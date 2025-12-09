@@ -16,7 +16,7 @@ fn build_tests() {
 
 	if std::fs::exists(&archive_path).ok().is_some_and(|x| !x) {
 		match std::fs::copy("./src/grug-tests/tests.so", &archive_path) {
-			Ok(_) => println!("cargo::rustc-link-search={}", out_dir.display()),
+			Ok(_) => (),
 			Err(_) => println!(
 				"grug-tests is not pulled yet\n\
 				Run the following commands first\n\n\
@@ -26,5 +26,6 @@ fn build_tests() {
 			),
 		}
 	}
+	println!("cargo::rustc-link-search={}", out_dir.display());
 	
 }

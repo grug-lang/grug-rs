@@ -3,13 +3,13 @@
 mod frontend {
 	const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 
-	pub fn compile_grug_file(path: &str, mod_name: &str) -> Result<(), String> {
+	pub fn compile_grug_file<'a>(path: &'a str, mod_name: &'a str) -> Result<(), GrugError<'a>> {
 		if !path.contains('/') {
-			return Err(format!("The grug file path {}, does not contain a '/' character", path));
+			return Err(GrugError::FileNameError(FileNameError::FilePathDoesNotContainForwardSlash{path}))
 		}
 		let entity_type = get_entity_type(path)?;
 
-		let file_text = std::fs::read_to_string(&path).map_err(|x| x.to_string())?;
+		let file_text = std::fs::read_to_string(&path).unwrap();
 
 		let tokens = tokenizer::tokenize(&file_text)?;
 
@@ -18,89 +18,152 @@ mod frontend {
 		return Ok(());
 	}
 
-	fn get_entity_type(path: &str) -> Result<&str, String> {
+	fn get_entity_type(path: &str) -> Result<&str, FileNameError> {
 		let (_, entity_type) = path.rsplit_once("-").ok_or(
-				format!(
-					"'{}' is missing an entity type in its name;\n\
-					use a dash to specify it, like 'ak47-gun.grug'",
-					path
-				)
+				FileNameError::EntityMissing{path}
 			)?;
 		let (entity_type, _) = entity_type.rsplit_once(".").ok_or(
-				format!( "'{}' is missing a period in its filename", path)
+				FileNameError::MissingPeriodInFileName{path}
 			)?;
 		if entity_type.len() > MAX_FILE_ENTITY_TYPE_LENGTH {
-			return Err(
-				format!(
-                	"There are more than {MAX_FILE_ENTITY_TYPE_LENGTH} characters \n\
-                	in the entity type of '{path}', exceeding MAX_FILE_ENTITY_TYPE_LENGTH"
-				)
-			);
+			return Err(FileNameError::EntityLenExceedsMaxLen{path, entity_len: entity_type.len()});
 		}
 		if entity_type.len() == 0 {
-			return Err(format!(
-				"'{}' is missing an entity type in its name;\n\
-				use a dash to specify it, like 'ak47-gun.grug'",
-				path
-			));
+			return Err(FileNameError::EntityMissing{path});
 		}
 		check_custom_id_is_pascal(entity_type)
 	}
 
-	fn check_custom_id_is_pascal(entity_type: &str) -> Result<&str, String> {
+	fn check_custom_id_is_pascal(entity_type: &str) -> Result<&str, FileNameError> {
 		let mut chars = entity_type.chars();
 		let Some(first) = chars.next() else {
-			return Err(format!(
-                "'{entity_type}' seems like a custom ID type, but isn't in PascalCase"
-			));
+			return Err(FileNameError::EntityNotPascalCase1{entity_type});
 		};
 		for ch in chars {
 			if !(ch.is_uppercase() || ch.is_lowercase() || ch.is_digit(10)) {
-                return Err(format!(
-                    "'{entity_type}' seems like a custom ID type, but it contains '{ch}', \n\
-                    which isn't uppercase/lowercase/a digit"
-                ));
+                return Err(FileNameError::EntityNotPascalCase2{entity_type, wrong_char: ch});
 			}
 		}
 		Ok(entity_type)
 	}
 
-	// enum FileNameError<'a> {
-	// 	FilePathDoesNotContainForwardSlash{
-	// 		path: &'a str
-	// 	},
-	// 	MissingPeriodInFileName {
-	// 		path: &'a str
-	// 	},
-	// 	EntityLenExceedsMaxLen {
-	// 		path: &'a str,
-	// 		entity_len: &'a str,
-	// 	},
+	pub enum FileNameError<'a> {
+		FilePathDoesNotContainForwardSlash{
+			path: &'a str
+		},
+		MissingPeriodInFileName {
+			path: &'a str
+		},
+		EntityLenExceedsMaxLen {
+			path: &'a str,
+			entity_len: usize,
+		},
+		EntityMissing {
+			path: &'a str
+		},
+		EntityNotPascalCase1 {
+			entity_type: &'a str,
+		},
+		EntityNotPascalCase2 {
+			entity_type: &'a str,
+			wrong_char: char,
+		}
+	}
 
-	// }
+	impl<'a> std::fmt::Display for FileNameError<'a> {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				Self::FilePathDoesNotContainForwardSlash{
+					path
+				} => write!(f, "The grug file path {}, does not contain a '/' character", path),
+				Self::MissingPeriodInFileName {
+					path
+				} => write!(f, "'{}' is missing a period in its filename", path),
+				Self::EntityLenExceedsMaxLen {
+					path,
+					entity_len,
+				} => write!(f, 
+					"There are more than {MAX_FILE_ENTITY_TYPE_LENGTH} characters \n\
+                	in the entity type of '{path}', exceeding MAX_FILE_ENTITY_TYPE_LENGTH"
+				),
+				Self::EntityMissing {
+					path
+				} => write!(f, 
+					"'{}' is missing an entity type in its name;\n\
+					use a dash to specify it, like 'ak47-gun.grug'",
+					path
+				),
+				Self::EntityNotPascalCase1 {
+					entity_type,
+				} => write!(f, "'{entity_type}' seems like a custom ID type, but isn't in PascalCase"),
+				Self::EntityNotPascalCase2 {
+					entity_type,
+					wrong_char,
+				} => write!(f,
+					"'{entity_type}' seems like a custom ID type, but it contains '{wrong_char}', \n\
+                    which isn't uppercase/lowercase/a digit"
+				),
+			}
+		}
+	}
 
-	// pub enum GrugError {
-	// 	FileNameError(FileNameError),
-	// 	TokenizerError(TokenizerError),
-	// 	ParserError(ParserError),
-	// }
+	pub enum GrugError<'a> {
+		FileNameError(FileNameError<'a>),
+		TokenizerError(TokenizerError),
+		ParserError(ParserError),
+	}
+
+	impl<'a> From<FileNameError<'a>> for GrugError<'a> {
+		fn from (from: FileNameError<'a>) -> Self {
+			Self::FileNameError(from)
+		}
+	}
+
+	impl<'a> From<TokenizerError> for GrugError<'a> {
+		fn from (from: TokenizerError) -> Self {
+			Self::TokenizerError(from)
+		}
+	}
+
+	impl<'a> From<ParserError> for GrugError<'a> {
+		fn from (from: ParserError) -> Self {
+			Self::ParserError(from)
+		}
+	}
+
+	impl<'a> std::fmt::Display for GrugError<'a> {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				Self::FileNameError(error) => write!(f, "{}", error),
+				_ => todo!(),
+			}
+		}
+	}
 
 	mod tokenizer {
-		pub struct Token;
+		use std::marker::PhantomData;
 
-		pub fn tokenize(file_text: &str) -> Result<Vec<Token>, String> {
+		pub struct Token;
+		pub enum TokenizerError{}
+
+		pub fn tokenize(file_text: &'_ str) -> Result<Vec<Token>, TokenizerError> {
 			Ok(vec![])
 		}
 	}
+	use tokenizer::*;
 
 	mod parser {
+		use std::marker::PhantomData;
+
 		use super::tokenizer::Token;
+		pub enum ParserError{}
 
 		pub struct Ast;
-		pub fn parse(tokens: &[Token]) -> Result<Ast, String> {
+		pub fn parse(tokens: &'_ [Token]) -> Result<Ast, ParserError> {
 			Ok(Ast)
 		}
 	}
+	use parser::*;
 }
 
 mod bindings {
@@ -140,7 +203,7 @@ mod bindings {
 
 		match frontend::compile_grug_file(path, mod_name) {
 			Ok(()) => return std::ptr::null(),
-			Err(err_string) => ManuallyDrop::new(err_string).as_ptr() as *const c_char,
+			Err(err) => ManuallyDrop::new(format!("{}", err)).as_ptr() as *const c_char,
 		}
 	}
 	pub extern "C" fn init_globals_fn_dispatcher (path: *const c_char) {
