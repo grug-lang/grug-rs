@@ -1,0 +1,4 @@
+[submodule "src/grug-tests"]
+	path = src/grug-tests
+	url = https://github.com/grug-lang/grug-tests
+	branch = development

@@ -1,3 +1,4 @@
+// #![allow(warnings)]
 
 mod frontend {
 	const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
