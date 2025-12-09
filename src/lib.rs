@@ -47,6 +47,7 @@ mod frontend {
 		Ok(entity_type)
 	}
 
+	#[derive(Debug)]
 	pub enum FileNameError<'a> {
 		FilePathDoesNotContainForwardSlash{
 			path: &'a str
@@ -107,6 +108,7 @@ mod frontend {
 		}
 	}
 
+	#[derive(Debug)]
 	pub enum GrugError<'a> {
 		FileNameError(FileNameError<'a>),
 		TokenizerError(TokenizerError),
@@ -135,7 +137,7 @@ mod frontend {
 		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 			match self {
 				Self::FileNameError(error) => write!(f, "{}", error),
-				_ => todo!(),
+				err => write!(f, "{:?}", err),
 			}
 		}
 	}
@@ -143,11 +145,288 @@ mod frontend {
 	mod tokenizer {
 		use std::marker::PhantomData;
 
-		pub struct Token;
-		pub enum TokenizerError{}
+		struct Tokenizer {
+
+		}
+
+		impl Tokenizer {
+			fn new () -> Self {
+				Tokenizer{} 
+			}
+		}
+
+		#[derive(Debug)]
+		pub struct Token<'a> {
+			ty: TokenType,
+			value: &'a str
+		}
+
+		#[derive(Debug)]
+		pub enum TokenType {
+			OpenParenthesis,
+			CloseParenthesis,
+			OpenBrace,
+			CloseBrace,
+			Plus,
+			Minus,
+			Star,
+			ForwardSlash,
+			Percent,
+			Comma,
+			Colon,
+			NewLine,
+			DoubleEquals,
+			NotEquals,
+			Equal,
+			GreaterEqual,
+			Greater,
+			LessEqual,
+			Less,
+			And,
+			Or,
+			Not,
+			True,
+			False,
+			If,
+			Else,
+			While,
+			Break,
+			Return,
+			Continue,
+			Space,
+			Indentation,
+			String,
+			Word,
+			Int32,
+			Float32,
+			Comment,
+		}
+
+		#[derive(Debug)]
+		pub enum TokenizerError{
+			SpacesPerIndentError {
+				actual_spaces: usize,
+				spaces_per_indent: usize,
+				line_num: usize,
+				col_num: usize,
+			},
+			UnclosedString {
+				start_line: usize,
+				start_col: usize,
+			},
+			MultiplePeriodsInNumber {
+				line: usize,
+				col: usize,
+			},
+			FloatTrailingPeriod {
+				line: usize,
+				col: usize,
+			},
+			NoSpaceAfterComment {
+				line: usize,
+				col: usize,
+			},
+			UnrecognizedCharacter {
+				ch: char,
+				line: usize,
+				col: usize,
+			}
+		}
+
+		const SPACES_PER_INDENT: usize = 4;
 
 		pub fn tokenize(file_text: &'_ str) -> Result<Vec<Token>, TokenizerError> {
-			Ok(vec![])
+			let tokenizer = Tokenizer::new();
+			let mut tokens = Vec::new();
+			let mut cur_line = 1;
+			let mut last_new_line = 0;
+
+			let file_text = file_text.as_bytes();
+			let mut i = 0;
+
+			while i < file_text.len() {
+				macro_rules! token_match {
+					($tag: literal => $expr: expr$(, $extra_expr: expr)?) => {
+						let lit_len = $tag.len();
+						if i + lit_len <= file_text.len() && &file_text[i..(i+lit_len)] == &*$tag {
+							// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
+							tokens.push(Token{ty: $expr, value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])}});
+							i += lit_len;
+							$($extra_expr;)?
+							continue;
+						}
+					}
+				}
+				token_match!(b"(" => TokenType::OpenParenthesis);
+				token_match!(b")" => TokenType::CloseParenthesis);
+				token_match!(b"{" => TokenType::OpenBrace);
+				token_match!(b"}" => TokenType::CloseBrace);
+				token_match!(b"+" => TokenType::Plus);
+				token_match!(b"-" => TokenType::Minus);
+				token_match!(b"*" => TokenType::Star);
+				token_match!(b"/" => TokenType::ForwardSlash);
+				token_match!(b"%" => TokenType::Percent);
+				token_match!(b"," => TokenType::Comma);
+				token_match!(b":" => TokenType::Colon);
+				token_match!(b"\n" => TokenType::NewLine, {cur_line += 1; last_new_line = i + 1});
+				token_match!(b"\r\n" => TokenType::NewLine, {cur_line += 1; last_new_line = i + 2});
+				token_match!(b"==" => TokenType::DoubleEquals);
+				token_match!(b"!=" => TokenType::NotEquals);
+				token_match!(b"=" => TokenType::Equal);
+				token_match!(b">=" => TokenType::GreaterEqual);
+				token_match!(b">" => TokenType::Greater);
+				token_match!(b"<=" => TokenType::LessEqual);
+				token_match!(b"<" => TokenType::Less);
+				token_match!(b"and" => TokenType::And);
+				token_match!(b"or" => TokenType::Or);
+				token_match!(b"not" => TokenType::Not);
+				token_match!(b"true" => TokenType::True);
+				token_match!(b"false" => TokenType::False);
+				token_match!(b"if" => TokenType::If);
+				token_match!(b"while" => TokenType::Else);
+				token_match!(b"while" => TokenType::While);
+				token_match!(b"break" => TokenType::Break);
+				token_match!(b"return" => TokenType::Return);
+				token_match!(b"continue" => TokenType::Continue);
+
+				// Spaces
+				let lit_len = b" ".len();
+				if &file_text[i..(i+lit_len)] == &*b" " {
+					let old_i = i;
+					while i < file_text.len() && file_text[i] == b' ' {
+						i += 1;
+					}
+					let num_spaces = i - old_i;
+					if num_spaces == 1 {
+							// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
+						tokens.push(Token{ty: TokenType::Space, value: unsafe{str::from_utf8_unchecked(&file_text[old_i..i])}});
+						continue;
+					}
+					if num_spaces % SPACES_PER_INDENT != 0 {
+						return Err(TokenizerError::SpacesPerIndentError{
+							actual_spaces: num_spaces,
+							spaces_per_indent: SPACES_PER_INDENT,
+							line_num: cur_line,
+							col_num: old_i - last_new_line,
+						});
+					}
+
+					// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
+					tokens.push(Token{ty: TokenType::Indentation, value: unsafe{str::from_utf8_unchecked(&file_text[old_i..i])}});
+					continue;
+				}
+					
+				// TODO: Does grug allow tabs for indentation and if it does, should each tab be a separate token
+				// token_match!(b"\t" => TokenType::Indentation);
+
+				// Strings
+				if file_text[i] == b'"' {
+					let quote_start_index = i;
+					i += 1;
+					let start_index = i;
+					let start_line = cur_line;
+					let start_col = quote_start_index - last_new_line;
+
+					// TODO: Handle Escaped strings
+					// This requires changing Token::value to Cow<'_, str>
+					while i < file_text.len() && file_text[i] != b'"' {
+						if file_text[i] == b'\n' {
+							cur_line += 1;
+							last_new_line = i + 1;
+						}
+						i += 1;
+					}
+					if i >= file_text.len() {
+						return Err(TokenizerError::UnclosedString{
+							start_line,
+							start_col,
+						});
+					}
+					tokens.push(Token{
+						ty: TokenType::String,
+						// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
+						value: unsafe{str::from_utf8_unchecked(&file_text[start_index..(i-1)])},
+					});
+					i += 1;
+				}
+
+				// TODO: Handle unicode strings
+				// Words
+				if (file_text[i] as char).is_ascii_alphabetic() || file_text[i] == b'_' {
+					let start = i;
+					while i < file_text.len() && (file_text[i] as char).is_ascii_alphanumeric() || file_text[i] == b'_'{
+						i += 1
+					}
+					// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
+					tokens.push(Token{ty: TokenType::Word, value: unsafe{str::from_utf8_unchecked(&file_text[start..i])}});
+					continue;
+				}
+
+				// Numbers
+				if (file_text[i] as char).is_ascii_digit() {
+					let start = i;
+					let mut seen_period = false;
+					i += 1;
+					while i < file_text.len() && (file_text[i] as char).is_ascii_digit() || file_text[i] == b'.' {
+						if file_text[i] == b'.'{
+							if seen_period {
+								return Err(TokenizerError::MultiplePeriodsInNumber{
+									line: cur_line,
+									col: i - last_new_line,
+								});
+							}
+							seen_period = true;
+						}
+						i += 1;
+					}
+
+					if seen_period {
+						if file_text[i - 1] == b'.' {
+							// TODO: I think floats with trailing periods
+							// should be allowed but i can understand why
+							// they're not
+							return Err(TokenizerError::FloatTrailingPeriod {
+								line: cur_line,
+								col: i - 1 - last_new_line,
+							});
+						}
+						// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
+						tokens.push(Token{ty: TokenType::Float32, value: unsafe{str::from_utf8_unchecked(&file_text[start..i])}});
+					}
+					else {
+						// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
+						tokens.push(Token{ty: TokenType::Int32, value: unsafe{str::from_utf8_unchecked(&file_text[start..i])}});
+					}
+					continue;
+				}
+
+				// Comments
+				if file_text[i] == b'#' {
+					i += 1;
+					if i >= file_text.len() || file_text[i] != b' ' {
+						return Err(TokenizerError::NoSpaceAfterComment{
+							line: cur_line,
+							col: i - last_new_line,
+						});
+					}
+					i += 1;
+					let start = i;
+					while i < file_text.len() && file_text[i] != b'\r' && file_text[i] != b'\n' {
+						i += 1;
+					}
+					// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
+					tokens.push(Token{ty: TokenType::Comment, value: unsafe{str::from_utf8_unchecked(&file_text[start..i])}});
+					continue;
+				}
+
+				return Err(TokenizerError::UnrecognizedCharacter{
+					ch: file_text[i] as char,
+					line: cur_line,
+					col: i - last_new_line,
+				});
+			}
+			
+			Ok(tokens)
 		}
 	}
 	use tokenizer::*;
@@ -156,6 +435,7 @@ mod frontend {
 		use std::marker::PhantomData;
 
 		use super::tokenizer::Token;
+		#[derive(Debug)]
 		pub enum ParserError{}
 
 		pub struct Ast;
@@ -167,7 +447,7 @@ mod frontend {
 }
 
 mod bindings {
-	use std::ffi::{c_char, c_float, CStr, OsStr};
+	use std::ffi::{c_char, c_float, CStr, CString};
 	use std::mem::ManuallyDrop;
 	use std::io::Write;
 
@@ -203,7 +483,7 @@ mod bindings {
 
 		match frontend::compile_grug_file(path, mod_name) {
 			Ok(()) => return std::ptr::null(),
-			Err(err) => ManuallyDrop::new(format!("{}", err)).as_ptr() as *const c_char,
+			Err(err) => ManuallyDrop::new(CString::new(format!("{}", err)).unwrap()).as_ptr() as *const c_char,
 		}
 	}
 	pub extern "C" fn init_globals_fn_dispatcher (path: *const c_char) {
