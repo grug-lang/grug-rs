@@ -3,6 +3,17 @@
 mod frontend {
 	const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 
+	enum GrugType {
+		Void,
+		Bool,
+		I32,
+		F32,
+		String,
+		Id,
+		Resource,
+		Entity,
+	}
+
 	pub fn compile_grug_file<'a>(path: &'a str, mod_name: &'a str) -> Result<(), GrugError<'a>> {
 		if !path.contains('/') {
 			return Err(GrugError::FileNameError(FileNameError::FilePathDoesNotContainForwardSlash{path}))
@@ -143,17 +154,15 @@ mod frontend {
 	}
 
 	mod tokenizer {
-		use std::marker::PhantomData;
-
 		#[derive(Debug)]
 		pub struct Token<'a> {
-			ty: TokenType,
-			value: &'a str,
-			line: usize,
-			col: usize,
+			pub(super) ty: TokenType,
+			pub(super) value: &'a str,
+			pub(super) line: usize,
+			pub(super) col: usize,
 		}
 
-		#[derive(Debug)]
+		#[derive(Debug, PartialEq, Clone, Copy)]
 		pub enum TokenType {
 			OpenParenthesis,
 			CloseParenthesis,
@@ -281,8 +290,8 @@ mod frontend {
 				token_match!(b"%" => TokenType::Percent);
 				token_match!(b"," => TokenType::Comma);
 				token_match!(b":" => TokenType::Colon);
-				token_match!(b"\n" => TokenType::NewLine, {cur_line += 1; last_new_line = i + 1});
-				token_match!(b"\r\n" => TokenType::NewLine, {cur_line += 1; last_new_line = i + 2});
+				token_match!(b"\n" => TokenType::NewLine, {cur_line += 1; last_new_line = i});
+				token_match!(b"\r\n" => TokenType::NewLine, {cur_line += 1; last_new_line = i});
 				token_match!(b"==" => TokenType::DoubleEquals);
 				token_match!(b"!=" => TokenType::NotEquals);
 				token_match!(b"=" => TokenType::Equal);
@@ -482,12 +491,107 @@ mod frontend {
 	use tokenizer::*;
 
 	mod parser {
-		use std::marker::PhantomData;
 		use std::collections::{HashSet, HashMap};
 
-		use super::tokenizer::Token;
+		mod types {
+			use crate::frontend::GrugType;
+			pub struct VariableStatement {
+				name: String,
+				ty: Option<GrugType>,
+				type_name: Option<String>,
+				assignment_expr: Expr,
+			}
+
+			pub enum Expr {
+				TrueExpr,
+				FalseExpr,
+				StringExpr{
+					value: String,
+				},
+				ResourceExpr,
+				EntityExpr,
+				IdentifierExpr{
+					name: String
+				},
+				I32Expr{
+					value: i32,
+				},
+				F32Expr{
+					value: f32,
+				},
+				UnaryExpr,
+				BinaryExpr,
+				LogicalExpr,
+				CallExpr{
+					function_name: String,
+				},
+				ParenthesizedExpr,
+			}
+		}
+
+		pub use types::*;
+
+		use super::tokenizer::{Token, TokenType};
+		use super::GrugType;
 		#[derive(Debug)]
-		pub enum ParserError{}
+		pub enum ParserError {
+			UnexpectedToken {
+				expected: TokenType,
+				got: TokenType,
+				line: usize,
+				#[allow(unused)]
+				col: usize,
+			},
+			OutOfTokensError,
+			GlobalAfterOnFunctions {
+				token_value: String,
+				#[allow(unused)]
+				line: usize,
+				#[allow(unused)]
+				col: usize,
+			},
+			ExpectedNewLine {
+				#[allow(unused)]
+				token_value: String,
+				#[allow(unused)]
+				line: usize, 
+				#[allow(unused)]
+				col: usize,
+			},
+			GlobalNamedMe {
+				#[allow(unused)]
+				line: usize,
+				#[allow(unused)]
+				col: usize,
+			},
+			ExpectedSpace {
+				got: TokenType,
+				#[allow(unused)]
+				line: usize,
+				#[allow(unused)]
+				col: usize, 
+			},
+			MissingType {
+				#[allow(unused)]
+				line: usize,
+				#[allow(unused)]
+				col: usize,
+			},
+			GlobalCantBeResource {
+				name: String,
+				#[allow(unused)]
+				line: usize,
+				#[allow(unused)]
+				col: usize,
+			},
+			GlobalCantBeEntity {
+				name: String,
+				#[allow(unused)]
+				line: usize,
+				#[allow(unused)]
+				col: usize,
+			}
+		}
 
 		pub struct Ast;
 		pub fn parse(tokens: &'_ [Token]) -> Result<Ast, ParserError> {
@@ -503,6 +607,8 @@ mod frontend {
 			// let called_helper_fn_names = set();
 			// let global_statements = [];
 
+			let mut ast = Vec::new();
+
 			let mut seen_on_fn = false;
 			let mut seen_newline = false;
 			let mut newline_allowed = false;
@@ -511,7 +617,121 @@ mod frontend {
 
 			let mut idx = 0;
 
+			let mut tokens = tokens.iter();
+
+			while let Some(token) = tokens.next() {
+				if assert_next_token_types(&tokens, &[TokenType::Word, TokenType::Colon]).is_ok() {
+				    if seen_on_fn {
+						return Err(ParserError::GlobalAfterOnFunctions {
+							token_value: token.value.to_string(),
+							line: token.line,
+							col: token.col,
+						});
+				    }
+				    if newline_required && !just_seen_global {
+						return Err(ParserError::GlobalAfterOnFunctions {
+							token_value: token.value.to_string(),
+							line: token.line,
+							col: token.col,
+						});
+				    }
+
+				    ast.push(parse_global_variable(&mut tokens)?);
+				    consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+
+				    newline_allowed = true;
+				    newline_required = true;
+				    just_seen_global = true;
+				}
+			}
+
 			Ok(Ast)
+		}
+
+		// global -> word + ":" + expr;
+		fn parse_global_variable<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<VariableStatement, ParserError> {
+			let name_token = &tokens.as_slice()[0];
+			let global_name = name_token.value; 
+
+			if global_name == "me" {
+				return Err(ParserError::GlobalNamedMe{
+					line: name_token.line,
+					col: name_token.col,
+				});
+			}
+			consume_next_token_types(tokens, &[TokenType::Colon])?;
+			consume_space(tokens)?;
+
+			let global_type = parse_type(tokens)?;
+			match global_type {
+				GrugType::Resource => return Err(ParserError::GlobalCantBeResource{
+					name: global_name.to_string(),
+					line: name_token.line,
+					col: name_token.line,
+				}),
+				GrugType::Entity   => return Err(ParserError::GlobalCantBeEntity{
+					name: global_name.to_string(),
+					line: name_token.line,
+					col: name_token.line,
+				}),
+				_ => (),
+			}
+			
+			todo!();
+		}
+
+		fn parse_type<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<GrugType, ParserError> {
+			let next_token = get_next_token(tokens)?;
+			if next_token.ty != TokenType::Word {
+				return Err (ParserError::MissingType{
+					line: next_token.line,
+					col: next_token.col,
+				});
+			}
+			Ok(match next_token.value {
+				"void"     => GrugType::Void,
+				"bool"     => GrugType::Bool,
+				"i32"      => GrugType::I32,
+				"f32"      => GrugType::F32,
+				"string"   => GrugType::String,
+				"resource" => GrugType::Resource,
+				"entity"   => GrugType::Entity,
+				_       => GrugType::Id,
+			})
+		}
+
+		fn assert_next_token_types(tokens: &std::slice::Iter<Token>, expected: &[TokenType]) -> Result<(), ParserError> {
+			if tokens.len() < expected.len() {
+				return Err(ParserError::OutOfTokensError);
+			}
+			for (Token{ty: got_ty, line, col, ..}, expected_ty) in tokens.clone().zip(expected.into_iter()) {
+				if got_ty != expected_ty {
+					return Err(ParserError::UnexpectedToken{
+						expected: *expected_ty,
+						got: *got_ty,
+						line: *line,
+						col: *col,
+					});
+				}
+			}
+			Ok(())
+		}
+
+		fn consume_next_token_types(tokens: &mut std::slice::Iter<Token>, expected: &[TokenType]) -> Result<(), ParserError> {
+			assert_next_token_types(tokens, expected)?;
+			*tokens = tokens.as_slice()[expected.len()..].into_iter();
+			Ok(())
+		}
+
+		fn get_next_token<'a> (tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
+			tokens.next().ok_or(ParserError::OutOfTokensError)
+		}
+
+		fn consume_space(tokens: &mut std::slice::Iter<Token>) -> Result<(), ParserError> {
+			consume_next_token_types(tokens, &[TokenType::Space]).map_err(|err| match err {
+				ParserError::UnexpectedToken{got, line, col, ..} => ParserError::ExpectedSpace{got, line, col},
+				_ => unreachable!(),
+			})
 		}
 	}
 	use parser::*;
@@ -546,7 +766,6 @@ mod bindings {
 		ty: grug_type,
 		value: grug_value_union
 	}
-
 
 	pub extern "C" fn compile_grug_file(path: *const c_char, mod_name: *const c_char) -> *const c_char {
 		let path = unsafe{CStr::from_ptr(path)}.to_str().unwrap();
@@ -626,7 +845,7 @@ mod test {
 		
 		unsafe {
 			grug_tests_run(
-				c"../grug-tests/tests/".as_ptr(),
+				c"src/grug-tests/tests/".as_ptr(),
 				compile_grug_file,
 				init_globals_fn_dispatcher,
 				on_fn_dispatcher,
