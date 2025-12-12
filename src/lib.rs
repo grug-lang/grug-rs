@@ -257,6 +257,18 @@ mod frontend {
 						}
 					}
 				}
+				macro_rules! token_match_word {
+					($tag: literal => $expr: expr$(, $extra_expr: expr)?) => {
+						let lit_len = $tag.len();
+						if i + lit_len <= file_text.len() && &file_text[i..(i+lit_len)] == &*$tag && (i + lit_len == file_text.len() || !is_word_char(file_text[i+lit_len] as char)) {
+							// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
+							tokens.push(Token{ty: $expr, value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])}});
+							i += lit_len;
+							$($extra_expr;)?
+							continue;
+						}
+					}
+				}
 				token_match!(b"(" => TokenType::OpenParenthesis);
 				token_match!(b")" => TokenType::CloseParenthesis);
 				token_match!(b"{" => TokenType::OpenBrace);
@@ -277,17 +289,17 @@ mod frontend {
 				token_match!(b">" => TokenType::Greater);
 				token_match!(b"<=" => TokenType::LessEqual);
 				token_match!(b"<" => TokenType::Less);
-				token_match!(b"and" => TokenType::And);
-				token_match!(b"or" => TokenType::Or);
-				token_match!(b"not" => TokenType::Not);
-				token_match!(b"true" => TokenType::True);
-				token_match!(b"false" => TokenType::False);
-				token_match!(b"if" => TokenType::If);
-				token_match!(b"while" => TokenType::Else);
-				token_match!(b"while" => TokenType::While);
-				token_match!(b"break" => TokenType::Break);
-				token_match!(b"return" => TokenType::Return);
-				token_match!(b"continue" => TokenType::Continue);
+				token_match_word!(b"and" => TokenType::And);
+				token_match_word!(b"or" => TokenType::Or);
+				token_match_word!(b"not" => TokenType::Not);
+				token_match_word!(b"true" => TokenType::True);
+				token_match_word!(b"false" => TokenType::False);
+				token_match_word!(b"if" => TokenType::If);
+				token_match_word!(b"while" => TokenType::Else);
+				token_match_word!(b"while" => TokenType::While);
+				token_match_word!(b"break" => TokenType::Break);
+				token_match_word!(b"return" => TokenType::Return);
+				token_match_word!(b"continue" => TokenType::Continue);
 
 				// Spaces
 				let lit_len = b" ".len();
@@ -427,6 +439,10 @@ mod frontend {
 			}
 			
 			Ok(tokens)
+		}
+
+		fn is_word_char(ch: char) -> bool {
+			ch.is_ascii_alphanumeric() || ch == '_'
 		}
 	}
 	use tokenizer::*;
