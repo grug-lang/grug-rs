@@ -145,20 +145,12 @@ mod frontend {
 	mod tokenizer {
 		use std::marker::PhantomData;
 
-		struct Tokenizer {
-
-		}
-
-		impl Tokenizer {
-			fn new () -> Self {
-				Tokenizer{} 
-			}
-		}
-
 		#[derive(Debug)]
 		pub struct Token<'a> {
 			ty: TokenType,
-			value: &'a str
+			value: &'a str,
+			line: usize,
+			col: usize,
 		}
 
 		#[derive(Debug)]
@@ -236,7 +228,6 @@ mod frontend {
 		const SPACES_PER_INDENT: usize = 4;
 
 		pub fn tokenize(file_text: &'_ str) -> Result<Vec<Token>, TokenizerError> {
-			let tokenizer = Tokenizer::new();
 			let mut tokens = Vec::new();
 			let mut cur_line = 1;
 			let mut last_new_line = 0;
@@ -250,7 +241,12 @@ mod frontend {
 						let lit_len = $tag.len();
 						if i + lit_len <= file_text.len() && &file_text[i..(i+lit_len)] == &*$tag {
 							// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
-							tokens.push(Token{ty: $expr, value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])}});
+							tokens.push(Token{
+								ty: $expr, 
+								value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])},
+								line: cur_line,
+								col: i - last_new_line,
+							});
 							i += lit_len;
 							$($extra_expr;)?
 							continue;
@@ -262,7 +258,12 @@ mod frontend {
 						let lit_len = $tag.len();
 						if i + lit_len <= file_text.len() && &file_text[i..(i+lit_len)] == &*$tag && (i + lit_len == file_text.len() || !is_word_char(file_text[i+lit_len] as char)) {
 							// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
-							tokens.push(Token{ty: $expr, value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])}});
+							tokens.push(Token{
+								ty: $expr, 
+								value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])},
+								line: cur_line,
+								col: i - last_new_line,
+							});
 							i += lit_len;
 							$($extra_expr;)?
 							continue;
@@ -311,7 +312,12 @@ mod frontend {
 					let num_spaces = i - old_i;
 					if num_spaces == 1 {
 							// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-						tokens.push(Token{ty: TokenType::Space, value: unsafe{str::from_utf8_unchecked(&file_text[old_i..i])}});
+						tokens.push(Token{
+							ty: TokenType::Space, 
+							value: unsafe{str::from_utf8_unchecked(&file_text[old_i..i])},
+							line: cur_line,
+							col: old_i - last_new_line,
+						});
 						continue;
 					}
 					if num_spaces % SPACES_PER_INDENT != 0 {
@@ -324,7 +330,12 @@ mod frontend {
 					}
 
 					// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-					tokens.push(Token{ty: TokenType::Indentation, value: unsafe{str::from_utf8_unchecked(&file_text[old_i..i])}});
+					tokens.push(Token{
+						ty: TokenType::Indentation, 
+						value: unsafe{str::from_utf8_unchecked(&file_text[old_i..i])},
+						line: cur_line,
+						col: old_i - last_new_line,
+					});
 					continue;
 				}
 					
@@ -358,6 +369,8 @@ mod frontend {
 						ty: TokenType::String,
 						// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
 						value: unsafe{str::from_utf8_unchecked(&file_text[start_index..(i-1)])},
+						line: start_line,
+						col: start_col,
 					});
 					i += 1;
 				}
@@ -370,7 +383,12 @@ mod frontend {
 						i += 1
 					}
 					// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-					tokens.push(Token{ty: TokenType::Word, value: unsafe{str::from_utf8_unchecked(&file_text[start..i])}});
+					tokens.push(Token{
+						ty: TokenType::Word, 
+						value: unsafe{str::from_utf8_unchecked(&file_text[start..i])},
+						line: cur_line,
+						col: start - last_new_line,
+					});
 					continue;
 				}
 
@@ -403,17 +421,28 @@ mod frontend {
 							});
 						}
 						// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-						tokens.push(Token{ty: TokenType::Float32, value: unsafe{str::from_utf8_unchecked(&file_text[start..i])}});
+						tokens.push(Token{
+							ty: TokenType::Float32, 
+							value: unsafe{str::from_utf8_unchecked(&file_text[start..i])},
+							line: cur_line,
+							col: start - last_new_line,
+						});
 					}
 					else {
 						// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-						tokens.push(Token{ty: TokenType::Int32, value: unsafe{str::from_utf8_unchecked(&file_text[start..i])}});
+						tokens.push(Token{
+							ty: TokenType::Int32, 
+							value: unsafe{str::from_utf8_unchecked(&file_text[start..i])},
+							line: cur_line,
+							col: start - last_new_line,
+						});
 					}
 					continue;
 				}
 
 				// Comments
 				if file_text[i] == b'#' {
+					let old_i = i;
 					i += 1;
 					if i >= file_text.len() || file_text[i] != b' ' {
 						return Err(TokenizerError::NoSpaceAfterComment{
@@ -427,7 +456,12 @@ mod frontend {
 						i += 1;
 					}
 					// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-					tokens.push(Token{ty: TokenType::Comment, value: unsafe{str::from_utf8_unchecked(&file_text[start..i])}});
+					tokens.push(Token{
+						ty: TokenType::Comment, 
+						value: unsafe{str::from_utf8_unchecked(&file_text[start..i])},
+						line: cur_line,
+						col: old_i - last_new_line
+					});
 					continue;
 				}
 
@@ -449,6 +483,7 @@ mod frontend {
 
 	mod parser {
 		use std::marker::PhantomData;
+		use std::collections::{HashSet, HashMap};
 
 		use super::tokenizer::Token;
 		#[derive(Debug)]
@@ -456,6 +491,26 @@ mod frontend {
 
 		pub struct Ast;
 		pub fn parse(tokens: &'_ [Token]) -> Result<Ast, ParserError> {
+			// let global_statements = [];
+			// let helper_fns = {};
+			// let on_fns = {};
+			// let statements = [];
+			// let arguments = [];
+			// let parsing_depth = 0;
+			// let loop_depth = 0;
+			// let parsing_depth = 0;
+			// let indentation = 0;
+			// let called_helper_fn_names = set();
+			// let global_statements = [];
+
+			let mut seen_on_fn = false;
+			let mut seen_newline = false;
+			let mut newline_allowed = false;
+			let mut newline_required = false;
+			let mut just_seen_global = false;
+
+			let mut idx = 0;
+
 			Ok(Ast)
 		}
 	}
