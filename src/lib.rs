@@ -3,6 +3,7 @@
 mod frontend {
 	const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 
+	#[derive(Debug)]
 	enum GrugType {
 		Void,
 		Bool,
@@ -179,9 +180,9 @@ mod frontend {
 			DoubleEquals,
 			NotEquals,
 			Equal,
-			GreaterEqual,
+			GreaterEquals,
 			Greater,
-			LessEqual,
+			LessEquals,
 			Less,
 			And,
 			Or,
@@ -295,9 +296,9 @@ mod frontend {
 				token_match!(b"==" => TokenType::DoubleEquals);
 				token_match!(b"!=" => TokenType::NotEquals);
 				token_match!(b"=" => TokenType::Equal);
-				token_match!(b">=" => TokenType::GreaterEqual);
+				token_match!(b">=" => TokenType::GreaterEquals);
 				token_match!(b">" => TokenType::Greater);
-				token_match!(b"<=" => TokenType::LessEqual);
+				token_match!(b"<=" => TokenType::LessEquals);
 				token_match!(b"<" => TokenType::Less);
 				token_match_word!(b"and" => TokenType::And);
 				token_match_word!(b"or" => TokenType::Or);
@@ -502,14 +503,25 @@ mod frontend {
 				assignment_expr: Expr,
 			}
 
-			pub enum Expr {
+			pub struct GlobalVariableStatement {
+				name: String,
+				ty: GrugType,
+				assigment_expr: Expr,
+			}
+
+			#[derive(Debug)]
+			pub enum LiteralExpr {
 				TrueExpr,
 				FalseExpr,
 				StringExpr{
 					value: String,
 				},
-				ResourceExpr,
-				EntityExpr,
+				ResourceExpr{
+					value: String,
+				},
+				EntityExpr{
+					value: String,
+				},
 				IdentifierExpr{
 					name: String
 				},
@@ -519,13 +531,96 @@ mod frontend {
 				F32Expr{
 					value: f32,
 				},
-				UnaryExpr,
-				BinaryExpr,
-				LogicalExpr,
+			}
+
+			#[derive(Debug)]
+			pub enum ExprType {
+				LiteralExpr{
+					expr: LiteralExpr,
+					line: usize,
+					col: usize,
+				},
+				UnaryExpr{
+					operator: UnaryOperator,
+					expr: Box<Expr>,
+				},
+				BinaryExpr{
+					operands: Box<(Expr, Expr)>,
+					operator: BinaryOperator,
+				},
+				// LogicalExpr(Box<Expr>),
 				CallExpr{
 					function_name: String,
+					arguments: Vec<Expr>,
+					line: usize,
+					col: usize,
 				},
-				ParenthesizedExpr,
+				ParenthesizedExpr{
+					expr: Box<Expr>,
+					line: usize,
+					col: usize,
+				},
+			}
+
+			impl ExprType {
+				fn get_last_known_location(&self) -> (usize, usize) {
+					let mut current = self;
+					loop {
+						match current {
+							Self::LiteralExpr{
+								line,
+								col,
+								..
+							} => return (*line, *col),
+							Self::UnaryExpr{
+								expr,
+								..
+							} => current = &expr.ty,
+							Self::BinaryExpr{
+								operands,
+								..
+							} => current = &operands.1.ty,
+							Self::CallExpr{
+								line, col,
+								..
+							} => return (*line, *col),
+							Self::ParenthesizedExpr {
+								line, col, 
+								..
+							} => return (*line, *col),
+						}
+					}
+				}
+			}
+			
+			#[derive(Debug)]
+			pub enum UnaryOperator {
+				Not,
+				Minus,
+			}
+
+			#[derive(Debug)]
+			pub enum BinaryOperator {
+				Or,
+				And,
+				DoubleEquals,
+				NotEquals,
+				Greater,
+				GreaterEquals,
+				Less,
+				LessEquals,
+				Plus,
+				Minus,
+				Multiply,
+				Division,
+				Remainder,
+			}
+			
+			#[derive(Debug)]
+			pub struct Expr {
+				pub(super) ty: ExprType,
+				// Can be None before Type checking but MUST be Some after
+				pub(super) result_ty: Option<GrugType>,
 			}
 		}
 
@@ -590,8 +685,25 @@ mod frontend {
 				line: usize,
 				#[allow(unused)]
 				col: usize,
-			}
+			},
+			GlobalMissingInitializer {
+				name: String,
+				#[allow(unused)]
+				line: usize,
+				#[allow(unused)]
+				col: usize,			
+			},
+			UnexpectedOpenParenthesis {
+				got_ty: ExprType,
+				#[allow(unused)]
+				line: usize,
+				#[allow(unused)]
+				col: usize,			
+			},
+			ExceededMaxParsingDepth,
 		}
+
+		const MAX_PARSING_DEPTH: usize = 100;
 
 		pub struct Ast;
 		pub fn parse(tokens: &'_ [Token]) -> Result<Ast, ParserError> {
@@ -648,7 +760,7 @@ mod frontend {
 			Ok(Ast)
 		}
 
-		// global -> word + ":" + expr;
+		// global -> word + ":" + type + " =" + expr;
 		fn parse_global_variable<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<VariableStatement, ParserError> {
 			let name_token = &tokens.as_slice()[0];
 			let global_name = name_token.value; 
@@ -676,10 +788,306 @@ mod frontend {
 				}),
 				_ => (),
 			}
+
+			if peek_next_token(tokens)?.ty != TokenType::Space {
+				return Err(ParserError::GlobalMissingInitializer{
+					name: global_name.to_string(),
+					line: name_token.line,
+					col: name_token.col,
+				});
+			}
+
+			consume_space(tokens)?;
+			consume_next_token_types(tokens, &[TokenType::Equal])?;
+
+			consume_space(tokens)?;
+			
+			let assignment_expr = parse_expression(tokens, 0)?;
 			
 			todo!();
 		}
 
+		// Recursive descent parsing adapted from the implementation in grug:
+		// https://github.com/grug-lang/grug
+		fn parse_expression(tokens: &mut std::slice::Iter<Token>, parsing_depth: usize) -> Result<Expr, ParserError> {
+			assert_parsing_depth(parsing_depth + 1)?;
+			return parse_or(tokens, parsing_depth + 1);
+		}
+
+		// or -> and + " " + "||" + and
+
+		fn parse_or(tokens: &mut std::slice::Iter<Token>, parsing_depth: usize) -> Result<Expr, ParserError> {
+			assert_parsing_depth(parsing_depth + 1)?;
+			let mut expr = parse_and(tokens, parsing_depth + 1)?;
+
+			while let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Or]) {
+				let left_expr = expr;
+				consume_space(tokens)?;
+				let right_expr = parse_and(tokens, parsing_depth + 1)?;
+				expr = Expr {
+					ty: ExprType::BinaryExpr{
+						operands: Box::new((left_expr, right_expr)),
+						operator: BinaryOperator::Or,
+					},
+					result_ty: None,
+				};
+			}
+			return Ok(expr);
+		}
+		
+		// and -> equality + " " + "||" + equality
+
+		fn parse_and(tokens: &mut std::slice::Iter<Token>, parsing_depth: usize) -> Result<Expr, ParserError> {
+			assert_parsing_depth(parsing_depth + 1)?;
+			let mut expr = parse_equality(tokens, parsing_depth + 1)?;
+
+			while let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::And]) {
+				let left_expr = expr;
+				consume_space(tokens)?;
+				let right_expr = parse_equality(tokens, parsing_depth + 1)?;
+				expr = Expr {
+					ty: ExprType::BinaryExpr{
+						operands: Box::new((left_expr, right_expr)),
+						operator: BinaryOperator::And,
+					},
+					result_ty: None,
+				};
+			}
+			return Ok(expr);
+		}
+		
+		// equality -> comparison + " " + ("==" | "!=") + comparison
+
+		fn parse_equality(tokens: &mut std::slice::Iter<Token>, parsing_depth: usize) -> Result<Expr, ParserError> {
+			assert_parsing_depth(parsing_depth + 1)?;
+			let mut expr = parse_comparison(tokens, parsing_depth + 1)?;
+
+			loop {
+				if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::DoubleEquals]) {
+					let left_expr = expr;
+					consume_space(tokens)?;
+					let right_expr = parse_comparison(tokens, parsing_depth + 1)?;
+					expr = Expr {
+						ty: ExprType::BinaryExpr{
+							operands: Box::new((left_expr, right_expr)),
+							operator: BinaryOperator::DoubleEquals,
+						},
+						result_ty: None,
+					};
+				} else if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::NotEquals]) {
+					let left_expr = expr;
+					consume_space(tokens)?;
+					let right_expr = parse_comparison(tokens, parsing_depth + 1)?;
+					expr = Expr {
+						ty: ExprType::BinaryExpr{
+							operands: Box::new((left_expr, right_expr)),
+							operator: BinaryOperator::NotEquals,
+						},
+						result_ty: None,
+					};
+				} else {
+					break
+				}
+			}
+			return Ok(expr);
+		}
+
+		fn parse_comparison(tokens: &mut std::slice::Iter<Token>, parsing_depth: usize) -> Result<Expr, ParserError> {
+			assert_parsing_depth(parsing_depth + 1)?;
+			let mut expr = parse_term(tokens, parsing_depth + 1)?;
+
+			loop {
+				if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Greater]) {
+					let left_expr = expr;
+					consume_space(tokens)?;
+					let right_expr = parse_term(tokens, parsing_depth + 1)?;
+					expr = Expr {
+						ty: ExprType::BinaryExpr{
+							operands: Box::new((left_expr, right_expr)),
+							operator: BinaryOperator::Greater,
+						},
+						result_ty: None,
+					};
+				} else if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::GreaterEquals]) {
+					let left_expr = expr;
+					consume_space(tokens)?;
+					let right_expr = parse_term(tokens, parsing_depth + 1)?;
+					expr = Expr {
+						ty: ExprType::BinaryExpr{
+							operands: Box::new((left_expr, right_expr)),
+							operator: BinaryOperator::GreaterEquals,
+						},
+						result_ty: None,
+					};
+				} else if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Less]) {
+					let left_expr = expr;
+					consume_space(tokens)?;
+					let right_expr = parse_term(tokens, parsing_depth + 1)?;
+					expr = Expr {
+						ty: ExprType::BinaryExpr{
+							operands: Box::new((left_expr, right_expr)),
+							operator: BinaryOperator::Less,
+						},
+						result_ty: None,
+					};
+				} else if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::LessEquals]) {
+					let left_expr = expr;
+					consume_space(tokens)?;
+					let right_expr = parse_term(tokens, parsing_depth + 1)?;
+					expr = Expr {
+						ty: ExprType::BinaryExpr{
+							operands: Box::new((left_expr, right_expr)),
+							operator: BinaryOperator::LessEquals,
+						},
+						result_ty: None,
+					};
+				} else {
+					break
+				}
+			}
+			return Ok(expr);
+		}
+
+		fn parse_term(tokens: &mut std::slice::Iter<Token>, parsing_depth: usize) -> Result<Expr, ParserError> {
+			assert_parsing_depth(parsing_depth + 1)?;
+			let mut expr = parse_factor(tokens, parsing_depth + 1)?;
+
+			loop {
+				if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Plus]) {
+					let left_expr = expr;
+					consume_space(tokens)?;
+					let right_expr = parse_factor(tokens, parsing_depth + 1)?;
+					expr = Expr {
+						ty: ExprType::BinaryExpr{
+							operands: Box::new((left_expr, right_expr)),
+							operator: BinaryOperator::Plus,
+						},
+						result_ty: None,
+					};
+				} else if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Minus]) {
+					let left_expr = expr;
+					consume_space(tokens)?;
+					let right_expr = parse_factor(tokens, parsing_depth + 1)?;
+					expr = Expr {
+						ty: ExprType::BinaryExpr{
+							operands: Box::new((left_expr, right_expr)),
+							operator: BinaryOperator::Minus,
+						},
+						result_ty: None,
+					};
+				} else {
+					break
+				}
+			}
+			return Ok(expr);
+		}
+
+		fn parse_factor(tokens: &mut std::slice::Iter<Token>, parsing_depth: usize) -> Result<Expr, ParserError> {
+			assert_parsing_depth(parsing_depth + 1)?;
+			let mut expr = parse_unary(tokens, parsing_depth + 1)?;
+
+			loop {
+				if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Star]) {
+					let left_expr = expr;
+					consume_space(tokens)?;
+					let right_expr = parse_unary(tokens, parsing_depth + 1)?;
+					expr = Expr {
+						ty: ExprType::BinaryExpr{
+							operands: Box::new((left_expr, right_expr)),
+							operator: BinaryOperator::Multiply,
+						},
+						result_ty: None,
+					};
+				} else if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::ForwardSlash]) {
+					let left_expr = expr;
+					consume_space(tokens)?;
+					let right_expr = parse_unary(tokens, parsing_depth + 1)?;
+					expr = Expr {
+						ty: ExprType::BinaryExpr{
+							operands: Box::new((left_expr, right_expr)),
+							operator: BinaryOperator::Division,
+						},
+						result_ty: None,
+					};
+				} else if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Percent]) {
+					let left_expr = expr;
+					consume_space(tokens)?;
+					let right_expr = parse_unary(tokens, parsing_depth + 1)?;
+					expr = Expr {
+						ty: ExprType::BinaryExpr{
+							operands: Box::new((left_expr, right_expr)),
+							operator: BinaryOperator::Division,
+						},
+						result_ty: None,
+					};
+				} else {
+					break
+				}
+			}
+			return Ok(expr);
+		}
+
+		fn parse_unary(tokens: &mut std::slice::Iter<Token>, parsing_depth: usize) -> Result<Expr, ParserError> {
+			assert_parsing_depth(parsing_depth + 1)?;
+
+			if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Minus]) {
+				Ok(Expr {
+					ty: ExprType::UnaryExpr{
+						operator: UnaryOperator::Minus,
+						expr: Box::new(parse_unary(tokens, parsing_depth + 1)?),
+					},
+					result_ty: None,
+				})
+			} else if let Ok(()) = consume_next_token_types(tokens, &[TokenType::Not]) {
+				consume_space(tokens)?;
+				Ok(Expr {
+					ty: ExprType::UnaryExpr{
+						operator: UnaryOperator::Not,
+						expr: Box::new(parse_unary(tokens, parsing_depth + 1)?),
+					},
+					result_ty: None,
+				})
+			} else {
+				parse_call(tokens, parsing_depth + 1)
+			}
+		}
+
+		fn parse_call(tokens: &mut std::slice::Iter<Token>, parsing_depth: usize) -> Result<Expr, ParserError> {
+			assert_parsing_depth(parsing_depth + 1)?;
+			let expr = parse_primary(tokens, parsing_depth + 1)?;
+
+			// Not a function call
+			if matches!(peek_next_token(tokens), Ok(Token{ty: TokenType::OpenParenthesis,..})) {
+				return Ok(expr);
+			}
+			
+
+			// functions can only be identifiers for now
+			if !matches!(expr.ty, ExprType::LiteralExpr{expr: LiteralExpr::IdentifierExpr{..}, ..}) {
+				let (line, col) = expr.get_last_known_location();
+				return Err(ParserError::UnexpectedOpenParenthesis{
+					got_ty: expr.ty,
+					line, 
+					col,
+				})
+			}
+			todo!();
+		}
+
+		fn parse_primary(tokens: &mut std::slice::Iter<Token>, parsing_depth: usize) -> Result<Expr, ParserError> {
+			assert_parsing_depth(parsing_depth + 1)?;
+		}
+
+
+		// Checks if the passed in parsing_depth is allowed
+		fn assert_parsing_depth(parsing_depth: usize) -> Result<(), ParserError> {
+			if parsing_depth > MAX_PARSING_DEPTH {
+				Err(ParserError::ExceededMaxParsingDepth)
+			} else {
+				Ok(())
+			}
+		}
+		
 		fn parse_type<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<GrugType, ParserError> {
 			let next_token = get_next_token(tokens)?;
 			if next_token.ty != TokenType::Word {
@@ -700,6 +1108,7 @@ mod frontend {
 			})
 		}
 
+		// checks whether the next few tokens match the expected tokens without consuming the input
 		fn assert_next_token_types(tokens: &std::slice::Iter<Token>, expected: &[TokenType]) -> Result<(), ParserError> {
 			if tokens.len() < expected.len() {
 				return Err(ParserError::OutOfTokensError);
@@ -717,6 +1126,7 @@ mod frontend {
 			Ok(())
 		}
 
+		// consumes the next few tokens if they match the given types, otherwise leaves the input unchanged
 		fn consume_next_token_types(tokens: &mut std::slice::Iter<Token>, expected: &[TokenType]) -> Result<(), ParserError> {
 			assert_next_token_types(tokens, expected)?;
 			*tokens = tokens.as_slice()[expected.len()..].into_iter();
@@ -725,6 +1135,10 @@ mod frontend {
 
 		fn get_next_token<'a> (tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
 			tokens.next().ok_or(ParserError::OutOfTokensError)
+		}
+
+		fn peek_next_token<'a> (tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
+			tokens.as_slice().get(0).ok_or(ParserError::OutOfTokensError)
 		}
 
 		fn consume_space(tokens: &mut std::slice::Iter<Token>) -> Result<(), ParserError> {
