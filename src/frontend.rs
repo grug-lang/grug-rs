@@ -1,4 +1,5 @@
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
+const SPACES_PER_INDENT: usize = 4;
 
 #[derive(Debug)]
 enum GrugType {
@@ -27,7 +28,7 @@ pub fn compile_grug_file<'a>(path: &'a str, mod_name: &'a str) -> Result<(), Gru
 	return Ok(());
 }
 
-fn get_entity_type(path: &str) -> Result<&str, FileNameError> {
+fn get_entity_type(path: &str) -> Result<&str, FileNameError<'_>> {
 	let (_, entity_type) = path.rsplit_once("-").ok_or(
 			FileNameError::EntityMissing{path}
 		)?;
@@ -43,7 +44,7 @@ fn get_entity_type(path: &str) -> Result<&str, FileNameError> {
 	check_custom_id_is_pascal(entity_type)
 }
 
-fn check_custom_id_is_pascal(entity_type: &str) -> Result<&str, FileNameError> {
+fn check_custom_id_is_pascal(entity_type: &str) -> Result<&str, FileNameError<'_>> {
 	let mut chars = entity_type.chars();
 	let Some(first) = chars.next() else {
 		return Err(FileNameError::EntityNotPascalCase1{entity_type});
@@ -152,6 +153,8 @@ impl<'a> std::fmt::Display for GrugError<'a> {
 }
 
 mod tokenizer {
+	use super::SPACES_PER_INDENT;
+
 	#[derive(Debug)]
 	pub struct Token<'a> {
 		pub(super) ty: TokenType,
@@ -232,9 +235,8 @@ mod tokenizer {
 		}
 	}
 
-	const SPACES_PER_INDENT: usize = 4;
 
-	pub fn tokenize(file_text: &'_ str) -> Result<Vec<Token>, TokenizerError> {
+	pub fn tokenize(file_text: &str) -> Result<Vec<Token<'_>>, TokenizerError> {
 		let mut tokens = Vec::new();
 		let mut cur_line = 1;
 		let mut last_new_line = 0;
@@ -634,6 +636,7 @@ mod parser {
 		}
 
 		// TODO: Finish these structs
+		// TODO: remove Statement suffix from these variants
 		pub enum Statement {
 			VariableStatement{
 				name: String,
@@ -641,7 +644,9 @@ mod parser {
 				type_name: Option<String>,
 				assignment_expr: Expr,
 			},
-			CallStatement,
+			CallStatement {
+				expr: Expr
+			},
 			IfStatement,
 			ReturnStatement,
 			WhileStatement,
@@ -676,6 +681,12 @@ mod parser {
 		ExpectedNewLine {
 			#[allow(unused)]
 			token_value: String,
+			#[allow(unused)]
+			line: usize, 
+			#[allow(unused)]
+			col: usize,
+		},
+		NewlineNotAllowed {
 			#[allow(unused)]
 			line: usize, 
 			#[allow(unused)]
@@ -764,6 +775,34 @@ mod parser {
 			#[allow(unused)]
 			col: usize,
 		},
+		IndentationMismatch{
+			expected_spaces: usize,
+			got_spaces: usize,
+			#[allow(unused)]
+			line: usize,
+			#[allow(unused)]
+			col: usize,
+		},
+		ExpectedIndentation{
+			got: String,
+			#[allow(unused)]
+			line: usize,
+			#[allow(unused)]
+			col: usize,
+		},
+		ExpectedStatement{
+			got_token: String,
+			#[allow(unused)]
+			line: usize,
+			#[allow(unused)]
+			col: usize,
+		},
+		LocalNamedMe {
+			#[allow(unused)]
+			line: usize,
+			#[allow(unused)]
+			col: usize,
+		},
 	}
 
 	const MAX_PARSING_DEPTH: usize = 100;
@@ -817,7 +856,7 @@ mod parser {
 				newline_allowed = true;
 				newline_required = true;
 				just_seen_global = true;
-			} else if let Ok(&[ref ty, ..]) = consume_next_token_types(&mut tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && ty.value.starts_with("on_") {
+			} else if let Ok(&[ref ty, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && ty.value.starts_with("on_") {
 				// Cannot have global function after helper function
 				if !helper_fns.is_empty() {
 					return Err(ParserError::OnFunctionAfterHelperFunctions{
@@ -844,7 +883,7 @@ mod parser {
 				newline_required = true;
 
 				just_seen_global = false;
-				consume_next_token_types(&mut tokens, &[TokenType::NewLine]);
+				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
 			}
 		}
 
@@ -864,7 +903,7 @@ mod parser {
 		};
 		consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 		
-		let body_statements = parse_statements(tokens, 0)?;
+		let body_statements = parse_statements(tokens, 0, 1)?;
 
 		if body_statements.iter().all(|x| matches!(x, Statement::Comment | Statement::EmptyLineStatement)) {
 			return Err(ParserError::EmptyFunction{
@@ -922,16 +961,111 @@ mod parser {
 		Ok(arguments)
 	}
 
-	fn parse_statements<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Vec<Statement>, ParserError> {
+	// TODO: Get the grammar for statements
+	fn parse_statements<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize) -> Result<Vec<Statement>, ParserError> {
 		assert_parsing_depth(parsing_depth + 1)?;
 		consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
 
-		let seen_newline = false;
-		let newline_allowed = false;
+		let mut seen_newline = false;
+		let mut newline_allowed = false;
 
 		let mut statements = Vec::new();
 
+		while !is_end_of_block(tokens, indentation)? {
+			// newlines
+			if let Ok(&[ref token]) = assert_next_token_types(tokens, &[TokenType::NewLine]) {
+				if !newline_allowed {
+					return Err(ParserError::NewlineNotAllowed{
+						line: token.line,
+						col: token.col,
+					});
+				}
+				seen_newline = true;
+				// cannot have consecutive newlines
+				newline_allowed = false;
+
+				statements.push(Statement::EmptyLineStatement);
+			} else {
+				newline_allowed = true;
+				consume_indentation(tokens, indentation + 1);
+
+				statements.push(parse_statement(tokens, parsing_depth + 1, indentation + 1)?);
+				consume_next_token_types(tokens, &[TokenType::NewLine]);
+			}
+		}
+
 		Ok(statements)
+	}
+
+	fn parse_statement<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize) -> Result<Statement, ParserError> {
+		let next_tokens = peek_next_tokens(tokens, 2)?;
+		match next_tokens[0].ty {
+			TokenType::Word => {
+				match next_tokens[1].ty {
+					TokenType::OpenParenthesis => {
+						Ok(Statement::CallStatement{
+							expr: parse_call(tokens, parsing_depth + 1)?,
+						})
+					}
+					TokenType::Colon | TokenType::Space => {
+						parse_local_variable(tokens);
+						todo!();
+					}
+					_ => {
+						Err(ParserError::ExpectedStatement{
+							got_token: next_tokens[0].value.to_string(),
+							line: next_tokens[0].line,
+							col: next_tokens[0].col,
+						})
+					}
+				}
+			}
+			_ => todo!(),
+		}
+	}
+
+	fn parse_local_variable<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<GlobalStatement, ParserError> {
+		let name_token = &tokens.as_slice()[0];
+		let local_name = name_token.value; 
+
+		if local_name == "me" {
+			return Err(ParserError::LocalNamedMe{
+				line: name_token.line,
+				col: name_token.col,
+			});
+		}
+		todo!();
+	}
+
+	fn is_end_of_block(tokens: &mut std::slice::Iter<Token>, indentation: usize) -> Result<bool, ParserError> {
+		use super::SPACES_PER_INDENT;
+
+		assert!(indentation != 0);
+		// TODO: Later
+		let next_token = peek_next_token(tokens)?;
+		match next_token.ty {
+			TokenType::CloseBrace => Ok(true),
+			TokenType::NewLine => Ok(false),
+			TokenType::Indentation => {
+				// TODO: I don't understand this?
+				//
+				// 	    fn on_something() {
+				// 	    	if (boolean) {
+				//				some_game_fn()
+				// 	  ->	}
+				// 	    }
+				// 	There would be an indentation token at the arrow with 4 spaces
+				// 	(indentation is going from 2 to 1) and this branch detects that
+				//
+				// 	Would'nt it be better to check for the close braces directly
+				Ok(next_token.value.len() == (indentation - 1) * SPACES_PER_INDENT)
+			}
+			_ => Err(ParserError::ExpectedIndentation {
+				got: next_token.value.to_string(),
+				line: next_token.line,
+				col: next_token.col,
+			})
+		}
 	}
 
 	// global -> word + ":" + type + " =" + expr;
@@ -1278,7 +1412,7 @@ mod parser {
 							result_ty: None,
 						});
 					}
-					consume_space(tokens);
+					consume_space(tokens)?;
 				}
 			}
 			_ => {
@@ -1418,7 +1552,7 @@ mod parser {
 	}
 
 	// checks whether the next few tokens match the expected tokens without consuming the input
-	fn assert_next_token_types(tokens: &std::slice::Iter<Token>, expected: &[TokenType]) -> Result<(), ParserError> {
+	fn assert_next_token_types<'a>(tokens: &std::slice::Iter<'a, Token<'a>>, expected: &[TokenType]) -> Result<&'a [Token<'a>], ParserError> {
 		if tokens.len() < expected.len() {
 			return Err(ParserError::OutOfTokensError);
 		}
@@ -1432,7 +1566,7 @@ mod parser {
 				});
 			}
 		}
-		Ok(())
+		Ok(&tokens.as_slice()[..expected.len()])
 	}
 
 	// consumes the next few tokens if they match the given types, otherwise leaves the input unchanged
@@ -1451,11 +1585,31 @@ mod parser {
 		tokens.as_slice().get(0).ok_or(ParserError::OutOfTokensError)
 	}
 
+	fn peek_next_tokens<'a> (tokens: &std::slice::Iter<'a, Token<'a>>, count: usize) -> Result<&'a [Token<'a>], ParserError> {
+		tokens.as_slice().get(..count).ok_or(ParserError::OutOfTokensError)
+	}
+
 	fn consume_space<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
 		Ok(&consume_next_token_types(tokens, &[TokenType::Space]).map_err(|err| match err {
 			ParserError::UnexpectedToken{got, line, col, ..} => ParserError::ExpectedSpace{got, line, col},
 			_ => unreachable!(),
 		})?[0])
+	}
+
+	fn consume_indentation<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, indentation: usize) -> Result<&'a Token<'a>, ParserError> {
+		use super::SPACES_PER_INDENT;
+
+		let token = &consume_next_token_types(tokens, &[TokenType::Indentation])?[0];
+		let spaces = token.value.len();
+		if spaces != indentation * SPACES_PER_INDENT {
+			return Err(ParserError::IndentationMismatch{
+				expected_spaces: indentation * SPACES_PER_INDENT,
+				got_spaces: spaces,
+				line: token.line,
+				col: token.col,
+			});
+		}
+		Ok(token)
 	}
 }
 use parser::*;
