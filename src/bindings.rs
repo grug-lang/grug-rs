@@ -71,6 +71,7 @@ pub type generate_file_from_json_t = extern "C" fn (*const c_char, *const c_char
 pub type game_fn_error_t = extern "C" fn (*const c_char);
 
 #[link(name="tests", kind="dylib")]
+#[cfg(test)]
 unsafe extern "C" {
 	pub fn grug_tests_run(
 		tests_dir_path_: *const c_char, 

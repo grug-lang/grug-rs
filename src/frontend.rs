@@ -1,3 +1,6 @@
+// This is to ensure that any results that come 
+// from parsing are not ignored
+#![deny(unused_must_use)]
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 const SPACES_PER_INDENT: usize = 4;
 
@@ -147,6 +150,7 @@ impl<'a> std::fmt::Display for GrugError<'a> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
 			Self::FileNameError(error) => write!(f, "{}", error),
+			Self::ParserError(error) => write!(f, "{}", error),
 			err => write!(f, "{:?}", err),
 		}
 	}
@@ -202,6 +206,51 @@ mod tokenizer {
 		Int32,
 		Float32,
 		Comment,
+	}
+
+	impl std::fmt::Display for TokenType {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+			match self {
+				Self::OpenParenthesis => write!(f, "OPEN_PARENTHESIS_TOKEN"),
+				Self::CloseParenthesis => write!(f, "CLOSE_PARENTHESIS_TOKEN"),
+				Self::OpenBrace => write!(f, "OPEN_BRACE_TOKEN"),
+				Self::CloseBrace => write!(f, "CLOSE_PARENTHESIS_TOKEN"),
+				Self::Plus => write!(f, "PLUS_TOKEN"),
+				Self::Minus => write!(f, "MINUS_TOKEN"),
+				Self::Star => write!(f, "MULTIPLICATION_TOKEN"),
+				Self::ForwardSlash => write!(f, "DIVISION_TOKEN"),
+				Self::Percent => write!(f, "REMAINDER_TOKEN"),
+				Self::Comma => write!(f, "COMMA_TOKEN"),
+				Self::Colon => write!(f, "COLON_TOKEN"),
+				Self::NewLine => write!(f, "NEWLINE_TOKEN"),
+				Self::DoubleEquals => write!(f, "EQUALS_TOKEN"),
+				Self::NotEquals => write!(f, "NOT_EQUALS_TOKEN"),
+				Self::Equal => write!(f, "ASSIGNMENT_TOKEN"),
+				Self::GreaterEquals => write!(f, "GREATER_OR_EQUAL_TOKEN"),
+				Self::Greater => write!(f, "GREATER_TOKEN"),
+				Self::LessEquals => write!(f, "LESS_OR_EQUAL_TOKEN"),
+				Self::Less => write!(f, "LESS_TOKEN"),
+				Self::And => write!(f, "AND_TOKEN"),
+				Self::Or => write!(f, "OR_TOKEN"),
+				Self::Not => write!(f, "NOT_TOKEN"),
+				Self::True => write!(f, "TRUE_TOKEN"),
+				Self::False => write!(f, "FALSE_TOKEN"),
+				Self::If => write!(f, "IF_TOKEN"),
+				Self::Else => write!(f, "ELSE_TOKEN"),
+				Self::While => write!(f, "WHILE_TOKEN"),
+				Self::Break => write!(f, "BREAK_TOKEN"),
+				Self::Return => write!(f, "RETURN_TOKEN"),
+				Self::Continue => write!(f, "CONTINUE_TOKEN"),
+				Self::Space => write!(f, "SPACE_TOKEN"),
+				Self::Indentation => write!(f, "INDENTATION_TOKEN"),
+				Self::String => write!(f, "STRING_TOKEN"),
+				Self::Word => write!(f, "WORD_TOKEN"),
+				Self::Int32 => write!(f, "I32_TOKEN"),
+				Self::Float32 => write!(f, "F32_TOKEN"),
+				Self::Comment => write!(f, "COMMENT_TOKEN"),
+				// _ => write!(f, "{:?}", self),
+			}
+		}
 	}
 
 	#[derive(Debug)]
@@ -492,6 +541,7 @@ use tokenizer::*;
 
 mod parser {
 	mod types {
+		use std::rc::Rc;
 		use crate::frontend::GrugType;
 		// TODO Unnest some of these enums
 
@@ -500,16 +550,16 @@ mod parser {
 			TrueExpr,
 			FalseExpr,
 			StringExpr{
-				value: String,
+				value: Rc<str>,
 			},
 			ResourceExpr{
-				value: String,
+				value: Rc<str>,
 			},
 			EntityExpr{
-				value: String,
+				value: Rc<str>,
 			},
 			IdentifierExpr{
-				name: String
+				name: Rc<str>
 			},
 			I32Expr{
 				value: i32,
@@ -536,7 +586,7 @@ mod parser {
 			},
 			// LogicalExpr(Box<Expr>),
 			CallExpr{
-				function_name: String,
+				function_name: Rc<str>,
 				arguments: Vec<Expr>,
 				line: usize,
 				col: usize,
@@ -612,45 +662,65 @@ mod parser {
 		// TODO: Finish these structs
 		pub enum GlobalStatement {
 			GlobalVariableStatement{
-				name: String,
+				name: Rc<str>,
 				ty: GrugType,
 				assignment_expr: Expr,
 			},
 			GlobalOnFunction{
-				name: String,
+				name: Rc<str>,
 				arguments: Vec<Argument>,
 				body_statements: Vec<Statement>,
 				calls_helper_fn: bool,
 				has_while_loop: bool,
 			},
-			GlobalHelperFunction,
-			GlobalComment,
-			GlobalNewLine,
+			GlobalComment{
+				value: Rc<str>,
+			},
+			GlobalEmptyLine,
+		}
+
+		pub struct HelperFn {
+			pub(super) name: Rc<str>,
+			pub(super) arguments: Vec<Argument>,
+			pub(super) body_statements: Vec<Statement>,
+			pub(super) calls_helper_fn: bool,
+			pub(super) has_while_loop: bool,
+			pub(super) return_ty: GrugType,
 		}
 
 		pub struct Argument {
-			pub(super) name: String,
+			pub(super) name: Rc<str>,
 			pub(super) ty: GrugType,
 			// used when ty is Resource or Entity to keep track extension of the resource or the name of the entity
-			pub(super) extra_value: Option<String>
+			pub(super) extra_value: Option<Rc<str>>
 		}
 
 		// TODO: Finish these structs
 		// TODO: remove Statement suffix from these variants
 		pub enum Statement {
 			VariableStatement{
-				name: String,
+				name: Rc<str>,
 				ty: Option<GrugType>,
-				type_name: Option<String>,
 				assignment_expr: Expr,
 			},
 			CallStatement {
 				expr: Expr
 			},
-			IfStatement,
-			ReturnStatement,
-			WhileStatement,
-			Comment,
+			IfStatement{
+				condition: Expr,
+				if_statements: Vec<Statement>,
+				else_statements: Vec<Statement>,
+			},
+			ReturnStatement{
+				expr: Option<Expr>,
+			},
+			WhileStatement{
+				condition: Expr,
+				statements: Vec<Statement>,
+			},
+			Comment{
+				value: Rc<str>,
+			},
 			BreakStatement,
 			ContinueStatement,
 			EmptyLineStatement,
@@ -661,6 +731,9 @@ mod parser {
 
 	use super::tokenizer::{Token, TokenType};
 	use super::GrugType;
+	use std::collections::HashMap;
+	use std::rc::Rc;
+
 	#[derive(Debug)]
 	pub enum ParserError {
 		UnexpectedToken {
@@ -775,6 +848,20 @@ mod parser {
 			#[allow(unused)]
 			col: usize,
 		},
+		HelperFnReturnTypeCantBeResource {
+			fn_name: String,
+			#[allow(unused)]
+			line: usize,
+			#[allow(unused)]
+			col: usize,
+		},
+		HelperFnReturnTypeCantBeEntity {
+			fn_name: String,
+			#[allow(unused)]
+			line: usize,
+			#[allow(unused)]
+			col: usize,
+		},
 		IndentationMismatch{
 			expected_spaces: usize,
 			got_spaces: usize,
@@ -797,31 +884,72 @@ mod parser {
 			#[allow(unused)]
 			col: usize,
 		},
+		ExpectedStatementToken{
+			got_token: TokenType,
+			#[allow(unused)]
+			line: usize,
+			#[allow(unused)]
+			col: usize,
+		},
 		LocalNamedMe {
 			#[allow(unused)]
 			line: usize,
 			#[allow(unused)]
 			col: usize,
 		},
+		VariableCantBeResource {
+			name: String,
+			#[allow(unused)]
+			line: usize,
+			#[allow(unused)]
+			col: usize,
+		},
+		VariableCantBeEntity {
+			name: String,
+			#[allow(unused)]
+			line: usize,
+			#[allow(unused)]
+			col: usize,
+		},
+		MissingVariableAssignment{
+			name: String,
+			#[allow(unused)]
+			line: usize,
+			#[allow(unused)]
+			col: usize,
+		},
+		ReassigningMe {
+			#[allow(unused)]
+			line: usize,
+			#[allow(unused)]
+			col: usize,
+		}
+	}
+
+	impl std::fmt::Display for ParserError {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+			match self {
+				Self::UnexpectedToken {
+					expected,
+					got,
+					line, 
+					..
+				} => write!(f, "Expected token type {}, but got {} on line {}", expected, got, line),
+				_ => write!(f, "{:?}", self),
+			}
+		}
 	}
 
 	const MAX_PARSING_DEPTH: usize = 100;
 
-	pub struct Ast;
-	pub fn parse(tokens: &'_ [Token]) -> Result<Ast, ParserError> {
-		// let global_statements = [];
-		let helper_fns: Vec<()> = Vec::new();
-		// let on_fns = {};
-		// let statements = [];
-		// let arguments = [];
-		// let parsing_depth = 0;
-		// let loop_depth = 0;
-		// let parsing_depth = 0;
-		// let indentation = 0;
-		// let called_helper_fn_names = set();
-		// let global_statements = [];
+	struct Ast {
+		global_statements: Vec<GlobalStatement>,
+		helper_fns: HashMap<Rc<str>, HelperFn>, 
+	}
 
-		let mut ast = Vec::new();
+	pub fn parse(tokens: &'_ [Token]) -> Result<Vec<GlobalStatement>, ParserError> {
+		let mut global_statements = Vec::new();
+		let mut helper_fns = HashMap::new();
 
 		let mut seen_on_fn = false;
 		let mut seen_newline = false;
@@ -850,32 +978,32 @@ mod parser {
 					});
 				}
 
-				ast.push(parse_global_variable(&mut tokens)?);
+				global_statements.push(parse_global_variable(&mut tokens)?);
 				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
 
 				newline_allowed = true;
 				newline_required = true;
 				just_seen_global = true;
-			} else if let Ok(&[ref ty, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && ty.value.starts_with("on_") {
+			} else if let Ok(&[ref name_token, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && name_token.value.starts_with("on_") {
 				// Cannot have global function after helper function
 				if !helper_fns.is_empty() {
 					return Err(ParserError::OnFunctionAfterHelperFunctions{
-						name: ty.value.to_string(),
-						line: ty.line,
-						col: ty.col,
+						name: name_token.value.to_string(),
+						line: name_token.line,
+						col: name_token.col,
 					});
 				}
 				// expect newline after each item
 				if newline_required {
 					return Err(ParserError::ExpectedNewLine{
-						token_value: ty.value.to_string(),
-						line: ty.line,
-						col: ty.col,
+						token_value: name_token.value.to_string(),
+						line: name_token.line,
+						col: name_token.col,
 					});
 				}
 
 				let on_fn = parse_on_fn(&mut tokens)?;
-				ast.push(on_fn);
+				global_statements.push(on_fn);
 
 				seen_on_fn = true;
 
@@ -884,16 +1012,117 @@ mod parser {
 
 				just_seen_global = false;
 				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+			} else if let Ok(&[ref name_token, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && name_token.value.starts_with("helper_") {
+				// expect newline after each item
+				if newline_required {
+					return Err(ParserError::ExpectedNewLine{
+						token_value: name_token.value.to_string(),
+						line: name_token.line,
+						col: name_token.col,
+					});
+				}
+
+				let helper_fn = parse_helper_fn(&mut tokens)?;
+				helper_fns.insert(Rc::clone(&helper_fn.name), helper_fn);
+
+				newline_allowed = true;
+				newline_required = true;
+
+				just_seen_global = false;
+				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+			} else if let Ok(&[ref token]) = consume_next_token_types(&mut tokens, &[TokenType::NewLine]) {
+				if !newline_allowed {
+					return Err(ParserError::NewlineNotAllowed{
+						line: token.line,
+						col: token.col,
+					});
+				}
+				seen_newline = true;
+
+				// Disallow consecutive empty lines
+				newline_allowed = false;
+				newline_required = false;
+				
+				global_statements.push(GlobalStatement::GlobalEmptyLine);
+			} else if let Ok(&[ref comment_token]) = consume_next_token_types(&mut tokens, &[TokenType::Comment]) {
+				newline_allowed = true;
+
+				global_statements.push(GlobalStatement::GlobalComment{
+					value: comment_token.value.into(),
+				});
+				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
 			}
 		}
 
-		Ok(Ast)
+		Ok(global_statements)
 	}
 
+	// helper_fn -> "on_" + name + "(" + arguments? + ")" + type + statements 
+	fn parse_helper_fn<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<HelperFn, ParserError> {
+		let name_token = tokens.next().unwrap();
+		let fn_name = name_token.value;
+
+		// TODO: Implement this
+		// 
+		// if (!seen_called_helper_fn_name(fn.fn_name)) {
+		// 	grug_error("%s() is defined before the first time it gets called", fn.fn_name);
+		// }
+
+		// This should never fail because this is checked before calling parse_helper_fn
+		consume_next_token_types(tokens, &[TokenType::OpenParenthesis]).unwrap();
+
+		let args = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
+			parse_arguments(tokens)?
+		} else {
+			Vec::new()
+		};
+		consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
+
+		// return type
+		let return_ty = if let Ok(&[_, ref type_token]) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Word]) {
+			match parse_type(tokens)? {
+				GrugType::Resource => return Err(ParserError::HelperFnReturnTypeCantBeResource{
+					fn_name: fn_name.to_string(),
+					line: name_token.line,
+					col: name_token.line,
+				}),
+				GrugType::Entity   => return Err(ParserError::HelperFnReturnTypeCantBeEntity{
+					fn_name: fn_name.to_string(),
+					line: name_token.line,
+					col: name_token.line,
+				}),
+				x => x,
+			}
+		} else {
+			GrugType::Void
+		};
+		
+		let body_statements = parse_statements(tokens, 0, 1)?;
+
+		if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLineStatement)) {
+			return Err(ParserError::EmptyFunction{
+				name: fn_name.to_string(),
+				line: name_token.line, 
+				col: name_token.col,
+			});
+		}
+
+		Ok(HelperFn{
+			name: fn_name.into(),
+			arguments: args,
+			body_statements,
+			calls_helper_fn: false,
+			has_while_loop: false,
+			return_ty
+		})
+	}
+
+	// on_fn -> "on_" + name + "(" + arguments? + ")" + statements 
 	fn parse_on_fn<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<GlobalStatement, ParserError> {
 		let name_token = tokens.next().unwrap();
 		let fn_name = name_token.value;
 
+		// This should never fail because this is checked before calling parse_on_fn
 		consume_next_token_types(tokens, &[TokenType::OpenParenthesis]).unwrap();
 
 		let args = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
@@ -905,7 +1134,7 @@ mod parser {
 		
 		let body_statements = parse_statements(tokens, 0, 1)?;
 
-		if body_statements.iter().all(|x| matches!(x, Statement::Comment | Statement::EmptyLineStatement)) {
+		if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLineStatement)) {
 			return Err(ParserError::EmptyFunction{
 				name: fn_name.to_string(),
 				line: name_token.line, 
@@ -914,7 +1143,7 @@ mod parser {
 		}
 
 		Ok(GlobalStatement::GlobalOnFunction{
-			name: fn_name.to_string(),
+			name: fn_name.into(),
 			arguments: args,
 			body_statements,
 			calls_helper_fn: false,
@@ -947,7 +1176,7 @@ mod parser {
 				_ => (),
 			}
 			arguments.push(Argument{
-				name: arg_name.to_string(),
+				name: arg_name.into(),
 				ty: arg_type,
 				extra_value: None,
 			});
@@ -962,6 +1191,7 @@ mod parser {
 	}
 
 	// TODO: Get the grammar for statements
+	// This parser consumes a space before consuming the curly braces
 	fn parse_statements<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize) -> Result<Vec<Statement>, ParserError> {
 		assert_parsing_depth(parsing_depth + 1)?;
 		consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
@@ -973,7 +1203,7 @@ mod parser {
 
 		while !is_end_of_block(tokens, indentation)? {
 			// newlines
-			if let Ok(&[ref token]) = assert_next_token_types(tokens, &[TokenType::NewLine]) {
+			if let Ok(&[ref token]) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
 				if !newline_allowed {
 					return Err(ParserError::NewlineNotAllowed{
 						line: token.line,
@@ -987,18 +1217,24 @@ mod parser {
 				statements.push(Statement::EmptyLineStatement);
 			} else {
 				newline_allowed = true;
-				consume_indentation(tokens, indentation + 1);
+				consume_indentation(tokens, indentation)?;
 
-				statements.push(parse_statement(tokens, parsing_depth + 1, indentation + 1)?);
-				consume_next_token_types(tokens, &[TokenType::NewLine]);
+				statements.push(parse_statement(tokens, parsing_depth + 1, indentation)?);
+				consume_next_token_types(tokens, &[TokenType::NewLine])?;
 			}
 		}
+
+		if indentation != 1 {
+			consume_indentation(tokens, indentation - 1)?;
+		}
+		consume_next_token_types(tokens, &[TokenType::CloseBrace])?;
 
 		Ok(statements)
 	}
 
+	// stmt -> variable_stmt | if_stmt | return_stmt | while_stmt | ;
 	fn parse_statement<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize) -> Result<Statement, ParserError> {
-		let next_tokens = peek_next_tokens(tokens, 2)?;
+		let next_tokens = peek_next_tokens::<2>(tokens)?;
 		match next_tokens[0].ty {
 			TokenType::Word => {
 				match next_tokens[1].ty {
@@ -1008,8 +1244,7 @@ mod parser {
 						})
 					}
 					TokenType::Colon | TokenType::Space => {
-						parse_local_variable(tokens);
-						todo!();
+						parse_local_variable(tokens, parsing_depth + 1)
 					}
 					_ => {
 						Err(ParserError::ExpectedStatement{
@@ -1020,21 +1255,147 @@ mod parser {
 					}
 				}
 			}
-			_ => todo!(),
+			TokenType::If => {
+				parse_if_statement(tokens, parsing_depth + 1, indentation)
+			}
+			TokenType::Return => {
+				let expr = if let Ok(_) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
+					None
+				} else {
+					consume_space(tokens)?;
+					Some(parse_expression(tokens, parsing_depth + 1)?)
+				};
+				Ok(Statement::ReturnStatement{
+					expr
+				})
+			}
+			TokenType::While => {
+				parse_while_statement(tokens, parsing_depth + 1, indentation)
+			}
+			TokenType::Break => {
+				Ok(Statement::BreakStatement)
+			}
+			TokenType::Continue => {
+				Ok(Statement::ContinueStatement)
+			}
+			TokenType::NewLine => {
+				Ok(Statement::EmptyLineStatement)
+			}
+			TokenType::Comment => {
+				Ok(Statement::Comment{
+					value: next_tokens[0].value.into(),
+				})
+			}
+			got_token => {
+				Err(ParserError::ExpectedStatementToken{
+					got_token,
+					line: next_tokens[0].line,
+					col: next_tokens[0].col,
+				})
+			},
 		}
 	}
+	
+	// while_statement -> "while" + " " + expr + statements
+	fn parse_while_statement<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize) -> Result<Statement, ParserError> {
+		assert_parsing_depth(parsing_depth)?;
+		consume_next_token_types(tokens, &[TokenType::While, TokenType::Space])?;
 
-	fn parse_local_variable<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<GlobalStatement, ParserError> {
-		let name_token = &tokens.as_slice()[0];
+		let condition = parse_expression(tokens, parsing_depth + 1)?;
+		let statements = parse_statements(tokens, parsing_depth + 1, indentation + 1)?;
+
+		Ok(Statement::WhileStatement{
+			condition,
+			statements,
+		})
+	}
+
+	// if_stmt -> "if" + " " + expr + " " + statements + ("else" + (" " + if_stmt | statements))?
+	fn parse_if_statement<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize) -> Result<Statement, ParserError> {
+		assert_parsing_depth(parsing_depth)?;
+		consume_next_token_types(tokens, &[TokenType::If, TokenType::Space])?;
+
+		let condition = parse_expression(tokens, parsing_depth + 1)?;
+		let if_statements = parse_statements(tokens, parsing_depth + 1, indentation + 1)?;
+		let else_statements;
+
+		if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]) {
+			if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::If]) {
+				else_statements = vec![parse_if_statement(tokens, parsing_depth, indentation)?];
+			} else {
+				else_statements = parse_statements(tokens, parsing_depth, indentation + 1)?;
+			}
+		} else {
+			else_statements = Vec::new();
+		}
+
+		Ok(Statement::IfStatement{
+			condition, 
+			if_statements,
+			else_statements,
+		})
+	}
+
+	// local_variable -> word + (":" + type)? + "=" + " " + expr
+	fn parse_local_variable<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Statement, ParserError> {
+		assert_parsing_depth(parsing_depth)?;
+		let name_token = get_next_token(tokens)?;
 		let local_name = name_token.value; 
+		let mut ty = None;
 
+		if consume_next_token_types(tokens, &[TokenType::Colon]).is_ok() {
+			if local_name == "me" {
+				return Err(ParserError::LocalNamedMe{
+					line: name_token.line,
+					col: name_token.col,
+				});
+			}
+			consume_space(tokens)?;
+			ty = Some(parse_type(tokens)?);
+
+			match ty {
+				Some(GrugType::Resource) => return Err(ParserError::VariableCantBeResource{
+					name: local_name.to_string(),
+					line: name_token.line,
+					col: name_token.line,
+				}),
+				Some(GrugType::Entity)   => return Err(ParserError::VariableCantBeEntity{
+					name: local_name.to_string(),
+					line: name_token.line,
+					col: name_token.line,
+				}),
+				_ => (),
+			}
+		}
+		// TODO: This error should just be folded into ExpectedSpace but it has
+		// to be different to match the required error message
+		consume_space(tokens).map_err(|x| match x {
+			ParserError::ExpectedSpace{got, line, col} => ParserError::MissingVariableAssignment{
+				name: local_name.to_string(),
+				line,
+				col
+			},
+			_ => unreachable!(),
+		})?;
+
+		// TODO: This Me error should be folded into the other Me error within
+		// the branch above but it has to be separate to match the required error message
 		if local_name == "me" {
-			return Err(ParserError::LocalNamedMe{
+			return Err(ParserError::ReassigningMe{
 				line: name_token.line,
 				col: name_token.col,
 			});
 		}
-		todo!();
+
+		consume_next_token_types(tokens, &[TokenType::Equal])?;
+
+		consume_space(tokens)?;
+		let assignment_expr = parse_expression(tokens, parsing_depth + 1)?;
+		Ok(Statement::VariableStatement{
+			name: local_name.into(),
+			ty,
+			assignment_expr,
+		})
 	}
 
 	fn is_end_of_block(tokens: &mut std::slice::Iter<Token>, indentation: usize) -> Result<bool, ParserError> {
@@ -1070,7 +1431,7 @@ mod parser {
 
 	// global -> word + ":" + type + " =" + expr;
 	fn parse_global_variable<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<GlobalStatement, ParserError> {
-		let name_token = &tokens.as_slice()[0];
+		let name_token = get_next_token(tokens)?;
 		let global_name = name_token.value; 
 
 		if global_name == "me" {
@@ -1113,7 +1474,7 @@ mod parser {
 		let assignment_expr = parse_expression(tokens, 0)?;
 		
 		return Ok(GlobalStatement::GlobalVariableStatement{
-			name: global_name.to_string(),
+			name: global_name.into(),
 			ty: global_type,
 			assignment_expr,
 		});
@@ -1364,15 +1725,15 @@ mod parser {
 		}
 	}
 
+	// call -> primary | word + "(" + (expr + ("," + " " + expr)*) ? + ")"
 	fn parse_call<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
 		assert_parsing_depth(parsing_depth + 1)?;
 		let expr = parse_primary(tokens, parsing_depth + 1)?;
 
 		// Not a function call
-		if matches!(peek_next_token(tokens), Ok(Token{ty: TokenType::OpenParenthesis,..})) {
+		if !matches!(peek_next_token(tokens), Ok(Token{ty: TokenType::OpenParenthesis,..})) {
 			return Ok(expr);
 		}
-		
 
 		// functions can only be identifiers for now
 		match expr.ty {
@@ -1383,11 +1744,13 @@ mod parser {
 				..
 			} => {
 				// TODO: Add called helper_functions tracking
-				let next_token = peek_next_token(tokens)?;
+				let [_, next_token] = peek_next_tokens(tokens)?;
 				if next_token.ty == TokenType::CloseParenthesis {
+					tokens.next();
+					tokens.next();
 					return Ok(Expr{
 						ty: ExprType::CallExpr {
-							function_name: name.to_string(),
+							function_name: name.into(),
 							arguments: Vec::new(),
 							line: next_token.line,
 							col: next_token.col,
@@ -1404,7 +1767,7 @@ mod parser {
 						consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 						return Ok(Expr{
 							ty: ExprType::CallExpr {
-								function_name: name.to_string(),
+								function_name: name.into(),
 								arguments: arguments,
 								line: next_token.line,
 								col: next_token.col,
@@ -1426,12 +1789,12 @@ mod parser {
 		}
 	}
 
+	// primary -> "(" + expr + ")" | "true" | "false" | string | word | i32 | f32;
 	fn parse_primary<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
 		assert_parsing_depth(parsing_depth + 1)?;
 		
-		match peek_next_token(tokens)? {
+		match get_next_token(tokens)? {
 			Token{ty: TokenType::OpenParenthesis, ..} => {
-				consume_next_token_types(tokens, &[TokenType::OpenParenthesis]).unwrap();
 				let expr = parse_expression(tokens, parsing_depth + 1)?;
 				let close_paren = &consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?[0];
 
@@ -1468,7 +1831,7 @@ mod parser {
 				Ok(Expr{
 					ty: ExprType::LiteralExpr{
 						expr: LiteralExpr::StringExpr {
-							value: value.to_string(),
+							value: (*value).into(),
 						},
 						line: *line,
 						col: *col
@@ -1480,7 +1843,7 @@ mod parser {
 				Ok(Expr{
 					ty: ExprType::LiteralExpr{
 						expr: LiteralExpr::IdentifierExpr {
-							name: value.to_string(),
+							name: (*value).into(),
 						},
 						line: *line,
 						col: *col
@@ -1585,8 +1948,8 @@ mod parser {
 		tokens.as_slice().get(0).ok_or(ParserError::OutOfTokensError)
 	}
 
-	fn peek_next_tokens<'a> (tokens: &std::slice::Iter<'a, Token<'a>>, count: usize) -> Result<&'a [Token<'a>], ParserError> {
-		tokens.as_slice().get(..count).ok_or(ParserError::OutOfTokensError)
+	fn peek_next_tokens<'a, const N: usize> (tokens: &std::slice::Iter<'a, Token<'a>>) -> Result<&'a [Token<'a>; N], ParserError> {
+		Ok(unsafe{&*(tokens.as_slice().get(..N).ok_or(ParserError::OutOfTokensError)? as *const _ as * const _)})
 	}
 
 	fn consume_space<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
