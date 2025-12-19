@@ -4,16 +4,205 @@
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 const SPACES_PER_INDENT: usize = 4;
 
-#[derive(Debug)]
-enum GrugType {
-	Void,
-	Bool,
-	I32,
-	F32,
-	String,
-	Id,
-	Resource,
-	Entity,
+
+mod types {
+	use std::rc::Rc;
+	// TODO Unnest some of these enums
+
+	#[derive(Debug)]
+	pub enum GrugType {
+		Void,
+		Bool,
+		I32,
+		F32,
+		String,
+		Id,
+		Resource,
+		Entity,
+	}
+
+	#[derive(Debug)]
+	pub enum LiteralExpr {
+		TrueExpr,
+		FalseExpr,
+		StringExpr{
+			value: Rc<str>,
+		},
+		ResourceExpr{
+			value: Rc<str>,
+		},
+		EntityExpr{
+			value: Rc<str>,
+		},
+		IdentifierExpr{
+			name: Rc<str>
+		},
+		I32Expr{
+			value: i32,
+		},
+		F32Expr{
+			value: f32,
+		},
+	}
+
+	#[derive(Debug)]
+	pub enum ExprType {
+		LiteralExpr{
+			expr: LiteralExpr,
+			line: usize,
+			col: usize,
+		},
+		UnaryExpr{
+			operator: UnaryOperator,
+			expr: Box<Expr>,
+		},
+		BinaryExpr{
+			operands: Box<(Expr, Expr)>,
+			operator: BinaryOperator,
+		},
+		// LogicalExpr(Box<Expr>),
+		CallExpr{
+			function_name: Rc<str>,
+			arguments: Vec<Expr>,
+			line: usize,
+			col: usize,
+		},
+		ParenthesizedExpr{
+			expr: Box<Expr>,
+			line: usize,
+			col: usize,
+		},
+	}
+
+	impl ExprType {
+		pub fn get_last_known_location(&self) -> (usize, usize) {
+			let mut current = self;
+			loop {
+				match current {
+					Self::LiteralExpr{
+						line,
+						col,
+						..
+					} => return (*line, *col),
+					Self::UnaryExpr{
+						expr,
+						..
+					} => current = &expr.ty,
+					Self::BinaryExpr{
+						operands,
+						..
+					} => current = &operands.1.ty,
+					Self::CallExpr{
+						line, col,
+						..
+					} => return (*line, *col),
+					Self::ParenthesizedExpr {
+						line, col, 
+						..
+					} => return (*line, *col),
+				}
+			}
+		}
+	}
+	
+	#[derive(Debug)]
+	pub enum UnaryOperator {
+		Not,
+		Minus,
+	}
+
+	#[derive(Debug)]
+	pub enum BinaryOperator {
+		Or,
+		And,
+		DoubleEquals,
+		NotEquals,
+		Greater,
+		GreaterEquals,
+		Less,
+		LessEquals,
+		Plus,
+		Minus,
+		Multiply,
+		Division,
+		Remainder,
+	}
+	
+	#[derive(Debug)]
+	pub struct Expr {
+		pub(super) ty: ExprType,
+		// Can be None before Type checking but MUST be Some after
+		pub(super) result_ty: Option<GrugType>,
+	}
+
+	// TODO: Finish these structs
+	#[derive(Debug)]
+	pub enum GlobalStatement {
+		GlobalVariableStatement{
+			name: Rc<str>,
+			ty: GrugType,
+			assignment_expr: Expr,
+		},
+		GlobalOnFunction{
+			name: Rc<str>,
+			arguments: Vec<Argument>,
+			body_statements: Vec<Statement>,
+			calls_helper_fn: bool,
+			has_while_loop: bool,
+		},
+		GlobalHelperFunction{
+			name: Rc<str>,
+			arguments: Vec<Argument>,
+			body_statements: Vec<Statement>,
+			calls_helper_fn: bool,
+			has_while_loop: bool,
+			return_ty: GrugType,
+		},
+		GlobalComment{
+			value: Rc<str>,
+		},
+		GlobalEmptyLine,
+	}
+
+	#[derive(Debug)]
+	pub struct Argument {
+		pub(super) name: Rc<str>,
+		pub(super) ty: GrugType,
+		// used when ty is Resource, Entity or id to keep track extension of the resource or the name of the entity
+		pub(super) extra_value: Option<Rc<str>>
+	}
+
+	// TODO: Finish these structs
+	// TODO: remove Statement suffix from these variants
+	#[derive(Debug)]
+	pub enum Statement {
+		VariableStatement{
+			name: Rc<str>,
+			ty: Option<GrugType>,
+			assignment_expr: Expr,
+		},
+		CallStatement {
+			expr: Expr
+		},
+		IfStatement{
+			condition: Expr,
+			if_statements: Vec<Statement>,
+			else_statements: Vec<Statement>,
+		},
+		ReturnStatement{
+			expr: Option<Expr>,
+		},
+		WhileStatement{
+			condition: Expr,
+			statements: Vec<Statement>,
+		},
+		Comment{
+			value: Rc<str>,
+		},
+		BreakStatement,
+		ContinueStatement,
+		EmptyLineStatement,
+	}
 }
 
 pub fn compile_grug_file<'a>(path: &'a str, mod_name: &'a str) -> Result<(), GrugError<'a>> {
@@ -126,10 +315,14 @@ pub enum GrugError<'a> {
 	FileNameError(FileNameError<'a>),
 	TokenizerError(TokenizerError),
 	ParserError(ParserError),
+	ModApiError(ModApiError),
 }
 
 impl<'a> From<FileNameError<'a>> for GrugError<'a> {
 	fn from (from: FileNameError<'a>) -> Self {
+		// this extra single quote is needed to prevent a vim plugin from
+		// mishandling quotes in the rest of the file
+		// '
 		Self::FileNameError(from)
 	}
 }
@@ -156,7 +349,7 @@ impl<'a> std::fmt::Display for GrugError<'a> {
 	}
 }
 
-mod tokenizer {
+pub mod tokenizer {
 	use super::SPACES_PER_INDENT;
 
 	#[derive(Debug)]
@@ -539,199 +732,10 @@ mod tokenizer {
 }
 use tokenizer::*;
 
-mod parser {
-	mod types {
-		use std::rc::Rc;
-		use crate::frontend::GrugType;
-		// TODO Unnest some of these enums
-
-		#[derive(Debug)]
-		pub enum LiteralExpr {
-			TrueExpr,
-			FalseExpr,
-			StringExpr{
-				value: Rc<str>,
-			},
-			ResourceExpr{
-				value: Rc<str>,
-			},
-			EntityExpr{
-				value: Rc<str>,
-			},
-			IdentifierExpr{
-				name: Rc<str>
-			},
-			I32Expr{
-				value: i32,
-			},
-			F32Expr{
-				value: f32,
-			},
-		}
-
-		#[derive(Debug)]
-		pub enum ExprType {
-			LiteralExpr{
-				expr: LiteralExpr,
-				line: usize,
-				col: usize,
-			},
-			UnaryExpr{
-				operator: UnaryOperator,
-				expr: Box<Expr>,
-			},
-			BinaryExpr{
-				operands: Box<(Expr, Expr)>,
-				operator: BinaryOperator,
-			},
-			// LogicalExpr(Box<Expr>),
-			CallExpr{
-				function_name: Rc<str>,
-				arguments: Vec<Expr>,
-				line: usize,
-				col: usize,
-			},
-			ParenthesizedExpr{
-				expr: Box<Expr>,
-				line: usize,
-				col: usize,
-			},
-		}
-
-		impl ExprType {
-			pub fn get_last_known_location(&self) -> (usize, usize) {
-				let mut current = self;
-				loop {
-					match current {
-						Self::LiteralExpr{
-							line,
-							col,
-							..
-						} => return (*line, *col),
-						Self::UnaryExpr{
-							expr,
-							..
-						} => current = &expr.ty,
-						Self::BinaryExpr{
-							operands,
-							..
-						} => current = &operands.1.ty,
-						Self::CallExpr{
-							line, col,
-							..
-						} => return (*line, *col),
-						Self::ParenthesizedExpr {
-							line, col, 
-							..
-						} => return (*line, *col),
-					}
-				}
-			}
-		}
-		
-		#[derive(Debug)]
-		pub enum UnaryOperator {
-			Not,
-			Minus,
-		}
-
-		#[derive(Debug)]
-		pub enum BinaryOperator {
-			Or,
-			And,
-			DoubleEquals,
-			NotEquals,
-			Greater,
-			GreaterEquals,
-			Less,
-			LessEquals,
-			Plus,
-			Minus,
-			Multiply,
-			Division,
-			Remainder,
-		}
-		
-		#[derive(Debug)]
-		pub struct Expr {
-			pub(super) ty: ExprType,
-			// Can be None before Type checking but MUST be Some after
-			pub(super) result_ty: Option<GrugType>,
-		}
-
-		// TODO: Finish these structs
-		pub enum GlobalStatement {
-			GlobalVariableStatement{
-				name: Rc<str>,
-				ty: GrugType,
-				assignment_expr: Expr,
-			},
-			GlobalOnFunction{
-				name: Rc<str>,
-				arguments: Vec<Argument>,
-				body_statements: Vec<Statement>,
-				calls_helper_fn: bool,
-				has_while_loop: bool,
-			},
-			GlobalComment{
-				value: Rc<str>,
-			},
-			GlobalEmptyLine,
-		}
-
-		pub struct HelperFn {
-			pub(super) name: Rc<str>,
-			pub(super) arguments: Vec<Argument>,
-			pub(super) body_statements: Vec<Statement>,
-			pub(super) calls_helper_fn: bool,
-			pub(super) has_while_loop: bool,
-			pub(super) return_ty: GrugType,
-		}
-
-		pub struct Argument {
-			pub(super) name: Rc<str>,
-			pub(super) ty: GrugType,
-			// used when ty is Resource or Entity to keep track extension of the resource or the name of the entity
-			pub(super) extra_value: Option<Rc<str>>
-		}
-
-		// TODO: Finish these structs
-		// TODO: remove Statement suffix from these variants
-		pub enum Statement {
-			VariableStatement{
-				name: Rc<str>,
-				ty: Option<GrugType>,
-				assignment_expr: Expr,
-			},
-			CallStatement {
-				expr: Expr
-			},
-			IfStatement{
-				condition: Expr,
-				if_statements: Vec<Statement>,
-				else_statements: Vec<Statement>,
-			},
-			ReturnStatement{
-				expr: Option<Expr>,
-			},
-			WhileStatement{
-				condition: Expr,
-				statements: Vec<Statement>,
-			},
-			Comment{
-				value: Rc<str>,
-			},
-			BreakStatement,
-			ContinueStatement,
-			EmptyLineStatement,
-		}
-	}
-
-	pub use types::*;
-
+pub mod parser {
 	use super::tokenizer::{Token, TokenType};
-	use super::GrugType;
-	use std::collections::HashMap;
+	use super::types::*;
+	use std::collections::HashSet;
 	use std::rc::Rc;
 
 	#[derive(Debug)]
@@ -942,14 +946,9 @@ mod parser {
 
 	const MAX_PARSING_DEPTH: usize = 100;
 
-	struct Ast {
-		global_statements: Vec<GlobalStatement>,
-		helper_fns: HashMap<Rc<str>, HelperFn>, 
-	}
-
 	pub fn parse(tokens: &'_ [Token]) -> Result<Vec<GlobalStatement>, ParserError> {
 		let mut global_statements = Vec::new();
-		let mut helper_fns = HashMap::new();
+		let mut helper_fns = HashSet::new();
 
 		let mut seen_on_fn = false;
 		let mut seen_newline = false;
@@ -1023,7 +1022,11 @@ mod parser {
 				}
 
 				let helper_fn = parse_helper_fn(&mut tokens)?;
-				helper_fns.insert(Rc::clone(&helper_fn.name), helper_fn);
+
+				let helper_fn_name = if let GlobalStatement::GlobalHelperFunction{ref name,..} = helper_fn {Rc::clone(name)} else {unreachable!()};
+				helper_fns.insert(helper_fn_name);
+
+				global_statements.push(helper_fn);
 
 				newline_allowed = true;
 				newline_required = true;
@@ -1058,7 +1061,7 @@ mod parser {
 	}
 
 	// helper_fn -> "on_" + name + "(" + arguments? + ")" + type + statements 
-	fn parse_helper_fn<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<HelperFn, ParserError> {
+	fn parse_helper_fn<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<GlobalStatement, ParserError> {
 		let name_token = tokens.next().unwrap();
 		let fn_name = name_token.value;
 
@@ -1107,7 +1110,7 @@ mod parser {
 			});
 		}
 
-		Ok(HelperFn{
+		Ok(GlobalStatement::GlobalHelperFunction{
 			name: fn_name.into(),
 			arguments: args,
 			body_statements,
@@ -1370,7 +1373,7 @@ mod parser {
 		// TODO: This error should just be folded into ExpectedSpace but it has
 		// to be different to match the required error message
 		consume_space(tokens).map_err(|x| match x {
-			ParserError::ExpectedSpace{got, line, col} => ParserError::MissingVariableAssignment{
+			ParserError::ExpectedSpace{line, col, ..} => ParserError::MissingVariableAssignment{
 				name: local_name.to_string(),
 				line,
 				col
@@ -1975,4 +1978,298 @@ mod parser {
 		Ok(token)
 	}
 }
+
 use parser::*;
+
+pub mod mod_api {
+	use super::types::*;
+	use super::*;
+
+	#[derive(Debug)]
+	pub struct ModApi {
+		entities: Vec<GrugEntity>,
+		game_functions: Vec<GrugGameFn>,
+	}
+
+	#[derive(Debug)]
+	pub struct GrugEntity {
+		name: String,
+		description: Option<String>,
+		on_fns: Vec<GrugOnFn>,
+	}
+	
+	#[derive(Debug)]
+	pub struct GrugOnFn {
+		name: String, 
+		description: Option<String>,
+		arguments: Vec<Argument>,
+	}
+
+	#[derive(Debug)]
+	pub struct GrugGameFn {
+		name: String,
+		description: Option<String>,
+		// second part is the extra argument for ids, resources and entities
+		return_ty: (GrugType, Option<String>),
+		arguments: Vec<Argument>,
+	}
+
+	// TODO: Add Display impl for all variants
+	#[derive(Debug)]
+	pub enum ModApiError{
+		JsonError(json::Error),
+		EntitiesNotObject,
+		OnFunctionsNotObject{
+			entity_name: String,
+		},
+		OnFnsArgumentsNotArray{
+			entity_name: String,
+			on_fn_name: String,
+		},
+		OnFnArgumentMissingName{
+			entity_name: String,
+			on_fn_name: String,
+		},
+		OnFnArgumentMissingType{
+			entity_name: String,
+			on_fn_name: String,
+		},
+		OnFnArgumentResource {
+			entity_name: String,
+			on_fn_name: String,
+			argument_name: String,
+		},
+		OnFnArgumentEntity {
+			entity_name: String,
+			on_fn_name: String,
+			argument_name: String,
+		},
+		GameFnsNotObject,
+		OnFnArgumentVoid {
+			entity_name: String,
+			on_fn_name: String,
+			argument_name: String,
+		},
+		GameFnArgumentsNotArray{
+			game_fn_name: String,
+		},
+		GameFnArgumentMissingName{
+			game_fn_name: String,
+		},
+		GameFnArgumentMissingType{
+			game_fn_name: String,
+			argument_name: String,
+		},
+		GameFnArgumentVoid{
+			game_fn_name: String,
+			argument_name: String,
+		},
+		GameFnResourceMissingExtension{
+			game_fn_name: String,
+			argument_name: String,
+		},
+		GameFnReturnsResource{
+			game_fn_name: String,
+		},
+	}
+	
+	impl From<json::Error> for ModApiError {
+		fn from(other: json::Error) -> ModApiError {
+			ModApiError::JsonError(other)
+		}
+	}
+
+	pub fn get_mod_api(mod_api_text: &str) -> Result<ModApi, ModApiError> {
+		use std::collections::HashSet;
+
+		let mod_api_json = json::parse(mod_api_text)?;
+		// "entities" object
+		let entities = &mod_api_json["entities"];
+		if !entities.is_object() {
+			return Err(ModApiError::EntitiesNotObject);
+		}
+
+		let existing_entities = entities.entries().map(|(entity_name, _)| entity_name).collect::<HashSet<_>>();
+
+		let entities = entities.entries().map(|(entity_name, entity_values)| {
+			// optional "description" string
+			let description = entity_values["description"].as_str().map(str::to_string);
+
+			// optional "on_fns" object
+			let on_fns = &entity_values["on_functions"];
+			if !on_fns.is_object() && !on_fns.is_null() {
+				return Err(ModApiError::OnFunctionsNotObject{
+					entity_name: entity_name.to_string(),
+				});
+			}
+			let on_fns = on_fns.entries().map(|(fn_name, fn_values)| {
+				// optional "description" string
+				let description = fn_values["description"].as_str().map(str::to_string);
+				
+				// optional "arguments" object
+				let arguments = &fn_values["arguments"];
+				if !arguments.is_array() && !arguments.is_null(){
+					return Err(ModApiError::OnFnsArgumentsNotArray{
+						entity_name: entity_name.to_string(),
+						on_fn_name: fn_name.to_string(),
+					});
+				}
+				let arguments = arguments.members().map(|argument_values| {
+					// optional "name" string
+					let argument_name = argument_values["name"].as_str().ok_or(ModApiError::OnFnArgumentMissingName{
+						entity_name: entity_name.to_string(),
+						on_fn_name: fn_name.to_string(),
+					})?;
+					// "type" string
+					let ty = argument_values["type"].as_str().ok_or(ModApiError::OnFnArgumentMissingType{
+						entity_name: entity_name.to_string(),
+						on_fn_name: fn_name.to_string(),
+					})?;
+					let mut extra_value = None;
+					let ty = match ty {
+						// arguments can't be void
+						"void"     => Err(ModApiError::OnFnArgumentVoid{
+							entity_name: entity_name.to_string(),
+							on_fn_name: fn_name.to_string(),
+							argument_name: argument_name.to_string(),
+						})?,
+						"bool"     => GrugType::Bool,
+						"i32"      => GrugType::I32,
+						"f32"      => GrugType::F32,
+						"string"   => GrugType::String,
+						"id"       => GrugType::Id,
+						"entity"   => GrugType::Entity,
+						"resource" => Err(ModApiError::OnFnArgumentResource{
+							entity_name: entity_name.to_string(),
+							on_fn_name: fn_name.to_string(),
+							argument_name: argument_name.to_string(),
+						})?,
+						arg_ty => {
+							extra_value = Some(arg_ty.to_string());
+							if existing_entities.contains(arg_ty) {
+								GrugType::Entity
+							} else {
+								GrugType::Id
+							}
+						}
+					};
+					Ok(Argument{
+						name: argument_name.into(),
+						ty,
+						extra_value: None,
+					})
+				}).collect::<Result<Vec<_>, ModApiError>>()?;
+				Ok(GrugOnFn{
+					name: fn_name.to_string(),
+					description,
+					arguments
+				})
+			}).collect::<Result<Vec<_>, _>>()?;
+			Ok(GrugEntity{
+				name: entity_name.to_string(),
+				description,
+				on_fns
+			})
+		}).collect::<Result<Vec<_>, ModApiError>>()?;
+		
+		// "game_functions" object
+		let game_functions = &mod_api_json["game_functions"];
+		if !game_functions.is_object() {
+			return Err(ModApiError::GameFnsNotObject);
+		}
+
+		let game_functions = game_functions.entries().map(|(fn_name, game_fn_values)| {
+			// optional "description" string
+			let description = game_fn_values["description"].as_str().map(str::to_string);
+
+			// optional "arguments" object
+			let arguments = &game_fn_values["arguments"];
+			if !arguments.is_array() && !arguments.is_null(){
+				return Err(ModApiError::GameFnArgumentsNotArray{
+					game_fn_name: fn_name.to_string(),
+				});
+			}
+			let arguments = arguments.members().map(|argument_values| {
+				// "name" string
+				let argument_name = argument_values["name"].as_str().ok_or(ModApiError::GameFnArgumentMissingName{
+					game_fn_name: fn_name.to_string(),
+				})?;
+				// "type" string
+				let ty = argument_values["type"].as_str().ok_or(ModApiError::GameFnArgumentMissingType{
+					game_fn_name: fn_name.to_string(),
+					argument_name: argument_name.to_string(),
+				})?;
+				let mut extra_value = None;
+				let ty = match ty {
+					// arguments can't be void
+					"void"     => Err(ModApiError::GameFnArgumentVoid{
+						game_fn_name: fn_name.to_string(),
+						argument_name: argument_name.to_string(),
+					})?,
+					"bool"     => GrugType::Bool,
+					"i32"      => GrugType::I32,
+					"f32"      => GrugType::F32,
+					"string"   => GrugType::String,
+					"id"       => GrugType::Id,
+					"entity"   => GrugType::Entity,
+					"resource" => {
+						extra_value = Some(argument_values["resource_extension"].as_str().ok_or(ModApiError::GameFnResourceMissingExtension{
+							game_fn_name: fn_name.to_string(),
+							argument_name: argument_name.to_string(),
+						})?.into());
+						GrugType::Resource
+					}
+					arg_ty => {
+						extra_value = Some(arg_ty.into());
+						if existing_entities.contains(arg_ty) {
+							GrugType::Entity
+						} else {
+							GrugType::Id
+						}
+					}
+				};
+				Ok(Argument{
+					name: argument_name.into(),
+					ty,
+					extra_value,
+				})
+			}).collect::<Result<Vec<_>, ModApiError>>()?;
+
+			// optional "return_type" string
+			let return_ty = game_fn_values["return_type"].as_str().unwrap_or("void");
+			let return_ty = match return_ty {
+				"void"     => (GrugType::Void, None),
+				"bool"     => (GrugType::Bool, None),
+				"i32"      => (GrugType::I32, None),
+				"f32"      => (GrugType::F32, None),
+				"string"   => (GrugType::String, None),
+				"id"       => (GrugType::Id, None),
+				"entity"   => (GrugType::Entity, None),
+				"resource" => Err(ModApiError::GameFnReturnsResource{
+					game_fn_name: fn_name.to_string(),
+				})?,
+				_ => {
+					let extra_value = Some(return_ty.to_string());
+					if existing_entities.contains(return_ty) {
+						(GrugType::Entity, extra_value)
+					} else {
+						(GrugType::Id, extra_value)
+					}
+				}
+			};
+			Ok(GrugGameFn{
+				name: fn_name.to_string(),
+				return_ty,
+				description,
+				arguments
+			})
+		}).collect::<Result<Vec<_>, ModApiError>>()?;
+
+		Ok(ModApi{
+			entities,
+			game_functions
+		})
+	}
+}
+
+use mod_api::*;

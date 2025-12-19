@@ -38,6 +38,7 @@ pub extern "C" fn compile_grug_file(path: *const c_char, mod_name: *const c_char
 pub extern "C" fn init_globals_fn_dispatcher (path: *const c_char) {
 	println!("init_globals_fn_dispatcher called with {}", unsafe{CStr::from_ptr(path)}.to_str().unwrap());
 }
+#[allow(unused_variables)]
 pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, grug_file_path: *const c_char, value: *mut grug_value, values_count: c_size_t) {
 	println!(
 		"on_fn_dispatcher: {} {}", 
@@ -45,12 +46,15 @@ pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, grug_file_path: *con
 		unsafe{CStr::from_ptr(grug_file_path)}.to_str().unwrap(),
 	);
 }
+#[allow(unused_variables)]
 pub extern "C" fn dump_file_to_json (input_grug_path: *const c_char, output_json_path: *const c_char) -> bool {
 	false
 }
+#[allow(unused_variables)]
 pub extern "C" fn generate_file_from_json (input_json_path: *const c_char, output_grug_path: *const c_char) -> bool {
 	false
 }
+#[allow(unused_variables)]
 pub extern "C" fn game_fn_error (msg: *const c_char) {
 	println!("game_fn_error called with {}", unsafe{CStr::from_ptr(msg)}.to_str().unwrap());
 }
