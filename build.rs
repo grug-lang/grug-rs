@@ -10,32 +10,47 @@ fn build_tests() {
 
 	let out_dir = PathBuf::from(var("OUT_DIR").unwrap());
 
-	let mut source_path = PathBuf::from("./src/grug-tests/");
-	let mut archive_path = PathBuf::from(var("OUT_DIR").unwrap());
-
-	#[cfg(target_os = "linux")]
-	{
-		source_path.push("tests.so");
-		archive_path.push("libtests.so");
-	}
-	#[cfg(target_os = "windows")]
-	{
-		source_path.push("tests.dll");
-		archive_path.push("tests.dll");
-	}
+	let mut source_path = String::from("./src/grug-tests");
+	let mut archive_path = String::from(var("OUT_DIR").unwrap());
 
 	println!("{:?}", archive_path);
 
 	if std::fs::exists(&archive_path).ok().is_some_and(|x| !x) {
-		match std::fs::copy(&source_path, &archive_path) {
-			Ok(_) => (),
-			Err(_) => println!(
-				"grug-tests is not pulled yet\n\
-				Run the following commands first\n\n\
-				'git submodule update --init --force'\n\
-				'cd src/grug-tests/'\n\
-				'./build.sh'"
-			),
+		#[cfg(target_os = "linux")]
+		{
+			match std::fs::copy(&source_path + "tests.so", &archive_path + "libtests.so") {
+				Ok(_) => (),
+				Err(_) => println!(
+					"grug-tests is not pulled yet\n\
+					Run the following commands first\n\n\
+					'git submodule update --init --force'\n\
+					'cd src/grug-tests/'\n\
+					'./build.sh'"
+				),
+			}
+		}
+		#[cfg(target_os = "windows")]
+		{
+			match std::fs::copy(source_path.clone() + "/tests.dll", archive_path.clone() + "/tests.dll") {
+				Ok(_) => (),
+				Err(_) => println!(
+					"grug-tests is not pulled yet\n\
+					Run the following commands first\n\n\
+					'git submodule update --init --force'\n\
+					'cd src/grug-tests/'\n\
+					'./build.sh'"
+				),
+			}
+			match std::fs::copy(source_path + "/libtests.dll.a", archive_path + "/tests.lib") {
+				Ok(_) => (),
+				Err(_) => println!(
+					"grug-tests is not pulled yet\n\
+					Run the following commands first\n\n\
+					'git submodule update --init --force'\n\
+					'cd src/grug-tests/'\n\
+					'./build.sh'"
+				),
+			}
 		}
 	}
 	println!("cargo::rustc-link-search={}", out_dir.display());
