@@ -4,9 +4,8 @@
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 const SPACES_PER_INDENT: usize = 4;
 
-
 mod types {
-	use std::rc::Rc;
+	use std::sync::Arc;
 	// TODO Unnest some of these enums
 
 	#[derive(Debug)]
@@ -26,16 +25,16 @@ mod types {
 		TrueExpr,
 		FalseExpr,
 		StringExpr{
-			value: Rc<str>,
+			value: Arc<str>,
 		},
 		ResourceExpr{
-			value: Rc<str>,
+			value: Arc<str>,
 		},
 		EntityExpr{
-			value: Rc<str>,
+			value: Arc<str>,
 		},
 		IdentifierExpr{
-			name: Rc<str>
+			name: Arc<str>
 		},
 		I32Expr{
 			value: i32,
@@ -62,7 +61,7 @@ mod types {
 		},
 		// LogicalExpr(Box<Expr>),
 		CallExpr{
-			function_name: Rc<str>,
+			function_name: Arc<str>,
 			arguments: Vec<Expr>,
 			line: usize,
 			col: usize,
@@ -139,19 +138,19 @@ mod types {
 	#[derive(Debug)]
 	pub enum GlobalStatement {
 		GlobalVariableStatement{
-			name: Rc<str>,
+			name: Arc<str>,
 			ty: GrugType,
 			assignment_expr: Expr,
 		},
 		GlobalOnFunction{
-			name: Rc<str>,
+			name: Arc<str>,
 			arguments: Vec<Argument>,
 			body_statements: Vec<Statement>,
 			calls_helper_fn: bool,
 			has_while_loop: bool,
 		},
 		GlobalHelperFunction{
-			name: Rc<str>,
+			name: Arc<str>,
 			arguments: Vec<Argument>,
 			body_statements: Vec<Statement>,
 			calls_helper_fn: bool,
@@ -159,17 +158,17 @@ mod types {
 			return_ty: GrugType,
 		},
 		GlobalComment{
-			value: Rc<str>,
+			value: Arc<str>,
 		},
 		GlobalEmptyLine,
 	}
 
 	#[derive(Debug)]
 	pub struct Argument {
-		pub(super) name: Rc<str>,
+		pub(super) name: Arc<str>,
 		pub(super) ty: GrugType,
 		// used when ty is Resource, Entity or id to keep track extension of the resource or the name of the entity
-		pub(super) extra_value: Option<Rc<str>>
+		pub(super) extra_value: Option<Arc<str>>
 	}
 
 	// TODO: Finish these structs
@@ -177,7 +176,7 @@ mod types {
 	#[derive(Debug)]
 	pub enum Statement {
 		VariableStatement{
-			name: Rc<str>,
+			name: Arc<str>,
 			ty: Option<GrugType>,
 			assignment_expr: Expr,
 		},
@@ -197,7 +196,7 @@ mod types {
 			statements: Vec<Statement>,
 		},
 		Comment{
-			value: Rc<str>,
+			value: Arc<str>,
 		},
 		BreakStatement,
 		ContinueStatement,
@@ -736,7 +735,7 @@ pub mod parser {
 	use super::tokenizer::{Token, TokenType};
 	use super::types::*;
 	use std::collections::HashSet;
-	use std::rc::Rc;
+	use std::sync::Arc;
 
 	#[derive(Debug)]
 	pub enum ParserError {
@@ -1023,7 +1022,7 @@ pub mod parser {
 
 				let helper_fn = parse_helper_fn(&mut tokens)?;
 
-				let helper_fn_name = if let GlobalStatement::GlobalHelperFunction{ref name,..} = helper_fn {Rc::clone(name)} else {unreachable!()};
+				let helper_fn_name = if let GlobalStatement::GlobalHelperFunction{ref name,..} = helper_fn {Arc::clone(&name)} else {unreachable!()};
 				helper_fns.insert(helper_fn_name);
 
 				global_statements.push(helper_fn);
@@ -1984,30 +1983,42 @@ use parser::*;
 pub mod mod_api {
 	use super::types::*;
 	use super::*;
+	use std::collections::HashMap;
+	use std::sync::Arc;
+	use std::sync::OnceLock;
 
 	#[derive(Debug)]
 	pub struct ModApi {
-		entities: Vec<GrugEntity>,
-		game_functions: Vec<GrugGameFn>,
+		entities: HashMap<Arc<str>, GrugEntity>,
+		game_functions: HashMap<Arc<str>, GrugGameFn>,
+	}
+
+	impl ModApi {
+		pub fn entities(&self) -> &HashMap<Arc<str>, GrugEntity> {
+			&self.entities
+		}
+		pub fn game_functions(&self) -> &HashMap<Arc<str>, GrugGameFn> {
+			&self.game_functions
+		}
 	}
 
 	#[derive(Debug)]
 	pub struct GrugEntity {
-		name: String,
+		name: Arc<str>,
 		description: Option<String>,
-		on_fns: Vec<GrugOnFn>,
+		on_fns: HashMap<Arc<str>, GrugOnFn>,
 	}
 	
 	#[derive(Debug)]
 	pub struct GrugOnFn {
-		name: String, 
+		name: Arc<str>, 
 		description: Option<String>,
 		arguments: Vec<Argument>,
 	}
 
 	#[derive(Debug)]
 	pub struct GrugGameFn {
-		name: String,
+		name: Arc<str>,
 		description: Option<String>,
 		// second part is the extra argument for ids, resources and entities
 		return_ty: (GrugType, Option<String>),
@@ -2159,18 +2170,20 @@ pub mod mod_api {
 						extra_value: None,
 					})
 				}).collect::<Result<Vec<_>, ModApiError>>()?;
-				Ok(GrugOnFn{
-					name: fn_name.to_string(),
+				let fn_name = Arc::from(fn_name);
+				Ok((Arc::clone(&fn_name), GrugOnFn{
+					name: fn_name,
 					description,
 					arguments
-				})
-			}).collect::<Result<Vec<_>, _>>()?;
-			Ok(GrugEntity{
-				name: entity_name.to_string(),
+				}))
+			}).collect::<Result<HashMap<_, _>, _>>()?;
+			let entity_name = Arc::from(entity_name);
+			Ok((Arc::clone(&entity_name), GrugEntity{
+				name: entity_name,
 				description,
 				on_fns
-			})
-		}).collect::<Result<Vec<_>, ModApiError>>()?;
+			}))
+		}).collect::<Result<HashMap<_, _>, ModApiError>>()?;
 		
 		// "game_functions" object
 		let game_functions = &mod_api_json["game_functions"];
@@ -2257,18 +2270,195 @@ pub mod mod_api {
 					}
 				}
 			};
-			Ok(GrugGameFn{
-				name: fn_name.to_string(),
+			let fn_name = Arc::from(fn_name);
+			Ok((Arc::clone(&fn_name), GrugGameFn{
+				name: fn_name,
 				return_ty,
 				description,
 				arguments
-			})
-		}).collect::<Result<Vec<_>, ModApiError>>()?;
+			}))
+		}).collect::<Result<HashMap<_, _>, ModApiError>>()?;
 
 		Ok(ModApi{
 			entities,
 			game_functions
 		})
+	}
+
+	pub static MOD_API: OnceLock<ModApi> = std::sync::OnceLock::new();
+}
+
+pub mod type_propogation {
+	use super::mod_api::*;
+	use std::collections::HashMap;
+	use std::collections::hash_map::Entry;
+	use std::sync::Arc;
+	use super::types::*;
+	use super::mod_api::MOD_API;
+
+	type GrugIDType = *mut ();
+
+	enum GrugValue {
+		Bool(bool),
+		I32(i32),
+		F32(f32),
+		String(String),
+		Id(GrugIDType),
+		Resource(String),
+		Entity(GrugIDType),
+		Uninitialized,
+	}
+	struct Variable {
+		name: Arc<str>,
+		ty: GrugType,
+		// for id, resource and entity
+		extra_value: Option<Arc<str>>,
+		value: GrugValue,
+	}
+
+	struct TypePropogator {
+		global_variables: HashMap<Arc<str>, Variable>,
+	}
+
+	enum TypePropogatorError {
+		EntityDoesNotExist{
+			entity_name: Arc<str>,
+		},
+		GlobalVariableShadowed {
+			name: Arc<str>,
+		},
+		GlobalCantCallHelperFn {
+			global_name: Arc<str>,
+			line: usize,
+			col: usize,
+		}
+	}
+	
+	impl TypePropogator {
+		pub fn fill_result_types(&mut self, entity_name: &str, statements: &mut [GlobalStatement]) -> Result<(), TypePropogatorError> {
+			let entity_name = Arc::from(entity_name);
+			let entity = MOD_API.wait().entities().get(&*entity_name).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
+				entity_name: Arc::clone(&entity_name),
+			});
+			
+			self.add_global_variable(Arc::from("me"), GrugType::Id, Some(entity_name))?;
+
+			for statement in statements {
+				match statement {
+					GlobalStatement::GlobalVariableStatement{
+						name,
+						ty,
+						assignment_expr,
+					} => {
+						self.check_global_expr(assignment_expr, &*name)?;
+					}
+					_ => todo!(),
+				}
+			}
+			todo!();
+		}
+
+		// Check that the global variable's assigned value doesn't contain a call nor identifier
+		fn check_global_expr(&mut self, assignment_expr: &Expr, name: &Arc<str>) -> Result<(), TypePropogatorError> {
+			match assignment_expr.ty {
+				ExprType::LiteralExpr{expr: LiteralExpr::EntityExpr{..}, ..} => unreachable!(),
+				ExprType::LiteralExpr{..} => (),
+				ExprType::UnaryExpr{
+					ref operator,
+					ref expr,
+				} => self.check_global_expr(&*expr, name)?,
+				ExprType::BinaryExpr{
+					ref operands,
+					ref operator,
+				} => {
+					self.check_global_expr(&operands.0, name)?;
+					self.check_global_expr(&operands.1, name)?;
+				},
+				ExprType::CallExpr{
+					ref function_name,
+					ref arguments,
+					line,
+					col,
+				} => {
+					if function_name.starts_with("helper_") {
+						Err(TypePropogatorError::GlobalCantCallHelperFn{
+							global_name: Arc::clone(name),
+							line,
+							col,
+						})?;
+					}
+					arguments.iter().map(|argument| self.check_global_expr(argument, name))
+						.collect::<Result<Vec<_>, _>>()?;
+				},
+				ExprType::ParenthesizedExpr{
+					ref expr,
+					line,
+					col,
+				} => self.check_global_expr(&*expr, name)?,
+			}
+			Ok(())
+		}
+
+		fn fill_expr(&mut self, assignment_expr: &Expr, name: &Arc<str>) -> Result<(), TypePropogatorError> {
+			match assignment_expr.ty {
+				ExprType::LiteralExpr{expr: LiteralExpr::EntityExpr{..}, ..} => unreachable!(),
+				ExprType::LiteralExpr{..} => (),
+				ExprType::UnaryExpr{
+					ref operator,
+					ref expr,
+				} => self.check_global_expr(&*expr, name)?,
+				ExprType::BinaryExpr{
+					ref operands,
+					ref operator,
+				} => {
+					self.check_global_expr(&operands.0, name)?;
+					self.check_global_expr(&operands.1, name)?;
+				},
+				ExprType::CallExpr{
+					ref function_name,
+					ref arguments,
+					line,
+					col,
+				} => {
+					if function_name.starts_with("helper_") {
+						Err(TypePropogatorError::GlobalCantCallHelperFn{
+							global_name: Arc::clone(name),
+							line,
+							col,
+						})?;
+					}
+					arguments.iter().map(|argument| self.check_global_expr(argument, name))
+						.collect::<Result<Vec<_>, _>>()?;
+				},
+				ExprType::ParenthesizedExpr{
+					ref expr,
+					line,
+					col,
+				} => self.check_global_expr(&*expr, name)?,
+			}
+			Ok(())
+		}
+
+
+		fn add_global_variable(&mut self, name: Arc<str>, ty: GrugType, extra_value: Option<Arc<str>>) -> Result<(), TypePropogatorError> {
+			match ty {
+				// This is an internal error
+				GrugType::Entity if extra_value.is_none() => panic!("entity without extra_information"),
+				_ => (),
+			}
+			match self.global_variables.entry(Arc::clone(&name)) {
+				Entry::Occupied(_) => return Err(TypePropogatorError::GlobalVariableShadowed{
+					name,
+				})?,
+				Entry::Vacant(x) => {x.insert(Variable{
+					name,
+					ty,
+					extra_value,
+					value: GrugValue::Uninitialized,
+				});},
+			}
+			Ok(())
+		}
 	}
 }
 

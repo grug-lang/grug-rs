@@ -31,8 +31,9 @@ mod test {
 		let mod_api_text = std::fs::read_to_string("src/grug-tests/mod_api.json").unwrap();
 
 		let mod_api = get_mod_api(&mod_api_text).unwrap();
+		_ = MOD_API.set(mod_api);
 		// panic!();
-		panic!("{:#?}", mod_api);
+		// panic!("{:#?}", mod_api);
 		
 		unsafe {
 			grug_tests_run(
