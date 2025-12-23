@@ -8,7 +8,7 @@ mod types {
 	use std::sync::Arc;
 	// TODO Unnest some of these enums
 
-	#[derive(Debug)]
+	#[derive(Debug, Clone, Copy, PartialEq)]
 	pub enum GrugType {
 		Void,
 		Bool,
@@ -104,13 +104,13 @@ mod types {
 		}
 	}
 	
-	#[derive(Debug)]
+	#[derive(Debug, Clone, Copy)]
 	pub enum UnaryOperator {
 		Not,
 		Minus,
 	}
 
-	#[derive(Debug)]
+	#[derive(Debug, Clone, Copy)]
 	pub enum BinaryOperator {
 		Or,
 		And,
@@ -131,7 +131,7 @@ mod types {
 	pub struct Expr {
 		pub(super) ty: ExprType,
 		// Can be None before Type checking but MUST be Some after
-		pub(super) result_ty: Option<GrugType>,
+		pub(super) result_ty: Option<(GrugType, Option<Arc<str>>)>,
 	}
 
 	// TODO: Finish these structs
@@ -2316,22 +2316,54 @@ pub mod type_propogation {
 		value: GrugValue,
 	}
 
-	struct TypePropogator {
+	pub(super) struct TypePropogator {
 		global_variables: HashMap<Arc<str>, Variable>,
 	}
 
-	enum TypePropogatorError {
+	pub(super) enum TypePropogatorError {
+		// grug_assert(grug_entity, "The entity '%s' was not declared by mod_api.json", file_entity_type);
 		EntityDoesNotExist{
 			entity_name: Arc<str>,
 		},
+		// grug_assert(!get_global_variable(name), "The global variable '%s' shadows an earlier global variable with the same name, so change the name of one of them", name);
 		GlobalVariableShadowed {
 			name: Arc<str>,
 		},
+		// grug_assert(!starts_with(expr->call.fn_name, "helper_"), "The global variable '%s' isn't allowed to call helper functions", name);
 		GlobalCantCallHelperFn {
 			global_name: Arc<str>,
 			line: usize,
 			col: usize,
-		}
+		},
+		// grug_assert(var, "The variable '%s' does not exist", expr->literal.string);
+		VariableDoesNotExist {
+			name: Arc<str>,
+			line: usize, 
+			col: usize,
+		},
+		// grug_assert(expr->unary.operator != expr->unary.expr->unary.operator, "Found '%s' directly next to another '%s', which can be simplified by just removing both of them", get_token_type_str[expr->unary.operator], get_token_type_str[expr->unary.expr->unary.operator]);
+		AdjacentUnaryOperators {
+			operator: UnaryOperator,
+		},
+		// grug_assert(expr->result_type == type_bool, "Found 'not' before %s, but it can only be put before a bool", expr->result_type_name);
+		NotOperatorNotBeforeBool{
+			got: (GrugType, Option<Arc<str>>),
+		},
+		// grug_assert(expr->result_type == type_i32 || expr->result_type == type_f32, "Found '-' before %s, but it can only be put before an i32 or f32", expr->result_type_name);
+		MinusOperatorNotBeforeNumber {
+			got: (GrugType, Option<Arc<str>>),
+		},
+		// grug_assert(binary_expr.operator == EQUALS_TOKEN || binary_expr.operator == NOT_EQUALS_TOKEN, "You can't use the %s operator on a string", get_token_type_str[binary_expr.operator]);
+		CannotCompareStrings {
+			// This can only be BinaryOperator::DoubleEquals | BinaryOperator::NotEquals
+			operator: BinaryOperator,
+		},
+		// grug_error("The left and right operand of a binary expression ('%s') must have the same type, but got %s and %s", get_token_type_str[binary_expr.operator], binary_expr.left_expr->result_type_name, binary_expr.right_expr->result_type_name);
+		BinaryOperatorTypeMismatch {
+			operator: BinaryOperator,
+			left: (GrugType, Option<Arc<str>>),
+			right: (GrugType, Option<Arc<str>>),
+		},
 	}
 	
 	impl TypePropogator {
@@ -2351,6 +2383,7 @@ pub mod type_propogation {
 						assignment_expr,
 					} => {
 						self.check_global_expr(assignment_expr, &*name)?;
+						self.fill_expr(assignment_expr, &*name)?;
 					}
 					_ => todo!(),
 				}
@@ -2399,46 +2432,140 @@ pub mod type_propogation {
 			Ok(())
 		}
 
-		fn fill_expr(&mut self, assignment_expr: &Expr, name: &Arc<str>) -> Result<(), TypePropogatorError> {
-			match assignment_expr.ty {
-				ExprType::LiteralExpr{expr: LiteralExpr::EntityExpr{..}, ..} => unreachable!(),
-				ExprType::LiteralExpr{..} => (),
-				ExprType::UnaryExpr{
-					ref operator,
-					ref expr,
-				} => self.check_global_expr(&*expr, name)?,
-				ExprType::BinaryExpr{
-					ref operands,
-					ref operator,
-				} => {
-					self.check_global_expr(&operands.0, name)?;
-					self.check_global_expr(&operands.1, name)?;
-				},
-				ExprType::CallExpr{
-					ref function_name,
-					ref arguments,
+		fn fill_expr(&mut self, assignment_expr: &mut Expr, name: &Arc<str>) -> Result<(GrugType, Option<Arc<str>>), TypePropogatorError> {
+			// MUST be None before type propogation
+			assert!(matches!(assignment_expr.result_ty, None));
+			let result_ty = match assignment_expr.ty {
+				ExprType::LiteralExpr{
+					ref mut expr,
 					line,
 					col,
 				} => {
-					if function_name.starts_with("helper_") {
-						Err(TypePropogatorError::GlobalCantCallHelperFn{
-							global_name: Arc::clone(name),
-							line,
-							col,
-						})?;
+					match expr {
+						LiteralExpr::TrueExpr => (GrugType::Bool, None),
+						LiteralExpr::FalseExpr => (GrugType::Bool, None),
+						LiteralExpr::StringExpr{
+							value
+						} => (GrugType::String, None),
+						LiteralExpr::ResourceExpr{
+							value
+						} => {
+							// TODO: Figure out why this is
+							panic!("This is supposed to be unreachable but i don't remember why");
+						}
+						LiteralExpr::EntityExpr{
+							value
+						} => {
+							// TODO: Figure out why this is
+							panic!("This is supposed to be unreachable but i don't remember why");
+						}
+						LiteralExpr::IdentifierExpr{
+							name
+						} => {
+							let var = self.get_variable(&*name).ok_or_else(|| TypePropogatorError::VariableDoesNotExist{
+								name: Arc::clone(name),
+								line,
+								col,
+							})?;
+							(var.ty, var.extra_value.clone())
+						},
+						LiteralExpr::I32Expr{
+							value: i32,
+						} => (GrugType::I32, None),
+						LiteralExpr::F32Expr{
+							value: f32,
+						} => (GrugType::F32, None),
 					}
-					arguments.iter().map(|argument| self.check_global_expr(argument, name))
-						.collect::<Result<Vec<_>, _>>()?;
+				},
+				ExprType::UnaryExpr{
+					operator,
+					ref mut expr,
+				} => {
+					if let ExprType::UnaryExpr{..} = expr.ty {
+						return Err(TypePropogatorError::AdjacentUnaryOperators{
+							operator
+						});
+					}
+					let result_ty = self.fill_expr(expr, name)?;
+					match (operator, &result_ty) {
+						(UnaryOperator::Not, (GrugType::Bool, None)) => (),
+						(UnaryOperator::Not, got@_) => return Err(TypePropogatorError::NotOperatorNotBeforeBool{
+							got: got.clone(),
+						}),
+						(UnaryOperator::Minus, (GrugType::F32, None)) => (),
+						(UnaryOperator::Minus, (GrugType::I32, None)) => (),
+						(UnaryOperator::Minus, got@_) => return Err(TypePropogatorError::MinusOperatorNotBeforeNumber{
+							got: got.clone(),
+						}),
+						_ => (),
+					};
+					result_ty
+				},
+				ExprType::BinaryExpr{
+					ref mut operands,
+					operator,
+				} => {
+					let result_0 = self.fill_expr(&mut operands.0, name)?;
+					let result_1 = self.fill_expr(&mut operands.1, name)?;
+					match (&result_1, operator) {
+						((GrugType::String, _), BinaryOperator::DoubleEquals) | 
+						((GrugType::String, _), BinaryOperator::NotEquals) => {
+							return Err(TypePropogatorError::CannotCompareStrings{
+								operator
+							});
+						},
+						_ => (), 
+					}
+					if result_0 != result_1 {
+						return Err(TypePropogatorError::BinaryOperatorTypeMismatch{
+							operator,
+							left: result_0,
+							right: result_1,
+						});
+					}
+
+					// match operator {
+					// 	BinaryOperator::Or => ,
+					// 	BinaryOperator::And => ,
+					// 	BinaryOperator::DoubleEquals => ,
+					// 	BinaryOperator::NotEquals => ,
+					// 	BinaryOperator::Greater => ,
+					// 	BinaryOperator::GreaterEquals => ,
+					// 	BinaryOperator::Less => ,
+					// 	BinaryOperator::LessEquals => ,
+					// 	BinaryOperator::Plus => ,
+					// 	BinaryOperator::Minus => ,
+					// 	BinaryOperator::Multiply => ,
+					// 	BinaryOperator::Division => ,
+					// 	BinaryOperator::Remainder => ,
+					// }
+					todo!();
+				},
+				// LogicalExpr(Box<Expr>),
+				ExprType::CallExpr{
+					ref mut function_name,
+					ref mut arguments,
+					line,
+					col,
+				} => {
+					todo!();
 				},
 				ExprType::ParenthesizedExpr{
-					ref expr,
+					ref mut expr,
 					line,
 					col,
-				} => self.check_global_expr(&*expr, name)?,
-			}
-			Ok(())
+				} => {
+					todo!();
+				},
+			};
+			assignment_expr.result_ty = Some(result_ty.clone());
+			Ok(result_ty)
 		}
 
+		fn get_variable(&self, var_name: &str) -> Option<&Variable> {
+			// TODO: also do local variables
+			self.global_variables.get(var_name)
+		}
 
 		fn add_global_variable(&mut self, name: Arc<str>, ty: GrugType, extra_value: Option<Arc<str>>) -> Result<(), TypePropogatorError> {
 			match ty {

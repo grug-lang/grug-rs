@@ -10,12 +10,24 @@ fn build_tests() {
 
 	let out_dir = PathBuf::from(var("OUT_DIR").unwrap());
 
+	let mut source_path = PathBuf::from("./src/grug-tests/");
 	let mut archive_path = PathBuf::from(var("OUT_DIR").unwrap());
-	archive_path.push("libtests.so");
+
+	#[cfg(target_os = "linux")]
+	{
+		source_path.push("tests.so");
+		archive_path.push("libtests.so");
+	}
+	#[cfg(target_os = "windows")]
+	{
+		source_path.push("tests.dll");
+		archive_path.push("tests.dll");
+	}
+
 	println!("{:?}", archive_path);
 
 	if std::fs::exists(&archive_path).ok().is_some_and(|x| !x) {
-		match std::fs::copy("./src/grug-tests/tests.so", &archive_path) {
+		match std::fs::copy(&source_path, &archive_path) {
 			Ok(_) => (),
 			Err(_) => println!(
 				"grug-tests is not pulled yet\n\
@@ -27,5 +39,4 @@ fn build_tests() {
 		}
 	}
 	println!("cargo::rustc-link-search={}", out_dir.display());
-	
 }
