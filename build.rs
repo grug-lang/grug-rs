@@ -10,8 +10,8 @@ fn build_tests() {
 
 	let out_dir = PathBuf::from(var("OUT_DIR").unwrap());
 
-	let mut source_path = String::from("./src/grug-tests");
-	let mut archive_path = String::from(var("OUT_DIR").unwrap());
+	let source_path = String::from("./src/grug-tests");
+	let archive_path = String::from(var("OUT_DIR").unwrap());
 
 	println!("{:?}", archive_path);
 
