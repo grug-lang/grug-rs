@@ -2432,6 +2432,34 @@ pub mod type_propogation {
 			got_type: GrugType,
 			parameter_name: Arc<str>
 		},
+		// grug_assert(entity_on_fn, "The function '%s' was not was not declared by entity '%s' in mod_api.json", on_fns[fn_index].fn_name, file_entity_type);
+		OnFnDoesNotExist {
+			function_name: Arc<str>,
+			entity_name: Arc<str>,
+		},
+		// grug_assert(arg_count >= param_count, "Function '%s' expected the parameter '%s' with type %s", name, params[arg_count].name, params[arg_count].type_name);
+		TooFewParameters{
+			function_name: Arc<str>,
+			expected_name: Arc<str>,
+			expected_type: GrugType,
+		},
+		// grug_assert(arg_count <= param_count, "Function '%s' got an unexpected extra parameter '%s' with type %s", name, args[param_count].name, args[param_count].type_name);
+		TooManyParameters{
+			function_name: Arc<str>,
+			got_ty: GrugType,
+		},
+		// grug_assert(streq(arg_name, param.name), "Function '%s' its '%s' parameter was supposed to be named '%s'", name, arg_name, param.name);
+		OnFnParameterNameMismatch{
+			function_name: Arc<str>,
+			got_name: Arc<str>,
+			expected_name: Arc<str>,
+		},
+		//grug_error("Function '%s' its '%s' parameter was supposed to have the type %s, but got %s", name, param.name, param.type_name, arg_type_name);
+		OnFnParameterTypeMismatch{
+			function_name: Arc<str>,
+			got_type: GrugType,
+			expected_type: GrugType,
+		},
 	}
 
 	#[derive(Debug)]
@@ -2508,9 +2536,9 @@ pub mod type_propogation {
 
 		pub fn fill_result_types(&mut self, entity_name: &str, ast: &mut AST) -> Result<(), TypePropogatorError> {
 			let entity_name = Arc::from(entity_name);
-			let _entity = MOD_API.wait().entities().get(&*entity_name).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
+			let entity = MOD_API.wait().entities().get(&*entity_name).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
 				entity_name: Arc::clone(&entity_name),
-			});
+			})?;
 			
 			self.add_global_variable(Arc::from("me"), GrugType::Id{custom_name: Some(entity_name.into())})?;
 
@@ -2524,10 +2552,51 @@ pub mod type_propogation {
 						self.check_global_expr(assignment_expr, &*name)?;
 						self.fill_expr(&ast.helper_fn_signatures, assignment_expr, &*name)?;
 					}
+					GlobalStatement::GlobalOnFunction{
+						name,
+						arguments,
+						body_statements,
+						calls_helper_fn,
+						has_while_loop,
+					} => {
+						let grug_on_fn = entity.on_fns.get(&**name).ok_or_else(|| TypePropogatorError::OnFnDoesNotExist{
+							function_name: Arc::clone(name),
+							entity_name: Arc::clone(&entity.name),
+						})?;
+						if grug_on_fn.arguments.len() > arguments.len() {
+							return Err(TypePropogatorError::TooFewArguments{
+								function_name: Arc::clone(name),
+								expected_name: Arc::clone(&grug_on_fn.arguments[arguments.len()].name),
+								expected_type: grug_on_fn.arguments[arguments.len()].ty.clone(),
+							});
+						} else if grug_on_fn.arguments.len() < arguments.len() {
+							return Err(TypePropogatorError::TooManyArguments{
+								function_name: Arc::clone(name),
+								got_ty: arguments[grug_on_fn.arguments.len()].ty.clone(),
+							});
+						}
+						for (param, arg) in grug_on_fn.arguments.iter().zip(arguments) {
+							if param.name != arg.name {
+								return Err(TypePropogatorError::OnFnParameterNameMismatch {
+									function_name: Arc::clone(name),
+									got_name: Arc::clone(&arg.name),
+									expected_name: Arc::clone(&param.name),
+								});
+							}
+							if param.ty != arg.ty {
+								//grug_error("Function '%s' its '%s' parameter was supposed to have the type %s, but got %s", name, param.name, param.type_name, arg_type_name);
+								return Err(TypePropogatorError::OnFnParameterTypeMismatch {
+									function_name: Arc::clone(name),
+									got_type: arg.ty.clone(),
+									expected_type: param.ty.clone(),
+								});
+							}
+						}
+					}
 					_ => todo!(),
 				}
 			}
-			todo!();
+			Ok(())
 		}
 
 		// Check that the global variable's assigned value doesn't contain a call_to a helper function nor identifier
