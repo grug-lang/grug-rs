@@ -10,16 +10,22 @@ mod types {
 	use std::sync::Arc;
 	// TODO Unnest some of these enums
 
-	#[derive(Debug, Clone, Copy, PartialEq)]
+	#[derive(Debug, Clone, PartialEq)]
 	pub enum GrugType {
 		Void,
 		Bool,
 		I32,
 		F32,
 		String,
-		Id,
-		Resource,
-		Entity,
+		Id{
+			custom_name: Option<Arc<str>>,
+		},
+		Resource {
+			extension: Arc<str>,
+		},
+		Entity {
+			name: Arc<str>,
+		},
 	}
 
 	#[derive(Debug)]
@@ -132,7 +138,7 @@ mod types {
 	pub struct Expr {
 		pub(super) ty: ExprType,
 		// Can be None before Type checking but MUST be Some after
-		pub(super) result_ty: Option<(GrugType, Option<Arc<str>>)>,
+		pub(super) result_ty: Option<GrugType>,
 	}
 
 	#[derive(Debug)]
@@ -163,12 +169,10 @@ mod types {
 		GlobalEmptyLine,
 	}
 
-	#[derive(Debug)]
+	#[derive(Debug, Clone)]
 	pub struct Argument {
 		pub(super) name: Arc<str>,
 		pub(super) ty: GrugType,
-		// used when ty is Resource, Entity or id to keep track extension of the resource or the name of the entity
-		pub(super) extra_value: Option<Arc<str>>
 	}
 
 	// TODO: Finish these structs
@@ -285,7 +289,7 @@ impl<'a> std::fmt::Display for FileNameError<'a> {
 			} => write!(f, "'{}' is missing a period in its filename", path),
 			Self::EntityLenExceedsMaxLen {
 				path,
-				entity_len,
+				entity_len: _,
 			} => write!(f, 
 				"There are more than {MAX_FILE_ENTITY_TYPE_LENGTH} characters \n\
 				in the entity type of '{path}', exceeding MAX_FILE_ENTITY_TYPE_LENGTH"
@@ -749,7 +753,8 @@ use tokenizer::*;
 pub mod parser {
 	use super::tokenizer::{Token, TokenType};
 	use super::types::*;
-	use std::collections::HashSet;
+	use super::MOD_API;
+	use std::collections::{HashSet, HashMap};
 	use std::sync::Arc;
 
 	#[allow(unused)]
@@ -892,7 +897,10 @@ pub mod parser {
 		// grug_error("%s() is defined before the first time it gets called", fn.fn_name);
 		HelperFnDefinedBeforeCall {
 			helper_fn_name: String
-		}
+		},
+		AlreadyDefinedHelperFunction {
+			helper_fn_name: Arc<str>,
+		},
 	}
 
 	impl std::fmt::Display for ParserError {
@@ -912,8 +920,9 @@ pub mod parser {
 	const MAX_PARSING_DEPTH: usize = 100;
 
 	pub(super) struct AST {
-		global_statements: Vec<GlobalStatement>,
-		called_helper_fns: HashSet<Arc<str>>, 
+		pub(super) global_statements: Vec<GlobalStatement>,
+		pub(super) called_helper_fns: HashSet<Arc<str>>, 
+		pub(super) helper_fn_signatures: HashMap<Arc<str>, (GrugType, Vec<Argument>)>,
 	}
 
 	pub fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
@@ -990,8 +999,16 @@ pub mod parser {
 				}
 
 				let helper_fn = ast.parse_helper_fn(&mut tokens)?;
+				let (helper_fn_name, return_ty, helper_fn_arguments) = if let GlobalStatement::GlobalHelperFunction{name, return_ty, arguments, ..} = &helper_fn {(Arc::clone(name), return_ty.clone(), arguments)} else {unreachable!()};
 				seen_helper_fn = true;
 
+				if ast.helper_fn_signatures.get(&helper_fn_name).is_some() {
+					return Err(ParserError::AlreadyDefinedHelperFunction{
+						helper_fn_name,
+					});
+				}
+
+				ast.helper_fn_signatures.insert(helper_fn_name, (return_ty, helper_fn_arguments.clone()));
 				ast.global_statements.push(helper_fn);
 
 				newline_allowed = true;
@@ -1030,15 +1047,8 @@ pub mod parser {
 			Self {
 				global_statements: Vec::new(),
 				called_helper_fns: HashSet::new(),
+				helper_fn_signatures: HashMap::new(),
 			}
-		}
-
-		pub fn global_statements(&self) -> &[GlobalStatement] {
-			&*self.global_statements
-		}
-
-		pub fn global_statements_mut(&mut self) -> &mut [GlobalStatement] {
-			&mut *self.global_statements
 		}
 
 		// helper_fn -> "on_" + name + "(" + arguments? + ")" + type + statements 
@@ -1046,9 +1056,7 @@ pub mod parser {
 			let name_token = tokens.next().unwrap();
 			let fn_name = name_token.value;
 
-			// TODO: Implement this
-			// 
-			if (!self.called_helper_fns.contains(fn_name)) {
+			if !self.called_helper_fns.contains(fn_name) {
 				return Err(ParserError::HelperFnDefinedBeforeCall {
 					helper_fn_name: fn_name.into(),
 				});
@@ -1067,12 +1075,12 @@ pub mod parser {
 			// return type
 			let return_ty = if let Ok(&[_, _]) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Word]) {
 				match self.parse_type(tokens)? {
-					GrugType::Resource => return Err(ParserError::HelperFnReturnTypeCantBeResource{
+					GrugType::Resource{..} => return Err(ParserError::HelperFnReturnTypeCantBeResource{
 						fn_name: fn_name.to_string(),
 						line: name_token.line,
 						col: name_token.line,
 					}),
-					GrugType::Entity   => return Err(ParserError::HelperFnReturnTypeCantBeEntity{
+					GrugType::Entity{..}   => return Err(ParserError::HelperFnReturnTypeCantBeEntity{
 						fn_name: fn_name.to_string(),
 						line: name_token.line,
 						col: name_token.line,
@@ -1149,12 +1157,12 @@ pub mod parser {
 				let arg_type = self.parse_type(tokens)?;
 
 				match arg_type {
-					GrugType::Resource => return Err(ParserError::ArgumentCantBeResource{
+					GrugType::Resource{..} => return Err(ParserError::ArgumentCantBeResource{
 						name: arg_name.to_string(),
 						line: name_token.line,
 						col: name_token.line,
 					}),
-					GrugType::Entity   => return Err(ParserError::ArgumentCantBeEntity{
+					GrugType::Entity{..}   => return Err(ParserError::ArgumentCantBeEntity{
 						name: arg_name.to_string(),
 						line: name_token.line,
 						col: name_token.line,
@@ -1164,7 +1172,6 @@ pub mod parser {
 				arguments.push(Argument{
 					name: arg_name.into(),
 					ty: arg_type,
-					extra_value: None,
 				});
 				
 				if consume_next_token_types(tokens, &[TokenType::Comma]).is_err() {
@@ -1179,7 +1186,7 @@ pub mod parser {
 		// TODO: Get the grammar for statements
 		// This parser consumes a space before consuming the curly braces
 		fn parse_statements<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize) -> Result<Vec<Statement>, ParserError> {
-			assert_parsing_depth(parsing_depth + 1)?;
+			assert_parsing_depth(parsing_depth)?;
 			consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
 
 			let mut newline_allowed = false;
@@ -1338,12 +1345,12 @@ pub mod parser {
 				ty = Some(self.parse_type(tokens)?);
 
 				match ty {
-					Some(GrugType::Resource) => return Err(ParserError::VariableCantBeResource{
+					Some(GrugType::Resource{..}) => return Err(ParserError::VariableCantBeResource{
 						name: local_name.to_string(),
 						line: name_token.line,
 						col: name_token.line,
 					}),
-					Some(GrugType::Entity)   => return Err(ParserError::VariableCantBeEntity{
+					Some(GrugType::Entity{..})   => return Err(ParserError::VariableCantBeEntity{
 						name: local_name.to_string(),
 						line: name_token.line,
 						col: name_token.line,
@@ -1398,12 +1405,12 @@ pub mod parser {
 
 			let global_type = self.parse_type(tokens)?;
 			match global_type {
-				GrugType::Resource => return Err(ParserError::GlobalCantBeResource{
+				GrugType::Resource{..} => return Err(ParserError::GlobalCantBeResource{
 					name: global_name.to_string(),
 					line: name_token.line,
 					col: name_token.line,
 				}),
-				GrugType::Entity   => return Err(ParserError::GlobalCantBeEntity{
+				GrugType::Entity{..}   => return Err(ParserError::GlobalCantBeEntity{
 					name: global_name.to_string(),
 					line: name_token.line,
 					col: name_token.line,
@@ -1436,14 +1443,14 @@ pub mod parser {
 		// Recursive descent parsing adapted from the implementation in grug:
 		// https://github.com/grug-lang/grug
 		fn parse_expression<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-			assert_parsing_depth(parsing_depth + 1)?;
+			assert_parsing_depth(parsing_depth)?;
 			return self.parse_or(tokens, parsing_depth + 1);
 		}
 
 		// or -> and + " " + "||" + and
 
 		fn parse_or<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-			assert_parsing_depth(parsing_depth + 1)?;
+			assert_parsing_depth(parsing_depth)?;
 			let mut expr = self.parse_and(tokens, parsing_depth + 1)?;
 
 			while let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Or]) {
@@ -1464,7 +1471,7 @@ pub mod parser {
 		// and -> equality + " " + "||" + equality
 
 		fn parse_and<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-			assert_parsing_depth(parsing_depth + 1)?;
+			assert_parsing_depth(parsing_depth)?;
 			let mut expr = self.parse_equality(tokens, parsing_depth + 1)?;
 
 			while let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::And]) {
@@ -1485,7 +1492,7 @@ pub mod parser {
 		// equality -> comparison + " " + ("==" | "!=") + comparison
 
 		fn parse_equality<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-			assert_parsing_depth(parsing_depth + 1)?;
+			assert_parsing_depth(parsing_depth)?;
 			let mut expr = self.parse_comparison(tokens, parsing_depth + 1)?;
 
 			loop {
@@ -1519,7 +1526,7 @@ pub mod parser {
 		}
 
 		fn parse_comparison<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-			assert_parsing_depth(parsing_depth + 1)?;
+			assert_parsing_depth(parsing_depth)?;
 			let mut expr = self.parse_term(tokens, parsing_depth + 1)?;
 
 			loop {
@@ -1575,7 +1582,7 @@ pub mod parser {
 		}
 
 		fn parse_term<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-			assert_parsing_depth(parsing_depth + 1)?;
+			assert_parsing_depth(parsing_depth)?;
 			let mut expr = self.parse_factor(tokens, parsing_depth + 1)?;
 
 			loop {
@@ -1609,7 +1616,7 @@ pub mod parser {
 		}
 
 		fn parse_factor<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-			assert_parsing_depth(parsing_depth + 1)?;
+			assert_parsing_depth(parsing_depth)?;
 			let mut expr = self.parse_unary(tokens, parsing_depth + 1)?;
 
 			loop {
@@ -1654,7 +1661,7 @@ pub mod parser {
 		}
 
 		fn parse_unary<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-			assert_parsing_depth(parsing_depth + 1)?;
+			assert_parsing_depth(parsing_depth)?;
 
 			if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Minus]) {
 				Ok(Expr {
@@ -1680,7 +1687,7 @@ pub mod parser {
 
 		// call -> primary | word + "(" + (expr + ("," + " " + expr)*) ? + ")"
 		fn parse_call<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-			assert_parsing_depth(parsing_depth + 1)?;
+			assert_parsing_depth(parsing_depth)?;
 			let expr = self.parse_primary(tokens, parsing_depth + 1)?;
 
 			// Not a function call
@@ -1747,7 +1754,7 @@ pub mod parser {
 
 		// primary -> "(" + expr + ")" | "true" | "false" | string | word | i32 | f32;
 		fn parse_primary<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-			assert_parsing_depth(parsing_depth + 1)?;
+			assert_parsing_depth(parsing_depth)?;
 			
 			match get_next_token(tokens)? {
 				Token{ty: TokenType::OpenParenthesis, ..} => {
@@ -1855,9 +1862,22 @@ pub mod parser {
 				"i32"      => GrugType::I32,
 				"f32"      => GrugType::F32,
 				"string"   => GrugType::String,
-				"resource" => GrugType::Resource,
-				"entity"   => GrugType::Entity,
-				_       => GrugType::Id,
+				"resource" => GrugType::Resource{
+					extension: "".into(),
+				},
+				"id"       => GrugType::Id {custom_name: None},
+				type_name => {
+					let extra_value = type_name.into();
+					if MOD_API.wait().entities().contains_key(type_name) {
+						GrugType::Entity {
+							name: extra_value,
+						}
+					} else {
+						GrugType::Id {
+							custom_name: Some(extra_value),
+						}
+					}
+				}
 			})
 		}
 	}
@@ -1987,25 +2007,24 @@ pub mod mod_api {
 
 	#[derive(Debug)]
 	pub struct ModApiEntity {
-		name: Arc<str>,
-		description: Option<String>,
-		on_fns: HashMap<Arc<str>, ModApiOnFn>,
+		pub(super) name: Arc<str>,
+		pub(super) description: Option<String>,
+		pub(super) on_fns: HashMap<Arc<str>, ModApiOnFn>,
 	}
 	
 	#[derive(Debug)]
 	pub struct ModApiOnFn {
-		name: Arc<str>, 
-		description: Option<String>,
-		arguments: Vec<Argument>,
+		pub(super) name: Arc<str>, 
+		pub(super) description: Option<String>,
+		pub(super) arguments: Vec<Argument>,
 	}
 
 	#[derive(Debug)]
 	pub struct ModApiGameFn {
-		name: Arc<str>,
-		description: Option<String>,
-		// second part is the extra argument for ids, resources and entities
-		return_ty: (GrugType, Option<String>),
-		arguments: Vec<Argument>,
+		pub(super) name: Arc<str>,
+		pub(super) description: Option<String>,
+		pub(super) return_ty: GrugType,
+		pub(super) arguments: Vec<Argument>,
 	}
 
 	// TODO: Add Display impl for all variants
@@ -2119,7 +2138,6 @@ pub mod mod_api {
 						entity_name: entity_name.to_string(),
 						on_fn_name: fn_name.to_string(),
 					})?;
-					let mut extra_value = None;
 					let ty = match ty {
 						// arguments can't be void
 						"void"     => Err(ModApiError::OnFnArgumentVoid{
@@ -2131,26 +2149,29 @@ pub mod mod_api {
 						"i32"      => GrugType::I32,
 						"f32"      => GrugType::F32,
 						"string"   => GrugType::String,
-						"id"       => GrugType::Id,
-						"entity"   => GrugType::Entity,
+						"id"       => GrugType::Id{custom_name: None},
+						// "entity"   => GrugType::Entity,
 						"resource" => Err(ModApiError::OnFnArgumentResource{
 							entity_name: entity_name.to_string(),
 							on_fn_name: fn_name.to_string(),
 							argument_name: argument_name.to_string(),
 						})?,
-						arg_ty => {
-							extra_value = Some(Arc::from(arg_ty));
-							if existing_entities.contains(arg_ty) {
-								GrugType::Entity
+						type_name => {
+							let extra_value = type_name.into();
+							if existing_entities.contains(type_name) {
+								GrugType::Entity {
+									name: extra_value,
+								}
 							} else {
-								GrugType::Id
+								GrugType::Id {
+									custom_name: Some(extra_value),
+								}
 							}
 						}
 					};
 					Ok(Argument{
 						name: argument_name.into(),
 						ty,
-						extra_value,
 					})
 				}).collect::<Result<Vec<_>, ModApiError>>()?;
 				let fn_name = Arc::from(fn_name);
@@ -2195,7 +2216,6 @@ pub mod mod_api {
 					game_fn_name: fn_name.to_string(),
 					argument_name: argument_name.to_string(),
 				})?;
-				let mut extra_value = None;
 				let ty = match ty {
 					// arguments can't be void
 					"void"     => Err(ModApiError::GameFnArgumentVoid{
@@ -2206,50 +2226,59 @@ pub mod mod_api {
 					"i32"      => GrugType::I32,
 					"f32"      => GrugType::F32,
 					"string"   => GrugType::String,
-					"id"       => GrugType::Id,
-					"entity"   => GrugType::Entity,
+					"id"       => GrugType::Id{custom_name: None},
+					// "entity"   => GrugType::Entity,
 					"resource" => {
-						extra_value = Some(argument_values["resource_extension"].as_str().ok_or(ModApiError::GameFnResourceMissingExtension{
+						let extension = argument_values["resource_extension"].as_str().ok_or(ModApiError::GameFnResourceMissingExtension{
 							game_fn_name: fn_name.to_string(),
 							argument_name: argument_name.to_string(),
-						})?.into());
-						GrugType::Resource
+						})?.into();
+						GrugType::Resource {
+							extension
+						}
 					}
-					arg_ty => {
-						extra_value = Some(arg_ty.into());
-						if existing_entities.contains(arg_ty) {
-							GrugType::Entity
+					type_name => {
+						let extra_value = type_name.into();
+						if existing_entities.contains(type_name) {
+							GrugType::Entity {
+								name: extra_value,
+							}
 						} else {
-							GrugType::Id
+							GrugType::Id {
+								custom_name: Some(extra_value),
+							}
 						}
 					}
 				};
 				Ok(Argument{
 					name: argument_name.into(),
 					ty,
-					extra_value,
 				})
 			}).collect::<Result<Vec<_>, ModApiError>>()?;
 
 			// optional "return_type" string
 			let return_ty = game_fn_values["return_type"].as_str().unwrap_or("void");
 			let return_ty = match return_ty {
-				"void"     => (GrugType::Void, None),
-				"bool"     => (GrugType::Bool, None),
-				"i32"      => (GrugType::I32, None),
-				"f32"      => (GrugType::F32, None),
-				"string"   => (GrugType::String, None),
-				"id"       => (GrugType::Id, None),
-				"entity"   => (GrugType::Entity, None),
+				"void"     => GrugType::Void,
+				"bool"     => GrugType::Bool,
+				"i32"      => GrugType::I32,
+				"f32"      => GrugType::F32,
+				"string"   => GrugType::String,
+				"id"       => GrugType::Id{custom_name: None},
+				// "entity"   => GrugType::Entity,
 				"resource" => Err(ModApiError::GameFnReturnsResource{
 					game_fn_name: fn_name.to_string(),
 				})?,
-				_ => {
-					let extra_value = Some(return_ty.to_string());
-					if existing_entities.contains(return_ty) {
-						(GrugType::Entity, extra_value)
+				type_name => {
+					let extra_value = type_name.into();
+					if existing_entities.contains(type_name) {
+						GrugType::Entity {
+							name: extra_value,
+						}
 					} else {
-						(GrugType::Id, extra_value)
+						GrugType::Id {
+							custom_name: Some(extra_value),
+						}
 					}
 				}
 			};
@@ -2295,13 +2324,12 @@ pub mod type_propogation {
 	struct Variable {
 		name: Arc<str>,
 		ty: GrugType,
-		// for id, resource and entity
-		extra_value: Option<Arc<str>>,
 		value: GrugValue,
 	}
 
 	pub(super) struct TypePropogator {
 		global_variables: HashMap<Arc<str>, Variable>,
+		current_on_fn_calls_helper_fn: bool,
 	}
 
 	#[derive(Debug)]
@@ -2332,11 +2360,11 @@ pub mod type_propogation {
 		},
 		// grug_assert(expr->result_type == type_bool, "Found 'not' before %s, but it can only be put before a bool", expr->result_type_name);
 		NotOperatorNotBeforeBool{
-			got: (GrugType, Option<Arc<str>>),
+			got: GrugType,
 		},
 		// grug_assert(expr->result_type == type_i32 || expr->result_type == type_f32, "Found '-' before %s, but it can only be put before an i32 or f32", expr->result_type_name);
 		MinusOperatorNotBeforeNumber {
-			got: (GrugType, Option<Arc<str>>),
+			got: GrugType,
 		},
 		// grug_assert(binary_expr.operator == EQUALS_TOKEN || binary_expr.operator == NOT_EQUALS_TOKEN, "You can't use the %s operator on a string", get_token_type_str[binary_expr.operator]);
 		CannotCompareStrings {
@@ -2346,8 +2374,8 @@ pub mod type_propogation {
 		// grug_error("The left and right operand of a binary expression ('%s') must have the same type, but got %s and %s", get_token_type_str[binary_expr.operator], binary_expr.left_expr->result_type_name, binary_expr.right_expr->result_type_name);
 		BinaryOperatorTypeMismatch {
 			operator: BinaryOperator,
-			left: (GrugType, Option<Arc<str>>),
-			right: (GrugType, Option<Arc<str>>),
+			left: GrugType,
+			right: GrugType,
 		},
 		// grug_assert(binary_expr.left_expr->result_type == type_bool, "'%s' operator expects bool", get_token_type_str[binary_expr.operator]);
 		LogicalOperatorExpectsBool {
@@ -2370,23 +2398,123 @@ pub mod type_propogation {
 		RemainderOperatorExpectsNumber {
 			got_ty: GrugType,
 		},
+		// grug_error("Mods aren't allowed to call their own on_ functions, but '%s' was called", name);
+		CallOnFnWithinOnFn {
+			on_fn_name: Arc<str>,
+		},
+		// grug_error("The function '%s' does not exist", name);
+		FunctionDoesNotExist {
+			function_name: Arc<str>,
+		},
+		// grug_assert(call_expr.argument_count >= param_count, "Function call '%s' expected the argument '%s' with type %s", name, params[call_expr.argument_count].name, params[call_expr.argument_count].type_name);
+		TooFewArguments{
+			function_name: Arc<str>,
+			expected_name: Arc<str>,
+			expected_type: GrugType,
+		},
+		// grug_assert(call_expr.argument_count <= param_count, "Function call '%s' got an unexpected extra argument with type %s", name, call_expr.arguments[param_count].result_type_name);
+		TooManyArguments{
+			function_name: Arc<str>,
+			got_ty: GrugType,
+		},
+		ResourceValidationError(ResourceValidationError),
+		EntityValidationError(EntityValidationError),
+		// grug_assert(arg->result_type != type_void, "Function call '%s' expected the type %s for argument '%s', but got a function call that doesn't return anything", name, param.type_name, param.name);
+		VoidArgumentInFunctionCall {
+			function_name: Arc<str>,
+			signature_type: GrugType,
+			parameter_name: Arc<str>
+		},
+		// grug_error("Function call '%s' expected the type %s for argument '%s', but got %s", name, param.type_name, param.name, arg->result_type_name);
+		FunctionArgumentMismatch {
+			function_name: Arc<str>,
+			expected_type: GrugType,
+			got_type: GrugType,
+			parameter_name: Arc<str>
+		},
+	}
+
+	#[derive(Debug)]
+	pub enum ResourceValidationError {
+		// grug_assert(string[0] != '\0', "Resources can't be empty strings");
+		// TODO: This needs to display the actual argument
+		EmptyResource {},
+		// grug_assert(string[0] != '/', "Remove the leading slash from the resource \"%s\"", string);
+		LeadingForwardSlash {
+			value: Arc<str>
+		},
+		//grug_assert(string[string_len - 1] != '/', "Remove the trailing slash from the resource \"%s\"", string);
+		TrailingForwardSlash {
+			value: Arc<str>
+		},
+		// grug_assert(!strchr(string, '\\'), "Replace the '\\' with '/' in the resource \"%s\"", string);
+		ContainsBackslash {
+			value: Arc<str>
+		},
+		// grug_assert(!strstr(string, "//"), "Replace the '//' with '/' in the resource \"%s\"", string);
+		ContainsDoubleForwardSlash {
+			value: Arc<str>
+		},
+		// TODO: This error needs a better message
+		// grug_assert(string_len != 1 && string[1] != '/', "Remove the '.' from the resource \"%s\"", string);
+		BeginsWithDotWithoutSlash {
+			value: Arc<str>
+		},
+		// TODO: This error needs a better message
+		// grug_assert(dot[1] != '/' && dot[1] != '\0', "Remove the '.' from the resource \"%s\"", string);
+		ContainsSlashDotInMiddle {
+			value: Arc<str>
+		},
+		// TODO: This error needs a better message
+		// grug_assert(string_len != 2 && string[2] != '/', "Remove the '..' from the resource \"%s\"", string);
+		BeginsWithDotDotWithoutSlash {
+			value: Arc<str>
+		},
+		// TODO: This error needs a better message
+		// grug_assert(dotdot[2] != '/' && dotdot[2] != '\0', "Remove the '..' from the resource \"%s\"", string);
+		ContainsSlashDotDotInMiddle {
+			value: Arc<str>
+		},
+		ResourceExtensionMismatch {
+			expected: Arc<str>,
+			value: Arc<str>
+		}
+	}
+
+	#[derive(Debug)]
+	pub enum EntityValidationError {
+		
+	}
+
+	impl From<ResourceValidationError> for TypePropogatorError {
+		fn from (other: ResourceValidationError) -> Self {
+			Self::ResourceValidationError(other)
+		}
+	}
+
+	impl From<EntityValidationError> for TypePropogatorError {
+		fn from (other: EntityValidationError) -> Self {
+			Self::EntityValidationError(other)
+		}
 	}
 	
 	impl TypePropogator {
 		pub fn new () -> Self {
 			Self {
 				global_variables: HashMap::new(),
+				current_on_fn_calls_helper_fn: false,
 			}
 		}
+
 		pub fn fill_result_types(&mut self, entity_name: &str, ast: &mut AST) -> Result<(), TypePropogatorError> {
 			let entity_name = Arc::from(entity_name);
 			let _entity = MOD_API.wait().entities().get(&*entity_name).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
 				entity_name: Arc::clone(&entity_name),
 			});
 			
-			self.add_global_variable(Arc::from("me"), GrugType::Id, Some(entity_name))?;
+			self.add_global_variable(Arc::from("me"), GrugType::Id{custom_name: Some(entity_name.into())})?;
 
-			for statement in ast.global_statements_mut() {
+			for statement in &mut ast.global_statements {
 				match statement {
 					GlobalStatement::GlobalVariableStatement{
 						name,
@@ -2394,7 +2522,7 @@ pub mod type_propogation {
 						assignment_expr,
 					} => {
 						self.check_global_expr(assignment_expr, &*name)?;
-						self.fill_expr(assignment_expr, &*name)?;
+						self.fill_expr(&ast.helper_fn_signatures, assignment_expr, &*name)?;
 					}
 					_ => todo!(),
 				}
@@ -2443,7 +2571,8 @@ pub mod type_propogation {
 			Ok(())
 		}
 
-		fn fill_expr(&mut self, assignment_expr: &mut Expr, name: &Arc<str>) -> Result<(GrugType, Option<Arc<str>>), TypePropogatorError> {
+		// out parameter self.current_on_fn_calls_helper_fn
+		fn fill_expr(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, assignment_expr: &mut Expr, name: &Arc<str>) -> Result<GrugType, TypePropogatorError> {
 			// MUST be None before type propogation
 			assert!(matches!(assignment_expr.result_ty, None));
 			let result_ty = match assignment_expr.ty {
@@ -2453,11 +2582,11 @@ pub mod type_propogation {
 					col,
 				} => {
 					match expr {
-						LiteralExpr::TrueExpr => (GrugType::Bool, None),
-						LiteralExpr::FalseExpr => (GrugType::Bool, None),
+						LiteralExpr::TrueExpr => GrugType::Bool,
+						LiteralExpr::FalseExpr => GrugType::Bool,
 						LiteralExpr::StringExpr{
 							..
-						} => (GrugType::String, None),
+						} => GrugType::String,
 						LiteralExpr::ResourceExpr{
 							..
 						} => {
@@ -2478,14 +2607,14 @@ pub mod type_propogation {
 								line,
 								col,
 							})?;
-							(var.ty, var.extra_value.clone())
+							var.ty.clone()
 						},
 						LiteralExpr::I32Expr{
 							..
-						} => (GrugType::I32, None),
+						} => GrugType::I32,
 						LiteralExpr::F32Expr{
 							..
-						} => (GrugType::F32, None),
+						} => GrugType::F32,
 					}
 				},
 				ExprType::UnaryExpr{
@@ -2497,14 +2626,14 @@ pub mod type_propogation {
 							operator
 						});
 					}
-					let result_ty = self.fill_expr(expr, name)?;
+					let result_ty = self.fill_expr(helper_fns, expr, name)?;
 					match (operator, &result_ty) {
-						(UnaryOperator::Not, (GrugType::Bool, None)) => (),
+						(UnaryOperator::Not, GrugType::Bool) => (),
 						(UnaryOperator::Not, got@_) => return Err(TypePropogatorError::NotOperatorNotBeforeBool{
 							got: got.clone(),
 						}),
-						(UnaryOperator::Minus, (GrugType::F32, None)) => (),
-						(UnaryOperator::Minus, (GrugType::I32, None)) => (),
+						(UnaryOperator::Minus, GrugType::F32) => (),
+						(UnaryOperator::Minus, GrugType::I32) => (),
 						(UnaryOperator::Minus, got@_) => return Err(TypePropogatorError::MinusOperatorNotBeforeNumber{
 							got: got.clone(),
 						}),
@@ -2516,11 +2645,11 @@ pub mod type_propogation {
 					ref mut operands,
 					operator,
 				} => {
-					let result_0 = self.fill_expr(&mut operands.0, name)?;
-					let result_1 = self.fill_expr(&mut operands.1, name)?;
+					let result_0 = self.fill_expr(helper_fns, &mut operands.0, name)?;
+					let result_1 = self.fill_expr(helper_fns, &mut operands.1, name)?;
 					match (&result_1, operator) {
-						((GrugType::String, _), BinaryOperator::DoubleEquals) | 
-						((GrugType::String, _), BinaryOperator::NotEquals) => {
+						(GrugType::String, BinaryOperator::DoubleEquals) | 
+						(GrugType::String, BinaryOperator::NotEquals) => {
 							return Err(TypePropogatorError::CannotCompareStrings{
 								operator
 							});
@@ -2537,43 +2666,43 @@ pub mod type_propogation {
 
 					match operator {
 						BinaryOperator::Or | BinaryOperator::And => {
-							if result_0.0 != GrugType::Bool {
+							if result_0 != GrugType::Bool {
 								return Err(TypePropogatorError::LogicalOperatorExpectsBool {
 									operator,
 								});
 							}
-							(GrugType::Bool, None)
+							GrugType::Bool
 						}
 						BinaryOperator::DoubleEquals | BinaryOperator::NotEquals => {
-							(GrugType::Bool, None)
+							GrugType::Bool
 						},
 						BinaryOperator::Greater | BinaryOperator::GreaterEquals | 
 						BinaryOperator::Less | BinaryOperator::LessEquals => {
-							if !matches!(result_0.0, GrugType::I32 | GrugType::F32) {
+							if !matches!(result_0, GrugType::I32 | GrugType::F32) {
 								return Err(TypePropogatorError::ComparisonOperatorExpectsNumber {
 									operator,
-									got_ty: result_0.0,
+									got_ty: result_0,
 								});
 							}
-							(GrugType::Bool, None)
+							GrugType::Bool
 						},
 						BinaryOperator::Plus | BinaryOperator::Minus |
 						BinaryOperator::Multiply | BinaryOperator::Division => {
-							if !matches!(result_0.0, GrugType::I32 | GrugType::F32) {
+							if !matches!(result_0, GrugType::I32 | GrugType::F32) {
 								return Err(TypePropogatorError::ArithmeticOperatorExpectsNumber {
 									operator,
-									got_ty: result_0.0,
+									got_ty: result_0,
 								});
 							}
-							(result_0.0, None)
+							result_0
 						},
 						BinaryOperator::Remainder => {
-							if result_0.0 != GrugType::I32 {
+							if result_0 != GrugType::I32 {
 								return Err(TypePropogatorError::RemainderOperatorExpectsNumber {
-									got_ty: result_0.0,
+									got_ty: result_0,
 								});
 							}
-							(result_0.0, None)
+							result_0
 						},
 					}
 				},
@@ -2583,19 +2712,133 @@ pub mod type_propogation {
 					line,
 					col,
 				} => {
-					arguments.iter_mut().map(|argument| self.fill_expr(argument, name)).collect::<Result<Vec<_>, _>>()?;
-					todo!();
+					// TODO: Move this line to within check_arguments
+					arguments.iter_mut().map(|argument| self.fill_expr(helper_fns, argument, name)).collect::<Result<Vec<_>, _>>()?;
+					if function_name.starts_with("helper_") {
+						self.current_on_fn_calls_helper_fn = true;
+					}
+					if let Some((return_ty, sig_arguments)) = helper_fns.get(function_name) {
+						self.check_arguments(function_name, sig_arguments, arguments)?;
+						return_ty.clone()
+					} else if let Some(game_fn) = MOD_API.get().unwrap().game_functions().get(function_name) {
+						self.check_arguments(function_name, &game_fn.arguments, arguments)?;
+						game_fn.return_ty.clone()
+					} else if function_name.starts_with("on_") {
+						return Err(TypePropogatorError::CallOnFnWithinOnFn {
+							on_fn_name: Arc::clone(function_name)
+						});
+					} else {
+						return Err(TypePropogatorError::FunctionDoesNotExist {
+							function_name: Arc::clone(function_name)
+						});
+					}
 				},
 				ExprType::ParenthesizedExpr{
 					ref mut expr,
 					line,
 					col,
 				} => {
-					todo!();
+					self.fill_expr(helper_fns, expr, name)?
 				},
 			};
 			assignment_expr.result_ty = Some(result_ty.clone());
 			Ok(result_ty)
+		}
+
+		fn check_arguments(&mut self, function_name: &Arc<str>, signature: &[Argument], arguments: &mut [Expr]) -> Result<(), TypePropogatorError> {
+			debug_assert!(arguments.iter().all(|arg| arg.result_ty.is_some()));
+			if signature.len() > arguments.len() {
+				return Err(TypePropogatorError::TooFewArguments{
+					function_name: Arc::clone(function_name),
+					expected_name: Arc::clone(&signature[arguments.len()].name),
+					expected_type: signature[arguments.len()].ty.clone(),
+				});
+			} else if signature.len() < arguments.len() {
+				return Err(TypePropogatorError::TooManyArguments{
+					function_name: Arc::clone(function_name),
+					got_ty: arguments[signature.len()].result_ty.clone().unwrap(),
+				});
+			}
+			for (param, arg) in signature.iter().zip(arguments) {
+				if let GrugType::Resource{ref extension} = param.ty 
+					&& let ExprType::LiteralExpr{expr: LiteralExpr::StringExpr{ref value}, ..} = arg.ty {
+					self.validate_resource_string(value, extension)?;
+					arg.result_ty = Some(GrugType::Resource{
+						extension: Arc::clone(extension)
+					});
+				} else if let GrugType::Entity{ref name} = param.ty 
+					&& let ExprType::LiteralExpr{expr: LiteralExpr::StringExpr{ref value}, ..} = arg.ty {
+					self.validate_entity_string(value, name)?;
+					arg.result_ty = Some(GrugType::Entity{
+						name: Arc::clone(name)
+					});
+				} else if arg.result_ty.as_ref().unwrap() == &GrugType::Void {
+					return Err(TypePropogatorError::VoidArgumentInFunctionCall{
+						function_name: Arc::clone(function_name),
+						signature_type: param.ty.clone(),
+						parameter_name: Arc::clone(&param.name),
+					});
+				} else if Some(&param.ty) != arg.result_ty.as_ref() {
+					return Err(TypePropogatorError::FunctionArgumentMismatch {
+						function_name: Arc::clone(&function_name),
+						expected_type: param.ty.clone(),
+						got_type: arg.result_ty.as_ref().unwrap().clone(),
+						parameter_name: Arc::clone(&param.name),
+					});
+				}
+			}
+			Ok(())
+		}
+
+		fn validate_resource_string(&mut self, value: &Arc<str>, extension: &Arc<str>) -> Result<(), ResourceValidationError> {
+			if value.len() == 0 {
+				Err(ResourceValidationError::EmptyResource{ })
+			} else if value.starts_with("/") {
+				Err(ResourceValidationError::LeadingForwardSlash {
+					value: Arc::clone(value),
+				})
+			} else if value.ends_with("/") {
+				Err(ResourceValidationError::TrailingForwardSlash {
+					value: Arc::clone(value),
+				})
+			} else if value.contains("\\") {
+				Err(ResourceValidationError::ContainsBackslash {
+					value: Arc::clone(value),
+				})
+			} else if value.contains("//") {
+				Err(ResourceValidationError::ContainsDoubleForwardSlash {
+					value: Arc::clone(value),
+				})
+			} else if value.starts_with(".") && !value.starts_with("./") {
+				Err(ResourceValidationError::BeginsWithDotWithoutSlash {
+					value: Arc::clone(value),
+				})
+			} else if (value.contains("/.") && !value.contains("/./")) || value.ends_with("/.") {
+				Err(ResourceValidationError::ContainsSlashDotInMiddle {
+					value: Arc::clone(value),
+				})
+			} else if value.starts_with("..") && !value.starts_with("../") {
+				Err(ResourceValidationError::BeginsWithDotDotWithoutSlash {
+					value: Arc::clone(value),
+				})
+			} else if (value.contains("/..") && !value.contains("/../")) || value.ends_with("/..") {
+				Err(ResourceValidationError::ContainsSlashDotDotInMiddle {
+					value: Arc::clone(value),
+				})
+			} else if value.ends_with(&**extension) {
+				Ok(())
+			} else {
+				Err(ResourceValidationError::ResourceExtensionMismatch {
+					expected: Arc::clone(extension),
+					value: Arc::clone(value),
+				})
+			}
+		}
+
+		fn validate_entity_string(&mut self, value: &Arc<str>, extension: &str) -> Result<(), EntityValidationError> {
+			// TODO:
+			todo!();
+			// Ok(())
 		}
 
 		fn get_variable(&self, var_name: &str) -> Option<&Variable> {
@@ -2603,12 +2846,7 @@ pub mod type_propogation {
 			self.global_variables.get(var_name)
 		}
 
-		fn add_global_variable(&mut self, name: Arc<str>, ty: GrugType, extra_value: Option<Arc<str>>) -> Result<(), TypePropogatorError> {
-			match ty {
-				// This is an internal error
-				GrugType::Entity if extra_value.is_none() => panic!("entity without extra_information"),
-				_ => (),
-			}
+		fn add_global_variable(&mut self, name: Arc<str>, ty: GrugType) -> Result<(), TypePropogatorError> {
 			match self.global_variables.entry(Arc::clone(&name)) {
 				Entry::Occupied(_) => return Err(TypePropogatorError::GlobalVariableShadowed{
 					name,
@@ -2616,7 +2854,6 @@ pub mod type_propogation {
 				Entry::Vacant(x) => {x.insert(Variable{
 					name,
 					ty,
-					extra_value,
 					value: GrugValue::Uninitialized,
 				});},
 			}
