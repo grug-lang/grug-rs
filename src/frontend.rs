@@ -28,6 +28,30 @@ mod types {
 		},
 	}
 
+	impl std::fmt::Display for GrugType {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				Self::Void => write!(f, "void"),
+				Self::Bool => write!(f, "bool"),
+				Self::I32 => write!(f, "i32"),
+				Self::F32 => write!(f, "f32"),
+				Self::String => write!(f, "string"),
+				Self::Id{
+					custom_name: None,
+				} => write!(f, "id"),
+				Self::Id{
+					custom_name: Some(custom_name),
+				} => write!(f, "{}", custom_name),
+				Self::Resource {
+					extension: _,
+				} => write!(f, "resource"),
+				Self::Entity {
+					name,
+				} => write!(f, "{}", name),
+			}
+		}
+	}
+
 	#[derive(Debug)]
 	pub enum LiteralExpr {
 		TrueExpr,
@@ -362,6 +386,7 @@ impl<'a> std::fmt::Display for GrugError<'a> {
 		match self {
 			Self::FileNameError(error) => write!(f, "{}", error),
 			Self::ParserError(error) => write!(f, "{}", error),
+			Self::TypePropogatorError(error) => write!(f, "{}", error),
 			err => write!(f, "{:?}", err),
 		}
 	}
@@ -2329,7 +2354,9 @@ pub mod type_propogation {
 
 	pub(super) struct TypePropogator {
 		global_variables: HashMap<Arc<str>, Variable>,
+		local_variables: HashMap<Arc<str>, Variable>,
 		current_on_fn_calls_helper_fn: bool,
+		current_on_fn_has_while_loop: bool,
 	}
 
 	#[derive(Debug)]
@@ -2460,6 +2487,49 @@ pub mod type_propogation {
 			got_type: GrugType,
 			expected_type: GrugType,
 		},
+		// grug_assert(!streq(global->assignment_expr.literal.string, "me"), "Global variables can't be assigned 'me'");
+		GlobalCantBeAssignedMe {
+			name: Arc<str>,
+		},
+		// grug_error("Can't assign %s to '%s', which has type %s", global->assignment_expr.result_type_name, global->name, global->type_name);
+		VariableTypeMismatch {
+			name: Arc<str>,
+			got_type: GrugType,
+			expected_type: GrugType,
+		},
+		// grug_assert(!get_local_variable(name), "The local variable '%s' shadows an earlier local variable with the same name, so change the name of one of them", name);
+		LocalVariableShadowedByGlobal {
+			name: Arc<str>,
+		},
+		// grug_assert(!get_global_variable(name), "The local variable '%s' shadows an earlier global variable with the same name, so change the name of one of them", name);
+		LocalVariableShadowedByLocal {
+			name: Arc<str>,
+		},
+		// grug_assert(var, "Can't assign to the variable '%s', since it does not exist", variable_statement.name);
+		CantAssignBecauseVariableDoesntExist {
+			name: Arc<str>,
+		},
+		// "If condition must be bool but got '%s'", 
+		IfConditionTypeMismatch {
+			got_type: GrugType,
+		},
+		// "While condition must be bool but got '%s'", 
+		WhileConditionTypeMismatch {
+			got_type: GrugType,
+		},
+	}
+
+	impl std::fmt::Display for TypePropogatorError {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				Self::VariableTypeMismatch {
+					name,
+					got_type,
+					expected_type,
+				} => write!(f, "Can't assign {} to '{}', which has type {}", got_type, name, expected_type),
+				_ => write!(f, "{:?}", self),
+			}
+		}
 	}
 
 	#[derive(Debug)]
@@ -2530,7 +2600,9 @@ pub mod type_propogation {
 		pub fn new () -> Self {
 			Self {
 				global_variables: HashMap::new(),
+				local_variables: HashMap::new(),
 				current_on_fn_calls_helper_fn: false,
+				current_on_fn_has_while_loop: false,
 			}
 		}
 
@@ -2550,7 +2622,26 @@ pub mod type_propogation {
 						assignment_expr,
 					} => {
 						self.check_global_expr(assignment_expr, &*name)?;
-						self.fill_expr(&ast.helper_fn_signatures, assignment_expr, &*name)?;
+						let result_ty = self.fill_expr(&ast.helper_fn_signatures, assignment_expr)?;
+						
+						// global expr cant call helper function and this has been checked
+						debug_assert!(!self.current_on_fn_calls_helper_fn);
+
+						if let ExprType::LiteralExpr{expr: LiteralExpr::IdentifierExpr{name, ..}, ..} = &assignment_expr.ty 
+							&& &**name == "me" {
+							// grug_assert(!streq(global->assignment_expr.literal.string, "me"), "Global variables can't be assigned 'me'");
+							return Err(TypePropogatorError::GlobalCantBeAssignedMe {
+								name: Arc::clone(name),
+							});
+						}
+						if &result_ty != ty {
+							return Err(TypePropogatorError::VariableTypeMismatch {
+								name: Arc::clone(name),
+								got_type: result_ty.clone(),
+								expected_type: ty.clone(),
+							});
+						}
+						self.add_global_variable(Arc::clone(name), result_ty)?;
 					}
 					GlobalStatement::GlobalOnFunction{
 						name,
@@ -2575,7 +2666,7 @@ pub mod type_propogation {
 								got_ty: arguments[grug_on_fn.arguments.len()].ty.clone(),
 							});
 						}
-						for (param, arg) in grug_on_fn.arguments.iter().zip(arguments) {
+						for (param, arg) in grug_on_fn.arguments.iter().zip(arguments.iter()) {
 							if param.name != arg.name {
 								return Err(TypePropogatorError::OnFnParameterNameMismatch {
 									function_name: Arc::clone(name),
@@ -2584,7 +2675,6 @@ pub mod type_propogation {
 								});
 							}
 							if param.ty != arg.ty {
-								//grug_error("Function '%s' its '%s' parameter was supposed to have the type %s, but got %s", name, param.name, param.type_name, arg_type_name);
 								return Err(TypePropogatorError::OnFnParameterTypeMismatch {
 									function_name: Arc::clone(name),
 									got_type: arg.ty.clone(),
@@ -2592,11 +2682,97 @@ pub mod type_propogation {
 								});
 							}
 						}
+						self.reset_local_variables();
+						for arg in arguments {
+							self.add_local_variable(Arc::clone(&arg.name), arg.ty.clone())?;
+						}
+						self.fill_statements(&ast.helper_fn_signatures, body_statements)?;
 					}
 					_ => todo!(),
 				}
 			}
 			Ok(())
+		}
+		
+		// out parameter self.current_on_fn_calls_helper_fn
+		fn fill_statements(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, statements: &mut [Statement]) -> Result<GrugType, TypePropogatorError> {
+			for statement in statements {
+				match statement {
+					Statement::VariableStatement {
+						name,
+						ty,
+						assignment_expr
+					} => {
+						let result_ty = self.fill_expr(helper_fns, assignment_expr)?;
+						
+						if let Some(ty) = ty {
+							if &result_ty == ty {
+								self.add_local_variable(Arc::clone(name), ty.clone())?
+							} else {
+								return Err(TypePropogatorError::VariableTypeMismatch {
+									name: Arc::clone(name),
+									got_type: result_ty.clone(),
+									expected_type: ty.clone(),
+								});
+							}
+						} else {
+							let var = self.get_local_variable(name).ok_or_else(|| TypePropogatorError::CantAssignBecauseVariableDoesntExist {
+								name: Arc::clone(name),
+							})?;
+							if result_ty != var.ty {
+								return Err(TypePropogatorError::VariableTypeMismatch {
+									name: Arc::clone(name),
+									got_type: result_ty.clone(),
+									expected_type: var.ty.clone(),
+								});
+							}
+						}
+					}
+					Statement::CallStatement {
+						expr
+					} => {
+						self.fill_expr(helper_fns, expr)?;
+					}
+					Statement::IfStatement {
+						condition,
+						if_statements,
+						else_statements,
+					} => {
+						let cond_type = self.fill_expr(helper_fns, condition)?;
+						if cond_type != GrugType::Bool {
+							return Err(TypePropogatorError::IfConditionTypeMismatch {
+								got_type: cond_type
+							});
+						}
+						self.fill_statements(helper_fns, if_statements)?;
+						self.fill_statements(helper_fns, else_statements)?;
+					}
+					Statement::WhileStatement {
+						condition,
+						statements,
+					} => {
+						let cond_type = self.fill_expr(helper_fns, condition)?;
+						if cond_type != GrugType::Bool {
+							return Err(TypePropogatorError::WhileConditionTypeMismatch {
+								got_type: cond_type
+							});
+						}
+						self.fill_statements(helper_fns, statements)?;
+						self.current_on_fn_has_while_loop = true;
+					}
+					Statement::ReturnStatement {
+						expr,
+					} => {
+						todo!();
+					}
+					_ => (),
+				}
+			}
+			todo!();
+		}
+		
+		fn reset_local_variables(&mut self) {
+			self.local_variables.clear();
 		}
 
 		// Check that the global variable's assigned value doesn't contain a call_to a helper function nor identifier
@@ -2641,7 +2817,7 @@ pub mod type_propogation {
 		}
 
 		// out parameter self.current_on_fn_calls_helper_fn
-		fn fill_expr(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, assignment_expr: &mut Expr, name: &Arc<str>) -> Result<GrugType, TypePropogatorError> {
+		fn fill_expr(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, assignment_expr: &mut Expr) -> Result<GrugType, TypePropogatorError> {
 			// MUST be None before type propogation
 			assert!(matches!(assignment_expr.result_ty, None));
 			let result_ty = match assignment_expr.ty {
@@ -2695,7 +2871,7 @@ pub mod type_propogation {
 							operator
 						});
 					}
-					let result_ty = self.fill_expr(helper_fns, expr, name)?;
+					let result_ty = self.fill_expr(helper_fns, expr)?;
 					match (operator, &result_ty) {
 						(UnaryOperator::Not, GrugType::Bool) => (),
 						(UnaryOperator::Not, got@_) => return Err(TypePropogatorError::NotOperatorNotBeforeBool{
@@ -2714,8 +2890,8 @@ pub mod type_propogation {
 					ref mut operands,
 					operator,
 				} => {
-					let result_0 = self.fill_expr(helper_fns, &mut operands.0, name)?;
-					let result_1 = self.fill_expr(helper_fns, &mut operands.1, name)?;
+					let result_0 = self.fill_expr(helper_fns, &mut operands.0)?;
+					let result_1 = self.fill_expr(helper_fns, &mut operands.1)?;
 					match (&result_1, operator) {
 						(GrugType::String, BinaryOperator::DoubleEquals) | 
 						(GrugType::String, BinaryOperator::NotEquals) => {
@@ -2782,7 +2958,7 @@ pub mod type_propogation {
 					col,
 				} => {
 					// TODO: Move this line to within check_arguments
-					arguments.iter_mut().map(|argument| self.fill_expr(helper_fns, argument, name)).collect::<Result<Vec<_>, _>>()?;
+					arguments.iter_mut().map(|argument| self.fill_expr(helper_fns, argument)).collect::<Result<Vec<_>, _>>()?;
 					if function_name.starts_with("helper_") {
 						self.current_on_fn_calls_helper_fn = true;
 					}
@@ -2807,7 +2983,7 @@ pub mod type_propogation {
 					line,
 					col,
 				} => {
-					self.fill_expr(helper_fns, expr, name)?
+					self.fill_expr(helper_fns, expr)?
 				},
 			};
 			assignment_expr.result_ty = Some(result_ty.clone());
@@ -2912,7 +3088,38 @@ pub mod type_propogation {
 
 		fn get_variable(&self, var_name: &str) -> Option<&Variable> {
 			// TODO: also do local variables
+			if let var@Some(_) = self.get_local_variable(var_name) {
+				var
+			} else {
+				self.get_global_variable(var_name)
+			}
+		}
+
+		fn get_local_variable(&self, var_name: &str) -> Option<&Variable> {
+			self.local_variables.get(var_name)
+		}
+
+		fn get_global_variable(&self, var_name: &str) -> Option<&Variable> {
 			self.global_variables.get(var_name)
+		}
+
+		fn add_local_variable(&mut self, name: Arc<str>, ty: GrugType) -> Result<(), TypePropogatorError> {
+			if let Some(_) = self.get_global_variable(&name) {
+				return Err(TypePropogatorError::LocalVariableShadowedByGlobal{
+					name,
+				});
+			}
+			match self.local_variables.entry(Arc::clone(&name)) {
+				Entry::Occupied(_) => return Err(TypePropogatorError::LocalVariableShadowedByLocal{
+					name,
+				})?,
+				Entry::Vacant(x) => {x.insert(Variable{
+					name,
+					ty,
+					value: GrugValue::Uninitialized,
+				});},
+			}
+			Ok(())
 		}
 
 		fn add_global_variable(&mut self, name: Arc<str>, ty: GrugType) -> Result<(), TypePropogatorError> {
