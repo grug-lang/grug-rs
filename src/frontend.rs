@@ -14,8 +14,7 @@ mod types {
 	pub enum GrugType {
 		Void,
 		Bool,
-		I32,
-		F32,
+		Number,
 		String,
 		Id{
 			custom_name: Option<Arc<str>>,
@@ -33,8 +32,7 @@ mod types {
 			match self {
 				Self::Void => write!(f, "void"),
 				Self::Bool => write!(f, "bool"),
-				Self::I32 => write!(f, "i32"),
-				Self::F32 => write!(f, "f32"),
+				Self::Number => write!(f, "number"),
 				Self::String => write!(f, "string"),
 				Self::Id{
 					custom_name: None,
@@ -156,6 +154,26 @@ mod types {
 		Multiply,
 		Division,
 		Remainder,
+	}
+
+	impl std::fmt::Display for BinaryOperator {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				Self::Or => write!(f, "OR_TOKEN"),
+				Self::And => write!(f, "AND_TOKEN"),
+				Self::DoubleEquals => write!(f, "EQUALS_TOKEN"),
+				Self::NotEquals => write!(f, "NOT_EQUALS_TOKEN"),
+				Self::Greater => write!(f, "GREATER_TOKEN"),
+				Self::GreaterEquals => write!(f, "GREATER_OR_EQUAL_TOKEN"),
+				Self::Less => write!(f, "LESS_TOKEN"),
+				Self::LessEquals => write!(f, "LESS_OR_EQUAL_TOKEN"),
+				Self::Plus => write!(f, "PLUS_TOKEN"),
+				Self::Minus => write!(f, "MINUS_TOKEN"),
+				Self::Multiply => write!(f, "MULTIPLICATION_TOKEN"),
+				Self::Division => write!(f, "DIVISION_TOKEN"),
+				Self::Remainder => write!(f, "REMAINDER_TOKEN"),
+			}
+		}
 	}
 	
 	#[derive(Debug)]
@@ -1716,65 +1734,63 @@ pub mod parser {
 			let expr = self.parse_primary(tokens, parsing_depth + 1)?;
 
 			// Not a function call
-			if !matches!(peek_next_token(tokens), Ok(Token{ty: TokenType::OpenParenthesis,..})) {
-				return Ok(expr);
-			}
-
-			// functions can only be identifiers for now
-			match expr.ty {
-				ExprType::LiteralExpr {
-					expr: LiteralExpr::IdentifierExpr{
-						name,
-					},
-					..
-				} => {
-					// TODO: Add called helper_functions tracking
-					if name.starts_with("helper_") {
-						self.called_helper_fns.insert(Arc::clone(&name));
-					}
-					let [_, next_token] = peek_next_tokens(tokens)?;
-					if next_token.ty == TokenType::CloseParenthesis {
-						tokens.next();
-						tokens.next();
-						return Ok(Expr{
-							ty: ExprType::CallExpr {
-								function_name: name.into(),
-								arguments: Vec::new(),
-								line: next_token.line,
-								col: next_token.col,
-							},
-							result_ty: None,
-						});
-					}
-
-					let mut arguments = Vec::new();
-
-					loop {
-						arguments.push(self.parse_expression(tokens, parsing_depth + 1)?);
-						if !consume_next_token_types(tokens, &[TokenType::Comma]).is_ok() {
-							consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
+			if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenParenthesis]) {
+				// functions can only be identifiers for now
+				match expr.ty {
+					ExprType::LiteralExpr {
+						expr: LiteralExpr::IdentifierExpr{
+							name,
+						},
+						..
+					} => {
+						// TODO: Add called helper_functions tracking
+						if name.starts_with("helper_") {
+							self.called_helper_fns.insert(Arc::clone(&name));
+						}
+						if let Ok(&[ref close_paren_token]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
 							return Ok(Expr{
 								ty: ExprType::CallExpr {
 									function_name: name.into(),
-									arguments: arguments,
-									line: next_token.line,
-									col: next_token.col,
+									arguments: Vec::new(),
+									line: close_paren_token.line,
+									col: close_paren_token.col,
 								},
 								result_ty: None,
 							});
 						}
-						consume_space(tokens)?;
+
+						let mut arguments = Vec::new();
+
+						loop {
+							arguments.push(self.parse_expression(tokens, parsing_depth + 1)?);
+							if !consume_next_token_types(tokens, &[TokenType::Comma]).is_ok() {
+								let [close_paren_token] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
+								return Ok(Expr{
+									ty: ExprType::CallExpr {
+										function_name: name.into(),
+										arguments: arguments,
+										line: close_paren_token.line,
+										col: close_paren_token.col,
+									},
+									result_ty: None,
+								});
+							}
+							consume_space(tokens)?;
+						}
+					}
+					_ => {
+						let (line, col) = expr.ty.get_last_known_location();
+						return Err(ParserError::UnexpectedOpenParenthesis{
+							got_ty: expr.ty,
+							line, 
+							col,
+						})
 					}
 				}
-				_ => {
-					let (line, col) = expr.ty.get_last_known_location();
-					return Err(ParserError::UnexpectedOpenParenthesis{
-						got_ty: expr.ty,
-						line, 
-						col,
-					})
-				}
+			} else {
+				Ok(expr)
 			}
+
 		}
 
 		// primary -> "(" + expr + ")" | "true" | "false" | string | word | i32 | f32;
@@ -1884,8 +1900,7 @@ pub mod parser {
 			Ok(match next_token.value {
 				"void"     => GrugType::Void,
 				"bool"     => GrugType::Bool,
-				"i32"      => GrugType::I32,
-				"f32"      => GrugType::F32,
+				"number"   => GrugType::Number,
 				"string"   => GrugType::String,
 				"resource" => GrugType::Resource{
 					extension: "".into(),
@@ -1965,11 +1980,11 @@ pub mod parser {
 	}
 
 	// consumes the next few tokens if they match the given types, otherwise leaves the input unchanged
-	fn consume_next_token_types<'a>(tokens: &'_ mut std::slice::Iter<'a, Token<'a>>, expected: &'_ [TokenType]) -> Result<&'a [Token<'a>], ParserError> {
+	fn consume_next_token_types<'a, const N: usize>(tokens: &'_ mut std::slice::Iter<'a, Token<'a>>, expected: &'_ [TokenType; N]) -> Result<&'a [Token<'a>; N], ParserError> {
 		assert_next_token_types(tokens, expected)?;
 		let ret_val = &tokens.as_slice()[..expected.len()];
 		*tokens = tokens.as_slice()[expected.len()..].into_iter();
-		Ok(ret_val)
+		Ok(unsafe{&*(ret_val as *const [Token] as *const [Token; N])})
 	}
 
 	fn get_next_token<'a> (tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
@@ -2171,8 +2186,7 @@ pub mod mod_api {
 							argument_name: argument_name.to_string(),
 						})?,
 						"bool"     => GrugType::Bool,
-						"i32"      => GrugType::I32,
-						"f32"      => GrugType::F32,
+						"number"   => GrugType::Number,
 						"string"   => GrugType::String,
 						"id"       => GrugType::Id{custom_name: None},
 						// "entity"   => GrugType::Entity,
@@ -2248,8 +2262,7 @@ pub mod mod_api {
 						argument_name: argument_name.to_string(),
 					})?,
 					"bool"     => GrugType::Bool,
-					"i32"      => GrugType::I32,
-					"f32"      => GrugType::F32,
+					"number"      => GrugType::Number,
 					"string"   => GrugType::String,
 					"id"       => GrugType::Id{custom_name: None},
 					// "entity"   => GrugType::Entity,
@@ -2286,8 +2299,7 @@ pub mod mod_api {
 			let return_ty = match return_ty {
 				"void"     => GrugType::Void,
 				"bool"     => GrugType::Bool,
-				"i32"      => GrugType::I32,
-				"f32"      => GrugType::F32,
+				"number"      => GrugType::Number,
 				"string"   => GrugType::String,
 				"id"       => GrugType::Id{custom_name: None},
 				// "entity"   => GrugType::Entity,
@@ -2413,7 +2425,7 @@ pub mod type_propogation {
 		ComparisonOperatorExpectsNumber {
 			// Must be '>', '>=', '<', or '<=' operators
 			operator: BinaryOperator,
-			got_ty: GrugType,
+			got_type: GrugType,
 		},
 		// grug_assert(binary_expr.left_expr->result_type == type_i32 || binary_expr.left_expr->result_type == type_f32, "'%s' operator expects i32 or f32", get_token_type_str[binary_expr.operator]);
 		ArithmeticOperatorExpectsNumber {
@@ -2527,6 +2539,13 @@ pub mod type_propogation {
 					got_type,
 					expected_type,
 				} => write!(f, "Can't assign {} to '{}', which has type {}", got_type, name, expected_type),
+				Self::ComparisonOperatorExpectsNumber {
+					operator,
+					got_type: _,
+				} => write!(f, "'{}' operator expects number", operator),
+				Self::MinusOperatorNotBeforeNumber {
+					got,
+				} => write!(f, "Found '-' before {}, but it can only be put before a number", got),
 				_ => write!(f, "{:?}", self),
 			}
 		}
@@ -2695,7 +2714,7 @@ pub mod type_propogation {
 		}
 		
 		// out parameter self.current_on_fn_calls_helper_fn
-		fn fill_statements(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, statements: &mut [Statement]) -> Result<GrugType, TypePropogatorError> {
+		fn fill_statements(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, statements: &mut [Statement]) -> Result<(), TypePropogatorError> {
 			for statement in statements {
 				match statement {
 					Statement::VariableStatement {
@@ -2768,7 +2787,7 @@ pub mod type_propogation {
 					_ => (),
 				}
 			}
-			todo!();
+			Ok(())
 		}
 		
 		fn reset_local_variables(&mut self) {
@@ -2856,10 +2875,10 @@ pub mod type_propogation {
 						},
 						LiteralExpr::I32Expr{
 							..
-						} => GrugType::I32,
+						} => GrugType::Number,
 						LiteralExpr::F32Expr{
 							..
-						} => GrugType::F32,
+						} => GrugType::Number,
 					}
 				},
 				ExprType::UnaryExpr{
@@ -2877,8 +2896,7 @@ pub mod type_propogation {
 						(UnaryOperator::Not, got@_) => return Err(TypePropogatorError::NotOperatorNotBeforeBool{
 							got: got.clone(),
 						}),
-						(UnaryOperator::Minus, GrugType::F32) => (),
-						(UnaryOperator::Minus, GrugType::I32) => (),
+						(UnaryOperator::Minus, GrugType::Number) => (),
 						(UnaryOperator::Minus, got@_) => return Err(TypePropogatorError::MinusOperatorNotBeforeNumber{
 							got: got.clone(),
 						}),
@@ -2923,17 +2941,17 @@ pub mod type_propogation {
 						},
 						BinaryOperator::Greater | BinaryOperator::GreaterEquals | 
 						BinaryOperator::Less | BinaryOperator::LessEquals => {
-							if !matches!(result_0, GrugType::I32 | GrugType::F32) {
+							if result_0 != GrugType::Number {
 								return Err(TypePropogatorError::ComparisonOperatorExpectsNumber {
 									operator,
-									got_ty: result_0,
+									got_type: result_0,
 								});
 							}
 							GrugType::Bool
 						},
 						BinaryOperator::Plus | BinaryOperator::Minus |
 						BinaryOperator::Multiply | BinaryOperator::Division => {
-							if !matches!(result_0, GrugType::I32 | GrugType::F32) {
+							if result_0 != GrugType::Number {
 								return Err(TypePropogatorError::ArithmeticOperatorExpectsNumber {
 									operator,
 									got_ty: result_0,
@@ -2942,7 +2960,7 @@ pub mod type_propogation {
 							result_0
 						},
 						BinaryOperator::Remainder => {
-							if result_0 != GrugType::I32 {
+							if result_0 != GrugType::Number {
 								return Err(TypePropogatorError::RemainderOperatorExpectsNumber {
 									got_ty: result_0,
 								});
