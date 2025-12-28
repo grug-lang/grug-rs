@@ -23,7 +23,7 @@ mod types {
 			extension: Arc<str>,
 		},
 		Entity {
-			name: Arc<str>,
+			ty: Option<Arc<str>>,
 		},
 	}
 
@@ -44,8 +44,11 @@ mod types {
 					extension: _,
 				} => write!(f, "resource"),
 				Self::Entity {
-					name,
+					ty: Some(name),
 				} => write!(f, "{}", name),
+				Self::Entity {
+					ty: None,
+				} => write!(f, "entity"),
 			}
 		}
 	}
@@ -139,6 +142,15 @@ mod types {
 		Minus,
 	}
 
+	impl std::fmt::Display for UnaryOperator {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				Self::Not => write!(f, "NOT_TOKEN"),
+				Self::Minus => write!(f, "MINUS_TOKEN"),
+			}
+		}
+	}
+
 	#[derive(Debug, Clone, Copy)]
 	pub enum BinaryOperator {
 		Or,
@@ -217,8 +229,8 @@ mod types {
 		pub(super) ty: GrugType,
 	}
 
-	// TODO: Finish these structs
 	// TODO: remove Statement suffix from these variants
+	// TODO: Statements needs location information
 	#[derive(Debug)]
 	pub enum Statement {
 		VariableStatement{
@@ -608,7 +620,7 @@ pub mod tokenizer {
 			token_match_word!(b"true" => TokenType::True);
 			token_match_word!(b"false" => TokenType::False);
 			token_match_word!(b"if" => TokenType::If);
-			token_match_word!(b"while" => TokenType::Else);
+			token_match_word!(b"else" => TokenType::Else);
 			token_match_word!(b"while" => TokenType::While);
 			token_match_word!(b"break" => TokenType::Break);
 			token_match_word!(b"return" => TokenType::Return);
@@ -680,11 +692,12 @@ pub mod tokenizer {
 				tokens.push(Token{
 					ty: TokenType::String,
 					// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-					value: unsafe{str::from_utf8_unchecked(&file_text[start_index..(i-1)])},
+					value: unsafe{str::from_utf8_unchecked(&file_text[start_index..(i)])},
 					line: start_line,
 					col: start_col,
 				});
 				i += 1;
+				continue;
 			}
 
 			// TODO: Handle unicode strings
@@ -809,6 +822,8 @@ pub mod parser {
 			line: usize,
 			col: usize,
 		},
+		// TODO: This is a bad error message
+		// "token_index 1 was out of bounds in peek_token()"
 		OutOfTokensError,
 		GlobalAfterOnFunctions {
 			token_value: String,
@@ -820,12 +835,17 @@ pub mod parser {
 			line: usize, 
 			col: usize,
 		},
+		// "Unexpected empty line, on line %s"
 		NewlineNotAllowed {
 			line: usize, 
 			col: usize,
 		},
+		// "The global variable 'me' has to have its name changed to something else, since grug already declares that variable"
+		// TODO: This error message should also return line information
 		GlobalNamedMe {
+			#[allow(unused)]
 			line: usize,
+			#[allow(unused)]
 			col: usize,
 		},
 		ExpectedSpace {
@@ -868,6 +888,7 @@ pub mod parser {
 			line: usize,
 			col: usize,
 		},
+		// ("%s() can't be empty", name)
 		EmptyFunction{
 			name: String,
 			line: usize,
@@ -914,6 +935,7 @@ pub mod parser {
 			line: usize,
 			col: usize,
 		},
+		// "The local variable 'me' has to have its name changed to something else, since grug already declares that variable"
 		LocalNamedMe {
 			line: usize,
 			col: usize,
@@ -955,6 +977,25 @@ pub mod parser {
 					line, 
 					..
 				} => write!(f, "Expected token type {}, but got {} on line {}", expected, got, line),
+				Self::GlobalNamedMe {
+					line, 
+					col, 
+				} => write!(f, "The global variable 'me' has to have its name changed to something else, since grug already declares that variable"),
+				Self::LocalNamedMe {
+					line, 
+					col, 
+				} => write!(f, "The local variable 'me' has to have its name changed to something else, since grug already declares that variable"),
+				Self::OutOfTokensError => 
+					write!(f, "token_index 1 was out of bounds in peek_token()"),
+				Self::EmptyFunction{
+					name,
+					..
+				} => write!(f, "{}() can't be empty", name),
+				// "Unexpected empty line, on line %s"
+				Self::NewlineNotAllowed {
+					line, 
+					..
+				} => write!(f, "Unexpected empty line, on line {}", line),
 				_ => write!(f, "{:?}", self),
 			}
 		}
@@ -974,8 +1015,10 @@ pub mod parser {
 
 		let mut seen_on_fn = false;
 		let mut newline_allowed = false;
+		let mut newline_seen = false;
 		let mut newline_required = false;
 		let mut just_seen_global = false;
+		let mut last_newline_location = (0, 0);
 
 		let mut tokens = tokens.iter();
 
@@ -1027,6 +1070,7 @@ pub mod parser {
 				seen_on_fn = true;
 
 				newline_allowed = true;
+				newline_seen = false;
 				newline_required = true;
 
 				just_seen_global = false;
@@ -1055,6 +1099,7 @@ pub mod parser {
 				ast.global_statements.push(helper_fn);
 
 				newline_allowed = true;
+				newline_seen = false;
 				newline_required = true;
 
 				just_seen_global = false;
@@ -1069,7 +1114,9 @@ pub mod parser {
 
 				// Disallow consecutive empty lines
 				newline_allowed = false;
+				newline_seen = true;
 				newline_required = false;
+				last_newline_location = (token.line, token.col);
 				
 				ast.global_statements.push(GlobalStatement::GlobalEmptyLine);
 			} else if let Ok(&[ref comment_token]) = consume_next_token_types(&mut tokens, &[TokenType::Comment]) {
@@ -1080,6 +1127,15 @@ pub mod parser {
 				});
 				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
 			}
+		}
+
+		if !newline_allowed && newline_seen {
+			return Err(ParserError::NewlineNotAllowed{
+				// a newline has been seen so the line number will be incremented by one
+				// but we want the line number of the previous line
+				line: last_newline_location.0,
+				col: last_newline_location.1,
+			});
 		}
 
 		Ok(ast)
@@ -1233,6 +1289,7 @@ pub mod parser {
 			consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
 
 			let mut newline_allowed = false;
+			let mut newline_seen = false;
 
 			let mut statements = Vec::new();
 
@@ -1247,15 +1304,27 @@ pub mod parser {
 					}
 					// cannot have consecutive newlines
 					newline_allowed = false;
+					newline_seen = true;
 
 					statements.push(Statement::EmptyLineStatement);
 				} else {
 					newline_allowed = true;
+					newline_seen = false;
 					consume_indentation(tokens, indentation)?;
 
 					statements.push(self.parse_statement(tokens, parsing_depth + 1, indentation)?);
 					consume_next_token_types(tokens, &[TokenType::NewLine])?;
 				}
+			}
+
+			if !newline_allowed && newline_seen {
+				let [next_token] = peek_next_tokens(tokens)?;
+				return Err(ParserError::NewlineNotAllowed{
+					// a newline has been seen so the line number will be incremented by one
+					// but we want the line number of the previous line
+					line: next_token.line - 1,
+					col: next_token.col,
+				});
 			}
 
 			if indentation != 1 {
@@ -1293,6 +1362,7 @@ pub mod parser {
 					self.parse_if_statement(tokens, parsing_depth + 1, indentation)
 				}
 				TokenType::Return => {
+					tokens.next();
 					let expr = if let Ok(_) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
 						None
 					} else {
@@ -1307,15 +1377,19 @@ pub mod parser {
 					self.parse_while_statement(tokens, parsing_depth + 1, indentation)
 				}
 				TokenType::Break => {
+					tokens.next();
 					Ok(Statement::BreakStatement)
 				}
 				TokenType::Continue => {
+					tokens.next();
 					Ok(Statement::ContinueStatement)
 				}
 				TokenType::NewLine => {
+					tokens.next();
 					Ok(Statement::EmptyLineStatement)
 				}
 				TokenType::Comment => {
+					tokens.next();
 					Ok(Statement::Comment{
 						value: next_tokens[0].value.into(),
 					})
@@ -1906,11 +1980,14 @@ pub mod parser {
 					extension: "".into(),
 				},
 				"id"       => GrugType::Id {custom_name: None},
+				"entity"   => GrugType::Entity {
+					ty: None,
+				},
 				type_name => {
 					let extra_value = type_name.into();
 					if MOD_API.wait().entities().contains_key(type_name) {
 						GrugType::Entity {
-							name: extra_value,
+							ty: Some(extra_value),
 						}
 					} else {
 						GrugType::Id {
@@ -2121,6 +2198,13 @@ pub mod mod_api {
 			game_fn_name: String,
 			argument_name: String,
 		},
+		GameFnEntityMissingType{
+			game_fn_name: String,
+			argument_name: String,
+		},
+		GameFnReturnsEntity{
+			game_fn_name: String,
+		},
 		GameFnReturnsResource{
 			game_fn_name: String,
 		},
@@ -2189,22 +2273,20 @@ pub mod mod_api {
 						"number"   => GrugType::Number,
 						"string"   => GrugType::String,
 						"id"       => GrugType::Id{custom_name: None},
-						// "entity"   => GrugType::Entity,
 						"resource" => Err(ModApiError::OnFnArgumentResource{
+							entity_name: entity_name.to_string(),
+							on_fn_name: fn_name.to_string(),
+							argument_name: argument_name.to_string(),
+						})?,
+						"entity" => Err(ModApiError::OnFnArgumentEntity{
 							entity_name: entity_name.to_string(),
 							on_fn_name: fn_name.to_string(),
 							argument_name: argument_name.to_string(),
 						})?,
 						type_name => {
 							let extra_value = type_name.into();
-							if existing_entities.contains(type_name) {
-								GrugType::Entity {
-									name: extra_value,
-								}
-							} else {
-								GrugType::Id {
-									custom_name: Some(extra_value),
-								}
+							GrugType::Id {
+								custom_name: Some(extra_value),
 							}
 						}
 					};
@@ -2265,7 +2347,15 @@ pub mod mod_api {
 					"number"      => GrugType::Number,
 					"string"   => GrugType::String,
 					"id"       => GrugType::Id{custom_name: None},
-					// "entity"   => GrugType::Entity,
+					"entity"   => {
+						let entity_type: Arc<str> = argument_values["entity_type"].as_str().ok_or(ModApiError::GameFnEntityMissingType{
+							game_fn_name: fn_name.to_string(),
+							argument_name: argument_name.to_string(),
+						})?.into();
+						GrugType::Entity {
+							ty: (&*entity_type != "").then(|| entity_type)
+						}
+					},
 					"resource" => {
 						let extension = argument_values["resource_extension"].as_str().ok_or(ModApiError::GameFnResourceMissingExtension{
 							game_fn_name: fn_name.to_string(),
@@ -2277,14 +2367,8 @@ pub mod mod_api {
 					}
 					type_name => {
 						let extra_value = type_name.into();
-						if existing_entities.contains(type_name) {
-							GrugType::Entity {
-								name: extra_value,
-							}
-						} else {
-							GrugType::Id {
-								custom_name: Some(extra_value),
-							}
+						GrugType::Id {
+							custom_name: Some(extra_value),
 						}
 					}
 				};
@@ -2302,20 +2386,16 @@ pub mod mod_api {
 				"number"      => GrugType::Number,
 				"string"   => GrugType::String,
 				"id"       => GrugType::Id{custom_name: None},
-				// "entity"   => GrugType::Entity,
+				"entity" => Err(ModApiError::GameFnReturnsEntity{
+					game_fn_name: fn_name.to_string(),
+				})?,
 				"resource" => Err(ModApiError::GameFnReturnsResource{
 					game_fn_name: fn_name.to_string(),
 				})?,
 				type_name => {
 					let extra_value = type_name.into();
-					if existing_entities.contains(type_name) {
-						GrugType::Entity {
-							name: extra_value,
-						}
-					} else {
-						GrugType::Id {
-							custom_name: Some(extra_value),
-						}
+					GrugType::Id {
+						custom_name: Some(extra_value),
 					}
 				}
 			};
@@ -2366,7 +2446,8 @@ pub mod type_propogation {
 
 	pub(super) struct TypePropogator {
 		global_variables: HashMap<Arc<str>, Variable>,
-		local_variables: HashMap<Arc<str>, Variable>,
+		local_variables: Vec<HashMap<Arc<str>, Variable>>,
+		num_while_loops_deep: usize,
 		current_on_fn_calls_helper_fn: bool,
 		current_on_fn_has_while_loop: bool,
 	}
@@ -2431,7 +2512,7 @@ pub mod type_propogation {
 		ArithmeticOperatorExpectsNumber {
 			// Must be '+', '-', '*', or '/' operators
 			operator: BinaryOperator,
-			got_ty: GrugType,
+			got_type: GrugType,
 		},
 		// grug_assert(binary_expr.left_expr->result_type == type_i32, "'%%' operator expects i32");
 		RemainderOperatorExpectsNumber {
@@ -2529,6 +2610,12 @@ pub mod type_propogation {
 		WhileConditionTypeMismatch {
 			got_type: GrugType,
 		},
+		// TODO: This needs location information 
+		// "There is a break statement that isn't inside of a while loop" 
+		BreakStatementOutsideWhileLoop,
+		// TODO: This needs location information 
+		// "There is a break statement that isn't inside of a while loop" 
+		ContinueStatementOutsideWhileLoop,
 	}
 
 	impl std::fmt::Display for TypePropogatorError {
@@ -2546,6 +2633,20 @@ pub mod type_propogation {
 				Self::MinusOperatorNotBeforeNumber {
 					got,
 				} => write!(f, "Found '-' before {}, but it can only be put before a number", got),
+				Self::ArithmeticOperatorExpectsNumber {
+					got_type: GrugType::String,
+					operator,
+				} => write!(f, "You can't use the {} operator on a string", operator),
+				Self::BreakStatementOutsideWhileLoop => 
+					write!(f, "There is a break statement that isn't inside of a while loop"),
+				Self::ContinueStatementOutsideWhileLoop => 
+					write!(f, "There is a continue statement that isn't inside of a while loop"),
+				Self::GlobalVariableShadowed {
+					name
+				} => write!(f, "The global variable '{}' shadows an earlier global variable with the same name, so change the name of one of them", name),
+				Self::AdjacentUnaryOperators {
+					operator,
+				} => write!(f, "Found '{0}' directly next to another '{0}', which can be simplified by just removing both of them", operator),
 				_ => write!(f, "{:?}", self),
 			}
 		}
@@ -2619,7 +2720,8 @@ pub mod type_propogation {
 		pub fn new () -> Self {
 			Self {
 				global_variables: HashMap::new(),
-				local_variables: HashMap::new(),
+				local_variables: Vec::new(),
+				num_while_loops_deep: 0,
 				current_on_fn_calls_helper_fn: false,
 				current_on_fn_has_while_loop: false,
 			}
@@ -2715,6 +2817,7 @@ pub mod type_propogation {
 		
 		// out parameter self.current_on_fn_calls_helper_fn
 		fn fill_statements(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, statements: &mut [Statement]) -> Result<(), TypePropogatorError> {
+			self.push_scope();
 			for statement in statements {
 				match statement {
 					Statement::VariableStatement {
@@ -2776,7 +2879,9 @@ pub mod type_propogation {
 								got_type: cond_type
 							});
 						}
+						self.num_while_loops_deep += 1;
 						self.fill_statements(helper_fns, statements)?;
+						self.num_while_loops_deep -= 1;
 						self.current_on_fn_has_while_loop = true;
 					}
 					Statement::ReturnStatement {
@@ -2784,9 +2889,20 @@ pub mod type_propogation {
 					} => {
 						todo!();
 					}
+					Statement::BreakStatement => {
+						if self.num_while_loops_deep == 0 {
+							return Err(TypePropogatorError::BreakStatementOutsideWhileLoop);
+						}
+					}
+					Statement::ContinueStatement => {
+						if self.num_while_loops_deep == 0 {
+							return Err(TypePropogatorError::ContinueStatementOutsideWhileLoop);
+						}
+					}
 					_ => (),
 				}
 			}
+			self.pop_scope();
 			Ok(())
 		}
 		
@@ -2954,7 +3070,7 @@ pub mod type_propogation {
 							if result_0 != GrugType::Number {
 								return Err(TypePropogatorError::ArithmeticOperatorExpectsNumber {
 									operator,
-									got_ty: result_0,
+									got_type: result_0,
 								});
 							}
 							result_0
@@ -3029,11 +3145,11 @@ pub mod type_propogation {
 					arg.result_ty = Some(GrugType::Resource{
 						extension: Arc::clone(extension)
 					});
-				} else if let GrugType::Entity{ref name} = param.ty 
+				} else if let GrugType::Entity{ref ty} = param.ty 
 					&& let ExprType::LiteralExpr{expr: LiteralExpr::StringExpr{ref value}, ..} = arg.ty {
-					self.validate_entity_string(value, name)?;
+					self.validate_entity_string(value, ty.as_deref())?;
 					arg.result_ty = Some(GrugType::Entity{
-						name: Arc::clone(name)
+						ty: ty.clone()
 					});
 				} else if arg.result_ty.as_ref().unwrap() == &GrugType::Void {
 					return Err(TypePropogatorError::VoidArgumentInFunctionCall{
@@ -3098,7 +3214,7 @@ pub mod type_propogation {
 			}
 		}
 
-		fn validate_entity_string(&mut self, value: &Arc<str>, extension: &str) -> Result<(), EntityValidationError> {
+		fn validate_entity_string(&mut self, value: &Arc<str>, extension: Option<&str>) -> Result<(), EntityValidationError> {
 			// TODO:
 			todo!();
 			// Ok(())
@@ -3113,8 +3229,21 @@ pub mod type_propogation {
 			}
 		}
 
+		fn push_scope(&mut self) {
+			self.local_variables.push(HashMap::new());
+		}
+
+		fn pop_scope(&mut self) {
+			self.local_variables.pop().unwrap();
+		}
+
 		fn get_local_variable(&self, var_name: &str) -> Option<&Variable> {
-			self.local_variables.get(var_name)
+			for scope in self.local_variables.iter().rev() {
+				if let var@Some(_) = scope.get(var_name) {
+					return var;
+				}
+			}
+			None
 		}
 
 		fn get_global_variable(&self, var_name: &str) -> Option<&Variable> {
@@ -3127,7 +3256,7 @@ pub mod type_propogation {
 					name,
 				});
 			}
-			match self.local_variables.entry(Arc::clone(&name)) {
+			match self.local_variables.last_mut().expect("There is no local scope to push onto").entry(Arc::clone(&name)) {
 				Entry::Occupied(_) => return Err(TypePropogatorError::LocalVariableShadowedByLocal{
 					name,
 				})?,

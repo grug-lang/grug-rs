@@ -50,4 +50,5 @@ mod test {
 	}
 }
 
+// TODO: Check that GrugType::Entity is implemented correctly everywhere
 // TODO: implementation errors like too many statements in block should not be grug errors
