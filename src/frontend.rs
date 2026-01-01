@@ -133,7 +133,7 @@ mod types {
 		}
 	}
 	
-	#[derive(Debug, Clone, Copy)]
+	#[derive(Debug, Clone, Copy, PartialEq)]
 	pub enum UnaryOperator {
 		Not,
 		Minus,
@@ -478,7 +478,7 @@ pub mod tokenizer {
 				Self::OpenParenthesis => write!(f, "OPEN_PARENTHESIS_TOKEN"),
 				Self::CloseParenthesis => write!(f, "CLOSE_PARENTHESIS_TOKEN"),
 				Self::OpenBrace => write!(f, "OPEN_BRACE_TOKEN"),
-				Self::CloseBrace => write!(f, "CLOSE_PARENTHESIS_TOKEN"),
+				Self::CloseBrace => write!(f, "CLOSE_BRACE_TOKEN"),
 				Self::Plus => write!(f, "PLUS_TOKEN"),
 				Self::Minus => write!(f, "MINUS_TOKEN"),
 				Self::Star => write!(f, "MULTIPLICATION_TOKEN"),
@@ -509,8 +509,8 @@ pub mod tokenizer {
 				Self::Indentation => write!(f, "INDENTATION_TOKEN"),
 				Self::String => write!(f, "STRING_TOKEN"),
 				Self::Word => write!(f, "WORD_TOKEN"),
-				Self::Int32 => write!(f, "I32_TOKEN"),
-				Self::Float32 => write!(f, "F32_TOKEN"),
+				Self::Int32 => write!(f, "NUMBER_TOKEN"),
+				Self::Float32 => write!(f, "NUMBER_TOKEN"),
 				Self::Comment => write!(f, "COMMENT_TOKEN"),
 				// _ => write!(f, "{:?}", self),
 			}
@@ -547,6 +547,11 @@ pub mod tokenizer {
 			ch: char,
 			line: usize,
 			col: usize,
+		},
+		// grug_assert(!isspace(grug_text[i - 1]), "A comment has trailing whitespace on line %zu", get_character_line_number(i));
+		CommentTrailingWhitespace {
+			line: usize,
+			col: usize,
 		}
 	}
 
@@ -558,6 +563,18 @@ pub mod tokenizer {
 					line: _,
 					col: _,
 				} => write!(f, "Missing digit after decimal point in '{}'", parsed_string),
+				Self::NoSpaceAfterComment {
+					line,
+					col: _,
+				} => write!(f, "Expected a single space after the '#' on line {}", line),
+				Self::CommentTrailingWhitespace {
+					line,
+					col,
+				} => write!(f, "A comment has trailing whitespace on line {}", line),
+				Self::UnclosedString {
+					start_line,
+					start_col: _,
+				} => write!(f, "Unclosed \" on line {}", start_line),
 				err => write!(f, "{:?}", err),
 			}
 		}
@@ -793,6 +810,12 @@ pub mod tokenizer {
 				while i < file_text.len() && file_text[i] != b'\r' && file_text[i] != b'\n' {
 					i += 1;
 				}
+				if (file_text[i - 1] as char).is_ascii_whitespace() {
+					return Err(TokenizerError::CommentTrailingWhitespace{
+						line: cur_line,
+						col: i - last_new_line,
+					});
+				}
 				// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
 				tokens.push(Token{
 					ty: TokenType::Comment, 
@@ -946,7 +969,7 @@ pub mod parser {
 			col: usize,
 		},
 		ExpectedStatement{
-			got_token: String,
+			prev_token: String,
 			line: usize,
 			col: usize,
 		},
@@ -994,6 +1017,10 @@ pub mod parser {
 		FloatTooSmall {
 			value: String,
 		},
+		// grug_assert(!get_helper_fn(name), "The function '%s' was defined several times in the same file", name);
+		AlreadyDefinedOnFn {
+			on_fn_name: Arc<str>, 
+		}
 	}
 
 	impl std::fmt::Display for ParserError {
@@ -1075,6 +1102,65 @@ pub mod parser {
 				Self::AlreadyDefinedHelperFunction {
 					helper_fn_name,
 				} => write!(f, "The function '{}' was defined several times in the same file", helper_fn_name),
+				Self::ExpectedPrimaryExpression {
+					got_token,
+					line,
+					col: _,
+				} => write!(f, "Expected a primary expression token, but got token type {} on line {}", got_token, line),
+				Self::ExceededMaxParsingDepth => write!(f, "There is a function that contains more than {} levels of nested expressions", MAX_PARSING_DEPTH),
+				Self::ReassigningMe {
+					line: _,
+					col: _,
+				} => write!(f, "Assigning a new value to the entity's 'me' variable is not allowed"),
+				Self::ExpectedNewLine {
+					token_value: _,
+					line,
+					col: _,
+				} => write!(f, "Expected an empty line, on line {}", line),
+				// grug_assert(!get_helper_fn(name), "The function '%s' was defined several times in the same file", name);
+				Self::AlreadyDefinedOnFn {
+					on_fn_name
+				} => write!(f, "The function '{}' was defined several times in the same file", on_fn_name),
+				Self::ArgumentCantBeResource {
+					name,
+					line: _,
+					col: _,
+				} => write!(f, "The argument '{}' can't have 'resource' as its type", name),
+				Self::HelperFnReturnTypeCantBeResource {
+					fn_name,
+					line: _,
+					col: _,
+				} => write!(f, "The function '{}' can't have 'resource' as its return type", fn_name),
+				Self::HelperFnReturnTypeCantBeEntity {
+					fn_name,
+					line: _,
+					col: _,
+				} => write!(f, "The function '{}' can't have 'entity' as its return type", fn_name),
+				Self::VariableCantBeResource {
+					name,
+					line: _,
+					col: _,
+				} => write!(f, "The variable '{}' can't have 'resource' as its type", name),
+				Self::VariableCantBeEntity {
+					name,
+					line: _,
+					col: _,
+				} => write!(f, "The variable '{}' can't have 'entity' as its type", name),
+				Self::ExpectedStatementToken{
+					got_token,
+					line,
+					col: _,
+				} => write!(f, "Expected a statement token, but got token type {} on line {}", got_token, line),
+				Self::MissingVariableAssignment{
+					name,
+					line,
+					col: _,
+				} => write!(f, "The variable '{}' was not assigned a value on line {}", name, line),
+				Self::ExpectedStatement{
+					prev_token,
+					line,
+					col: _,
+				} => write!(f, "Expected '(', or ':', or ' =' after the word '{}' on line {}", prev_token, line),
 				_ => write!(f, "{:?}", self),
 			}
 		}
@@ -1086,6 +1172,7 @@ pub mod parser {
 		pub(super) global_statements: Vec<GlobalStatement>,
 		pub(super) called_helper_fns: HashSet<Arc<str>>, 
 		pub(super) helper_fn_signatures: HashMap<Arc<str>, (GrugType, Vec<Argument>)>,
+		pub(super) on_fn_signatures: HashMap<Arc<str>, Vec<Argument>>,
 	}
 
 	pub fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
@@ -1144,6 +1231,15 @@ pub mod parser {
 				}
 
 				let on_fn = ast.parse_on_fn(&mut tokens)?;
+				let (on_fn_name, on_fn_arguments) = if let GlobalStatement::GlobalOnFunction{name, arguments, ..} = &on_fn {(Arc::clone(name), arguments)} else {unreachable!()};
+
+				if ast.on_fn_signatures.get(&on_fn_name).is_some() {
+					return Err(ParserError::AlreadyDefinedOnFn{
+						on_fn_name,
+					});
+				}
+				
+				ast.on_fn_signatures.insert(on_fn_name, (on_fn_arguments.clone()));
 				ast.global_statements.push(on_fn);
 
 				seen_on_fn = true;
@@ -1232,6 +1328,7 @@ pub mod parser {
 				global_statements: Vec::new(),
 				called_helper_fns: HashSet::new(),
 				helper_fn_signatures: HashMap::new(),
+				on_fn_signatures: HashMap::new(),
 			}
 		}
 
@@ -1436,7 +1533,7 @@ pub mod parser {
 						}
 						_ => {
 							Err(ParserError::ExpectedStatement{
-								got_token: next_tokens[0].value.to_string(),
+								prev_token: next_tokens[0].value.to_string(),
 								line: next_tokens[0].line,
 								col: next_tokens[0].col,
 							})
@@ -2222,6 +2319,7 @@ pub mod mod_api {
 		pub(super) name: Arc<str>, 
 		pub(super) description: Option<String>,
 		pub(super) arguments: Vec<Argument>,
+		pub(super) index: usize,
 	}
 
 	#[derive(Debug)]
@@ -2327,7 +2425,7 @@ pub mod mod_api {
 					entity_name: entity_name.to_string(),
 				});
 			}
-			let on_fns = on_fns.entries().map(|(fn_name, fn_values)| {
+			let on_fns = on_fns.entries().enumerate().map(|(i, (fn_name, fn_values))| {
 				// optional "description" string
 				let description = fn_values["description"].as_str().map(str::to_string);
 				
@@ -2387,7 +2485,8 @@ pub mod mod_api {
 				Ok((Arc::clone(&fn_name), ModApiOnFn{
 					name: fn_name,
 					description,
-					arguments
+					arguments,
+					index: i,
 				}))
 			}).collect::<Result<HashMap<_, _>, _>>()?;
 			let entity_name = Arc::from(entity_name);
@@ -2642,7 +2741,7 @@ pub mod type_propogation {
 			got_type: GrugType,
 			parameter_name: Arc<str>
 		},
-		// grug_assert(entity_on_fn, "The function '%s' was not was not declared by entity '%s' in mod_api.json", on_fns[fn_index].fn_name, file_entity_type);
+		// grug_assert(entity_on_fn, "The function '%s' was not declared by entity '%s' in mod_api.json", on_fns[fn_index].fn_name, file_entity_type);
 		OnFnDoesNotExist {
 			function_name: Arc<str>,
 			entity_name: Arc<str>,
@@ -2729,6 +2828,11 @@ pub mod type_propogation {
 			function_name: Arc<str>,
 			expected_return_type: GrugType,
 		},
+		// grug_assert(previous_on_fn_index <= on_fn_index, "The function '%s' needs to be moved before/after a different on_ function, according to the entity '%s' in mod_api.json", on_fn->fn_name, grug_entity->name);
+		OutOfOrderOnFn {
+			entity_name: Arc<str>,
+			on_fn_name: Arc<str>,
+		}
 	}
 
 	impl std::fmt::Display for TypePropogatorError {
@@ -2761,6 +2865,16 @@ pub mod type_propogation {
 				} => write!(f, "Found '-' before {}, but it can only be put before a number", got),
 				Self::CannotCompareStrings {
 					operator,
+				} => write!(f, "You can't use the {} operator on a string", operator),
+				Self::BinaryOperatorTypeMismatch {
+					operator,
+					left: GrugType::String,
+					right,
+				} => write!(f, "You can't use the {} operator on a string", operator),
+				Self::BinaryOperatorTypeMismatch {
+					operator,
+					left,
+					right: GrugType::String,
 				} => write!(f, "You can't use the {} operator on a string", operator),
 				Self::BinaryOperatorTypeMismatch {
 					operator,
@@ -2816,7 +2930,7 @@ pub mod type_propogation {
 				Self::OnFnDoesNotExist {
 					function_name,
 					entity_name,
-				} => write!(f, "The function '{}' was not was not declared by entity '{}' in mod_api.json", function_name, entity_name),
+				} => write!(f, "The function '{}' was not declared by entity '{}' in mod_api.json", function_name, entity_name),
 				Self::TooFewParameters{
 					function_name,
 					expected_name,
@@ -2891,6 +3005,11 @@ pub mod type_propogation {
 					function_name,
 					expected_return_type,
 				} => write!(f, "Function '{}' is supposed to return {} as its last line", function_name, expected_return_type),
+				// grug_assert(previous_on_fn_index <= on_fn_index, "The function '%s' needs to be moved before/after a different on_ function, according to the entity '%s' in mod_api.json", on_fn->fn_name, grug_entity->name);
+				Self::OutOfOrderOnFn {
+					entity_name,
+					on_fn_name,
+				} => write!(f, "The function '{}' needs to be moved before/after a different on_ function, according to the entity '{}' in mod_api.json", on_fn_name, entity_name),
 			}
 		}
 	}
@@ -2937,8 +3056,13 @@ pub mod type_propogation {
 		ContainsSlashDotDotInMiddle {
 			value: Arc<str>
 		},
-		ResourceExtensionMismatch {
+		// grug_assert(ends_with(string, resource_extension), "The resource '%s' was supposed to have the extension '%s'", string, resource_extension);
+		ExtensionMismatch {
 			expected: Arc<str>,
+			value: Arc<str>
+		},
+		// raise TypePropagationError(f'resource name "{string}" cannot end with .')
+		EndsWithDot  {
 			value: Arc<str>
 		}
 	}
@@ -2946,7 +3070,53 @@ pub mod type_propogation {
 	impl std::fmt::Display for ResourceValidationError {
 		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 			match self {
-				_ => write!(f, "{:?}", self)
+				Self::EmptyResource{} => write!(f, "Resources can't be empty strings"),
+				// grug_assert(string[0] != '/', "Remove the leading slash from the resource \"%s\"", string);
+				Self::LeadingForwardSlash {
+					value
+				} => write!(f, "Remove the leading slash from the resource \"{}\"", value),
+				//grug_assert(string[string_len - 1] != '/', "Remove the trailing slash from the resource \"%s\"", string);
+				Self::TrailingForwardSlash {
+					value
+				} => write!(f, "Remove the trailing slash from the resource \"{}\"", value),
+				// grug_assert(!strchr(string, '\\'), "Replace the '\\' with '/' in the resource \"%s\"", string);
+				Self::ContainsBackslash {
+					value
+				} => write!(f, "Replace the '\\' with '/' in the resource \"{}\"", value),
+				// grug_assert(!strstr(string, "//"), "Replace the '//' with '/' in the resource \"%s\"", string);
+				Self::ContainsDoubleForwardSlash {
+					value
+				} => write!(f, "Replace the '//' with '/' in the resource \"{}\"", value),
+				// TODO: This error needs a better message
+				// grug_assert(string_len != 1 && string[1] != '/', "Remove the '.' from the resource \"%s\"", string);
+				Self::BeginsWithDotWithoutSlash {
+					value
+				} => write!(f, "Remove the '.' from the resource \"{}\"", value),
+				// TODO: This error needs a better message
+				// grug_assert(dot[1] != '/' && dot[1] != '\0', "Remove the '.' from the resource \"%s\"", string);
+				Self::ContainsSlashDotInMiddle {
+					value
+				} => write!(f, "Remove the '.' from the resource \"{}\"", value),
+				// TODO: This error needs a better message
+				// grug_assert(string_len != 2 && string[2] != '/', "Remove the '..' from the resource \"%s\"", string);
+				Self::BeginsWithDotDotWithoutSlash {
+					value
+				} => write!(f, "Remove the '..' from the resource \"{}\"", value),
+				// TODO: This error needs a better message
+				// grug_assert(dotdot[2] != '/' && dotdot[2] != '\0', "Remove the '..' from the resource \"%s\"", string);
+				// " 
+				Self::ContainsSlashDotDotInMiddle {
+					value
+				} => write!(f, "Remove the '..' from the resource \"{}\"", value),
+				// grug_assert(ends_with(string, resource_extension), "The resource '%s' was supposed to have the extension '%s'", string, resource_extension);
+				Self::ExtensionMismatch {
+					expected,
+					value
+				} => write!(f, "The resource '{}' was supposed to have the extension '{}'", value, expected),
+				// raise TypePropagationError(f'resource name "{string}" cannot end with .')
+				Self::EndsWithDot {
+					value
+				} => write!(f, "resource name \"{}\" cannot end with .", value),
 			}
 		}
 	}
@@ -3010,7 +3180,6 @@ pub mod type_propogation {
 					entity_name, 
 					invalid_char
 				} => write!(f, "Entity '{}' its entity name contains the invalid character '{}'", entity_name, invalid_char),
-				_ => write!(f, "{:?}", self),
 			}
 		}
 	}
@@ -3046,7 +3215,8 @@ pub mod type_propogation {
 				entity_name: Arc::clone(&entity_name),
 			})?;
 			
-			self.add_global_variable(Arc::from("me"), GrugType::Id{custom_name: Some(entity_name.into())})?;
+			self.add_global_variable(Arc::from("me"), GrugType::Id{custom_name: Some(Arc::clone(&entity_name))})?;
+			let next_expected_global_fn_index = 0;
 
 			for statement in &mut ast.global_statements {
 				match statement {
@@ -3088,6 +3258,12 @@ pub mod type_propogation {
 							function_name: Arc::clone(name),
 							entity_name: Arc::clone(&entity.name),
 						})?;
+						if grug_on_fn.index != next_expected_global_fn_index {
+							return Err(TypePropogatorError::OutOfOrderOnFn {
+								entity_name: Arc::from(entity_name),
+								on_fn_name: Arc::clone(&grug_on_fn.name),
+							});
+						}
 						if grug_on_fn.arguments.len() > arguments.len() {
 							return Err(TypePropogatorError::TooFewParameters{
 								function_name: Arc::clone(name),
@@ -3126,10 +3302,12 @@ pub mod type_propogation {
 						debug_assert!(self.current_fn_name == None);
 
 						self.current_fn_name = Some(Arc::clone(name));
+						self.push_scope();
 						for arg in arguments {
 							self.add_local_variable(Arc::clone(&arg.name), arg.ty.clone())?;
 						}
 						self.fill_statements(&ast.helper_fn_signatures, body_statements, &GrugType::Void)?;
+						self.pop_scope();
 
 						debug_assert!(self.current_fn_name.as_ref() == Some(name));
 						self.current_fn_name = None;
@@ -3177,8 +3355,7 @@ pub mod type_propogation {
 		// out parameter self.current_on_fn_calls_helper_fn
 		fn fill_statements(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, statements: &mut [Statement], expected_return_type: &GrugType) -> Result<(), TypePropogatorError> {
 			self.push_scope();
-			let mut last_statement = None;
-			for statement in statements {
+			for statement in &mut *statements {
 				match statement {
 					Statement::VariableStatement {
 						name,
@@ -3224,13 +3401,11 @@ pub mod type_propogation {
 								});
 							}
 						}
-						last_statement = Some(statement);
 					}
 					Statement::CallStatement {
 						expr
 					} => {
 						self.fill_expr(helper_fns, expr)?;
-						last_statement = Some(statement);
 					}
 					Statement::IfStatement {
 						condition,
@@ -3247,7 +3422,6 @@ pub mod type_propogation {
 						self.fill_statements(helper_fns, else_statements, expected_return_type)?;
 						// TODO: Maybe this should be looked at again
 						// [https://github.com/grug-lang/grug/issues/116]
-						last_statement = Some(statement);
 					}
 					Statement::WhileStatement {
 						condition,
@@ -3264,7 +3438,6 @@ pub mod type_propogation {
 						self.num_while_loops_deep -= 1;
 						self.current_fn_has_while_loop = true;
 
-						last_statement = Some(statement);
 					}
 					Statement::ReturnStatement {
 						expr,
@@ -3280,24 +3453,21 @@ pub mod type_propogation {
 								got_type: return_ty.clone(),
 							})
 						}
-						last_statement = Some(statement);
 					}
 					Statement::BreakStatement => {
 						if self.num_while_loops_deep == 0 {
 							return Err(TypePropogatorError::BreakStatementOutsideWhileLoop);
 						}
-						last_statement = Some(statement);
 					}
 					Statement::ContinueStatement => {
 						if self.num_while_loops_deep == 0 {
 							return Err(TypePropogatorError::ContinueStatementOutsideWhileLoop);
 						}
-						last_statement = Some(statement);
 					}
 					_ => (),
 				}
 			}
-			if *expected_return_type != GrugType::Void && !matches!(last_statement, Some(Statement::ReturnStatement{..})) {
+			if *expected_return_type != GrugType::Void && !matches!(statements.last(), Some(Statement::ReturnStatement{..})) {
 				return Err(TypePropogatorError::LastStatementNotReturn {
 					function_name: Arc::clone(&self.current_fn_name.as_ref().unwrap()),
 					expected_return_type: expected_return_type.clone(),
@@ -3395,7 +3565,7 @@ pub mod type_propogation {
 					operator,
 					ref mut expr,
 				} => {
-					if let ExprType::UnaryExpr{..} = expr.ty {
+					if let ExprType::UnaryExpr{operator: next_operator, ..} = expr.ty && next_operator == operator {
 						return Err(TypePropogatorError::AdjacentUnaryOperators{
 							operator
 						});
@@ -3582,26 +3752,30 @@ pub mod type_propogation {
 				Err(ResourceValidationError::ContainsDoubleForwardSlash {
 					value: Arc::clone(value),
 				})
-			} else if value.starts_with(".") && !value.starts_with("./") {
-				Err(ResourceValidationError::BeginsWithDotWithoutSlash {
-					value: Arc::clone(value),
-				})
-			} else if (value.contains("/.") && !value.contains("/./")) || value.ends_with("/.") {
-				Err(ResourceValidationError::ContainsSlashDotInMiddle {
-					value: Arc::clone(value),
-				})
-			} else if value.starts_with("..") && !value.starts_with("../") {
+			} else if value.starts_with("..") {
 				Err(ResourceValidationError::BeginsWithDotDotWithoutSlash {
 					value: Arc::clone(value),
 				})
-			} else if (value.contains("/..") && !value.contains("/../")) || value.ends_with("/..") {
+			} else if value.contains("/..") {
 				Err(ResourceValidationError::ContainsSlashDotDotInMiddle {
+					value: Arc::clone(value),
+				})
+			} else if value.starts_with(".") {
+				Err(ResourceValidationError::BeginsWithDotWithoutSlash {
+					value: Arc::clone(value),
+				})
+			} else if value.contains("/.") {
+				Err(ResourceValidationError::ContainsSlashDotInMiddle {
+					value: Arc::clone(value),
+				})
+			} else if value.ends_with(".") {
+				Err(ResourceValidationError::EndsWithDot {
 					value: Arc::clone(value),
 				})
 			} else if value.ends_with(&**extension) {
 				Ok(())
 			} else {
-				Err(ResourceValidationError::ResourceExtensionMismatch {
+				Err(ResourceValidationError::ExtensionMismatch {
 					expected: Arc::clone(extension),
 					value: Arc::clone(value),
 				})
