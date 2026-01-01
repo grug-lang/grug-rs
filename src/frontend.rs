@@ -69,12 +69,9 @@ mod types {
 		IdentifierExpr{
 			name: Arc<str>
 		},
-		I32Expr{
-			value: i32,
-		},
-		F32Expr{
-			value: f32,
-		},
+		NumberExpr {
+			value: f64,
+		}
 	}
 
 	#[derive(Debug)]
@@ -262,7 +259,7 @@ mod types {
 	}
 }
 
-pub fn compile_grug_file<'a>(path: &'a str, _mod_name: &'a str) -> Result<(), GrugError<'a>> {
+pub fn compile_grug_file<'a>(path: &'a str, mod_name: &'a str) -> Result<(), GrugError<'a>> {
 	if !path.contains('/') {
 		return Err(GrugError::FileNameError(FileNameError::FilePathDoesNotContainForwardSlash{path}))
 	}
@@ -274,7 +271,7 @@ pub fn compile_grug_file<'a>(path: &'a str, _mod_name: &'a str) -> Result<(), Gr
 
 	let mut ast = parser::parse(&*tokens)?;
 	
-	TypePropogator::new().fill_result_types(entity_type, &mut ast)?;
+	TypePropogator::new(mod_name.into()).fill_result_types(entity_type, &mut ast)?;
 
 	return Ok(());
 }
@@ -414,6 +411,7 @@ impl<'a> From<TypePropogatorError> for GrugError<'a> {
 impl<'a> std::fmt::Display for GrugError<'a> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
+			Self::TokenizerError(error) => write!(f, "{}", error),
 			Self::FileNameError(error) => write!(f, "{}", error),
 			Self::ParserError(error) => write!(f, "{}", error),
 			Self::TypePropogatorError(error) => write!(f, "{}", error),
@@ -535,7 +533,9 @@ pub mod tokenizer {
 			line: usize,
 			col: usize,
 		},
+		// "Missing digit after decimal point in '%s'"
 		FloatTrailingPeriod {
+			parsed_string: String,
 			line: usize,
 			col: usize,
 		},
@@ -550,6 +550,18 @@ pub mod tokenizer {
 		}
 	}
 
+	impl std::fmt::Display for TokenizerError {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				Self::FloatTrailingPeriod {
+					parsed_string,
+					line: _,
+					col: _,
+				} => write!(f, "Missing digit after decimal point in '{}'", parsed_string),
+				err => write!(f, "{:?}", err),
+			}
+		}
+	}
 
 	pub fn tokenize(file_text: &str) -> Result<Vec<Token<'_>>, TokenizerError> {
 		let mut tokens = Vec::new();
@@ -741,6 +753,7 @@ pub mod tokenizer {
 						// should be allowed but i can understand why
 						// they're not
 						return Err(TokenizerError::FloatTrailingPeriod {
+							parsed_string: String::from(unsafe{str::from_utf8_unchecked(&file_text[start..i])}),
 							line: cur_line,
 							col: i - 1 - last_new_line,
 						});
@@ -816,7 +829,13 @@ pub mod parser {
 	#[allow(unused)]
 	#[derive(Debug)]
 	pub enum ParserError {
+		// grug_error("Unexpected token '%s' on line %zu", token.str, get_token_line_number(i));
 		UnexpectedToken {
+			token_value: String,
+			line: usize,
+			col: usize,
+		},
+		GotWrongToken {
 			expected: TokenType,
 			got: TokenType,
 			line: usize,
@@ -899,6 +918,7 @@ pub mod parser {
 			line: usize,
 			col: usize,
 		},
+		// "The argument '%s' can't have 'entity' as its type"
 		ArgumentCantBeEntity {
 			name: String,
 			line: usize,
@@ -966,12 +986,26 @@ pub mod parser {
 		AlreadyDefinedHelperFunction {
 			helper_fn_name: Arc<str>,
 		},
+		// grug_error("The f32 %s is too big", str);
+		FloatTooBig {
+			value: String,
+		},
+		// grug_error("The f32 %s is too close to zero", str);
+		FloatTooSmall {
+			value: String,
+		},
 	}
 
 	impl std::fmt::Display for ParserError {
 		fn fmt (&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 			match self {
+				// grug_error("Unexpected token '%s' on line %zu", token.str, get_token_line_number(i));
 				Self::UnexpectedToken {
+					token_value,
+					line,
+					col: _,
+				} => write!(f, "Unexpected token '{}' on line {}", token_value, line),
+				Self::GotWrongToken{
 					expected,
 					got,
 					line, 
@@ -996,6 +1030,51 @@ pub mod parser {
 					line, 
 					..
 				} => write!(f, "Unexpected empty line, on line {}", line),
+				// "The argument '%s' can't have 'entity' as its type"
+				Self::ArgumentCantBeEntity {
+					name,
+					line: _,
+					col: _,
+				} => write!(f, "The argument '{}' can't have 'entity' as its type", name),
+				// grug_error("The f32 %s is too big", str);
+				Self::FloatTooBig {
+					value,
+				} => write!(f, "The number {} is too big", value),
+				// grug_error("The f32 %s is too close to zero", str);
+				Self::FloatTooSmall {
+					value,
+				} => write!(f, "The number {} is too close to zero", value),
+				Self::GlobalAfterOnFunctions {
+					token_value,
+					line: _,
+					col: _,
+				} => write!(f, "Move the global variable '{}' so it is above the on_ functions", token_value),
+				Self::GlobalCantBeEntity {
+					name,
+					line: _,
+					col: _,
+				} => write!(f, "The global variable '{}' can't have 'entity' as its type", name),
+				Self::GlobalCantBeResource {
+					name,
+					line: _,
+					col: _,
+				} => write!(f, "The global variable '{}' can't have 'resource' as its type", name),
+				Self::GlobalMissingInitializer {
+					name,
+					line,
+					col: _,			
+				} => write!(f, "The global variable '{}' was not assigned a value on line {}", name, line),
+				Self::HelperFnDefinedBeforeCall {
+					helper_fn_name
+				} => write!(f, "{}() is defined before the first time it gets called", helper_fn_name),
+				Self::OnFunctionAfterHelperFunctions {
+					name,
+					line: _,
+					col: _,
+				} => write!(f, "{}() must be defined before all helper_ functions", name),
+				Self::AlreadyDefinedHelperFunction {
+					helper_fn_name,
+				} => write!(f, "The function '{}' was defined several times in the same file", helper_fn_name),
 				_ => write!(f, "{:?}", self),
 			}
 		}
@@ -1126,6 +1205,12 @@ pub mod parser {
 					value: comment_token.value.into(),
 				});
 				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+			} else {
+				return Err(ParserError::UnexpectedToken{
+					token_value: String::from(token.value),
+					line: token.line,
+					col: token.col,
+				});
 			}
 		}
 
@@ -1172,8 +1257,8 @@ pub mod parser {
 			consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 
 			// return type
-			let return_ty = if let Ok(&[_, _]) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Word]) {
-				match self.parse_type(tokens)? {
+			let return_ty = if let Ok(&[_, ref type_token]) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Word]) {
+				match self.parse_type(type_token)? {
 					GrugType::Resource{..} => return Err(ParserError::HelperFnReturnTypeCantBeResource{
 						fn_name: fn_name.to_string(),
 						line: name_token.line,
@@ -1253,7 +1338,7 @@ pub mod parser {
 				let arg_name = name_token.value;
 				consume_next_token_types(tokens, &[TokenType::Colon, TokenType::Space])?;
 
-				let arg_type = self.parse_type(tokens)?;
+				let arg_type = self.parse_type(get_next_token(tokens)?)?;
 
 				match arg_type {
 					GrugType::Resource{..} => return Err(ParserError::ArgumentCantBeResource{
@@ -1459,7 +1544,7 @@ pub mod parser {
 					});
 				}
 				consume_space(tokens)?;
-				ty = Some(self.parse_type(tokens)?);
+				ty = Some(self.parse_type(get_next_token(tokens)?)?);
 
 				match ty {
 					Some(GrugType::Resource{..}) => return Err(ParserError::VariableCantBeResource{
@@ -1520,7 +1605,7 @@ pub mod parser {
 			consume_next_token_types(tokens, &[TokenType::Colon])?;
 			consume_space(tokens)?;
 
-			let global_type = self.parse_type(tokens)?;
+			let global_type = self.parse_type(get_next_token(tokens)?)?;
 			match global_type {
 				GrugType::Resource{..} => return Err(ParserError::GlobalCantBeResource{
 					name: global_name.to_string(),
@@ -1932,8 +2017,8 @@ pub mod parser {
 				Token{ty: TokenType::Int32, line, col, value} => {
 					Ok(Expr{
 						ty: ExprType::LiteralExpr{
-							expr: LiteralExpr::I32Expr {
-								value: value.parse::<i32>().unwrap(),
+							expr: LiteralExpr::NumberExpr {
+								value: value.parse::<i64>().unwrap() as f64,
 							},
 							line: *line,
 							col: *col
@@ -1942,10 +2027,21 @@ pub mod parser {
 					})
 				}
 				Token{ty: TokenType::Float32, line, col, value} => {
+					let number = value.parse::<f64>().unwrap();
+					if number > f64::MAX {
+						return Err(ParserError::FloatTooBig{
+							value: String::from(*value),
+						});
+					} else if number != 0. && number < f64::MIN_POSITIVE {
+						return Err(ParserError::FloatTooSmall{
+							value: String::from(*value),
+						});
+					}
+
 					Ok(Expr{
 						ty: ExprType::LiteralExpr{
-							expr: LiteralExpr::F32Expr {
-								value: value.parse::<f32>().unwrap(),
+							expr: LiteralExpr::NumberExpr {
+								value: number,
 							},
 							line: *line,
 							col: *col
@@ -1963,15 +2059,14 @@ pub mod parser {
 			}
 		}
 		
-		fn parse_type<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<GrugType, ParserError> {
-			let next_token = get_next_token(tokens)?;
-			if next_token.ty != TokenType::Word {
+		fn parse_type<'a>(&mut self, type_token: &Token) -> Result<GrugType, ParserError> {
+			if type_token.ty != TokenType::Word {
 				return Err (ParserError::MissingType{
-					line: next_token.line,
-					col: next_token.col,
+					line: type_token.line,
+					col: type_token.col,
 				});
 			}
-			Ok(match next_token.value {
+			Ok(match type_token.value {
 				"void"     => GrugType::Void,
 				"bool"     => GrugType::Bool,
 				"number"   => GrugType::Number,
@@ -1984,15 +2079,8 @@ pub mod parser {
 					ty: None,
 				},
 				type_name => {
-					let extra_value = type_name.into();
-					if MOD_API.wait().entities().contains_key(type_name) {
-						GrugType::Entity {
-							ty: Some(extra_value),
-						}
-					} else {
-						GrugType::Id {
-							custom_name: Some(extra_value),
-						}
+					GrugType::Id {
+						custom_name: Some(type_name.into()),
 					}
 				}
 			})
@@ -2045,7 +2133,7 @@ pub mod parser {
 		}
 		for (Token{ty: got_ty, line, col, ..}, expected_ty) in tokens.clone().zip(expected.into_iter()) {
 			if got_ty != expected_ty {
-				return Err(ParserError::UnexpectedToken{
+				return Err(ParserError::GotWrongToken{
 					expected: *expected_ty,
 					got: *got_ty,
 					line: *line,
@@ -2078,7 +2166,7 @@ pub mod parser {
 
 	fn consume_space<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
 		Ok(&consume_next_token_types(tokens, &[TokenType::Space]).map_err(|err| match err {
-			ParserError::UnexpectedToken{got, line, col, ..} => ParserError::ExpectedSpace{got, line, col},
+			ParserError::GotWrongToken{got, line, col, ..} => ParserError::ExpectedSpace{got, line, col},
 			_ => unreachable!(),
 		})?[0])
 	}
@@ -2445,11 +2533,13 @@ pub mod type_propogation {
 	}
 
 	pub(super) struct TypePropogator {
+		current_mod_name: String,
 		global_variables: HashMap<Arc<str>, Variable>,
 		local_variables: Vec<HashMap<Arc<str>, Variable>>,
 		num_while_loops_deep: usize,
-		current_on_fn_calls_helper_fn: bool,
-		current_on_fn_has_while_loop: bool,
+		current_fn_calls_helper_fn: bool,
+		current_fn_has_while_loop: bool,
+		current_fn_name: Option<Arc<str>>,
 	}
 
 	#[derive(Debug)]
@@ -2535,7 +2625,7 @@ pub mod type_propogation {
 		// grug_assert(call_expr.argument_count <= param_count, "Function call '%s' got an unexpected extra argument with type %s", name, call_expr.arguments[param_count].result_type_name);
 		TooManyArguments{
 			function_name: Arc<str>,
-			got_ty: GrugType,
+			got_type: GrugType,
 		},
 		ResourceValidationError(ResourceValidationError),
 		EntityValidationError(EntityValidationError),
@@ -2566,7 +2656,8 @@ pub mod type_propogation {
 		// grug_assert(arg_count <= param_count, "Function '%s' got an unexpected extra parameter '%s' with type %s", name, args[param_count].name, args[param_count].type_name);
 		TooManyParameters{
 			function_name: Arc<str>,
-			got_ty: GrugType,
+			parameter_name: Arc<str>,
+			parameter_type: GrugType,
 		},
 		// grug_assert(streq(arg_name, param.name), "Function '%s' its '%s' parameter was supposed to be named '%s'", name, arg_name, param.name);
 		OnFnParameterNameMismatch{
@@ -2577,6 +2668,7 @@ pub mod type_propogation {
 		//grug_error("Function '%s' its '%s' parameter was supposed to have the type %s, but got %s", name, param.name, param.type_name, arg_type_name);
 		OnFnParameterTypeMismatch{
 			function_name: Arc<str>,
+			parameter_name: Arc<str>,
 			got_type: GrugType,
 			expected_type: GrugType,
 		},
@@ -2616,38 +2708,189 @@ pub mod type_propogation {
 		// TODO: This needs location information 
 		// "There is a break statement that isn't inside of a while loop" 
 		ContinueStatementOutsideWhileLoop,
+
+		// TODO: This needs more information, like the name of the global
+		// grug_assert(!compiled_init_globals_fn, "Global id variables can't be reassigned");
+		GlobalIdsCantBeReassigned,
+		// grug_assert(!var, "The variable '%s' already exists", variable_statement.name);
+		VariableAlreadyExists {
+			variable_name: Arc<str>
+		},
+		// grug_assert(fn_return_type != type_void, "Function '%s' wasn't supposed to return any value", filled_fn_name);
+		// grug_error("Function '%s' is supposed to return %s, not %s", filled_fn_name, fn_return_type_name, statement.return_statement.value->result_type_name);
+		// grug_assert(fn_return_type == type_void, "Function '%s' is supposed to return a value of type %s", filled_fn_name, fn_return_type_name);
+		MismatchedReturnType {
+			function_name: Arc<str>,
+			expected_type: GrugType,
+			got_type: GrugType,
+		},
+		// grug_assert(last_statement.type == RETURN_STATEMENT, "Function '%s' is supposed to return %s as its last line", filled_fn_name, fn_return_type_name);
+		LastStatementNotReturn {
+			function_name: Arc<str>,
+			expected_return_type: GrugType,
+		},
 	}
 
 	impl std::fmt::Display for TypePropogatorError {
 		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 			match self {
+				Self::EntityDoesNotExist{
+					entity_name,
+				} => write!(f, "The entity '{}' was not declared by mod_api.json", entity_name),
+				Self::GlobalVariableShadowed {
+					name,
+				} => write!(f, "The global variable '{}' shadows an earlier global variable with the same name, so change the name of one of them", name),
+				Self::GlobalCantCallHelperFn {
+					global_name,
+					line,
+					col,
+				} => write!(f, "The global variable '{}' isn't allowed to call helper functions", global_name),
+				Self::VariableDoesNotExist {
+					name,
+					line, 
+					col,
+				} => write!(f, "The variable '{}' does not exist", name),
+				Self::AdjacentUnaryOperators {
+					operator,
+				} => write!(f, "Found '{0}' directly next to another '{0}', which can be simplified by just removing both of them", operator),
+				Self::NotOperatorNotBeforeBool{
+					got,
+				} => write!(f, "Found 'not' before {}, but it can only be put before a bool", got),
+				Self::MinusOperatorNotBeforeNumber {
+					got,
+				} => write!(f, "Found '-' before {}, but it can only be put before a number", got),
+				Self::CannotCompareStrings {
+					operator,
+				} => write!(f, "You can't use the {} operator on a string", operator),
+				Self::BinaryOperatorTypeMismatch {
+					operator,
+					left,
+					right,
+				} => write!(f, "The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", operator, left, right),
+				Self::LogicalOperatorExpectsBool {
+					operator,
+				} => write!(f, "'{}' operator expects bool", operator),
+				Self::ComparisonOperatorExpectsNumber {
+					operator,
+					got_type,
+				} => write!(f, "'{}' operator expects number", operator),
+				Self::ArithmeticOperatorExpectsNumber {
+					got_type: GrugType::String,
+					operator,
+				} => write!(f, "You can't use the {} operator on a string", operator),
+				Self::ArithmeticOperatorExpectsNumber {
+					operator,
+					got_type,
+				} => write!(f, "'{}' operator expects number", operator),
+				Self::RemainderOperatorExpectsNumber {
+					got_ty,
+				} => write!(f, "'%' operator expects number"),
+				Self::CallOnFnWithinOnFn {
+					on_fn_name,
+				} => write!(f, "Mods aren't allowed to call their own on_ functions, but '{}' was called", on_fn_name),
+				Self::FunctionDoesNotExist {
+					function_name,
+				} => write!(f, "The function '{}' does not exist", function_name),
+				Self::TooFewArguments{
+					function_name,
+					expected_name,
+					expected_type,
+				} => write!(f, "Function call '{}' expected the argument '{}' with type {}", function_name, expected_name, expected_type),
+				Self::TooManyArguments{
+					function_name,
+					got_type,
+				} => write!(f, "Function call '{}' got an unexpected extra argument with type {}", function_name, got_type),
+				Self::ResourceValidationError(error) => write!(f, "{}", error),
+				Self::EntityValidationError(error) => write!(f, "{}", error),
+				Self::VoidArgumentInFunctionCall {
+					function_name,
+					signature_type,
+					parameter_name
+				} => write!(f, "Function call '{}' expected the type {} for argument '{}', but got a function call that doesn't return anything", function_name, signature_type, parameter_name),
+				Self::FunctionArgumentMismatch {
+					function_name,
+					expected_type,
+					got_type,
+					parameter_name
+				} => write!(f, "Function call '{}' expected the type {} for argument '{}', but got {}", function_name, expected_type, parameter_name, got_type),
+				Self::OnFnDoesNotExist {
+					function_name,
+					entity_name,
+				} => write!(f, "The function '{}' was not was not declared by entity '{}' in mod_api.json", function_name, entity_name),
+				Self::TooFewParameters{
+					function_name,
+					expected_name,
+					expected_type,
+				} => write!(f, "Function '{}' expected the parameter '{}' with type {}", function_name, expected_name, expected_type),
+				Self::TooManyParameters{
+					function_name,
+					parameter_name,
+					parameter_type,
+				} => write!(f, "Function '{}' got an unexpected extra parameter '{}' with type {}", function_name, parameter_name, parameter_type),
+				Self::OnFnParameterNameMismatch{
+					function_name,
+					got_name,
+					expected_name,
+				} => write!(f, "Function '{}' its '{}' parameter was supposed to be named '{}'", function_name, got_name, expected_name),
+				Self::OnFnParameterTypeMismatch{
+					function_name,
+					parameter_name,
+					got_type,
+					expected_type,
+				} => write!(f, "Function '{}' its '{}' parameter was supposed to have the type {}, but got {}", function_name, parameter_name, expected_type, got_type),
+				Self::GlobalCantBeAssignedMe {
+					name,
+				} => write!(f, "Global variables can't be assigned 'me'"),
 				Self::VariableTypeMismatch {
 					name,
 					got_type,
 					expected_type,
 				} => write!(f, "Can't assign {} to '{}', which has type {}", got_type, name, expected_type),
-				Self::ComparisonOperatorExpectsNumber {
-					operator,
+				Self::LocalVariableShadowedByGlobal {
+					name,
+				} => write!(f, "The local variable '{}' shadows an earlier global  variable with the same name, so change the name of one of them", name),
+				Self::LocalVariableShadowedByLocal {
+					name,
+				} => write!(f, "The local variable '{}' shadows an earlier local variable with the same name, so change the name of one of them", name),
+				Self::CantAssignBecauseVariableDoesntExist {
+					name,
+				} => write!(f, "Can't assign to the variable '{}', since it does not exist", name),
+				Self::IfConditionTypeMismatch {
+					got_type,
+				} => write!(f, "If condition must be bool but got '{}'", got_type),
+				Self::WhileConditionTypeMismatch {
+					got_type,
+				} => write!(f, "While condition must be bool but got '{}'", got_type),
+				Self::BreakStatementOutsideWhileLoop => write!(f, "There is a break statement that isn't inside of a while loop"),
+				Self::ContinueStatementOutsideWhileLoop => write!(f, "There is a continue statement that isn't inside of a while loop"),
+				Self::GlobalIdsCantBeReassigned => write!(f, "Global id variables can't be reassigned"),
+				// grug_assert(!var, "The variable '%s' already exists", variable_statement.name);
+				Self::VariableAlreadyExists {
+					variable_name
+				} => write!(f, "The variable '{}' already exists", variable_name),
+				// grug_assert(fn_return_type == type_void, "Function '%s' is supposed to return a value of type %s", filled_fn_name, fn_return_type_name);
+				Self::MismatchedReturnType {
+					function_name,
+					expected_type,
+					got_type: GrugType::Void,
+				} => write!(f, "Function '{}' is supposed to return a value of type {}", function_name, expected_type),
+				// grug_assert(fn_return_type != type_void, "Function '%s' wasn't supposed to return any value", filled_fn_name);
+				Self::MismatchedReturnType {
+					function_name,
+					expected_type: GrugType::Void,
 					got_type: _,
-				} => write!(f, "'{}' operator expects number", operator),
-				Self::MinusOperatorNotBeforeNumber {
-					got,
-				} => write!(f, "Found '-' before {}, but it can only be put before a number", got),
-				Self::ArithmeticOperatorExpectsNumber {
-					got_type: GrugType::String,
-					operator,
-				} => write!(f, "You can't use the {} operator on a string", operator),
-				Self::BreakStatementOutsideWhileLoop => 
-					write!(f, "There is a break statement that isn't inside of a while loop"),
-				Self::ContinueStatementOutsideWhileLoop => 
-					write!(f, "There is a continue statement that isn't inside of a while loop"),
-				Self::GlobalVariableShadowed {
-					name
-				} => write!(f, "The global variable '{}' shadows an earlier global variable with the same name, so change the name of one of them", name),
-				Self::AdjacentUnaryOperators {
-					operator,
-				} => write!(f, "Found '{0}' directly next to another '{0}', which can be simplified by just removing both of them", operator),
-				_ => write!(f, "{:?}", self),
+				} => write!(f, "Function '{}' wasn't supposed to return any value", function_name),
+				// grug_error("Function '%s' is supposed to return %s, not %s", filled_fn_name, fn_return_type_name, statement.return_statement.value->result_type_name);
+				Self::MismatchedReturnType {
+					function_name,
+					expected_type,
+					got_type,
+				} => write!(f, "Function '{}' is supposed to return {}, not {}", function_name, expected_type, got_type),
+				// grug_assert(last_statement.type == RETURN_STATEMENT, "Function '%s' is supposed to return %s as its last line", filled_fn_name, fn_return_type_name);
+				Self::LastStatementNotReturn {
+					function_name,
+					expected_return_type,
+				} => write!(f, "Function '{}' is supposed to return {} as its last line", function_name, expected_return_type),
 			}
 		}
 	}
@@ -2690,6 +2933,7 @@ pub mod type_propogation {
 		},
 		// TODO: This error needs a better message
 		// grug_assert(dotdot[2] != '/' && dotdot[2] != '\0', "Remove the '..' from the resource \"%s\"", string);
+		// " 
 		ContainsSlashDotDotInMiddle {
 			value: Arc<str>
 		},
@@ -2699,9 +2943,76 @@ pub mod type_propogation {
 		}
 	}
 
+	impl std::fmt::Display for ResourceValidationError {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				_ => write!(f, "{:?}", self)
+			}
+		}
+	}
+
 	#[derive(Debug)]
 	pub enum EntityValidationError {
-		
+		EntityCantBeEmpty,
+		// grug_assert(len > 0, "Entity '%s' is missing a mod name", string);
+		EntityMissingModName {
+			entity_string: Arc<str>,
+		},
+		// grug_assert(*entity_name != '\0', "Entity '%s' specifies the mod name '%s', but it is missing an entity name after the ':'", string, mod_name);
+		EntityMissingEntityName {
+			mod_name: String,
+			entity_string: Arc<str>,
+		},
+		// grug_assert(!streq(mod_name, mod), "Entity '%s' its mod name '%s' is invalid, since the file it is in refers to its own mod; just change it to '%s'", string, mod_name, entity_name);
+		ModNameIsCurrentMod {
+			full_entity_string: Arc<str>,
+			mod_name: String,
+			entity_name: String,
+		},
+		// grug_assert(islower(c) || isdigit(c) || c == '_' || c == '-', "Entity '%s' its mod name contains the invalid character '%c'", string, c);
+		ModNameHasInvalidCharacter {
+			entity_name: Arc<str>, 
+			invalid_char: char
+		},
+		// grug_assert(islower(c) || isdigit(c) || c == '_' || c == '-', "Entity '%s' its entity name contains the invalid character '%c'", string, c);
+		EntityNameHasInvalidCharacter {
+			entity_name: Arc<str>, 
+			invalid_char: char
+		},
+	}
+
+	impl std::fmt::Display for EntityValidationError {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				Self::EntityCantBeEmpty => write!(f, "Entities can't be empty strings"),
+				// grug_assert(len > 0, "Entity '%s' is missing a mod name", string);
+				Self::EntityMissingModName {
+					entity_string,
+				} => write!(f, "Entity '{}' is missing a mod name", entity_string),
+				// grug_assert(*entity_name != '\0', "Entity '%s' specifies the mod name '%s', but it is missing an entity name after the ':'", string, mod_name);
+				Self::EntityMissingEntityName {
+					mod_name,
+					entity_string,
+				} => write!(f, "Entity '{}' specifies the mod name '{}', but it is missing an entity name after the ':'", entity_string, mod_name),
+				// grug_assert(!streq(mod_name, mod), "Entity '%s' its mod name '%s' is invalid, since the file it is in refers to its own mod; just change it to '%s'", string, mod_name, entity_name);
+				Self::ModNameIsCurrentMod {
+					full_entity_string,
+					mod_name,
+					entity_name,
+				} => write!(f, "Entity '{}' its mod name '{}' is invalid, since the file it is in refers to its own mod; just change it to '{}'", full_entity_string, mod_name, entity_name),
+				// grug_assert(islower(c) || isdigit(c) || c == '_' || c == '-', "Entity '%s' its mod name contains the invalid character '%c'", string, c);
+				Self::ModNameHasInvalidCharacter {
+					entity_name, 
+					invalid_char
+				} => write!(f, "Entity '{}' its mod name contains the invalid character '{}'", entity_name, invalid_char),
+				// grug_assert(islower(c) || isdigit(c) || c == '_' || c == '-', "Entity '%s' its entity name contains the invalid character '%c'", string, c);
+				Self::EntityNameHasInvalidCharacter {
+					entity_name, 
+					invalid_char
+				} => write!(f, "Entity '{}' its entity name contains the invalid character '{}'", entity_name, invalid_char),
+				_ => write!(f, "{:?}", self),
+			}
+		}
 	}
 
 	impl From<ResourceValidationError> for TypePropogatorError {
@@ -2717,13 +3028,15 @@ pub mod type_propogation {
 	}
 	
 	impl TypePropogator {
-		pub fn new () -> Self {
+		pub fn new (mod_name: String) -> Self {
 			Self {
+				current_mod_name: mod_name,
 				global_variables: HashMap::new(),
 				local_variables: Vec::new(),
 				num_while_loops_deep: 0,
-				current_on_fn_calls_helper_fn: false,
-				current_on_fn_has_while_loop: false,
+				current_fn_calls_helper_fn: false,
+				current_fn_has_while_loop: false,
+				current_fn_name: None,
 			}
 		}
 
@@ -2746,7 +3059,7 @@ pub mod type_propogation {
 						let result_ty = self.fill_expr(&ast.helper_fn_signatures, assignment_expr)?;
 						
 						// global expr cant call helper function and this has been checked
-						debug_assert!(!self.current_on_fn_calls_helper_fn);
+						debug_assert!(!self.current_fn_calls_helper_fn);
 
 						if let ExprType::LiteralExpr{expr: LiteralExpr::IdentifierExpr{name, ..}, ..} = &assignment_expr.ty 
 							&& &**name == "me" {
@@ -2776,15 +3089,16 @@ pub mod type_propogation {
 							entity_name: Arc::clone(&entity.name),
 						})?;
 						if grug_on_fn.arguments.len() > arguments.len() {
-							return Err(TypePropogatorError::TooFewArguments{
+							return Err(TypePropogatorError::TooFewParameters{
 								function_name: Arc::clone(name),
 								expected_name: Arc::clone(&grug_on_fn.arguments[arguments.len()].name),
 								expected_type: grug_on_fn.arguments[arguments.len()].ty.clone(),
 							});
 						} else if grug_on_fn.arguments.len() < arguments.len() {
-							return Err(TypePropogatorError::TooManyArguments{
+							return Err(TypePropogatorError::TooManyParameters{
 								function_name: Arc::clone(name),
-								got_ty: arguments[grug_on_fn.arguments.len()].ty.clone(),
+								parameter_name: Arc::clone(&arguments[grug_on_fn.arguments.len()].name),
+								parameter_type: arguments[grug_on_fn.arguments.len()].ty.clone(),
 							});
 						}
 						for (param, arg) in grug_on_fn.arguments.iter().zip(arguments.iter()) {
@@ -2798,16 +3112,61 @@ pub mod type_propogation {
 							if param.ty != arg.ty {
 								return Err(TypePropogatorError::OnFnParameterTypeMismatch {
 									function_name: Arc::clone(name),
+									parameter_name: Arc::clone(&param.name),
 									got_type: arg.ty.clone(),
 									expected_type: param.ty.clone(),
 								});
 							}
 						}
-						self.reset_local_variables();
+						// These should only be set inside self.fill_statements
+						debug_assert!(self.local_variables.len() == 0);
+						debug_assert!(self.num_while_loops_deep == 0);
+						debug_assert!(self.current_fn_calls_helper_fn == false);
+						debug_assert!(self.current_fn_has_while_loop == false);
+						debug_assert!(self.current_fn_name == None);
+
+						self.current_fn_name = Some(Arc::clone(name));
 						for arg in arguments {
 							self.add_local_variable(Arc::clone(&arg.name), arg.ty.clone())?;
 						}
-						self.fill_statements(&ast.helper_fn_signatures, body_statements)?;
+						self.fill_statements(&ast.helper_fn_signatures, body_statements, &GrugType::Void)?;
+
+						debug_assert!(self.current_fn_name.as_ref() == Some(name));
+						self.current_fn_name = None;
+
+						*calls_helper_fn = self.current_fn_calls_helper_fn;
+						*has_while_loop = self.current_fn_has_while_loop;
+						self.current_fn_calls_helper_fn = false;
+						self.current_fn_has_while_loop  = false;
+					}
+					GlobalStatement::GlobalEmptyLine => (),
+					GlobalStatement::GlobalHelperFunction {
+						name,
+						arguments,
+						body_statements,
+						calls_helper_fn,
+						has_while_loop,
+						return_ty,
+					} => {
+						debug_assert!(self.local_variables.len() == 0);
+						debug_assert!(self.num_while_loops_deep == 0);
+						debug_assert!(self.current_fn_calls_helper_fn == false);
+						debug_assert!(self.current_fn_has_while_loop == false);
+						debug_assert!(self.current_fn_name == None);
+
+						self.current_fn_name = Some(Arc::clone(name));
+						for arg in arguments {
+							self.add_local_variable(Arc::clone(&arg.name), arg.ty.clone())?;
+						}
+						self.fill_statements(&ast.helper_fn_signatures, body_statements, return_ty)?;
+
+						debug_assert!(self.current_fn_name.as_ref() == Some(name));
+						self.current_fn_name = None;
+
+						*calls_helper_fn = self.current_fn_calls_helper_fn;
+						*has_while_loop = self.current_fn_has_while_loop;
+						self.current_fn_calls_helper_fn = false;
+						self.current_fn_has_while_loop  = false;
 					}
 					_ => todo!(),
 				}
@@ -2816,8 +3175,9 @@ pub mod type_propogation {
 		}
 		
 		// out parameter self.current_on_fn_calls_helper_fn
-		fn fill_statements(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, statements: &mut [Statement]) -> Result<(), TypePropogatorError> {
+		fn fill_statements(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, statements: &mut [Statement], expected_return_type: &GrugType) -> Result<(), TypePropogatorError> {
 			self.push_scope();
+			let mut last_statement = None;
 			for statement in statements {
 				match statement {
 					Statement::VariableStatement {
@@ -2828,6 +3188,11 @@ pub mod type_propogation {
 						let result_ty = self.fill_expr(helper_fns, assignment_expr)?;
 						
 						if let Some(ty) = ty {
+							if self.get_variable(name).is_some() {
+								return Err(TypePropogatorError::VariableAlreadyExists{
+									variable_name: Arc::clone(name),
+								});
+							}
 							if &result_ty == ty {
 								self.add_local_variable(Arc::clone(name), ty.clone())?
 							} else {
@@ -2838,9 +3203,19 @@ pub mod type_propogation {
 								});
 							}
 						} else {
-							let var = self.get_local_variable(name).ok_or_else(|| TypePropogatorError::CantAssignBecauseVariableDoesntExist {
-								name: Arc::clone(name),
-							})?;
+							let var = if let Some(var) = self.get_global_variable(name) {
+								if matches!(var.ty, GrugType::Id {..}) {
+									return Err(TypePropogatorError::GlobalIdsCantBeReassigned);
+								}
+								var
+							} else if let Some(var) = self.get_local_variable(name) {
+								var
+							} else {
+								return Err(TypePropogatorError::CantAssignBecauseVariableDoesntExist {
+									name: Arc::clone(name),
+								});
+							};
+
 							if result_ty != var.ty {
 								return Err(TypePropogatorError::VariableTypeMismatch {
 									name: Arc::clone(name),
@@ -2849,11 +3224,13 @@ pub mod type_propogation {
 								});
 							}
 						}
+						last_statement = Some(statement);
 					}
 					Statement::CallStatement {
 						expr
 					} => {
 						self.fill_expr(helper_fns, expr)?;
+						last_statement = Some(statement);
 					}
 					Statement::IfStatement {
 						condition,
@@ -2866,8 +3243,11 @@ pub mod type_propogation {
 								got_type: cond_type
 							});
 						}
-						self.fill_statements(helper_fns, if_statements)?;
-						self.fill_statements(helper_fns, else_statements)?;
+						self.fill_statements(helper_fns, if_statements, expected_return_type)?;
+						self.fill_statements(helper_fns, else_statements, expected_return_type)?;
+						// TODO: Maybe this should be looked at again
+						// [https://github.com/grug-lang/grug/issues/116]
+						last_statement = Some(statement);
 					}
 					Statement::WhileStatement {
 						condition,
@@ -2880,41 +3260,58 @@ pub mod type_propogation {
 							});
 						}
 						self.num_while_loops_deep += 1;
-						self.fill_statements(helper_fns, statements)?;
+						self.fill_statements(helper_fns, statements, expected_return_type)?;
 						self.num_while_loops_deep -= 1;
-						self.current_on_fn_has_while_loop = true;
+						self.current_fn_has_while_loop = true;
+
+						last_statement = Some(statement);
 					}
 					Statement::ReturnStatement {
 						expr,
 					} => {
-						todo!();
+						// result_ty MUST be filled
+						let return_ty = expr.as_mut()
+							.map(|expr| self.fill_expr(helper_fns, expr))
+							.unwrap_or(Ok(GrugType::Void))?;
+						if *expected_return_type != return_ty {
+							return Err(TypePropogatorError::MismatchedReturnType{
+								function_name: Arc::clone(&self.current_fn_name.as_ref().unwrap()),
+								expected_type: expected_return_type.clone(),
+								got_type: return_ty.clone(),
+							})
+						}
+						last_statement = Some(statement);
 					}
 					Statement::BreakStatement => {
 						if self.num_while_loops_deep == 0 {
 							return Err(TypePropogatorError::BreakStatementOutsideWhileLoop);
 						}
+						last_statement = Some(statement);
 					}
 					Statement::ContinueStatement => {
 						if self.num_while_loops_deep == 0 {
 							return Err(TypePropogatorError::ContinueStatementOutsideWhileLoop);
 						}
+						last_statement = Some(statement);
 					}
 					_ => (),
 				}
 			}
+			if *expected_return_type != GrugType::Void && !matches!(last_statement, Some(Statement::ReturnStatement{..})) {
+				return Err(TypePropogatorError::LastStatementNotReturn {
+					function_name: Arc::clone(&self.current_fn_name.as_ref().unwrap()),
+					expected_return_type: expected_return_type.clone(),
+				});
+			}
 			self.pop_scope();
 			Ok(())
-		}
-		
-		fn reset_local_variables(&mut self) {
-			self.local_variables.clear();
 		}
 
 		// Check that the global variable's assigned value doesn't contain a call_to a helper function nor identifier
 		fn check_global_expr(&mut self, assignment_expr: &Expr, name: &Arc<str>) -> Result<(), TypePropogatorError> {
 			match assignment_expr.ty {
 				ExprType::LiteralExpr{expr: LiteralExpr::EntityExpr{..}, ..} => unreachable!(),
-				ExprType::LiteralExpr{expr: LiteralExpr::IdentifierExpr{..}, ..} => unreachable!(),
+				ExprType::LiteralExpr{expr: LiteralExpr::ResourceExpr{..}, ..} => unreachable!(),
 				ExprType::LiteralExpr{..} => (),
 				ExprType::UnaryExpr{
 					operator: _,
@@ -2989,10 +3386,7 @@ pub mod type_propogation {
 							})?;
 							var.ty.clone()
 						},
-						LiteralExpr::I32Expr{
-							..
-						} => GrugType::Number,
-						LiteralExpr::F32Expr{
+						LiteralExpr::NumberExpr{
 							..
 						} => GrugType::Number,
 					}
@@ -3094,7 +3488,7 @@ pub mod type_propogation {
 					// TODO: Move this line to within check_arguments
 					arguments.iter_mut().map(|argument| self.fill_expr(helper_fns, argument)).collect::<Result<Vec<_>, _>>()?;
 					if function_name.starts_with("helper_") {
-						self.current_on_fn_calls_helper_fn = true;
+						self.current_fn_calls_helper_fn = true;
 					}
 					if let Some((return_ty, sig_arguments)) = helper_fns.get(function_name) {
 						self.check_arguments(function_name, sig_arguments, arguments)?;
@@ -3135,7 +3529,7 @@ pub mod type_propogation {
 			} else if signature.len() < arguments.len() {
 				return Err(TypePropogatorError::TooManyArguments{
 					function_name: Arc::clone(function_name),
-					got_ty: arguments[signature.len()].result_ty.clone().unwrap(),
+					got_type: arguments[signature.len()].result_ty.clone().unwrap(),
 				});
 			}
 			for (param, arg) in signature.iter().zip(arguments) {
@@ -3147,7 +3541,7 @@ pub mod type_propogation {
 					});
 				} else if let GrugType::Entity{ref ty} = param.ty 
 					&& let ExprType::LiteralExpr{expr: LiteralExpr::StringExpr{ref value}, ..} = arg.ty {
-					self.validate_entity_string(value, ty.as_deref())?;
+					self.validate_entity_string(value)?;
 					arg.result_ty = Some(GrugType::Entity{
 						ty: ty.clone()
 					});
@@ -3214,10 +3608,49 @@ pub mod type_propogation {
 			}
 		}
 
-		fn validate_entity_string(&mut self, value: &Arc<str>, extension: Option<&str>) -> Result<(), EntityValidationError> {
-			// TODO:
-			todo!();
-			// Ok(())
+		fn validate_entity_string(&mut self, entity_string: &Arc<str>) -> Result<(), EntityValidationError> {
+			if entity_string.is_empty() {
+				return Err(EntityValidationError::EntityCantBeEmpty);
+			}
+
+			let (mod_name, entity_name) = if let Some((mod_name, entity_name)) = entity_string.split_once(":") {
+				if mod_name.is_empty() {
+					return Err(EntityValidationError::EntityMissingModName {
+						entity_string: Arc::clone(entity_string),
+					});
+				}
+				if entity_name.is_empty() {
+					return Err(EntityValidationError::EntityMissingEntityName {
+						mod_name: String::from(mod_name),
+						entity_string: Arc::clone(entity_string),
+					});
+				}
+				if mod_name == self.current_mod_name {
+					return Err(EntityValidationError::ModNameIsCurrentMod {
+						full_entity_string: Arc::clone(entity_string),
+						mod_name: String::from(mod_name),
+						entity_name: String::from(entity_name),
+					});
+					// grug_assert(!streq(mod_name, mod), "Entity '%s' its mod name '%s' is invalid, since the file it is in refers to its own mod; just change it to '%s'", string, mod_name, entity_name);
+				}
+				(mod_name, entity_name)
+			} else {
+				("", &**entity_string)
+			};
+
+			if let Some(ch) = mod_name.chars().filter(|ch| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '_' || *ch == '-')).next() {
+				return Err(EntityValidationError::ModNameHasInvalidCharacter{
+					entity_name: Arc::clone(entity_string),
+					invalid_char: ch,
+				});
+			}
+			if let Some(ch) = entity_name.chars().filter(|ch| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '_' || *ch == '-')).next() {
+				return Err(EntityValidationError::EntityNameHasInvalidCharacter{
+					entity_name: Arc::clone(entity_string),
+					invalid_char: ch,
+				});
+			}
+			Ok(())
 		}
 
 		fn get_variable(&self, var_name: &str) -> Option<&Variable> {
