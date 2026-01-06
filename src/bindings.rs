@@ -48,10 +48,12 @@ pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, grug_file_path: *con
 }
 #[allow(unused_variables)]
 pub extern "C" fn dump_file_to_json (input_grug_path: *const c_char, output_json_path: *const c_char) -> bool {
+	eprintln!("dump_file_to_json_t called with {} and {}", unsafe{CStr::from_ptr(input_grug_path)}.to_str().unwrap(), unsafe{CStr::from_ptr(output_json_path)}.to_str().unwrap());
 	false
 }
 #[allow(unused_variables)]
 pub extern "C" fn generate_file_from_json (input_json_path: *const c_char, output_grug_path: *const c_char) -> bool {
+	println!("generate_file_from_json called with {} and {}", unsafe{CStr::from_ptr(input_json_path)}.to_str().unwrap(), unsafe{CStr::from_ptr(output_grug_path)}.to_str().unwrap());
 	false
 }
 #[allow(unused_variables)]

@@ -1,14 +1,19 @@
-// #![allow(warnings)]
+// #![deny(warnings)]
 
 pub mod bindings;
 pub mod frontend;
+
+pub mod mod_api;
+pub mod types;
+pub mod serde;
+pub mod error;
 
 #[cfg(test)]
 mod test {
 	use super::bindings::*;
 	use std::ffi::CString;
 	use std::mem::ManuallyDrop;
-	use crate::frontend::mod_api::*;
+	use crate::mod_api::*;
 
 	#[test] 
 	fn grug_tests () {
@@ -26,7 +31,7 @@ mod test {
 
 		// let 
 
-		let grug_tests_path = c"src/grug-tests/tests/";
+		let grug_tests_path = c"src/grug-tests/tests";
 
 		let mod_api_text = std::fs::read_to_string("src/grug-tests/mod_api.json").unwrap();
 
@@ -50,5 +55,4 @@ mod test {
 	}
 }
 
-// TODO: Check that GrugType::Entity is implemented correctly everywhere
 // TODO: implementation errors like too many statements in block should not be grug errors
