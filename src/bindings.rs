@@ -2,6 +2,7 @@ use std::ffi::{c_char, c_float, CStr, CString};
 use std::mem::ManuallyDrop;
 
 use super::frontend;
+use super::serde;
 
 #[repr(C)]
 #[allow(non_camel_case_types)]
@@ -47,14 +48,23 @@ pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, grug_file_path: *con
 	);
 }
 #[allow(unused_variables)]
-pub extern "C" fn dump_file_to_json (input_grug_path: *const c_char, output_json_path: *const c_char) -> bool {
+pub extern "C" fn dump_file_to_json (input_grug_path: *const c_char, output_json_path: *const c_char) -> i32 {
 	eprintln!("dump_file_to_json_t called with {} and {}", unsafe{CStr::from_ptr(input_grug_path)}.to_str().unwrap(), unsafe{CStr::from_ptr(output_json_path)}.to_str().unwrap());
-	false
+	let grug_path = unsafe{CStr::from_ptr(input_grug_path)}.to_str().unwrap();
+	let json_path = unsafe{CStr::from_ptr(output_json_path)}.to_str().unwrap();
+
+	match serde::dump_file_to_json(grug_path, json_path) {
+		Ok(()) => 0,
+		Err(err) => {
+			eprintln!("{}", err);
+			1
+		}
+	}
 }
 #[allow(unused_variables)]
-pub extern "C" fn generate_file_from_json (input_json_path: *const c_char, output_grug_path: *const c_char) -> bool {
+pub extern "C" fn generate_file_from_json (input_json_path: *const c_char, output_grug_path: *const c_char) -> i32 {
 	println!("generate_file_from_json called with {} and {}", unsafe{CStr::from_ptr(input_json_path)}.to_str().unwrap(), unsafe{CStr::from_ptr(output_grug_path)}.to_str().unwrap());
-	false
+	1
 }
 #[allow(unused_variables)]
 pub extern "C" fn game_fn_error (msg: *const c_char) {
@@ -70,9 +80,9 @@ pub type init_globals_fn_dispatcher_t = extern "C" fn (*const c_char);
 #[allow(non_camel_case_types)]
 pub type on_fn_dispatcher_t = extern "C" fn (*const c_char, *const c_char, *mut grug_value, c_size_t);
 #[allow(non_camel_case_types)]
-pub type dump_file_to_json_t = extern "C" fn (*const c_char, *const c_char) -> bool;
+pub type dump_file_to_json_t = extern "C" fn (*const c_char, *const c_char) -> i32;
 #[allow(non_camel_case_types)]
-pub type generate_file_from_json_t = extern "C" fn (*const c_char, *const c_char) -> bool;
+pub type generate_file_from_json_t = extern "C" fn (*const c_char, *const c_char) -> i32;
 #[allow(non_camel_case_types)]
 pub type game_fn_error_t = extern "C" fn (*const c_char);
 

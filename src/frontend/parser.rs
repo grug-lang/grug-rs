@@ -323,10 +323,10 @@ impl std::fmt::Display for ParserError {
 const MAX_PARSING_DEPTH: usize = 100;
 
 pub(crate) struct AST {
-	pub(super) global_statements: Vec<GlobalStatement>,
-	pub(super) called_helper_fns: HashSet<Arc<str>>, 
-	pub(super) helper_fn_signatures: HashMap<Arc<str>, (GrugType, Vec<Argument>)>,
-	pub(super) on_fn_signatures: HashMap<Arc<str>, Vec<Argument>>,
+	pub(crate) global_statements: Vec<GlobalStatement>,
+	pub(crate) called_helper_fns: HashSet<Arc<str>>, 
+	pub(crate) helper_fn_signatures: HashMap<Arc<str>, (GrugType, Vec<Argument>)>,
+	pub(crate) on_fn_signatures: HashMap<Arc<str>, Vec<Argument>>,
 }
 
 pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use crate::types::*;
-use super::parser::AST;
 use crate::mod_api::MOD_API;
+use super::AST;
 
 type GrugIDType = *mut ();
 
