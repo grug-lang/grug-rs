@@ -744,7 +744,7 @@ impl<'a> TypePropogator<'a> {
 					self.current_fn_calls_helper_fn = false;
 					self.current_fn_has_while_loop  = false;
 				}
-				_ => todo!(),
+				GlobalStatement::GlobalComment{..} => (),
 			}
 		}
 		Ok(())
@@ -1129,6 +1129,8 @@ impl<'a> TypePropogator<'a> {
 					signature_type: param.ty.clone(),
 					parameter_name: Arc::clone(&param.name),
 				});
+			} else if let GrugType::Id{custom_name: None} = param.ty && let Some(GrugType::Id{ref custom_name}) = arg.result_ty {
+				arg.result_ty = Some(GrugType::Id{custom_name: None});
 			} else if Some(&param.ty) != arg.result_ty.as_ref() {
 				return Err(TypePropogatorError::FunctionArgumentMismatch {
 					function_name: Arc::clone(&function_name),

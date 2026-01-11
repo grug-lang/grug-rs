@@ -206,7 +206,7 @@ mod ser {
 			LiteralExpr::IdentifierExpr{
 				name
 			} => object! { 
-				"type": "identitfier",
+				"type": "identifier",
 				"value": &**name,
 			},
 			LiteralExpr::NumberExpr {
@@ -220,7 +220,7 @@ mod ser {
 
 	fn serialize_unary_operator(operator: &UnaryOperator) -> JsonValue {
 		match operator {
-			UnaryOperator::Not => "!".into(),
+			UnaryOperator::Not => "not ".into(),
 			UnaryOperator::Minus => "-".into(),
 		}
 	}
@@ -228,7 +228,7 @@ mod ser {
 	fn serialize_binary_operator(operator: &BinaryOperator) -> JsonValue {
 		match operator {
 			BinaryOperator::Or => "||".into(),
-			BinaryOperator::And => "&&".into(),
+			BinaryOperator::And => "and".into(),
 			BinaryOperator::DoubleEquals => "==".into(),
 			BinaryOperator::NotEquals => "!=".into(),
 			BinaryOperator::Greater => ">".into(),
@@ -319,9 +319,9 @@ mod ser {
 				"kind": "comment",
 				"value": &**value,
 			},
-			Statement::BreakStatement => object!{"type": "break"},
-			Statement::ContinueStatement => object!{"type": "continue"},
-			Statement::EmptyLineStatement => object!{"type": "empty_line"},
+			Statement::BreakStatement => object!{"kind": "break"},
+			Statement::ContinueStatement => object!{"kind": "continue"},
+			Statement::EmptyLineStatement => object!{"kind": "empty_line"},
 		}
 	}
 }
@@ -363,6 +363,10 @@ mod de {
 		StatementKindNotString,
 		LocalVariableNameNotString,
 		LocalVariableTypeNotString,
+		ElseIfStatementsNotArray,
+		CommentValueNotString,
+		HelperFunctionNameNotString,
+		HelperFunctionReturnTypeNotString,
 	}
 
 	pub fn json_to_text(input: &JsonValue) -> Result<String, JsonDeserializeError> {
@@ -419,13 +423,37 @@ mod de {
 					Ok(())
 				}
 				"helper_function" => {
-					todo!();
+					let Some(name) = get_object_field(global_statement, "name", "global_helper")?.as_str() else {
+						return Err(JsonDeserializeError::HelperFunctionNameNotString)
+					};
+					output.push_str(name);
+					output.push_str("(");
+					let arguments = get_object_field(global_statement, "arguments", "global_helper")?;
+					let body_statements = get_object_field(global_statement, "body_statements", "global_helper")?;
+					apply_arguments(arguments, output)?;
+					output.push_str(") ");
+
+					if let Ok(ty) = get_object_field(global_statement, "return_type", "global_helper_function") {
+						let Some(ty) = ty.as_str() else {
+							return Err(JsonDeserializeError::HelperFunctionReturnTypeNotString);
+						};
+						output.push_str(ty);
+						output.push_str(" ");
+					}
+					
+					apply_statements(body_statements, indentation + 1, output)?;
+					Ok(())
 				}
 				"comment" => {
-					todo!();
+					let Some(value) = get_object_field(global_statement, "value", "comment")?.as_str() else {
+						return Err(JsonDeserializeError::CommentValueNotString);
+					};
+					output.push_str("# ");
+					output.push_str(value);
+					Ok(())
 				}
-				"newline" => {
-					todo!();
+				"empty_line" => {
+					Ok(())
 				}
 				_ => unreachable!(),
 			}
@@ -464,7 +492,6 @@ mod de {
 		};
 		output.push_str("{\n");
 		for statement in statements {
-			apply_indentation(indentation, output);
 			let JsonValue::Object(statement) = statement else {
 				return Err(JsonDeserializeError::StatementNotObject);
 			};
@@ -473,6 +500,7 @@ mod de {
 			};
 			match kind {
 				"variable" => {
+					apply_indentation(indentation, output);
 					let Some(name) = get_object_field(statement, "name", "variable")?.as_str() else {
 						return Err(JsonDeserializeError::LocalVariableNameNotString)
 					};
@@ -493,23 +521,52 @@ mod de {
 					apply_expr(assignment_expr, output)?;
 				}
 				"call" => {
+					apply_indentation(indentation, output);
 					let call = get_object_field(statement, "expr", "call_statement")?;
 					apply_expr(call, output)?;
 				}
 				"if" => {
-					todo!();
-					// output.push_str("if (");
-					// apply_expr(get_object_field(statement, "cond", "if")?, output)?;
-					// output.push_str(") ");
+					apply_indentation(indentation, output);
+					output.push_str("if ");
+					apply_expr(get_object_field(statement, "cond", "if")?, output)?;
+					output.push_str(" ");
+					apply_statements(get_object_field(statement, "if_block", "if")?, indentation + 1, output)?;
+					let JsonValue::Array(else_if_blocks) = get_object_field(statement, "else_if_statements", "if")? else {
+						return Err(JsonDeserializeError::ElseIfStatementsNotArray);
+					};
 					// apply_expr(get_object_field(statement, "if_block", "if")?, output)?;
 					// let JsonValue::Object(else_block) = get_object_field(sta
 				}
+				"while" => {
+					apply_indentation(indentation, output);
+					output.push_str("while ");
+					apply_expr(get_object_field(statement, "cond", "while")?, output)?;
+					output.push_str(" ");
+					apply_statements(get_object_field(statement, "statements", "while")?, indentation + 1, output)?;
+				}
+				"break" => {
+					apply_indentation(indentation, output);
+					output.push_str("break");
+				}
+				"continue" => {
+					apply_indentation(indentation, output);
+					output.push_str("continue");
+				}
+				"comment" => {
+					apply_indentation(indentation, output);
+					let Some(value) = get_object_field(statement, "value", "comment")?.as_str() else {
+						return Err(JsonDeserializeError::CommentValueNotString);
+					};
+					output.push_str("# ");
+					output.push_str(value);
+				}
+				"empty_line" => (),
 				_ => todo!(),
 			}
 			output.push_str("\n");
 		}
 		apply_indentation(indentation - 1, output);
-		output.push_str("}\n");
+		output.push_str("}");
 		Ok(())
 	}
 

@@ -5,6 +5,8 @@
 // #![deny(warnings)]
 use crate::error::GrugError;
 use crate::state::GrugState;
+use crate::backend::GrugFile;
+use crate::types::GlobalStatement;
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 pub(crate) const SPACES_PER_INDENT: usize = 4;
 
@@ -12,7 +14,7 @@ pub mod tokenizer;
 
 pub mod parser;
 
-pub fn compile_grug_file<'a>(state: &GrugState, path: &'a str) -> Result<(), GrugError<'a>> {
+pub fn compile_grug_file<'a>(state: &GrugState, path: &'a str) -> Result<GrugFile, GrugError<'a>> {
 	let mod_name = get_mod_name(path)?;
 	let entity_type = get_entity_type(path)?;
 
@@ -26,7 +28,24 @@ pub fn compile_grug_file<'a>(state: &GrugState, path: &'a str) -> Result<(), Gru
 	
 	TypePropogator::new(state, mod_name.into()).fill_result_types(entity_type, &mut ast)?;
 
-	return Ok(());
+	let mut global_variables = Vec::new();
+	let mut on_functions = Vec::new();
+	let mut helper_functions = Vec::new();
+
+	ast.global_statements.into_iter().for_each(|statement| {
+		match statement {
+			st@GlobalStatement::GlobalVariableStatement{..} => global_variables.push(st),
+			st@GlobalStatement::GlobalOnFunction       {..} => on_functions.push(st),
+			st@GlobalStatement::GlobalHelperFunction   {..} => helper_functions.push(st),
+			_ => (),
+		}
+	});
+
+	return Ok(GrugFile{
+		global_variables,
+		on_functions,
+		helper_functions,
+	});
 }
 
 fn get_mod_name<'a> (path: &'a str) -> Result<&'a str, GrugError<'a>> {

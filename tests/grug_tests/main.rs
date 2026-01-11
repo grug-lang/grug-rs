@@ -7,31 +7,46 @@ use grug_rs::state::{GrugState, GameFnPtr};
 mod test_bindings {
 	use super::*;
 	use grug_rs::state::GrugState;
+	use grug_rs::backend::{GrugFile, GrugEntity};
 	use grug_rs::types::{GrugValue};
 	use grug_rs::frontend;
 	use grug_rs::serde;
 	use std::ffi::{c_char, CStr, CString};
-	use std::sync::OnceLock;
+	use std::sync::{OnceLock, Mutex, Arc,};
 	use std::mem::ManuallyDrop;
 
-	pub static GLOBAL_TEST_STATE: OnceLock<GrugState> = OnceLock::new();
+	pub static GLOBAL_TEST_STATE: Mutex<Option<GrugState>> = Mutex::new(None);
+	pub static CURRENT_GRUG_FILE: Mutex<Option<Arc<GrugFile>>> = Mutex::new(None);
+	pub static CURRENT_GRUG_ENTITY: Mutex<Option<GrugEntity>> = Mutex::new(None);
 	pub extern "C" fn compile_grug_file(path: *const c_char) -> *const c_char {
 		let path = unsafe{CStr::from_ptr(path)}.to_str().unwrap();
 
-		match frontend::compile_grug_file(GLOBAL_TEST_STATE.get().unwrap(), path) {
-			Ok(()) => return std::ptr::null(),
+		match frontend::compile_grug_file(GLOBAL_TEST_STATE.lock().unwrap().as_ref().unwrap(), path) {
+			Ok(file) => {
+				*CURRENT_GRUG_FILE.lock().unwrap() = Some(Arc::new(file));
+				std::ptr::null()
+			},
 			Err(err) => ManuallyDrop::new(CString::new(format!("{}", err)).unwrap()).as_ptr() as *const c_char,
 		}
 	}
 	pub extern "C" fn init_globals_fn_dispatcher () {
-		println!("init_globals_fn_dispatcher called");
+		unsafe{GLOBAL_TEST_STATE.lock().unwrap().as_mut().unwrap().set_next_id(42)};
+		*CURRENT_GRUG_ENTITY.lock().unwrap() = Some(
+			GLOBAL_TEST_STATE
+				.lock().unwrap()
+				.as_mut().unwrap()
+				.create_entity(CURRENT_GRUG_FILE.lock().unwrap().as_ref().unwrap())
+				.expect("runtime error")
+		)
 	}
 	#[allow(unused_variables)]
-	pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, value: *mut GrugValue) {
-		println!(
-			"on_fn_dispatcher: {}", 
-			unsafe{CStr::from_ptr(fn_name)}.to_str().unwrap(),
-		);
+	pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, values: *const GrugValue) {
+		let fn_name = unsafe{CStr::from_ptr(fn_name)}.to_str().unwrap();
+		
+		unsafe{
+			GLOBAL_TEST_STATE.lock().unwrap().as_mut().unwrap()
+				.call_on_function_raw(CURRENT_GRUG_ENTITY.lock().unwrap().as_mut().unwrap(), fn_name, values).unwrap();
+		};
 	}
 	#[allow(unused_variables)]
 	pub extern "C" fn dump_file_to_json (input_grug_path: *const c_char, output_json_path: *const c_char) -> i32 {
@@ -71,7 +86,7 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	pub type init_globals_fn_dispatcher_t = extern "C" fn ();
 	#[allow(non_camel_case_types)]
-	pub type on_fn_dispatcher_t = extern "C" fn (*const c_char, *mut GrugValue);
+	pub type on_fn_dispatcher_t = extern "C" fn (*const c_char, *const GrugValue);
 	#[allow(non_camel_case_types)]
 	pub type dump_file_to_json_t = extern "C" fn (*const c_char, *const c_char) -> i32;
 	#[allow(non_camel_case_types)]
@@ -204,7 +219,7 @@ fn main () {
 	let state = GrugState::new("src/grug-tests/mod_api.json", grug_tests_path.to_str().unwrap(), game_functions).unwrap();
 	// register_game_functions(&mut state);
 		
-	_ = GLOBAL_TEST_STATE.set(state);
+	*GLOBAL_TEST_STATE.lock().unwrap() = Some(state);
 
 	unsafe {
 		grug_tests_run(
