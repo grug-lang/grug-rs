@@ -1,35 +1,13 @@
 use std::ffi::c_float;
-#[repr(C)]
-#[allow(non_camel_case_types)]
-pub enum grug_type {
-	grug_type_i32,
-	grug_type_f32,
-	grug_type_id,
-}
-
-#[repr(C)]
-#[allow(non_camel_case_types)]
-pub union grug_value_union {
-	i32: i32,
-	float: c_float,
-	id: u64
-}
-
-#[repr(C)]
-#[allow(non_camel_case_types)]
-pub struct grug_value {
-	ty: grug_type,
-	value: grug_value_union
-}
-
 #[cfg(test)]
 pub mod test_bindings {
 	use super::*;
-	use std::ffi::{c_char, CStr, CString};
 	use crate::state::GrugState;
-	use std::sync::OnceLock;
+	use crate::types::{GrugValue};
 	use crate::frontend;
 	use crate::serde;
+	use std::ffi::{c_char, CStr, CString};
+	use std::sync::OnceLock;
 	use std::mem::ManuallyDrop;
 
 	pub static GLOBAL_TEST_STATE: OnceLock<GrugState> = OnceLock::new();
@@ -45,7 +23,7 @@ pub mod test_bindings {
 		println!("init_globals_fn_dispatcher called");
 	}
 	#[allow(unused_variables)]
-	pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, value: *mut grug_value) {
+	pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, value: *mut GrugValue) {
 		println!(
 			"on_fn_dispatcher: {}", 
 			unsafe{CStr::from_ptr(fn_name)}.to_str().unwrap(),
@@ -89,7 +67,7 @@ pub mod test_bindings {
 	#[allow(non_camel_case_types)]
 	pub type init_globals_fn_dispatcher_t = extern "C" fn ();
 	#[allow(non_camel_case_types)]
-	pub type on_fn_dispatcher_t = extern "C" fn (*const c_char, *mut grug_value);
+	pub type on_fn_dispatcher_t = extern "C" fn (*const c_char, *mut GrugValue);
 	#[allow(non_camel_case_types)]
 	pub type dump_file_to_json_t = extern "C" fn (*const c_char, *const c_char) -> i32;
 	#[allow(non_camel_case_types)]

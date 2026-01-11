@@ -6,7 +6,7 @@ pub fn dump_file_to_json<'a> (grug_path: &'a str, output_path: &'a str) -> Resul
 
 	let tokens = tokenizer::tokenize(&file_text)?;
 
-	let mut ast = parser::parse(&*tokens)?;
+	let ast = parser::parse(&*tokens)?;
 	
 	let string = ast_to_json(&ast.global_statements);
 
@@ -258,6 +258,7 @@ mod ser {
 				assignment_expr,
 			} => object! {
 				"kind": "variable",
+				"name": &**name,
 				"type": serialize_type(ty),
 				"assignment_expr": serialize_expr(assignment_expr),
 			},
@@ -266,6 +267,7 @@ mod ser {
 				ty: None,
 				assignment_expr,
 			} => object! {
+				"name": &**name,
 				"kind": "variable",
 				"assignment_expr": serialize_expr(assignment_expr),
 			},
@@ -326,8 +328,7 @@ mod ser {
 use ser::*;
 
 mod de {
-	use crate::types::*;
-	use json::{JsonValue, object, object::Object};
+	use json::{JsonValue, object::Object};
 
 	#[derive(Debug)]
 	pub enum JsonDeserializeError {
@@ -341,7 +342,6 @@ mod de {
 		GlobalStatementKindNotString,
 		GlobalVariableNameNotString,
 		GlobalVariableTypeNotString,
-		GlobalVariableAssignmentExprNotObject,
 		ExpressionNotObject,
 		ExpressionKindNotString,
 		LiteralExpressionNotObject,
@@ -354,8 +354,6 @@ mod de {
 		CallExpressionFunctionNameNotString,
 		CallExpressionArgumentsNotArray,
 		OnFunctionNameNotString,
-		OnFunctionArgumentsNotArray,
-		OnFunctionNameBodyStatementsNotArray,
 		ArgumentsNotArray,
 		ArgumentNotObject,
 		ArgumentNameNotString,
@@ -370,8 +368,11 @@ mod de {
 	pub fn json_to_text(input: &JsonValue) -> Result<String, JsonDeserializeError> {
 		if let JsonValue::Array(input) = input {
 			let mut output = String::new();
-			for statement in input {
+			for (i, statement) in input.iter().enumerate() {
 				apply_global_statement(statement, 0, &mut output)?;
+				if i < input.len() - 1 {
+					output.push_str("\n");
+				}
 			}
 			Ok(output)
 		} else {
@@ -402,7 +403,6 @@ mod de {
 
 					let assignment_expr = get_object_field(global_statement, "assignment_expr", "global_variable")?;
 					apply_expr(assignment_expr, output)?;
-					output.push_str("\n");
 					Ok(())
 				}
 				"on_function" => {
@@ -416,7 +416,6 @@ mod de {
 					apply_arguments(arguments, output)?;
 					output.push_str(") ");
 					apply_statements(body_statements, indentation + 1, output)?;
-					output.push_str("\n");
 					Ok(())
 				}
 				"helper_function" => {
@@ -515,7 +514,7 @@ mod de {
 	}
 
 	fn apply_indentation(indentation: usize, output: &mut String) {
-		for i in 0..(indentation * crate::frontend::SPACES_PER_INDENT) {
+		for _ in 0..(indentation * crate::frontend::SPACES_PER_INDENT) {
 			output.push_str(" ");
 		}
 	}

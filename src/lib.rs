@@ -2,6 +2,7 @@
 
 pub mod bindings;
 pub mod frontend;
+pub mod backend;
 
 pub mod mod_api;
 pub mod types;
@@ -36,7 +37,10 @@ mod test {
 		let grug_tests_path = c"src/grug-tests/tests";
 		let mod_api_text = std::fs::read_to_string("src/grug-tests/mod_api.json").unwrap();
 
-		GLOBAL_TEST_STATE.set(GrugState::new("src/grug-tests/mod_api.json", grug_tests_path.to_str().unwrap()).unwrap()).unwrap();
+		let state = GrugState::new("src/grug-tests/mod_api.json", grug_tests_path.to_str().unwrap()).unwrap();
+		// register_game_functions(&mut state);
+			
+		_ = GLOBAL_TEST_STATE.set(state);
 
 		unsafe {
 			grug_tests_run(

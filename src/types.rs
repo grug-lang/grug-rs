@@ -1,5 +1,22 @@
 use std::sync::Arc;
+use std::ffi::{c_char, c_double};
 // TODO Unnest some of these enums
+
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy)]
+pub union GrugValue {
+	pub number: c_double,
+	pub bool: u8,
+	pub id: u64,
+	pub string: *const c_char,
+	pub void: (),
+}
+
+/// SAFETY: GrugValue is !Send and !Sync because of the *mut c_char within it
+/// This is just a pointer to a null terminated c string, which is thread safe
+unsafe impl Send for GrugValue {}
+unsafe impl Sync for GrugValue {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GrugType {
