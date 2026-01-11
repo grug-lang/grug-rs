@@ -1,7 +1,8 @@
 use std::ffi::{CString, c_float};
 use std::mem::ManuallyDrop;
+use std::collections::HashMap;
 use grug_rs::mod_api::*;
-use grug_rs::state::GrugState;
+use grug_rs::state::{GrugState, GameFnPtr};
 
 mod test_bindings {
 	use super::*;
@@ -94,6 +95,92 @@ mod test_bindings {
 }
 use test_bindings::*;
 
+mod game_fn_bindings {
+	use grug_rs::types::GrugValue;
+	use grug_rs::state::GameFnPtr;
+	use std::collections::HashMap;
+	#[link(name = "tests", kind="dylib")]
+	unsafe extern "C" {
+		safe fn game_fn_nothing();
+		safe fn game_fn_magic() -> GrugValue;
+		safe fn game_fn_initialize(values: *const GrugValue);
+		safe fn game_fn_initialize_bool(values: *const GrugValue);
+		safe fn game_fn_identity(values: *const GrugValue) -> GrugValue;
+		safe fn game_fn_max(values: *const GrugValue) -> GrugValue;
+		safe fn game_fn_say(values: *const GrugValue);
+		safe fn game_fn_sin(values: *const GrugValue) -> GrugValue;
+		safe fn game_fn_cos(values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_mega(values: *const GrugValue);
+        safe fn game_fn_get_false() -> GrugValue;
+        safe fn game_fn_set_is_happy(values: *const GrugValue);
+        safe fn game_fn_mega_f32(values: *const GrugValue);
+        safe fn game_fn_mega_i32(values: *const GrugValue);
+        safe fn game_fn_draw(values: *const GrugValue);
+        safe fn game_fn_blocked_alrm();
+        safe fn game_fn_spawn(values: *const GrugValue);
+        safe fn game_fn_has_resource(values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_has_entity(values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_has_string(values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_get_opponent() -> GrugValue;
+        safe fn game_fn_set_d(values: *const GrugValue);
+        safe fn game_fn_set_opponent(values: *const GrugValue);
+        safe fn game_fn_motherload(values: *const GrugValue);
+        safe fn game_fn_motherload_subless(values: *const GrugValue);
+        safe fn game_fn_offset_32_bit_f32(values: *const GrugValue);
+        safe fn game_fn_offset_32_bit_i32(values: *const GrugValue);
+        safe fn game_fn_offset_32_bit_string(values: *const GrugValue);
+        safe fn game_fn_talk(values: *const GrugValue);
+        safe fn game_fn_get_position(values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_set_position(values: *const GrugValue);
+        safe fn game_fn_cause_game_fn_error();
+        safe fn game_fn_call_on_b_fn();
+        safe fn game_fn_store(values: *const GrugValue);
+        safe fn game_fn_retrieve() -> GrugValue;
+        safe fn game_fn_box_number(values: *const GrugValue) -> GrugValue;
+	}
+	pub fn get_game_functions () -> HashMap<&'static str, GameFnPtr> {
+		HashMap::from([
+			("nothing", (game_fn_nothing as extern "C" fn()).into()),
+			("magic", (game_fn_magic as extern "C" fn() -> _).into()),
+			("initialize", (game_fn_initialize as extern "C" fn(_)).into()),
+			("initialize_bool", (game_fn_initialize_bool as extern "C" fn(_)).into()),
+			("identity", (game_fn_identity as extern "C" fn(_) -> _).into()),
+			("max", (game_fn_max as extern "C" fn(_) -> _).into()),
+			("say", (game_fn_say as extern "C" fn(_)).into()),
+			("sin", (game_fn_sin as extern "C" fn(_) -> _).into()),
+			("cos", (game_fn_cos as extern "C" fn(_) -> _).into()),
+			("mega", (game_fn_mega as extern "C" fn(_)).into()),
+			("get_false", (game_fn_get_false as extern "C" fn() -> _).into()),
+			("set_is_happy", (game_fn_set_is_happy as extern "C" fn(_)).into()),
+			("mega_f32", (game_fn_mega_f32 as extern "C" fn(_)).into()),
+			("mega_i32", (game_fn_mega_i32 as extern "C" fn(_)).into()),
+			("draw", (game_fn_draw as extern "C" fn(_)).into()),
+			("blocked_alrm", (game_fn_blocked_alrm as extern "C" fn()).into()),
+			("spawn", (game_fn_spawn as extern "C" fn(_)).into()),
+			("has_resource", (game_fn_has_resource as extern "C" fn(_) -> _).into()),
+			("has_entity", (game_fn_has_entity as extern "C" fn(_) -> _).into()),
+			("has_string", (game_fn_has_string as extern "C" fn(_) -> _).into()),
+			("get_opponent", (game_fn_get_opponent as extern "C" fn() -> _).into()),
+			("set_d", (game_fn_set_d as extern "C" fn(_)).into()),
+			("set_opponent", (game_fn_set_opponent as extern "C" fn(_)).into()),
+			("motherload", (game_fn_motherload as extern "C" fn(_)).into()),
+			("motherload_subless", (game_fn_motherload_subless as extern "C" fn(_)).into()),
+			("offset_32_bit_f32", (game_fn_offset_32_bit_f32 as extern "C" fn(_)).into()),
+			("offset_32_bit_i32", (game_fn_offset_32_bit_i32 as extern "C" fn(_)).into()),
+			("offset_32_bit_string", (game_fn_offset_32_bit_string as extern "C" fn(_)).into()),
+			("talk", (game_fn_talk as extern "C" fn(_)).into()),
+			("get_position", (game_fn_get_position as extern "C" fn(_) -> _).into()),
+			("set_position", (game_fn_set_position as extern "C" fn(_)).into()),
+			("cause_game_fn_error", (game_fn_cause_game_fn_error as extern "C" fn()).into()),
+			("call_on_b_fn", (game_fn_call_on_b_fn as extern "C" fn()).into()),
+			("store", (game_fn_store as extern "C" fn(_)).into()),
+			("retrieve", (game_fn_retrieve as extern "C" fn() -> _).into()),
+			("box_number", (game_fn_box_number as extern "C" fn(_) -> _).into()),
+		])
+	}
+}
+use game_fn_bindings::*;
+
 #[test]
 fn main () {
 	let mut args = std::env::args().collect::<Vec<_>>();
@@ -113,7 +200,8 @@ fn main () {
 	let grug_tests_path = c"src/grug-tests/tests";
 	let mod_api_text = std::fs::read_to_string("src/grug-tests/mod_api.json").unwrap();
 
-	let state = GrugState::new("src/grug-tests/mod_api.json", grug_tests_path.to_str().unwrap()).unwrap();
+	let game_functions = get_game_functions();
+	let state = GrugState::new("src/grug-tests/mod_api.json", grug_tests_path.to_str().unwrap(), game_functions).unwrap();
 	// register_game_functions(&mut state);
 		
 	_ = GLOBAL_TEST_STATE.set(state);

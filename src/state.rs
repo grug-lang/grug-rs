@@ -1,4 +1,4 @@
-use crate::mod_api::{ModApi, get_mod_api};
+use crate::mod_api::{ModApi, get_mod_api, ModApiError};
 use crate::error::GrugError;
 use crate::backend::{GrugEntity, GrugFile};
 use crate::types::{GlobalStatement, GrugValue, Expr, ExprType, LiteralExpr, UnaryOperator, BinaryOperator, GrugType};
@@ -9,23 +9,58 @@ use std::sync::Arc;
 use std::time::{Instant, Duration};
 
 #[repr(C)]
-union GameFnPtr {
+pub union GameFnPtr {
 	void: GameFnPtrVoid,
 	void_argless: GameFnPtrVoidArgless,
 	value: GameFnPtrValue,
 	value_argless: GameFnPtrValueArgless,
 }
 
-type GameFnPtrVoid = extern "C" fn (args: *mut GrugValue);
+mod from_impls {
+	use super::*;
+	impl From<GameFnPtrVoid> for GameFnPtr {
+		fn from (value: GameFnPtrVoid) -> Self {
+			Self {
+				void: value,
+			}
+		}
+	}
+
+	impl From<GameFnPtrVoidArgless> for GameFnPtr {
+		fn from (value: GameFnPtrVoidArgless) -> Self {
+			Self {
+				void_argless: value,
+			}
+		}
+	}
+
+	impl From<GameFnPtrValue> for GameFnPtr {
+		fn from (value: GameFnPtrValue) -> Self {
+			Self {
+				value: value,
+			}
+		}
+	}
+
+	impl From<GameFnPtrValueArgless> for GameFnPtr {
+		fn from (value: GameFnPtrValueArgless) -> Self {
+			Self {
+				value_argless: value,
+			}
+		}
+	}
+}
+
+type GameFnPtrVoid = extern "C" fn (args: *const GrugValue);
 type GameFnPtrVoidArgless = extern "C" fn ();
-type GameFnPtrValue = extern "C" fn (args: *mut GrugValue) -> GrugValue;
+type GameFnPtrValue = extern "C" fn (args: *const GrugValue) -> GrugValue;
 type GameFnPtrValueArgless = extern "C" fn () -> GrugValue;
 
 pub struct GrugState {
 	pub(crate) mod_api: ModApi,
 	pub(crate) mods_dir_path: PathBuf,
 	pub(crate) next_id: u64,
-	pub(crate) game_functions: HashMap<Arc<str>, GameFnPtr>,
+	pub(crate) game_functions: HashMap<&'static str, GameFnPtr>,
 
 	// should be moved into backend later
 	local_variables: Vec<Vec<HashMap<Arc<str>, GrugValue>>>,
@@ -36,14 +71,23 @@ pub struct GrugState {
 const ON_FN_TIME_LIMIT: u64 = 10; // ms
 
 impl GrugState {
-	pub fn new<'a, J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D) -> Result<Self, GrugError<'a>> {
+	pub fn new<'a, J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, game_functions: HashMap<&'static str, GameFnPtr>) -> Result<Self, GrugError<'a>> {
 		let mod_api_text = std::fs::read_to_string(mod_api_path).unwrap();
 		let mod_api = get_mod_api(&mod_api_text)?;
+
+		for (game_fn_name, game_fn) in mod_api.game_functions() {
+			if let None = game_functions.get(&**game_fn_name) {
+				Err(ModApiError::GameFnNotProvided{
+					game_fn_name: String::from(&**game_fn_name),
+				})?;
+			}
+		}
+		
 		Ok(Self {
 			mod_api,
 			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
 			next_id: 0,
-			game_functions: HashMap::new(),
+			game_functions,
 			local_variables: Vec::new(),
 			current_fn_call_depth: 0,
 			call_start_time: Instant::now()
@@ -154,14 +198,14 @@ impl GrugState {
 				col: _,
 			} => {
 				debug_assert!(!function_name.starts_with("on_") && !function_name.starts_with("helper_"));
-				let mut values = arguments.iter().map(|argument| self.run_expr(entity, argument)).collect::<Result<Vec<_>, _>>()?;
-				let game_fn = self.game_functions.get(function_name).expect("can't find game function");
+				let values = arguments.iter().map(|argument| self.run_expr(entity, argument)).collect::<Result<Vec<_>, _>>()?;
+				let game_fn = self.game_functions.get(&**function_name).expect("can't find game function");
 				let return_ty = &self.mod_api.game_functions().get(function_name).unwrap().return_ty;
 				match (values.len(), return_ty) {
 					(0, GrugType::Void) => unsafe{(game_fn.void_argless)(); GrugValue{void: ()}},
 					(0, _             ) => unsafe{(game_fn.value_argless)()},
-					(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_mut_ptr()); GrugValue{void: ()}},
-					(_, _             ) => unsafe{(game_fn.value)(values.as_mut_ptr())},
+					(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
+					(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
 				}
 			}
 			ExprType::ParenthesizedExpr{

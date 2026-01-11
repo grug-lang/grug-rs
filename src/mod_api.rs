@@ -104,6 +104,9 @@ pub enum ModApiError{
 	GameFnReturnsResource{
 		game_fn_name: String,
 	},
+	GameFnNotProvided {
+		game_fn_name: String,
+	}
 }
 
 impl From<json::Error> for ModApiError {
