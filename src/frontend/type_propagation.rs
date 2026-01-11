@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use crate::types::*;
-use crate::mod_api::MOD_API;
 use super::AST;
+use crate::state::GrugState;
 
 type GrugIDType = *mut ();
 
@@ -24,7 +24,8 @@ struct Variable {
 	value: GrugValue,
 }
 
-pub(super) struct TypePropogator {
+pub(super) struct TypePropogator<'a> {
+	grug_state: &'a GrugState,
 	current_mod_name: String,
 	global_variables: HashMap<Arc<str>, Variable>,
 	local_variables: Vec<HashMap<Arc<str>, Variable>>,
@@ -297,7 +298,10 @@ impl std::fmt::Display for TypePropogatorError {
 			} => write!(f, "Mods aren't allowed to call their own on_ functions, but '{}' was called", on_fn_name),
 			Self::FunctionDoesNotExist {
 				function_name,
-			} => write!(f, "The function '{}' does not exist", function_name),
+			} if function_name.starts_with("helper_") => write!(f, "The helper function '{}' was not defined by this grug file", function_name),
+			Self::FunctionDoesNotExist {
+				function_name,
+			} => write!(f, "The game function '{}' was not declared by mod_api.json", function_name),
 			Self::TooFewArguments{
 				function_name,
 				expected_name,
@@ -589,9 +593,10 @@ impl From<EntityValidationError> for TypePropogatorError {
 	}
 }
 
-impl TypePropogator {
-	pub fn new (mod_name: String) -> Self {
+impl<'a> TypePropogator<'a> {
+	pub fn new (state: &'a GrugState, mod_name: String) -> Self {
 		Self {
+			grug_state: state,
 			current_mod_name: mod_name,
 			global_variables: HashMap::new(),
 			local_variables: Vec::new(),
@@ -604,7 +609,7 @@ impl TypePropogator {
 
 	pub fn fill_result_types(&mut self, entity_name: &str, ast: &mut AST) -> Result<(), TypePropogatorError> {
 		let entity_name = Arc::from(entity_name);
-		let entity = MOD_API.wait().entities().get(&*entity_name).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
+		let entity = self.grug_state.mod_api.entities().get(&*entity_name).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
 			entity_name: Arc::clone(&entity_name),
 		})?;
 		
@@ -1066,7 +1071,7 @@ impl TypePropogator {
 				if let Some((return_ty, sig_arguments)) = helper_fns.get(function_name) {
 					self.check_arguments(function_name, sig_arguments, arguments)?;
 					return_ty.clone()
-				} else if let Some(game_fn) = MOD_API.get().unwrap().game_functions().get(function_name) {
+				} else if let Some(game_fn) = self.grug_state.mod_api.game_functions().get(function_name) {
 					self.check_arguments(function_name, &game_fn.arguments, arguments)?;
 					game_fn.return_ty.clone()
 				} else if function_name.starts_with("on_") {

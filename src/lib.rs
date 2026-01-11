@@ -7,6 +7,7 @@ pub mod mod_api;
 pub mod types;
 pub mod serde;
 pub mod error;
+pub mod state;
 
 #[cfg(test)]
 mod test {
@@ -14,6 +15,7 @@ mod test {
 	use std::ffi::CString;
 	use std::mem::ManuallyDrop;
 	use crate::mod_api::*;
+	use crate::state::GrugState;
 
 	#[test] 
 	fn grug_tests () {
@@ -32,14 +34,10 @@ mod test {
 		// let 
 
 		let grug_tests_path = c"src/grug-tests/tests";
-
 		let mod_api_text = std::fs::read_to_string("src/grug-tests/mod_api.json").unwrap();
 
-		let mod_api = get_mod_api(&mod_api_text).unwrap();
-		_ = MOD_API.set(mod_api);
-		// panic!();
-		// panic!("{:#?}", mod_api);
-		
+		GLOBAL_TEST_STATE.set(GrugState::new("src/grug-tests/mod_api.json", grug_tests_path.to_str().unwrap()).unwrap()).unwrap();
+
 		unsafe {
 			grug_tests_run(
 				grug_tests_path.as_ptr(),

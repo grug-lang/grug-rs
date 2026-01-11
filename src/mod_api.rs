@@ -308,4 +308,4 @@ pub fn get_mod_api(mod_api_text: &str) -> Result<ModApi, ModApiError> {
 	})
 }
 
-pub static MOD_API: OnceLock<ModApi> = std::sync::OnceLock::new();
+// pub static MOD_API: OnceLock<ModApi> = std::sync::OnceLock::new();

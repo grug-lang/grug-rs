@@ -5,6 +5,7 @@
 // #![deny(warnings)]
 use crate::mod_api::ModApiError;
 use crate::error::GrugError;
+use crate::state::GrugState;
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 pub(crate) const SPACES_PER_INDENT: usize = 4;
 
@@ -15,21 +16,25 @@ pub mod parser;
 use parser::*;
 pub(super) use parser::{AST, parse};
 
-pub fn compile_grug_file<'a>(path: &'a str, mod_name: &'a str) -> Result<(), GrugError<'a>> {
-	if !path.contains('/') {
-		return Err(GrugError::FileNameError(FileNameError::FilePathDoesNotContainForwardSlash{path}))
-	}
+pub fn compile_grug_file<'a>(state: &GrugState, path: &'a str) -> Result<(), GrugError<'a>> {
+	let mod_name = get_mod_name(path)?;
 	let entity_type = get_entity_type(path)?;
 
-	let file_text = std::fs::read_to_string(&path).unwrap();
+	let mut path_buf = state.mods_dir_path.clone();
+	path_buf.push(path);
+	let file_text = std::fs::read_to_string(path_buf).unwrap();
 
 	let tokens = tokenizer::tokenize(&file_text)?;
 
 	let mut ast = parser::parse(&*tokens)?;
 	
-	TypePropogator::new(mod_name.into()).fill_result_types(entity_type, &mut ast)?;
+	TypePropogator::new(state, mod_name.into()).fill_result_types(entity_type, &mut ast)?;
 
 	return Ok(());
+}
+
+fn get_mod_name<'a> (path: &'a str) -> Result<&'a str, GrugError<'a>> {
+	path.split_once('/').map(|x| x.0).ok_or(GrugError::FileNameError(FileNameError::FilePathDoesNotContainForwardSlash{path}))
 }
 
 fn get_entity_type(path: &str) -> Result<&str, FileNameError<'_>> {
