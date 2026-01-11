@@ -232,6 +232,7 @@ pub enum Statement {
 	IfStatement{
 		condition: Expr,
 		if_statements: Vec<Statement>,
+		else_if_statements: Vec<(Expr, Vec<Statement>)>,
 		else_statements: Vec<Statement>,
 	},
 	ReturnStatement{

@@ -695,7 +695,24 @@ impl AST {
 				}
 			}
 			TokenType::If => {
-				self.parse_if_statement(tokens, parsing_depth + 1, indentation)
+				let (condition, if_statements) = self.parse_if_statement(tokens, parsing_depth + 1, indentation)?;
+				let mut else_if_statements = Vec::new();
+				let mut else_statements = Vec::new();
+
+				while let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]) {
+					if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::If]) {
+						else_if_statements.push(self.parse_if_statement(tokens, parsing_depth, indentation)?);
+					} else {
+						else_statements = self.parse_statements(tokens, parsing_depth, indentation + 1)?;
+						break;
+					}
+				}
+				Ok(Statement::IfStatement{
+					condition, 
+					if_statements,
+					else_if_statements,
+					else_statements,
+				})
 			}
 			TokenType::Return => {
 				tokens.next();
@@ -755,29 +772,14 @@ impl AST {
 	}
 
 	// if_stmt -> "if" + " " + expr + " " + statements + ("else" + (" " + if_stmt | statements))?
-	fn parse_if_statement<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize) -> Result<Statement, ParserError> {
+	fn parse_if_statement<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize) -> Result<(Expr, Vec<Statement>), ParserError> {
 		assert_parsing_depth(parsing_depth)?;
 		consume_next_token_types(tokens, &[TokenType::If, TokenType::Space])?;
 
 		let condition = self.parse_expression(tokens, parsing_depth + 1)?;
-		let if_statements = self.parse_statements(tokens, parsing_depth + 1, indentation + 1)?;
-		let else_statements;
+		let statements = self.parse_statements(tokens, parsing_depth + 1, indentation + 1)?;
 
-		if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]) {
-			if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::If]) {
-				else_statements = vec![self.parse_if_statement(tokens, parsing_depth, indentation)?];
-			} else {
-				else_statements = self.parse_statements(tokens, parsing_depth, indentation + 1)?;
-			}
-		} else {
-			else_statements = Vec::new();
-		}
-
-		Ok(Statement::IfStatement{
-			condition, 
-			if_statements,
-			else_statements,
-		})
+		Ok((condition, statements))
 	}
 
 	// local_variable -> word + (":" + type)? + "=" + " " + expr

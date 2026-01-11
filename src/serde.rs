@@ -19,7 +19,8 @@ pub fn generate_file_from_json<'a> (json_path: &'a str, output_path: &'a str) ->
 	let file_text = std::fs::read_to_string(json_path).unwrap();
 	// TODO: This should maybe have a proper error
 	let json_value = json::parse(&file_text).unwrap();
-	// let statements = json_to_ast(json_value).unwrap();
+	let file_text = json_to_text(&json_value).unwrap();
+	std::fs::write(output_path, file_text).unwrap();
 	Ok(())
 }
 
@@ -270,15 +271,25 @@ mod ser {
 			},
 			Statement::CallStatement {
 				expr
-			} => serialize_expr(expr),
+			} => object! {
+				"kind": "call",
+				"expr": serialize_expr(expr),
+			},
 			Statement::IfStatement{
 				condition,
 				if_statements,
+				else_if_statements,
 				else_statements,
 			} => object! {
 				"kind": "if",
 				"cond": serialize_expr(condition),
 				"if_block": if_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
+				"else_if_statements": else_if_statements.iter().map(|(condition, statements)| {
+					object! {
+						"cond": serialize_expr(condition),
+						"block": statements.iter().map(serialize_statement).collect::<Vec<_>>(),
+					}
+				}).collect::<Vec<_>>(),
 				"else_block": else_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 			},
 			Statement::ReturnStatement{
@@ -319,7 +330,7 @@ mod de {
 	use json::{JsonValue, object, object::Object};
 
 	#[derive(Debug)]
-	enum JsonDeserializeError {
+	pub enum JsonDeserializeError {
 		RootNotArray,
 		FieldMissing {
 			parent_context: String,
@@ -334,8 +345,10 @@ mod de {
 		ExpressionNotObject,
 		ExpressionKindNotString,
 		LiteralExpressionNotObject,
-		LiteralExpressionKindNotString,
+		LiteralExpressionTypeNotString,
 		LiteralExpressionValueNotString,
+		LiteralExpressionValueNotNumber,
+		UnknownLiteralType,
 		UnaryExpressionOperatorNotString,
 		BinaryExpressionOperatorNotString,
 		CallExpressionFunctionNameNotString,
@@ -343,13 +356,22 @@ mod de {
 		OnFunctionNameNotString,
 		OnFunctionArgumentsNotArray,
 		OnFunctionNameBodyStatementsNotArray,
+		ArgumentsNotArray,
+		ArgumentNotObject,
+		ArgumentNameNotString,
+		ArgumentTypeNotString,
+		StatementsNotArray,
+		StatementNotObject,
+		StatementKindNotString,
+		LocalVariableNameNotString,
+		LocalVariableTypeNotString,
 	}
 
-	fn json_to_text(input: &JsonValue) -> Result<String, JsonDeserializeError> {
+	pub fn json_to_text(input: &JsonValue) -> Result<String, JsonDeserializeError> {
 		if let JsonValue::Array(input) = input {
 			let mut output = String::new();
 			for statement in input {
-				deserialize_global_statement(statement, 0, &mut output)?;
+				apply_global_statement(statement, 0, &mut output)?;
 			}
 			Ok(output)
 		} else {
@@ -357,8 +379,7 @@ mod de {
 		}
 	}
 
-
-	fn deserialize_global_statement(input: &JsonValue, indentation: usize, output: &mut String) -> Result<(), JsonDeserializeError> {
+	fn apply_global_statement(input: &JsonValue, indentation: usize, output: &mut String) -> Result<(), JsonDeserializeError> {
 		if let JsonValue::Object(global_statement) = input {
 			let Some(kind) = get_object_field(global_statement, "kind", "global_statement")?.as_str() else {
 				return Err(JsonDeserializeError::GlobalStatementKindNotString)
@@ -380,44 +401,126 @@ mod de {
 					output.push_str(" = ");
 
 					let assignment_expr = get_object_field(global_statement, "assignment_expr", "global_variable")?;
-					deserialize_expr(assignment_expr, output)?;
+					apply_expr(assignment_expr, output)?;
+					output.push_str("\n");
+					Ok(())
 				}
 				"on_function" => {
 					let Some(name) = get_object_field(global_statement, "name", "global_on_function")?.as_str() else {
 						return Err(JsonDeserializeError::OnFunctionNameNotString)
 					};
 					output.push_str(name);
+					output.push_str("(");
 					let arguments = get_object_field(global_statement, "arguments", "global_on_function")?;
 					let body_statements = get_object_field(global_statement, "body_statements", "global_on_function")?;
-					deserialize_arguments(arguments, output)?;
-					deserialize_statements(body_statements, output)?;
+					apply_arguments(arguments, output)?;
+					output.push_str(") ");
+					apply_statements(body_statements, indentation + 1, output)?;
+					output.push_str("\n");
+					Ok(())
 				}
 				"helper_function" => {
-
+					todo!();
 				}
 				"comment" => {
-
+					todo!();
 				}
 				"newline" => {
-
+					todo!();
 				}
 				_ => unreachable!(),
 			}
 		} else {
 			return Err(JsonDeserializeError::GlobalStatementNotObject)
 		}
-		todo!();
 	}
 
-	fn deserialize_arguments(input: &JsonValue, output: &mut String) -> Result<(), JsonDeserializeError> {
-		todo!();
+	fn apply_arguments(arguments: &JsonValue, output: &mut String) -> Result<(), JsonDeserializeError> {
+		let JsonValue::Array(arguments) = arguments else {
+			return Err(JsonDeserializeError::ArgumentsNotArray)
+		};
+		for (i, argument) in arguments.iter().enumerate() {
+			let JsonValue::Object(argument) = argument else {
+				return Err(JsonDeserializeError::ArgumentNotObject)
+			};
+			let Some(name) = get_object_field(argument, "name", "argument")?.as_str() else {
+				return Err(JsonDeserializeError::ArgumentNameNotString)
+			};
+			let Some(ty) = get_object_field(argument, "type", "argument")?.as_str() else {
+				return Err(JsonDeserializeError::ArgumentTypeNotString)
+			};
+			output.push_str(name);
+			output.push_str(": ");
+			output.push_str(ty);
+			if i < arguments.len() {
+				output.push_str(", ");
+			}
+		}
+		Ok(())
 	}
 	
-	fn deserialize_statements(input: &JsonValue, output: &mut String) -> Result<(), JsonDeserializeError> {
-		todo!();
+	fn apply_statements(statements: &JsonValue, indentation: usize, output: &mut String) -> Result<(), JsonDeserializeError> {
+		let JsonValue::Array(statements) = statements else {
+			return Err(JsonDeserializeError::StatementsNotArray)
+		};
+		output.push_str("{\n");
+		for statement in statements {
+			apply_indentation(indentation, output);
+			let JsonValue::Object(statement) = statement else {
+				return Err(JsonDeserializeError::StatementNotObject);
+			};
+			let Some(kind) = get_object_field(statement, "kind", "statement")?.as_str() else {
+				return Err(JsonDeserializeError::StatementKindNotString);
+			};
+			match kind {
+				"variable" => {
+					let Some(name) = get_object_field(statement, "name", "variable")?.as_str() else {
+						return Err(JsonDeserializeError::LocalVariableNameNotString)
+					};
+
+					output.push_str(name);
+
+					if let Ok(ty) = get_object_field(statement, "type", "variable") {
+						let Some(ty) = ty.as_str() else {
+							return Err(JsonDeserializeError::LocalVariableTypeNotString);
+						};
+						output.push_str(": ");
+						output.push_str(ty);
+					}
+
+					output.push_str(" = ");
+
+					let assignment_expr = get_object_field(statement, "assignment_expr", "variable")?;
+					apply_expr(assignment_expr, output)?;
+				}
+				"call" => {
+					let call = get_object_field(statement, "expr", "call_statement")?;
+					apply_expr(call, output)?;
+				}
+				"if" => {
+					todo!();
+					// output.push_str("if (");
+					// apply_expr(get_object_field(statement, "cond", "if")?, output)?;
+					// output.push_str(") ");
+					// apply_expr(get_object_field(statement, "if_block", "if")?, output)?;
+					// let JsonValue::Object(else_block) = get_object_field(sta
+				}
+				_ => todo!(),
+			}
+			output.push_str("\n");
+		}
+		apply_indentation(indentation - 1, output);
+		output.push_str("}\n");
+		Ok(())
 	}
 
-	fn deserialize_expr(input: &JsonValue, output: &mut String) -> Result<(), JsonDeserializeError> {
+	fn apply_indentation(indentation: usize, output: &mut String) {
+		for i in 0..(indentation * crate::frontend::SPACES_PER_INDENT) {
+			output.push_str(" ");
+		}
+	}
+
+	fn apply_expr(input: &JsonValue, output: &mut String) -> Result<(), JsonDeserializeError> {
 		let JsonValue::Object(input) = input else {
 			return Err(JsonDeserializeError::ExpressionNotObject)
 		};
@@ -430,12 +533,26 @@ mod de {
 					return Err(JsonDeserializeError::LiteralExpressionNotObject);
 				};
 				let Some(ty) = get_object_field(expr, "type", "literal_expression")?.as_str() else {
-					return Err(JsonDeserializeError::LiteralExpressionKindNotString);
+					return Err(JsonDeserializeError::LiteralExpressionTypeNotString);
 				};
-				let Some(value) = get_object_field(expr, "value", "literal_expression")?.as_str() else {
-					return Err(JsonDeserializeError::LiteralExpressionValueNotString);
-				};
-				output.push_str(value);
+				match ty {
+					"boolean" | "string" | "entity" | "resource" | "identifier" => {
+						let Some(value) = get_object_field(expr, "value", "literal_expression")?.as_str() else {
+							return Err(JsonDeserializeError::LiteralExpressionValueNotString);
+						};
+						output.push_str(value);
+					}
+					"number" => {
+						let Some(value) = get_object_field(expr, "value", "literal_expression")?.as_f32() else {
+							return Err(JsonDeserializeError::LiteralExpressionValueNotNumber);
+						};
+						use std::fmt::Write;
+						write!(output, "{}", value).unwrap();
+					}
+					_ => {
+						return Err(JsonDeserializeError::UnknownLiteralType)
+					}
+				}
 				Ok(())
 			}
 			"unary" => {
@@ -444,7 +561,7 @@ mod de {
 				};
 				output.push_str(op);
 				let expr = get_object_field(input, "expr", "unary_expression")?;
-				deserialize_expr(expr, output)
+				apply_expr(expr, output)
 			}
 			"binary" => {
 				let Some(op) = get_object_field(input, "operator", "binary_expression")?.as_str() else {
@@ -452,11 +569,11 @@ mod de {
 				};
 				let left = get_object_field(input, "left", "binary_expression")?;
 				let right = get_object_field(input, "right", "binary_expression")?;
-				deserialize_expr(left, output)?;
+				apply_expr(left, output)?;
 				output.push_str(" ");
 				output.push_str(op);
 				output.push_str(" ");
-				deserialize_expr(right, output)
+				apply_expr(right, output)
 			}
 			"call" => {
 				let Some(function_name) = get_object_field(input, "function_name", "call_expression")?.as_str() else {
@@ -466,10 +583,11 @@ mod de {
 					return Err(JsonDeserializeError::CallExpressionArgumentsNotArray);
 				};
 				output.push_str(function_name);
+				output.push_str("(");
 				for (i, argument) in arguments.iter().enumerate() {
-					deserialize_expr(argument, output)?;
+					apply_expr(argument, output)?;
 					
-					if i < arguments.len() {
+					if i < arguments.len() - 1 {
 						output.push_str(", ")
 					}
 				}
@@ -479,7 +597,7 @@ mod de {
 			"parenthesized" => {
 				let expr = get_object_field(input, "expr", "parenthesized_expression")?;
 				output.push_str("(");
-				deserialize_expr(expr, output)?;
+				apply_expr(expr, output)?;
 				output.push_str(")");
 				Ok(())
 			}

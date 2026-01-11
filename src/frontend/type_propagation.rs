@@ -803,6 +803,7 @@ impl TypePropogator {
 				Statement::IfStatement {
 					condition,
 					if_statements,
+					else_if_statements,
 					else_statements,
 				} => {
 					let cond_type = self.fill_expr(helper_fns, condition)?;
@@ -812,6 +813,15 @@ impl TypePropogator {
 						});
 					}
 					self.fill_statements(helper_fns, if_statements, expected_return_type)?;
+					for (condition, else_if_statements) in else_if_statements {
+						let cond_type = self.fill_expr(helper_fns, condition)?;
+						if cond_type != GrugType::Bool {
+							return Err(TypePropogatorError::IfConditionTypeMismatch {
+								got_type: cond_type
+							});
+						}
+						self.fill_statements(helper_fns, else_if_statements, expected_return_type)?;
+					}
 					self.fill_statements(helper_fns, else_statements, expected_return_type)?;
 					// TODO: Maybe this should be looked at again
 					// [https://github.com/grug-lang/grug/issues/116]

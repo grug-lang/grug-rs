@@ -6,7 +6,7 @@
 use crate::mod_api::ModApiError;
 use crate::error::GrugError;
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
-const SPACES_PER_INDENT: usize = 4;
+pub(crate) const SPACES_PER_INDENT: usize = 4;
 
 pub mod tokenizer;
 use tokenizer::*;

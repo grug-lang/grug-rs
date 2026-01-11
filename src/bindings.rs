@@ -49,7 +49,6 @@ pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, grug_file_path: *con
 }
 #[allow(unused_variables)]
 pub extern "C" fn dump_file_to_json (input_grug_path: *const c_char, output_json_path: *const c_char) -> i32 {
-	eprintln!("dump_file_to_json_t called with {} and {}", unsafe{CStr::from_ptr(input_grug_path)}.to_str().unwrap(), unsafe{CStr::from_ptr(output_json_path)}.to_str().unwrap());
 	let grug_path = unsafe{CStr::from_ptr(input_grug_path)}.to_str().unwrap();
 	let json_path = unsafe{CStr::from_ptr(output_json_path)}.to_str().unwrap();
 
@@ -63,8 +62,16 @@ pub extern "C" fn dump_file_to_json (input_grug_path: *const c_char, output_json
 }
 #[allow(unused_variables)]
 pub extern "C" fn generate_file_from_json (input_json_path: *const c_char, output_grug_path: *const c_char) -> i32 {
-	println!("generate_file_from_json called with {} and {}", unsafe{CStr::from_ptr(input_json_path)}.to_str().unwrap(), unsafe{CStr::from_ptr(output_grug_path)}.to_str().unwrap());
-	1
+	let input_json_path = unsafe{CStr::from_ptr(input_json_path)}.to_str().unwrap();
+	let output_grug_path = unsafe{CStr::from_ptr(output_grug_path)}.to_str().unwrap();
+
+	match serde::generate_file_from_json(input_json_path, output_grug_path) {
+		Ok(()) => 0,
+		Err(err) => {
+			eprintln!("{}", err);
+			1
+		}
+	}
 }
 #[allow(unused_variables)]
 pub extern "C" fn game_fn_error (msg: *const c_char) {
