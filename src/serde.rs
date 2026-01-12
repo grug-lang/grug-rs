@@ -364,6 +364,8 @@ mod de {
 		LocalVariableNameNotString,
 		LocalVariableTypeNotString,
 		ElseIfStatementsNotArray,
+		ElseIfBlockNotObject,
+		ElseBlockNotArray,
 		CommentValueNotString,
 		HelperFunctionNameNotString,
 		HelperFunctionReturnTypeNotString,
@@ -526,16 +528,32 @@ mod de {
 					apply_expr(call, output)?;
 				}
 				"if" => {
+
 					apply_indentation(indentation, output);
 					output.push_str("if ");
 					apply_expr(get_object_field(statement, "cond", "if")?, output)?;
 					output.push_str(" ");
 					apply_statements(get_object_field(statement, "if_block", "if")?, indentation + 1, output)?;
+
 					let JsonValue::Array(else_if_blocks) = get_object_field(statement, "else_if_statements", "if")? else {
 						return Err(JsonDeserializeError::ElseIfStatementsNotArray);
 					};
-					// apply_expr(get_object_field(statement, "if_block", "if")?, output)?;
-					// let JsonValue::Object(else_block) = get_object_field(sta
+					for else_if in else_if_blocks {
+						let JsonValue::Object(else_if) = else_if else {
+							return Err(JsonDeserializeError::ElseIfBlockNotObject);
+						};
+						output.push_str(" else if ");
+						apply_expr(get_object_field(else_if, "cond", "else_if")?, output)?;
+						output.push_str(" ");
+						apply_statements(get_object_field(else_if, "block", "if")?, indentation + 1, output)?;
+					}
+					let value@JsonValue::Array(else_block) = get_object_field(statement, "else_block", "if")? else {
+						return Err(JsonDeserializeError::ElseBlockNotArray);
+					};
+					if else_block.len() > 0 {
+						output.push_str(" else ");
+						apply_statements(value, indentation + 1, output)?;
+					}
 				}
 				"while" => {
 					apply_indentation(indentation, output);
@@ -592,7 +610,15 @@ mod de {
 					return Err(JsonDeserializeError::LiteralExpressionTypeNotString);
 				};
 				match ty {
-					"boolean" | "string" | "entity" | "resource" | "identifier" => {
+					"string" | "entity" | "resource" => {
+						let Some(value) = get_object_field(expr, "value", "literal_expression")?.as_str() else {
+							return Err(JsonDeserializeError::LiteralExpressionValueNotString);
+						};
+						output.push_str("\"");
+						output.push_str(value);
+						output.push_str("\"");
+					}
+					"boolean" | "identifier" => {
 						let Some(value) = get_object_field(expr, "value", "literal_expression")?.as_str() else {
 							return Err(JsonDeserializeError::LiteralExpressionValueNotString);
 						};

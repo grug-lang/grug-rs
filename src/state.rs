@@ -1,6 +1,6 @@
 use crate::mod_api::{ModApi, get_mod_api, ModApiError};
 use crate::error::GrugError;
-use crate::backend::{GrugEntity, GrugFile};
+use crate::backend::{GrugEntity, GrugFile, UninitGrugEntity};
 use crate::types::{GlobalStatement, GrugValue, Expr, ExprType, LiteralExpr, UnaryOperator, BinaryOperator, GrugType, Argument, Statement};
 
 use std::path::{Path, PathBuf};
@@ -76,7 +76,7 @@ impl GrugState {
 		let mod_api_text = std::fs::read_to_string(mod_api_path).unwrap();
 		let mod_api = get_mod_api(&mod_api_text)?;
 
-		for (game_fn_name, game_fn) in mod_api.game_functions() {
+		for game_fn_name in mod_api.game_functions().keys() {
 			if let None = game_functions.get(&**game_fn_name) {
 				Err(ModApiError::GameFnNotProvided{
 					game_fn_name: String::from(&**game_fn_name),
@@ -97,14 +97,20 @@ impl GrugState {
 
 	pub fn create_entity(&mut self, file: &Arc<GrugFile>) -> Result<GrugEntity, RuntimeError> {
 		let me_id = self.get_id();
-		let mut global_variables = self.init_global_variables(&file.global_variables)?;
-		global_variables.insert(Arc::from("me"), GrugValue{id: me_id});
-		Ok(GrugEntity {
-			id: me_id,
-			global_variables,
+		let mut temp_entity = UninitGrugEntity {
+			id: me_id, 
+			global_variables: HashMap::from([(Arc::from("me"), GrugValue{id:me_id})]),
 			file: Arc::clone(file),
+		};
+		self.init_global_variables(&mut temp_entity, &file.global_variables)?;
+		
+		Ok(GrugEntity {
+			id: temp_entity.id,
+			global_variables: temp_entity.global_variables,
+			file: temp_entity.file,
 		})
 	}
+
 
 	pub fn get_id(&mut self) -> u64 {
 		let next_id = self.next_id;
@@ -116,18 +122,19 @@ impl GrugState {
 		self.next_id = next_id;
 	}
 
-	fn init_global_variables(&mut self, globals: &[GlobalStatement]) -> Result<HashMap<Arc<str>, GrugValue>, RuntimeError> {
+	fn init_global_variables(&mut self, entity: &mut UninitGrugEntity, globals: &[GlobalStatement]) -> Result<(), RuntimeError> {
 		self.current_fn_call_depth += 1;
 		self.call_start_time = Instant::now();
-		let ret_val = globals.iter().map(|statement| {
+		globals.iter().map(|statement| {
 			let GlobalStatement::GlobalVariableStatement{name, assignment_expr, ..} = statement else {
 				unreachable!();
 			};
-			let value = self.init_global_exprs(assignment_expr)?;
-			Ok((Arc::clone(name), value))
-		}).collect::<Result<_, _>>();
+			let value = self.init_global_exprs(entity, assignment_expr)?;
+			entity.global_variables.insert(Arc::clone(name), value);
+			Ok(())
+		}).collect::<Result<Vec<_>, _>>()?;
 		self.current_fn_call_depth -= 1;
-		ret_val
+		Ok(())
 	}
 }
 
@@ -143,7 +150,7 @@ impl GrugState {
 	pub unsafe fn call_on_function_raw(&mut self, entity: &mut GrugEntity, function_name: &str, values: *const GrugValue) -> Result<(), RuntimeError> {
 		let file = Arc::clone(&entity.file);
 		for on_function in &file.on_functions {
-			let GlobalStatement::GlobalOnFunction{name, arguments, body_statements, calls_helper_fn, has_while_loop} = on_function else {
+			let GlobalStatement::GlobalOnFunction{name, arguments, body_statements, ..} = on_function else {
 				unreachable!();
 			};
 			if &**name != function_name {
@@ -168,7 +175,7 @@ impl GrugState {
 	pub fn call_on_function(&mut self, entity: &mut GrugEntity, function_name: &str, values: &[GrugValue]) -> Result<(), RuntimeError> {
 		let file = Arc::clone(&entity.file);
 		for on_function in &file.on_functions {
-			let GlobalStatement::GlobalOnFunction{name, arguments, body_statements, calls_helper_fn, has_while_loop} = on_function else {
+			let GlobalStatement::GlobalOnFunction{name, arguments, body_statements, ..} = on_function else {
 				unreachable!();
 			};
 			if &**name != function_name {
@@ -218,7 +225,7 @@ impl GrugState {
 					assignment_expr,
 				} => {
 					let assignment_expr = self.run_expr(entity, assignment_expr)?;
-					if let Some(ty) = ty {
+					if let Some(_) = ty {
 						self.add_local_variable(Arc::clone(name), assignment_expr);
 					} else {
 						*(if let Some(var) = self.get_local_variable(&**name) {
@@ -308,7 +315,7 @@ impl GrugState {
 					}
 				},
 				Statement::Comment{
-					value,
+					value: _,
 				} => (),
 				Statement::BreakStatement => {
 					ret_val = GrugControlFlow::Break;
@@ -325,7 +332,7 @@ impl GrugState {
 		Ok(ret_val)
 	}
 
-	fn init_global_exprs(&mut self, expr: &Expr) -> Result<GrugValue, RuntimeError> {
+	fn init_global_exprs(&mut self, entity: &mut UninitGrugEntity, expr: &Expr) -> Result<GrugValue, RuntimeError> {
 		if Instant::elapsed(&self.call_start_time) > Duration::from_millis(ON_FN_TIME_LIMIT) {
 			return Err(RuntimeError::ExceededTimeLimit);
 		}
@@ -339,11 +346,17 @@ impl GrugState {
 					LiteralExpr::TrueExpr => GrugValue{bool: 1},
 					LiteralExpr::FalseExpr => GrugValue{bool: 0},
 					LiteralExpr::StringExpr{
-						value,
+						value: _,
 					} => todo!("strings need to be null terminated"),
 					LiteralExpr::NumberExpr {
 						value,
 					} => GrugValue{number: *value},
+					LiteralExpr::IdentifierExpr {
+						name,
+					} => {
+						*entity.global_variables.get(name)
+							.expect("variable not found")
+					}
 					_ => unreachable!(),
 				}
 			},
@@ -351,7 +364,7 @@ impl GrugState {
 				operator,
 				expr,
 			} => {
-				let mut value = self.init_global_exprs(&expr)?;
+				let mut value = self.init_global_exprs(entity, &expr)?;
 				match (operator, &expr.result_ty) {
 					(UnaryOperator::Not, Some(GrugType::Bool)) => unsafe{value.bool = (value.bool == 0) as u8},
 					(UnaryOperator::Minus, Some(GrugType::Number)) => unsafe{value.number = -value.number},
@@ -363,7 +376,7 @@ impl GrugState {
 				operands,
 				operator,
 			} => {
-				let values = (self.init_global_exprs(&operands.0)?, self.init_global_exprs(&operands.1)?);
+				let values = (self.init_global_exprs(entity, &operands.0)?, self.init_global_exprs(entity, &operands.1)?);
 				debug_assert!(operands.0.result_ty == operands.1.result_ty);
 				match (operator, &operands.0.result_ty) {
 					(BinaryOperator::Or,             Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{values.0.bool | values.1.bool}},
@@ -389,15 +402,16 @@ impl GrugState {
 				col: _,
 			} => {
 				debug_assert!(!function_name.starts_with("on_") && !function_name.starts_with("helper_"));
-				let values = arguments.iter().map(|argument| self.init_global_exprs(argument)).collect::<Result<Vec<_>, _>>()?;
+				let values = arguments.iter().map(|argument| self.init_global_exprs(entity, argument)).collect::<Result<Vec<_>, _>>()?;
 				let game_fn = self.game_functions.get(&**function_name).expect("can't find game function");
 				let return_ty = &self.mod_api.game_functions().get(function_name).unwrap().return_ty;
 				match (values.len(), return_ty) {
+					(0, GrugType::Void) => unreachable!(),
+					(_, GrugType::Void) => unreachable!(),
 					// (0, GrugType::Void) => unsafe{(game_fn.void_argless)(); GrugValue{void: ()}},
-					(0, _             ) => unsafe{(game_fn.value_argless)()},
 					// (_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
+					(0, _             ) => unsafe{(game_fn.value_argless)()},
 					(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
-					_ => unreachable!(),
 				}
 			}
 			ExprType::ParenthesizedExpr{
@@ -405,7 +419,7 @@ impl GrugState {
 				line: _,
 				col: _,
 			} => {
-				self.init_global_exprs(expr)?
+				self.init_global_exprs(entity, expr)?
 			}
 		})
 	}
@@ -424,22 +438,22 @@ impl GrugState {
 					LiteralExpr::TrueExpr => GrugValue{bool: 1},
 					LiteralExpr::FalseExpr => GrugValue{bool: 0},
 					LiteralExpr::StringExpr{
-						value,
+						value: _,
 					} => todo!("strings need to be null terminated"),
 					LiteralExpr::NumberExpr {
 						value,
 					} => GrugValue{number: *value},
 					LiteralExpr::ResourceExpr{
-						value,
+						value: _,
 					} => unimplemented!(),
 					LiteralExpr::EntityExpr{
-						value,
+						value: _,
 					} => unimplemented!(),
 					LiteralExpr::IdentifierExpr{
 						name,
 					} => {
 						*self.get_local_variable(name).or_else(|| entity.get_global_variable(name))
-							.expect("could not find global variable")
+							.expect("could not find variable")
 					},
 				}
 			},
@@ -492,7 +506,6 @@ impl GrugState {
 						name,
 						arguments,
 						body_statements,
-						return_ty,
 						..
 					} = helper_fn else {
 						unreachable!();

@@ -700,7 +700,9 @@ impl AST {
 				let mut else_statements = Vec::new();
 
 				while let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]) {
-					if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::If]) {
+					let [space_token, if_token] = peek_next_tokens(tokens)?;
+					if TokenType::Space == space_token.ty && TokenType::If == if_token.ty {
+						consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
 						else_if_statements.push(self.parse_if_statement(tokens, parsing_depth, indentation)?);
 					} else {
 						else_statements = self.parse_statements(tokens, parsing_depth, indentation + 1)?;

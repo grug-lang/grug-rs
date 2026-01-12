@@ -1129,7 +1129,7 @@ impl<'a> TypePropogator<'a> {
 					signature_type: param.ty.clone(),
 					parameter_name: Arc::clone(&param.name),
 				});
-			} else if let GrugType::Id{custom_name: None} = param.ty && let Some(GrugType::Id{ref custom_name}) = arg.result_ty {
+			} else if let GrugType::Id{custom_name: None} = param.ty && let Some(GrugType::Id{custom_name: _}) = arg.result_ty {
 				arg.result_ty = Some(GrugType::Id{custom_name: None});
 			} else if Some(&param.ty) != arg.result_ty.as_ref() {
 				return Err(TypePropogatorError::FunctionArgumentMismatch {
