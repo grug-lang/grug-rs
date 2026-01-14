@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
+use crate::ntstring::NTStr;
 use crate::types::*;
 use crate::state::GrugState;
 use crate::frontend::parser::AST;
@@ -418,49 +419,49 @@ pub enum ResourceValidationError {
 	EmptyResource {},
 	// grug_assert(string[0] != '/', "Remove the leading slash from the resource \"%s\"", string);
 	LeadingForwardSlash {
-		value: Arc<str>
+		value: Arc<NTStr>
 	},
 	//grug_assert(string[string_len - 1] != '/', "Remove the trailing slash from the resource \"%s\"", string);
 	TrailingForwardSlash {
-		value: Arc<str>
+		value: Arc<NTStr>
 	},
 	// grug_assert(!strchr(string, '\\'), "Replace the '\\' with '/' in the resource \"%s\"", string);
 	ContainsBackslash {
-		value: Arc<str>
+		value: Arc<NTStr>
 	},
 	// grug_assert(!strstr(string, "//"), "Replace the '//' with '/' in the resource \"%s\"", string);
 	ContainsDoubleForwardSlash {
-		value: Arc<str>
+		value: Arc<NTStr>
 	},
 	// TODO: This error needs a better message
 	// grug_assert(string_len != 1 && string[1] != '/', "Remove the '.' from the resource \"%s\"", string);
 	BeginsWithDotWithoutSlash {
-		value: Arc<str>
+		value: Arc<NTStr>
 	},
 	// TODO: This error needs a better message
 	// grug_assert(dot[1] != '/' && dot[1] != '\0', "Remove the '.' from the resource \"%s\"", string);
 	ContainsSlashDotInMiddle {
-		value: Arc<str>
+		value: Arc<NTStr>
 	},
 	// TODO: This error needs a better message
 	// grug_assert(string_len != 2 && string[2] != '/', "Remove the '..' from the resource \"%s\"", string);
 	BeginsWithDotDotWithoutSlash {
-		value: Arc<str>
+		value: Arc<NTStr>
 	},
 	// TODO: This error needs a better message
 	// grug_assert(dotdot[2] != '/' && dotdot[2] != '\0', "Remove the '..' from the resource \"%s\"", string);
 	// " 
 	ContainsSlashDotDotInMiddle {
-		value: Arc<str>
+		value: Arc<NTStr>
 	},
 	// grug_assert(ends_with(string, resource_extension), "The resource '%s' was supposed to have the extension '%s'", string, resource_extension);
 	ExtensionMismatch {
 		expected: Arc<str>,
-		value: Arc<str>
+		value: Arc<NTStr>
 	},
 	// raise TypePropagationError(f'resource name "{string}" cannot end with .')
 	EndsWithDot  {
-		value: Arc<str>
+		value: Arc<NTStr>
 	}
 }
 
@@ -523,27 +524,27 @@ pub enum EntityValidationError {
 	EntityCantBeEmpty,
 	// grug_assert(len > 0, "Entity '%s' is missing a mod name", string);
 	EntityMissingModName {
-		entity_string: Arc<str>,
+		entity_string: Arc<NTStr>,
 	},
 	// grug_assert(*entity_name != '\0', "Entity '%s' specifies the mod name '%s', but it is missing an entity name after the ':'", string, mod_name);
 	EntityMissingEntityName {
 		mod_name: String,
-		entity_string: Arc<str>,
+		entity_string: Arc<NTStr>,
 	},
 	// grug_assert(!streq(mod_name, mod), "Entity '%s' its mod name '%s' is invalid, since the file it is in refers to its own mod; just change it to '%s'", string, mod_name, entity_name);
 	ModNameIsCurrentMod {
-		full_entity_string: Arc<str>,
+		full_entity_string: Arc<NTStr>,
 		mod_name: String,
 		entity_name: String,
 	},
 	// grug_assert(islower(c) || isdigit(c) || c == '_' || c == '-', "Entity '%s' its mod name contains the invalid character '%c'", string, c);
 	ModNameHasInvalidCharacter {
-		entity_name: Arc<str>, 
+		entity_name: Arc<NTStr>, 
 		invalid_char: char
 	},
 	// grug_assert(islower(c) || isdigit(c) || c == '_' || c == '-', "Entity '%s' its entity name contains the invalid character '%c'", string, c);
 	EntityNameHasInvalidCharacter {
-		entity_name: Arc<str>, 
+		entity_name: Arc<NTStr>, 
 		invalid_char: char
 	},
 }
@@ -731,10 +732,12 @@ impl<'a> TypePropogator<'a> {
 					debug_assert!(self.current_fn_name == None);
 
 					self.current_fn_name = Some(Arc::clone(name));
+					self.push_scope();
 					for arg in arguments {
 						self.add_local_variable(Arc::clone(&arg.name), arg.ty.clone())?;
 					}
 					self.fill_statements(&ast.helper_fn_signatures, body_statements, return_ty)?;
+					self.pop_scope();
 
 					debug_assert!(self.current_fn_name.as_ref() == Some(name));
 					self.current_fn_name = None;
@@ -827,7 +830,9 @@ impl<'a> TypePropogator<'a> {
 						}
 						self.fill_statements(helper_fns, else_if_statements, expected_return_type)?;
 					}
-					self.fill_statements(helper_fns, else_statements, expected_return_type)?;
+					if let Some(else_statements) = else_statements {
+						self.fill_statements(helper_fns, else_statements, expected_return_type)?;
+					}
 					// TODO: Maybe this should be looked at again
 					// [https://github.com/grug-lang/grug/issues/116]
 				}
@@ -1007,7 +1012,7 @@ impl<'a> TypePropogator<'a> {
 					},
 					_ => (), 
 				}
-				if result_0 != result_1 {
+				if result_0 != result_1 && !matches!((&result_0, &result_1), (GrugType::Id{custom_name: None}, GrugType::Id{..}) | (GrugType::Id{..}, GrugType::Id{custom_name: None})) {
 					return Err(TypePropogatorError::BinaryOperatorTypeMismatch{
 						operator,
 						left: result_0,
@@ -1112,14 +1117,16 @@ impl<'a> TypePropogator<'a> {
 		}
 		for (param, arg) in signature.iter().zip(arguments) {
 			if let GrugType::Resource{ref extension} = param.ty 
-				&& let ExprType::LiteralExpr{expr: LiteralExpr::StringExpr{ref value}, ..} = arg.ty {
+				&& let ExprType::LiteralExpr{expr: LiteralExpr::StringExpr{ref mut value}, line, col} = arg.ty {
 				self.validate_resource_string(value, extension)?;
+				*value = self.fix_resource_string(value);
 				arg.result_ty = Some(GrugType::Resource{
 					extension: Arc::clone(extension)
 				});
 			} else if let GrugType::Entity{ref ty} = param.ty 
-				&& let ExprType::LiteralExpr{expr: LiteralExpr::StringExpr{ref value}, ..} = arg.ty {
+				&& let ExprType::LiteralExpr{expr: LiteralExpr::StringExpr{ref mut value}, line, col} = arg.ty {
 				self.validate_entity_string(value)?;
+				if let Some(fixed_entity) = self.fix_entity_string(value) {*value = fixed_entity}
 				arg.result_ty = Some(GrugType::Entity{
 					ty: ty.clone()
 				});
@@ -1143,7 +1150,7 @@ impl<'a> TypePropogator<'a> {
 		Ok(())
 	}
 
-	fn validate_resource_string(&mut self, value: &Arc<str>, extension: &Arc<str>) -> Result<(), ResourceValidationError> {
+	fn validate_resource_string(&mut self, value: &mut Arc<NTStr>, extension: &Arc<str>) -> Result<(), ResourceValidationError> {
 		if value.len() == 0 {
 			Err(ResourceValidationError::EmptyResource{ })
 		} else if value.starts_with("/") {
@@ -1192,7 +1199,11 @@ impl<'a> TypePropogator<'a> {
 		}
 	}
 
-	fn validate_entity_string(&mut self, entity_string: &Arc<str>) -> Result<(), EntityValidationError> {
+	fn fix_resource_string(&mut self, value: &NTStr) -> Arc<NTStr> {
+		NTStr::arc_from_str(&*format!("{}/{}", self.current_mod_name, value))
+	}
+
+	fn validate_entity_string(&mut self, entity_string: &mut Arc<NTStr>) -> Result<(), EntityValidationError> {
 		if entity_string.is_empty() {
 			return Err(EntityValidationError::EntityCantBeEmpty);
 		}
@@ -1219,7 +1230,7 @@ impl<'a> TypePropogator<'a> {
 			}
 			(mod_name, entity_name)
 		} else {
-			("", &**entity_string)
+			("", &***entity_string)
 		};
 
 		if let Some(ch) = mod_name.chars().filter(|ch| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '_' || *ch == '-')).next() {
@@ -1235,6 +1246,14 @@ impl<'a> TypePropogator<'a> {
 			});
 		}
 		Ok(())
+	}
+
+	fn fix_entity_string(&mut self, value: &NTStr) -> Option<Arc<NTStr>> {
+		if let None = value.split_once(":") {
+			Some(NTStr::arc_from_str(&*format!("{}:{}", self.current_mod_name, value)))
+		} else {
+			None
+		}
 	}
 
 	fn get_variable(&self, var_name: &str) -> Option<&Variable> {

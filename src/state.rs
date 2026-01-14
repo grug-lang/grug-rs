@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, Duration};
+use std::ffi::CStr;
 
 #[repr(C)]
 pub union GameFnPtr {
@@ -275,13 +276,15 @@ impl GrugState {
 							}
 						}
 						// else statements
-						let control_flow = self.run_statements(entity, else_statements)?;
-						if let GrugControlFlow::None = control_flow {
-							continue;
-						} else {
-							ret_val = control_flow;
-							break 'outer;
-						} 
+						if let Some(else_statements) = else_statements {
+							let control_flow = self.run_statements(entity, else_statements)?;
+							if let GrugControlFlow::None = control_flow {
+								continue;
+							} else {
+								ret_val = control_flow;
+								break 'outer;
+							} 
+						}
 					}
 				},
 				Statement::ReturnStatement{
@@ -346,10 +349,17 @@ impl GrugState {
 					LiteralExpr::TrueExpr => GrugValue{bool: 1},
 					LiteralExpr::FalseExpr => GrugValue{bool: 0},
 					LiteralExpr::StringExpr{
-						value: _,
-					} => todo!("strings need to be null terminated"),
+						value
+					} => GrugValue{string: value.as_ptr().cast()},
+					LiteralExpr::ResourceExpr{
+						value
+					} => GrugValue{string: value.as_ptr().cast()},
+					LiteralExpr::EntityExpr{
+						value
+					} => GrugValue{string: value.as_ptr().cast()},
 					LiteralExpr::NumberExpr {
 						value,
+						string: _,
 					} => GrugValue{number: *value},
 					LiteralExpr::IdentifierExpr {
 						name,
@@ -357,7 +367,6 @@ impl GrugState {
 						*entity.global_variables.get(name)
 							.expect("variable not found")
 					}
-					_ => unreachable!(),
 				}
 			},
 			ExprType::UnaryExpr{
@@ -438,17 +447,18 @@ impl GrugState {
 					LiteralExpr::TrueExpr => GrugValue{bool: 1},
 					LiteralExpr::FalseExpr => GrugValue{bool: 0},
 					LiteralExpr::StringExpr{
-						value: _,
-					} => todo!("strings need to be null terminated"),
+						value
+					} => GrugValue{string: value.as_ptr().cast()},
+					LiteralExpr::ResourceExpr{
+						value
+					} => GrugValue{string: value.as_ptr().cast()},
+					LiteralExpr::EntityExpr{
+						value
+					} => GrugValue{string: value.as_ptr().cast()},
 					LiteralExpr::NumberExpr {
 						value,
+						string: _,
 					} => GrugValue{number: *value},
-					LiteralExpr::ResourceExpr{
-						value: _,
-					} => unimplemented!(),
-					LiteralExpr::EntityExpr{
-						value: _,
-					} => unimplemented!(),
 					LiteralExpr::IdentifierExpr{
 						name,
 					} => {
@@ -479,8 +489,30 @@ impl GrugState {
 				match (operator, &operands.0.result_ty) {
 					(BinaryOperator::Or,             Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{first_value.bool | second_value()?.bool}},
 					(BinaryOperator::And,            Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{(first_value.bool != 0 && second_value()?.bool != 0) as u8}},
-					(BinaryOperator::DoubleEquals,   _                     )  => unimplemented!(),
-					(BinaryOperator::NotEquals,      _                     )  => unimplemented!(),
+					(BinaryOperator::DoubleEquals,   Some(ty)              )  => {
+						let value = match ty {
+							GrugType::Bool => !unsafe{(first_value.bool == 0) ^ (second_value()?.bool == 0)},
+							GrugType::Number => unsafe{first_value.number == second_value()?.number},
+							GrugType::Id{..} => unsafe{first_value.id == second_value()?.id},
+							GrugType::String => {
+								unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
+							},
+							_ => unreachable!(),
+						};
+						GrugValue{bool: value as u8}
+					},
+					(BinaryOperator::NotEquals,      Some(ty)              )  => {
+						let value = match ty {
+							GrugType::Bool => unsafe{(first_value.bool == 0) ^ (second_value()?.bool == 0)}
+							GrugType::Number => unsafe{first_value.number != second_value()?.number}
+							GrugType::Id{..} => unsafe{first_value.id != second_value()?.id}
+							GrugType::String => {
+								!unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
+							}
+							_ => unreachable!(),
+						};
+						GrugValue{bool: value as u8}
+					},
 					(BinaryOperator::Greater,        Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number > second_value()?.number} as u8},
 					(BinaryOperator::GreaterEquals,  Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number >= second_value()?.number} as u8},
 					(BinaryOperator::Less,           Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number < second_value()?.number} as u8},

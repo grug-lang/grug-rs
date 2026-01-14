@@ -1,18 +1,16 @@
-use std::ffi::{CString, c_float};
+#![deny(warnings)]
+use std::ffi::CString;
 use std::mem::ManuallyDrop;
-use std::collections::HashMap;
-use grug_rs::mod_api::*;
-use grug_rs::state::{GrugState, GameFnPtr};
+use grug_rs::state::GrugState;
 
 mod test_bindings {
-	use super::*;
 	use grug_rs::state::GrugState;
 	use grug_rs::backend::{GrugFile, GrugEntity};
 	use grug_rs::types::{GrugValue};
 	use grug_rs::frontend;
 	use grug_rs::serde;
 	use std::ffi::{c_char, CStr, CString};
-	use std::sync::{OnceLock, Mutex, Arc,};
+	use std::sync::{Mutex, Arc,};
 	use std::mem::ManuallyDrop;
 
 	pub static GLOBAL_TEST_STATE: Mutex<Option<GrugState>> = Mutex::new(None);
@@ -20,14 +18,14 @@ mod test_bindings {
 	pub static CURRENT_GRUG_ENTITY: Mutex<Option<GrugEntity>> = Mutex::new(None);
 	pub extern "C" fn compile_grug_file(path: *const c_char) -> *const c_char {
 		let path = unsafe{CStr::from_ptr(path)}.to_str().unwrap();
-
-		match frontend::compile_grug_file(GLOBAL_TEST_STATE.lock().unwrap().as_ref().unwrap(), path) {
+		let ret_val = match frontend::compile_grug_file(GLOBAL_TEST_STATE.lock().unwrap().as_ref().unwrap(), path) {
 			Ok(file) => {
 				*CURRENT_GRUG_FILE.lock().unwrap() = Some(Arc::new(file));
 				std::ptr::null()
 			},
 			Err(err) => ManuallyDrop::new(CString::new(format!("{}", err)).unwrap()).as_ptr() as *const c_char,
-		}
+		};
+		ret_val
 	}
 	pub extern "C" fn init_globals_fn_dispatcher () {
 		unsafe{GLOBAL_TEST_STATE.lock().unwrap().as_mut().unwrap().set_next_id(42)};
@@ -43,7 +41,7 @@ mod test_bindings {
 	pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, values: *const GrugValue) {
 		let fn_name = unsafe{CStr::from_ptr(fn_name)}.to_str().unwrap();
 		
-		unsafe{
+		unsafe {
 			GLOBAL_TEST_STATE.lock().unwrap().as_mut().unwrap()
 				.call_on_function_raw(CURRENT_GRUG_ENTITY.lock().unwrap().as_mut().unwrap(), fn_name, values).unwrap();
 		};
@@ -80,7 +78,7 @@ mod test_bindings {
 	}
 
 	#[allow(non_camel_case_types)]
-	pub type c_size_t = u64;
+	// pub type c_size_t = u64;
 	#[allow(non_camel_case_types)]
 	pub type compile_grug_file_t = extern "C" fn(*const c_char) -> *const c_char;
 	#[allow(non_camel_case_types)]
@@ -195,6 +193,7 @@ mod game_fn_bindings {
 	}
 }
 use game_fn_bindings::*;
+use std::io::Write;
 
 #[test]
 fn main () {
@@ -213,7 +212,6 @@ fn main () {
 	// let 
 
 	let grug_tests_path = c"src/grug-tests/tests";
-	let mod_api_text = std::fs::read_to_string("src/grug-tests/mod_api.json").unwrap();
 
 	let game_functions = get_game_functions();
 	let state = GrugState::new("src/grug-tests/mod_api.json", grug_tests_path.to_str().unwrap(), game_functions).unwrap();
@@ -221,6 +219,12 @@ fn main () {
 		
 	*GLOBAL_TEST_STATE.lock().unwrap() = Some(state);
 
+	std::panic::set_hook(Box::new(|info| {
+		_ = std::io::stdout().write_fmt(
+			format_args!("{}: {}\n", info.location().unwrap(), info.payload_as_str().unwrap_or("No info"))
+		);
+		std::process::exit(2);
+	}));
 	unsafe {
 		grug_tests_run(
 			grug_tests_path.as_ptr(),
@@ -233,4 +237,5 @@ fn main () {
 			whitelisted_test,
 		)
 	}
+	_ = std::panic::take_hook();
 }

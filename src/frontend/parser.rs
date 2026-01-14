@@ -1,5 +1,6 @@
 use super::tokenizer::{Token, TokenType};
 use crate::types::*;
+use crate::ntstring::NTStr;
 use std::collections::{HashSet, HashMap};
 use std::sync::Arc;
 
@@ -697,7 +698,7 @@ impl AST {
 			TokenType::If => {
 				let (condition, if_statements) = self.parse_if_statement(tokens, parsing_depth + 1, indentation)?;
 				let mut else_if_statements = Vec::new();
-				let mut else_statements = Vec::new();
+				let mut else_statements = None;
 
 				while let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]) {
 					let [space_token, if_token] = peek_next_tokens(tokens)?;
@@ -705,7 +706,7 @@ impl AST {
 						consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
 						else_if_statements.push(self.parse_if_statement(tokens, parsing_depth, indentation)?);
 					} else {
-						else_statements = self.parse_statements(tokens, parsing_depth, indentation + 1)?;
+						else_statements = Some(self.parse_statements(tokens, parsing_depth, indentation + 1)?);
 						break;
 					}
 				}
@@ -718,7 +719,7 @@ impl AST {
 			}
 			TokenType::Return => {
 				tokens.next();
-				let expr = if let Ok(_) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
+				let expr = if let TokenType::NewLine = next_tokens[1].ty {
 					None
 				} else {
 					consume_space(tokens)?;
@@ -1249,7 +1250,7 @@ impl AST {
 				Ok(Expr{
 					ty: ExprType::LiteralExpr{
 						expr: LiteralExpr::StringExpr {
-							value: (*value).into(),
+							value: NTStr::arc_from_str(*value),
 						},
 						line: *line,
 						col: *col
@@ -1274,6 +1275,7 @@ impl AST {
 					ty: ExprType::LiteralExpr{
 						expr: LiteralExpr::NumberExpr {
 							value: value.parse::<i64>().unwrap() as f64,
+							string: Arc::from(*value),
 						},
 						line: *line,
 						col: *col
@@ -1297,6 +1299,7 @@ impl AST {
 					ty: ExprType::LiteralExpr{
 						expr: LiteralExpr::NumberExpr {
 							value: number,
+							string: Arc::from(*value),
 						},
 						line: *line,
 						col: *col

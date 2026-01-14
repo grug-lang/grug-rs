@@ -1,5 +1,6 @@
 use std::sync::Arc;
-use std::ffi::{c_char, c_double};
+use std::ffi::{CString, c_char, c_double};
+use crate::ntstring::NTStr;
 // TODO Unnest some of these enums
 
 #[repr(C)]
@@ -34,6 +35,93 @@ pub enum GrugType {
 		ty: Option<Arc<str>>,
 	},
 }
+// impl GrugType {
+// 	pub(crate) fn match_exact(&self, other: &Self) -> bool {
+// 		use GrugType::*;
+// 		match (self, other) {
+// 			(Void, Void) => true,
+// 			(Bool, Bool) => true,
+// 			(Number, Number) => true,
+// 			(String, String) => true,
+// 			(Id{custom_name: custom_name_1}, Id{custom_name: custom_name_2}) => custom_name_1 == custom_name_2,
+// 			(
+// 				Resource {
+// 					extension: extension_1,
+// 				}, 
+// 				Resource {
+// 					extension: extension_2,
+// 				}, 
+// 			) => extension_1 == extension_2,
+// 			(
+// 				Entity {
+// 					ty: ty_1,
+// 				}, 
+// 				Entity {
+// 					ty: ty_2,
+// 				}, 
+// 			) => ty_1 == ty_2,
+// 			_ => false,
+// 		}
+// 	}
+
+// 	pub(crate) fn match_non_exact(&self, other: &Self) -> bool {
+// 		use GrugType::*;
+// 		match (self, other) {
+// 			(Void, Void) => true,
+// 			(Bool, Bool) => true,
+// 			(Number, Number) => true,
+// 			(String, String) => true,
+// 			(Id{custom_name: custom_name_1}, Id{custom_name: custom_name_2}) => custom_name_1 == custom_name_2 || *custom_name_1 == None,
+// 			(
+// 				Resource {
+// 					extension: extension_1,
+// 				}, 
+// 				Resource {
+// 					extension: extension_2,
+// 				}, 
+// 			) => extension_1 == extension_2 || &**extension_1 == "" || &**extension_2 == "",
+// 			(
+// 				Entity {
+// 					ty: ty_1,
+// 				}, 
+// 				Entity {
+// 					ty: ty_2,
+// 				}, 
+// 			) => ty_1 == ty_2 || *ty_1 == None || *ty_2 == None,
+// 			_ => false,
+// 		}
+// 	}
+// }
+
+// impl PartialEq for GrugType {
+// 	fn eq(&self, other: &Self) -> bool {
+// 		use GrugType::*;
+// 		match (self, other) {
+// 			(Void, Void) => true,
+// 			(Bool, Bool) => true,
+// 			(Number, Number) => true,
+// 			(String, String) => true,
+// 			(Id{custom_name: _}, Id{custom_name: _}) => true,
+// 			(
+// 				Resource {
+// 					extension: extension_1,
+// 				}, 
+// 				Resource {
+// 					extension: extension_2,
+// 				}, 
+// 			) => extension_1 == extension_2 || &**extension_1 == "" || &**extension_2 == "",
+// 			(
+// 				Entity {
+// 					ty: ty_1,
+// 				}, 
+// 				Entity {
+// 					ty: ty_2,
+// 				}, 
+// 			) => ty_1 == ty_2 || *ty_1 == None || *ty_2 == None,
+// 			_ => false,
+// 		}
+// 	}
+// }
 
 impl std::fmt::Display for GrugType {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
@@ -66,19 +154,20 @@ pub enum LiteralExpr {
 	TrueExpr,
 	FalseExpr,
 	StringExpr{
-		value: Arc<str>,
+		value: Arc<NTStr>,
 	},
 	ResourceExpr{
-		value: Arc<str>,
+		value: Arc<NTStr>,
 	},
 	EntityExpr{
-		value: Arc<str>,
+		value: Arc<NTStr>,
 	},
 	IdentifierExpr{
 		name: Arc<str>
 	},
 	NumberExpr {
 		value: f64,
+		string: Arc<str>,
 	}
 }
 
@@ -250,7 +339,7 @@ pub enum Statement {
 		condition: Expr,
 		if_statements: Vec<Statement>,
 		else_if_statements: Vec<(Expr, Vec<Statement>)>,
-		else_statements: Vec<Statement>,
+		else_statements: Option<Vec<Statement>>,
 	},
 	ReturnStatement{
 		expr: Option<Expr>,

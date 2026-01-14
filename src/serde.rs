@@ -189,19 +189,19 @@ mod ser {
 				value,
 			} => object! { 
 				"type": "string",
-				"value": &**value,
+				"value": &***value,
 			},
 			LiteralExpr::ResourceExpr{
 				value,
 			} => object! { 
 				"type": "resource",
-				"value": &**value,
+				"value": &***value,
 			},
 			LiteralExpr::EntityExpr{
 				value,
 			} => object! { 
 				"type": "entity",
-				"value": &**value,
+				"value": &***value,
 			},
 			LiteralExpr::IdentifierExpr{
 				name
@@ -210,10 +210,12 @@ mod ser {
 				"value": &**name,
 			},
 			LiteralExpr::NumberExpr {
-				value
+				value,
+				string,
 			} => object! { 
 				"type": "number",
 				"value": *value,
+				"string": &**string,
 			},
 		}
 	}
@@ -227,7 +229,7 @@ mod ser {
 
 	fn serialize_binary_operator(operator: &BinaryOperator) -> JsonValue {
 		match operator {
-			BinaryOperator::Or => "||".into(),
+			BinaryOperator::Or => "or".into(),
 			BinaryOperator::And => "and".into(),
 			BinaryOperator::DoubleEquals => "==".into(),
 			BinaryOperator::NotEquals => "!=".into(),
@@ -281,7 +283,23 @@ mod ser {
 				condition,
 				if_statements,
 				else_if_statements,
-				else_statements,
+				else_statements: None,
+			} => object! {
+				"kind": "if",
+				"cond": serialize_expr(condition),
+				"if_block": if_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
+				"else_if_statements": else_if_statements.iter().map(|(condition, statements)| {
+					object! {
+						"cond": serialize_expr(condition),
+						"block": statements.iter().map(serialize_statement).collect::<Vec<_>>(),
+					}
+				}).collect::<Vec<_>>(),
+			},
+			Statement::IfStatement{
+				condition,
+				if_statements,
+				else_if_statements,
+				else_statements: Some(else_statements),
 			} => object! {
 				"kind": "if",
 				"cond": serialize_expr(condition),
@@ -347,7 +365,7 @@ mod de {
 		LiteralExpressionNotObject,
 		LiteralExpressionTypeNotString,
 		LiteralExpressionValueNotString,
-		LiteralExpressionValueNotNumber,
+		LiteralExpressionStringNotString,
 		UnknownLiteralType,
 		UnaryExpressionOperatorNotString,
 		BinaryExpressionOperatorNotString,
@@ -481,7 +499,7 @@ mod de {
 			output.push_str(name);
 			output.push_str(": ");
 			output.push_str(ty);
-			if i < arguments.len() {
+			if i < arguments.len() - 1 {
 				output.push_str(", ");
 			}
 		}
@@ -528,7 +546,6 @@ mod de {
 					apply_expr(call, output)?;
 				}
 				"if" => {
-
 					apply_indentation(indentation, output);
 					output.push_str("if ");
 					apply_expr(get_object_field(statement, "cond", "if")?, output)?;
@@ -547,12 +564,14 @@ mod de {
 						output.push_str(" ");
 						apply_statements(get_object_field(else_if, "block", "if")?, indentation + 1, output)?;
 					}
-					let value@JsonValue::Array(else_block) = get_object_field(statement, "else_block", "if")? else {
-						return Err(JsonDeserializeError::ElseBlockNotArray);
-					};
-					if else_block.len() > 0 {
-						output.push_str(" else ");
-						apply_statements(value, indentation + 1, output)?;
+					if let Ok(else_block) = get_object_field(statement, "else_block", "if") {
+						let value@JsonValue::Array(else_block) = else_block else {
+							return Err(JsonDeserializeError::ElseBlockNotArray);
+						};
+						if else_block.len() > 0 {
+							output.push_str(" else ");
+							apply_statements(value, indentation + 1, output)?;
+						}
 					}
 				}
 				"while" => {
@@ -578,8 +597,16 @@ mod de {
 					output.push_str("# ");
 					output.push_str(value);
 				}
+				"return" => {
+					apply_indentation(indentation, output);
+					output.push_str("return");
+					if let Ok(expr) = get_object_field(statement, "expr", "return") {
+						output.push_str(" ");
+						apply_expr(get_object_field(statement, "expr", "return")?, output)?;
+					}
+				}
 				"empty_line" => (),
-				_ => todo!(),
+				value => unreachable!("{}", value),
 			}
 			output.push_str("\n");
 		}
@@ -625,11 +652,11 @@ mod de {
 						output.push_str(value);
 					}
 					"number" => {
-						let Some(value) = get_object_field(expr, "value", "literal_expression")?.as_f32() else {
-							return Err(JsonDeserializeError::LiteralExpressionValueNotNumber);
+						let Some(string) = get_object_field(expr, "string", "literal_expression")?.as_str() else {
+							return Err(JsonDeserializeError::LiteralExpressionStringNotString);
 						};
 						use std::fmt::Write;
-						write!(output, "{}", value).unwrap();
+						write!(output, "{}", string).unwrap();
 					}
 					_ => {
 						return Err(JsonDeserializeError::UnknownLiteralType)
