@@ -21,7 +21,13 @@ impl ModApi {
 pub struct ModApiEntity {
 	pub(super) name: Arc<str>,
 	pub(super) description: Option<String>,
-	pub(super) on_fns: HashMap<Arc<str>, ModApiOnFn>,
+	pub(super) on_fns: Vec<(Arc<str>, ModApiOnFn)>,
+}
+
+impl ModApiEntity {
+	pub fn get_on_fn(&self, name: &str) -> Option<(usize, &ModApiOnFn)> {
+		self.on_fns.iter().enumerate().find_map(|(i, (fn_name, func))| (name == &**fn_name).then(|| (i, func)))
+	}
 }
 
 #[derive(Debug)]
@@ -197,7 +203,7 @@ pub fn get_mod_api(mod_api_text: &str) -> Result<ModApi, ModApiError> {
 				arguments,
 				index: i,
 			}))
-		}).collect::<Result<HashMap<_, _>, _>>()?;
+		}).collect::<Result<Vec<_>, _>>()?;
 		let entity_name = Arc::from(entity_name);
 		Ok((Arc::clone(&entity_name), ModApiEntity{
 			name: entity_name,

@@ -485,7 +485,8 @@ impl GrugState {
 			} => {
 				let first_value = self.run_expr(entity, &operands.0)?; 
 				let mut second_value = || self.run_expr(entity, &operands.1);
-				debug_assert!(operands.0.result_ty == operands.1.result_ty);
+				debug_assert!(GrugType::match_non_exact(operands.0.result_ty.as_ref().unwrap(), operands.1.result_ty.as_ref().unwrap()));
+				// debug_assert!(operands.0.result_ty == operands.1.result_ty || matches!((&operands.0.result_ty, &operands.1.result_ty), (Some(GrugType::Id{custom_name: None}), Some(GrugType::Id{..})) | (Some(GrugType::Id{..}), Some(GrugType::Id{custom_name: None}))));
 				match (operator, &operands.0.result_ty) {
 					(BinaryOperator::Or,             Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{first_value.bool | second_value()?.bool}},
 					(BinaryOperator::And,            Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{(first_value.bool != 0 && second_value()?.bool != 0) as u8}},

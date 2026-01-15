@@ -35,7 +35,7 @@ pub enum GrugType {
 		ty: Option<Arc<str>>,
 	},
 }
-// impl GrugType {
+impl GrugType {
 // 	pub(crate) fn match_exact(&self, other: &Self) -> bool {
 // 		use GrugType::*;
 // 		match (self, other) {
@@ -64,34 +64,34 @@ pub enum GrugType {
 // 		}
 // 	}
 
-// 	pub(crate) fn match_non_exact(&self, other: &Self) -> bool {
-// 		use GrugType::*;
-// 		match (self, other) {
-// 			(Void, Void) => true,
-// 			(Bool, Bool) => true,
-// 			(Number, Number) => true,
-// 			(String, String) => true,
-// 			(Id{custom_name: custom_name_1}, Id{custom_name: custom_name_2}) => custom_name_1 == custom_name_2 || *custom_name_1 == None,
-// 			(
-// 				Resource {
-// 					extension: extension_1,
-// 				}, 
-// 				Resource {
-// 					extension: extension_2,
-// 				}, 
-// 			) => extension_1 == extension_2 || &**extension_1 == "" || &**extension_2 == "",
-// 			(
-// 				Entity {
-// 					ty: ty_1,
-// 				}, 
-// 				Entity {
-// 					ty: ty_2,
-// 				}, 
-// 			) => ty_1 == ty_2 || *ty_1 == None || *ty_2 == None,
-// 			_ => false,
-// 		}
-// 	}
-// }
+	pub(crate) fn match_non_exact(&self, other: &Self) -> bool {
+		use GrugType::*;
+		match (self, other) {
+			(Void, Void) => true,
+			(Bool, Bool) => true,
+			(Number, Number) => true,
+			(String, String) => true,
+			(Id{custom_name: custom_name_1}, Id{custom_name: custom_name_2}) => custom_name_1 == custom_name_2 || *custom_name_1 == None || *custom_name_2 == None,
+			(
+				Resource {
+					extension: extension_1,
+				}, 
+				Resource {
+					extension: extension_2,
+				}, 
+			) => extension_1 == extension_2 || &**extension_1 == "" || &**extension_2 == "",
+			(
+				Entity {
+					ty: ty_1,
+				}, 
+				Entity {
+					ty: ty_2,
+				}, 
+			) => ty_1 == ty_2 || *ty_1 == None || *ty_2 == None,
+			_ => false,
+		}
+	}
+}
 
 // impl PartialEq for GrugType {
 // 	fn eq(&self, other: &Self) -> bool {

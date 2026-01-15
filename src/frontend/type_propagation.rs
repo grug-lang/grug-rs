@@ -615,7 +615,7 @@ impl<'a> TypePropogator<'a> {
 		})?;
 		
 		self.add_global_variable(Arc::from("me"), GrugType::Id{custom_name: Some(Arc::clone(&entity_name))})?;
-		let next_expected_global_fn_index = 0;
+		let mut previous_on_fn_index = 0;
 
 		for statement in &mut ast.global_statements {
 			match statement {
@@ -637,7 +637,8 @@ impl<'a> TypePropogator<'a> {
 							name: Arc::clone(name),
 						});
 					}
-					if &result_ty != ty {
+					if *ty != (GrugType::Id{custom_name: None}) && &result_ty != ty {
+					// if &result_ty != ty {
 						return Err(TypePropogatorError::VariableTypeMismatch {
 							name: Arc::clone(name),
 							got_type: result_ty.clone(),
@@ -653,16 +654,17 @@ impl<'a> TypePropogator<'a> {
 					calls_helper_fn,
 					has_while_loop,
 				} => {
-					let grug_on_fn = entity.on_fns.get(&**name).ok_or_else(|| TypePropogatorError::OnFnDoesNotExist{
+					let (on_fn_index, grug_on_fn) = entity.get_on_fn(&**name).ok_or_else(|| TypePropogatorError::OnFnDoesNotExist{
 						function_name: Arc::clone(name),
 						entity_name: Arc::clone(&entity.name),
 					})?;
-					if grug_on_fn.index != next_expected_global_fn_index {
+					if on_fn_index < previous_on_fn_index {
 						return Err(TypePropogatorError::OutOfOrderOnFn {
 							entity_name: Arc::from(entity_name),
 							on_fn_name: Arc::clone(&grug_on_fn.name),
 						});
 					}
+					previous_on_fn_index = grug_on_fn.index;
 					if grug_on_fn.arguments.len() > arguments.len() {
 						return Err(TypePropogatorError::TooFewParameters{
 							function_name: Arc::clone(name),
@@ -771,14 +773,15 @@ impl<'a> TypePropogator<'a> {
 								variable_name: Arc::clone(name),
 							});
 						}
-						if &result_ty == ty {
-							self.add_local_variable(Arc::clone(name), ty.clone())?
-						} else {
+						if !(*ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && *ty != result_ty {
+						// if *ty == (GrugType::Id{custom_name: None}) || GrugType::match_non_exact(ty, &result_ty) {
 							return Err(TypePropogatorError::VariableTypeMismatch {
 								name: Arc::clone(name),
 								got_type: result_ty.clone(),
 								expected_type: ty.clone(),
 							});
+						} else {
+							self.add_local_variable(Arc::clone(name), ty.clone())?
 						}
 					} else {
 						let var = if let Some(var) = self.get_global_variable(name) {
@@ -794,7 +797,8 @@ impl<'a> TypePropogator<'a> {
 							});
 						};
 
-						if result_ty != var.ty {
+						if !(var.ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && var.ty != result_ty {
+						// if result_ty != var.ty {
 							return Err(TypePropogatorError::VariableTypeMismatch {
 								name: Arc::clone(name),
 								got_type: result_ty.clone(),
@@ -859,7 +863,7 @@ impl<'a> TypePropogator<'a> {
 					let return_ty = expr.as_mut()
 						.map(|expr| self.fill_expr(helper_fns, expr))
 						.unwrap_or(Ok(GrugType::Void))?;
-					if *expected_return_type != return_ty {
+					if *expected_return_type != (GrugType::Id{custom_name: None}) && *expected_return_type != return_ty {
 						return Err(TypePropogatorError::MismatchedReturnType{
 							function_name: Arc::clone(&self.current_fn_name.as_ref().unwrap()),
 							expected_type: expected_return_type.clone(),
@@ -1012,7 +1016,7 @@ impl<'a> TypePropogator<'a> {
 					},
 					_ => (), 
 				}
-				if result_0 != result_1 && !matches!((&result_0, &result_1), (GrugType::Id{custom_name: None}, GrugType::Id{..}) | (GrugType::Id{..}, GrugType::Id{custom_name: None})) {
+				if !GrugType::match_non_exact(&result_0, &result_1) {
 					return Err(TypePropogatorError::BinaryOperatorTypeMismatch{
 						operator,
 						left: result_0,
