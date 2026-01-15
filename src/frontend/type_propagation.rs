@@ -1027,12 +1027,13 @@ impl<'a> TypePropogator<'a> {
 				let result_1 = self.fill_expr(helper_fns, &mut operands.1)?;
 				match (&result_1, operator) {
 					(GrugType::String, BinaryOperator::DoubleEquals) | 
-					(GrugType::String, BinaryOperator::NotEquals) => {
+					(GrugType::String, BinaryOperator::NotEquals) => (),
+					(GrugType::String, _) => {
 						return Err(TypePropogatorError::CannotCompareStrings{
 							operator
 						});
 					},
-					_ => (), 
+					_ => (),
 				}
 				if !GrugType::match_non_exact(&result_0, &result_1) {
 					return Err(TypePropogatorError::BinaryOperatorTypeMismatch{
@@ -1191,19 +1192,19 @@ impl<'a> TypePropogator<'a> {
 			Err(ResourceValidationError::ContainsDoubleForwardSlash {
 				value: Arc::clone(value),
 			})
-		} else if value.starts_with("..") {
+		} else if &***value == ".." || value.starts_with("../") {
 			Err(ResourceValidationError::BeginsWithDotDotWithoutSlash {
 				value: Arc::clone(value),
 			})
-		} else if value.contains("/..") {
+		} else if value.ends_with("/..") || value.contains("/../") {
 			Err(ResourceValidationError::ContainsSlashDotDotInMiddle {
 				value: Arc::clone(value),
 			})
-		} else if value.starts_with(".") {
+		} else if &***value == "." || value.starts_with("./") {
 			Err(ResourceValidationError::BeginsWithDotWithoutSlash {
 				value: Arc::clone(value),
 			})
-		} else if value.contains("/.") {
+		} else if value.ends_with("/.") || value.contains("/./") {
 			Err(ResourceValidationError::ContainsSlashDotInMiddle {
 				value: Arc::clone(value),
 			})

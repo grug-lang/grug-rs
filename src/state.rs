@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, Duration};
 use std::ffi::CStr;
+use std::fmt::Write;
 
 #[repr(C)]
 pub union GameFnPtr {
@@ -72,6 +73,8 @@ pub struct GrugState {
 // const ON_FN_TIME_LIMIT: u64 = 10; // ms
 const ON_FN_TIME_LIMIT: u64 = 2000000; // ms
 
+const MAX_RECURSION_LIMIT: usize = 100;
+
 impl GrugState {
 	pub fn new<'a, J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, game_functions: HashMap<&'static str, GameFnPtr>) -> Result<Self, GrugError<'a>> {
 		let mod_api_text = std::fs::read_to_string(mod_api_path).unwrap();
@@ -103,6 +106,7 @@ impl GrugState {
 			global_variables: HashMap::from([(Arc::from("me"), GrugValue{id:me_id})]),
 			file: Arc::clone(file),
 		};
+		self.reset_steady_state();
 		self.init_global_variables(&mut temp_entity, &file.global_variables)?;
 		
 		Ok(GrugEntity {
@@ -111,7 +115,6 @@ impl GrugState {
 			file: temp_entity.file,
 		})
 	}
-
 
 	pub fn get_id(&mut self) -> u64 {
 		let next_id = self.next_id;
@@ -132,6 +135,7 @@ impl GrugState {
 			Ok(())
 		}).collect::<Result<Vec<_>, _>>()?;
 		self.current_fn_call_depth -= 1;
+		debug_assert!(self.current_fn_call_depth == 0);
 		Ok(())
 	}
 }
@@ -145,6 +149,16 @@ enum GrugControlFlow {
 
 // should be moved into backend later
 impl GrugState {
+	fn reset_steady_state(&mut self) {
+		self.local_variables.clear();
+		self.current_fn_call_depth = 0;
+	}
+
+	fn assert_steady_state(&self) {
+		debug_assert!(self.local_variables.len() == 0);
+		debug_assert!(self.current_fn_call_depth == 0);
+	}
+
 	pub unsafe fn call_on_function_raw(&mut self, entity: &mut GrugEntity, function_name: &str, values: *const GrugValue) -> Result<(), RuntimeError> {
 		let file = Arc::clone(&entity.file);
 		for on_function in &file.on_functions {
@@ -173,14 +187,18 @@ impl GrugState {
 			if &*on_function.name != function_name {
 				continue;
 			}
-			debug_assert!(self.local_variables.len() == 0);
+			self.assert_steady_state();
 			self.run_function(entity, &on_function.arguments, values, &on_function.body_statements)?;
+			self.assert_steady_state();
 			break;
 		}
 		Ok(())
 	}
 
 	fn run_function(&mut self, entity: &mut GrugEntity, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
+		if self.current_fn_call_depth > MAX_RECURSION_LIMIT {
+			return Err(RuntimeError::StackOverflow)
+		}
 		if arguments.len() != values.len() {
 			return Err(RuntimeError::FunctionArgumentCountMismatch {
 				expected: arguments.len(),
@@ -193,7 +211,9 @@ impl GrugState {
 		for (argument, value) in arguments.iter().zip(values) {
 			self.add_local_variable(Arc::clone(&argument.name), *value);
 		}
+		self.current_fn_call_depth += 1;
 		let value = self.run_statements(entity, statements)?;
+		self.current_fn_call_depth -= 1;
 		let value = match value {
 			GrugControlFlow::Return(value) => value,
 			GrugControlFlow::None          => GrugValue{void: ()},
@@ -599,8 +619,23 @@ impl GrugState {
 #[derive(Debug)]
 pub enum RuntimeError {
 	ExceededTimeLimit,
+	StackOverflow,
 	FunctionArgumentCountMismatch {
 		expected: usize,
 		got: usize,
 	},
 }
+
+impl std::fmt::Display for RuntimeError {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+		match self {
+			Self::ExceededTimeLimit => write!(f, "{:?}", self),
+			Self::StackOverflow => write!(f, "Stack overflow, so check for accidental infinite recursion"),
+			Self::FunctionArgumentCountMismatch {
+				expected: _,
+				got: _,
+			} => write!(f, "{:?}", self),
+		}
+	}
+}
+
