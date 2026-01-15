@@ -6,7 +6,7 @@
 use crate::error::GrugError;
 use crate::state::GrugState;
 use crate::backend::GrugFile;
-use crate::types::GlobalStatement;
+use crate::types::{GlobalStatement, GlobalVariable, OnFunction, HelperFunction};
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 pub(crate) const SPACES_PER_INDENT: usize = 4;
 
@@ -34,9 +34,9 @@ pub fn compile_grug_file<'a>(state: &GrugState, path: &'a str) -> Result<GrugFil
 
 	ast.global_statements.into_iter().for_each(|statement| {
 		match statement {
-			st@GlobalStatement::GlobalVariableStatement{..} => global_variables.push(st),
-			st@GlobalStatement::GlobalOnFunction       {..} => on_functions.push(st),
-			st@GlobalStatement::GlobalHelperFunction   {..} => helper_functions.push(st),
+			GlobalStatement::Variable(st@GlobalVariable      {..}) => global_variables.push(st),
+			GlobalStatement::OnFunction(st@OnFunction        {..}) => on_functions.push(st),
+			GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),
 			_ => (),
 		}
 	});

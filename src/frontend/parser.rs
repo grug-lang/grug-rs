@@ -386,7 +386,7 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 			}
 
 			let on_fn = ast.parse_on_fn(&mut tokens)?;
-			let (on_fn_name, on_fn_arguments) = if let GlobalStatement::GlobalOnFunction{name, arguments, ..} = &on_fn {(Arc::clone(name), arguments)} else {unreachable!()};
+			let (on_fn_name, on_fn_arguments) = if let GlobalStatement::OnFunction(OnFunction{name, arguments, ..}) = &on_fn {(Arc::clone(name), arguments)} else {unreachable!()};
 
 			if ast.on_fn_signatures.get(&on_fn_name).is_some() {
 				return Err(ParserError::AlreadyDefinedOnFn{
@@ -416,7 +416,7 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 			}
 
 			let helper_fn = ast.parse_helper_fn(&mut tokens)?;
-			let (helper_fn_name, return_ty, helper_fn_arguments) = if let GlobalStatement::GlobalHelperFunction{name, return_ty, arguments, ..} = &helper_fn {(Arc::clone(name), return_ty.clone(), arguments)} else {unreachable!()};
+			let (helper_fn_name, return_ty, helper_fn_arguments) = if let GlobalStatement::HelperFunction(HelperFunction{name, return_ty, arguments, ..}) = &helper_fn {(Arc::clone(name), return_ty.clone(), arguments)} else {unreachable!()};
 			seen_helper_fn = true;
 
 			if ast.helper_fn_signatures.get(&helper_fn_name).is_some() {
@@ -448,11 +448,11 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 			newline_required = false;
 			last_newline_location = (token.line, token.col);
 			
-			ast.global_statements.push(GlobalStatement::GlobalEmptyLine);
+			ast.global_statements.push(GlobalStatement::EmptyLine);
 		} else if let Ok(&[ref comment_token]) = consume_next_token_types(&mut tokens, &[TokenType::Comment]) {
 			newline_allowed = true;
 
-			ast.global_statements.push(GlobalStatement::GlobalComment{
+			ast.global_statements.push(GlobalStatement::Comment{
 				value: comment_token.value.into(),
 			});
 			consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
@@ -537,14 +537,14 @@ impl AST {
 			});
 		}
 
-		Ok(GlobalStatement::GlobalHelperFunction{
+		Ok(GlobalStatement::HelperFunction(HelperFunction{
 			name: fn_name.into(),
 			arguments: args,
 			body_statements,
 			calls_helper_fn: false,
 			has_while_loop: false,
 			return_ty
-		})
+		}))
 	}
 
 	// on_fn -> "on_" + name + "(" + arguments? + ")" + statements 
@@ -572,13 +572,13 @@ impl AST {
 			});
 		}
 
-		Ok(GlobalStatement::GlobalOnFunction{
+		Ok(GlobalStatement::OnFunction(OnFunction{
 			name: fn_name.into(),
 			arguments: args,
 			body_statements,
 			calls_helper_fn: false,
 			has_while_loop: false,
-		})
+		}))
 	}
 
 	// arguments -> argument + ("," + argument)*;
@@ -891,11 +891,11 @@ impl AST {
 		
 		let assignment_expr = self.parse_expression(tokens, 0)?;
 		
-		return Ok(GlobalStatement::GlobalVariableStatement{
+		return Ok(GlobalStatement::Variable(GlobalVariable{
 			name: global_name.into(),
 			ty: global_type,
 			assignment_expr,
-		});
+		}));
 	}
 
 	// Recursive descent parsing adapted from the implementation in grug:

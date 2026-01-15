@@ -35,7 +35,6 @@ pub struct ModApiOnFn {
 	pub(super) name: Arc<str>, 
 	pub(super) description: Option<String>,
 	pub(super) arguments: Vec<Argument>,
-	pub(super) index: usize,
 }
 
 #[derive(Debug)]
@@ -140,7 +139,7 @@ pub fn get_mod_api(mod_api_text: &str) -> Result<ModApi, ModApiError> {
 				entity_name: entity_name.to_string(),
 			});
 		}
-		let on_fns = on_fns.entries().enumerate().map(|(i, (fn_name, fn_values))| {
+		let on_fns = on_fns.entries().map(|(fn_name, fn_values)| {
 			// optional "description" string
 			let description = fn_values["description"].as_str().map(str::to_string);
 			
@@ -201,7 +200,6 @@ pub fn get_mod_api(mod_api_text: &str) -> Result<ModApi, ModApiError> {
 				name: fn_name,
 				description,
 				arguments,
-				index: i,
 			}))
 		}).collect::<Result<Vec<_>, _>>()?;
 		let entity_name = Arc::from(entity_name);

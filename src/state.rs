@@ -1,7 +1,7 @@
 use crate::mod_api::{ModApi, get_mod_api, ModApiError};
 use crate::error::GrugError;
 use crate::backend::{GrugEntity, GrugFile, UninitGrugEntity};
-use crate::types::{GlobalStatement, GrugValue, Expr, ExprType, LiteralExpr, UnaryOperator, BinaryOperator, GrugType, Argument, Statement};
+use crate::types::{GlobalStatement, GrugValue, Expr, ExprType, LiteralExpr, UnaryOperator, BinaryOperator, GrugType, Argument, Statement, GlobalVariable, OnFunction};
 
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
@@ -123,15 +123,12 @@ impl GrugState {
 		self.next_id = next_id;
 	}
 
-	fn init_global_variables(&mut self, entity: &mut UninitGrugEntity, globals: &[GlobalStatement]) -> Result<(), RuntimeError> {
+	fn init_global_variables(&mut self, entity: &mut UninitGrugEntity, globals: &[GlobalVariable]) -> Result<(), RuntimeError> {
 		self.current_fn_call_depth += 1;
 		self.call_start_time = Instant::now();
-		globals.iter().map(|statement| {
-			let GlobalStatement::GlobalVariableStatement{name, assignment_expr, ..} = statement else {
-				unreachable!();
-			};
-			let value = self.init_global_exprs(entity, assignment_expr)?;
-			entity.global_variables.insert(Arc::clone(name), value);
+		globals.iter().map(|variable| {
+			let value = self.init_global_exprs(entity, &variable.assignment_expr)?;
+			entity.global_variables.insert(Arc::clone(&variable.name), value);
 			Ok(())
 		}).collect::<Result<Vec<_>, _>>()?;
 		self.current_fn_call_depth -= 1;
@@ -151,23 +148,20 @@ impl GrugState {
 	pub unsafe fn call_on_function_raw(&mut self, entity: &mut GrugEntity, function_name: &str, values: *const GrugValue) -> Result<(), RuntimeError> {
 		let file = Arc::clone(&entity.file);
 		for on_function in &file.on_functions {
-			let GlobalStatement::GlobalOnFunction{name, arguments, body_statements, ..} = on_function else {
-				unreachable!();
-			};
-			if &**name != function_name {
+			if &*on_function.name != function_name {
 				continue;
 			}
 			debug_assert!(self.local_variables.len() == 0);
-			let values = if arguments.len() == 0 {
+			let values = if on_function.arguments.len() == 0 {
 				&[]
 			} else {
-				unsafe{std::slice::from_raw_parts(values, arguments.len())}
+				unsafe{std::slice::from_raw_parts(values, on_function.arguments.len())}
 			};
 			self.run_function(
 				entity, 
-				arguments, 
+				&on_function.arguments, 
 				values,
-				body_statements
+				&on_function.body_statements
 			)?;
 		}
 		Ok(())
@@ -176,14 +170,11 @@ impl GrugState {
 	pub fn call_on_function(&mut self, entity: &mut GrugEntity, function_name: &str, values: &[GrugValue]) -> Result<(), RuntimeError> {
 		let file = Arc::clone(&entity.file);
 		for on_function in &file.on_functions {
-			let GlobalStatement::GlobalOnFunction{name, arguments, body_statements, ..} = on_function else {
-				unreachable!();
-			};
-			if &**name != function_name {
+			if &*on_function.name != function_name {
 				continue;
 			}
 			debug_assert!(self.local_variables.len() == 0);
-			self.run_function(entity, arguments, values, body_statements)?;
+			self.run_function(entity, &on_function.arguments, values, &on_function.body_statements)?;
 			break;
 		}
 		Ok(())
@@ -535,18 +526,10 @@ impl GrugState {
 				let file = Arc::clone(&entity.file);
 				let values = arguments.iter().map(|argument| self.run_expr(entity, argument)).collect::<Result<Vec<_>, _>>()?;
 				for helper_fn in &file.helper_functions {
-					let GlobalStatement::GlobalHelperFunction{
-						name,
-						arguments,
-						body_statements,
-						..
-					} = helper_fn else {
-						unreachable!();
-					};
-					if name != function_name {
+					if helper_fn.name != *function_name {
 						continue;
 					}
-					return Ok(self.run_function(entity, arguments, &values, body_statements)?);
+					return Ok(self.run_function(entity, &*helper_fn.arguments, &values, &*helper_fn.body_statements)?);
 				}
 				unreachable!("helper function not found");
 			}

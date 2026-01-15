@@ -36,34 +36,6 @@ pub enum GrugType {
 	},
 }
 impl GrugType {
-// 	pub(crate) fn match_exact(&self, other: &Self) -> bool {
-// 		use GrugType::*;
-// 		match (self, other) {
-// 			(Void, Void) => true,
-// 			(Bool, Bool) => true,
-// 			(Number, Number) => true,
-// 			(String, String) => true,
-// 			(Id{custom_name: custom_name_1}, Id{custom_name: custom_name_2}) => custom_name_1 == custom_name_2,
-// 			(
-// 				Resource {
-// 					extension: extension_1,
-// 				}, 
-// 				Resource {
-// 					extension: extension_2,
-// 				}, 
-// 			) => extension_1 == extension_2,
-// 			(
-// 				Entity {
-// 					ty: ty_1,
-// 				}, 
-// 				Entity {
-// 					ty: ty_2,
-// 				}, 
-// 			) => ty_1 == ty_2,
-// 			_ => false,
-// 		}
-// 	}
-
 	pub(crate) fn match_non_exact(&self, other: &Self) -> bool {
 		use GrugType::*;
 		match (self, other) {
@@ -92,36 +64,6 @@ impl GrugType {
 		}
 	}
 }
-
-// impl PartialEq for GrugType {
-// 	fn eq(&self, other: &Self) -> bool {
-// 		use GrugType::*;
-// 		match (self, other) {
-// 			(Void, Void) => true,
-// 			(Bool, Bool) => true,
-// 			(Number, Number) => true,
-// 			(String, String) => true,
-// 			(Id{custom_name: _}, Id{custom_name: _}) => true,
-// 			(
-// 				Resource {
-// 					extension: extension_1,
-// 				}, 
-// 				Resource {
-// 					extension: extension_2,
-// 				}, 
-// 			) => extension_1 == extension_2 || &**extension_1 == "" || &**extension_2 == "",
-// 			(
-// 				Entity {
-// 					ty: ty_1,
-// 				}, 
-// 				Entity {
-// 					ty: ty_2,
-// 				}, 
-// 			) => ty_1 == ty_2 || *ty_1 == None || *ty_2 == None,
-// 			_ => false,
-// 		}
-// 	}
-// }
 
 impl std::fmt::Display for GrugType {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
@@ -291,30 +233,39 @@ pub struct Expr {
 
 #[derive(Debug)]
 pub enum GlobalStatement {
-	GlobalVariableStatement{
-		name: Arc<str>,
-		ty: GrugType,
-		assignment_expr: Expr,
-	},
-	GlobalOnFunction{
-		name: Arc<str>,
-		arguments: Vec<Argument>,
-		body_statements: Vec<Statement>,
-		calls_helper_fn: bool,
-		has_while_loop: bool,
-	},
-	GlobalHelperFunction{
-		name: Arc<str>,
-		arguments: Vec<Argument>,
-		body_statements: Vec<Statement>,
-		calls_helper_fn: bool,
-		has_while_loop: bool,
-		return_ty: GrugType,
-	},
-	GlobalComment{
+	Variable(GlobalVariable),
+	OnFunction(OnFunction),
+	HelperFunction(HelperFunction),
+	Comment{
 		value: Arc<str>,
 	},
-	GlobalEmptyLine,
+	EmptyLine,
+}
+
+#[derive(Debug)]
+pub struct OnFunction {
+	pub name: Arc<str>,
+	pub arguments: Vec<Argument>,
+	pub body_statements: Vec<Statement>,
+	pub calls_helper_fn: bool,
+	pub has_while_loop: bool,
+}
+
+#[derive(Debug)]
+pub struct HelperFunction {
+	pub name: Arc<str>,
+	pub arguments: Vec<Argument>,
+	pub body_statements: Vec<Statement>,
+	pub calls_helper_fn: bool,
+	pub has_while_loop: bool,
+	pub return_ty: GrugType,
+}
+
+#[derive(Debug)]
+pub struct GlobalVariable {
+	pub name: Arc<str>,
+	pub ty: GrugType,
+	pub assignment_expr: Expr,
 }
 
 #[derive(Debug, Clone)]

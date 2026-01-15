@@ -1,11 +1,11 @@
-use crate::types::{GlobalStatement, GrugValue};
+use crate::types::{GlobalStatement, GrugValue, GlobalVariable, OnFunction, HelperFunction};
 use std::sync::Arc;
 use std::collections::HashMap;
 #[derive(Debug)]
 pub struct GrugFile {
-	pub(crate) global_variables: Vec<GlobalStatement>,
-	pub(crate) on_functions: Vec<GlobalStatement>,
-	pub(crate) helper_functions: Vec<GlobalStatement>,
+	pub(crate) global_variables: Vec<GlobalVariable>,
+	pub(crate) on_functions: Vec<OnFunction>,
+	pub(crate) helper_functions: Vec<HelperFunction>,
 }
 
 pub struct UninitGrugEntity {

@@ -30,11 +30,11 @@ mod ser {
 	pub(super) fn ast_to_json(ast: &[GlobalStatement]) -> String {
 		// let mut json_ast = Vec::new();
 		let ast = ast.iter().map(|statement| match statement {
-			GlobalStatement::GlobalVariableStatement{
+			GlobalStatement::Variable(GlobalVariable{
 				name,
 				ty,
 				assignment_expr,
-			} => {
+			}) => {
 				object! {
 					"kind": "global_variable",
 					"name": &**name, 
@@ -42,13 +42,13 @@ mod ser {
 					"assignment_expr": serialize_expr(assignment_expr),
 				}
 			},
-			GlobalStatement::GlobalOnFunction{
+			GlobalStatement::OnFunction(OnFunction{
 				name,
 				arguments,
 				body_statements,
 				calls_helper_fn: _,
 				has_while_loop: _,
-			} => {
+			}) => {
 				object! {
 					"kind": "on_function",
 					"name": &**name,
@@ -56,14 +56,14 @@ mod ser {
 					"body_statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				}
 			},
-			GlobalStatement::GlobalHelperFunction{
+			GlobalStatement::HelperFunction(HelperFunction{
 				name,
 				arguments,
 				body_statements,
 				calls_helper_fn: _,
 				has_while_loop: _,
 				return_ty: GrugType::Void,
-			} => {
+			}) => {
 				object! {
 					"kind": "helper_function",
 					"name": &**name,
@@ -71,14 +71,14 @@ mod ser {
 					"body_statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				}
 			},
-			GlobalStatement::GlobalHelperFunction{
+			GlobalStatement::HelperFunction(HelperFunction{
 				name,
 				arguments,
 				body_statements,
 				calls_helper_fn: _,
 				has_while_loop: _,
 				return_ty,
-			} => {
+			}) => {
 				object! {
 					"kind": "helper_function",
 					"name": &**name,
@@ -87,7 +87,7 @@ mod ser {
 					"return_type": serialize_type(return_ty),
 				}
 			},
-			GlobalStatement::GlobalComment{
+			GlobalStatement::Comment{
 				value,
 			} => {
 				object! {
@@ -95,7 +95,7 @@ mod ser {
 					"value": &**value,
 				}
 			},
-			GlobalStatement::GlobalEmptyLine => {
+			GlobalStatement::EmptyLine => {
 				object! {
 					"kind": "empty_line",
 				}

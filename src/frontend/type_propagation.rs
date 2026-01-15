@@ -615,118 +615,136 @@ impl<'a> TypePropogator<'a> {
 		})?;
 		
 		self.add_global_variable(Arc::from("me"), GrugType::Id{custom_name: Some(Arc::clone(&entity_name))})?;
+
+		let variables = ast.global_statements
+			.iter_mut().filter_map(|st| match st {GlobalStatement::Variable(x) => Some(x), _ => None})
+			.collect::<Vec<_>>();
+		for variable in variables {
+			self.check_global_expr(&variable.assignment_expr, &variable.name)?;
+			let result_ty = self.fill_expr(&ast.helper_fn_signatures, &mut variable.assignment_expr)?;
+			
+			// global expr cant call helper function and this has been checked
+			debug_assert!(!self.current_fn_calls_helper_fn);
+
+			if let ExprType::LiteralExpr{expr: LiteralExpr::IdentifierExpr{name, ..}, ..} = &variable.assignment_expr.ty 
+				&& &**name == "me" {
+				// grug_assert(!streq(global->assignment_expr.literal.string, "me"), "Global variables can't be assigned 'me'");
+				return Err(TypePropogatorError::GlobalCantBeAssignedMe {
+					name: Arc::clone(name),
+				});
+			}
+			if variable.ty != (GrugType::Id{custom_name: None}) && result_ty != variable.ty {
+			// if &result_ty != ty {
+				return Err(TypePropogatorError::VariableTypeMismatch {
+					name: Arc::clone(&variable.name),
+					got_type: result_ty.clone(),
+					expected_type: variable.ty.clone(),
+				});
+			}
+			self.add_global_variable(Arc::clone(&variable.name), result_ty)?;
+		}
+
 		let mut previous_on_fn_index = 0;
+		// on functions need to be iterated separately because grug_tests expects a certain order to the on_functions
+		let mut on_functions = ast.global_statements
+			.iter_mut().filter_map(|st| match st {GlobalStatement::OnFunction(x) => Some(x), _ => None})
+			.collect::<Vec<_>>();
+		for (on_fn_index, (on_fn_name, mod_api_on_fn)) in 
+			self.grug_state.mod_api.entities().get(&*entity_name)
+			.expect("already verified that entity exists").on_fns.iter().enumerate() 
+		{
+			let Some((current_index, current_on_fn)) = 
+				on_functions.iter_mut().enumerate()
+				.find(|(i, on_fn)| &*on_fn.name == &**on_fn_name) else 
+			{
+				continue;
+			};
+			if previous_on_fn_index > current_index {
+				return Err(TypePropogatorError::OutOfOrderOnFn {
+					entity_name: Arc::from(entity_name),
+					on_fn_name: Arc::clone(&current_on_fn.name),
+				});
+			}
+			previous_on_fn_index = current_index;
+			
+			if mod_api_on_fn.arguments.len() > current_on_fn.arguments.len() {
+				return Err(TypePropogatorError::TooFewParameters{
+					function_name: Arc::clone(&current_on_fn.name),
+					expected_name: Arc::clone(&mod_api_on_fn.arguments[current_on_fn.arguments.len()].name),
+					expected_type: mod_api_on_fn.arguments[current_on_fn.arguments.len()].ty.clone(),
+				});
+			} else if mod_api_on_fn.arguments.len() < current_on_fn.arguments.len() {
+				return Err(TypePropogatorError::TooManyParameters{
+					function_name: Arc::clone(&current_on_fn.name),
+					parameter_name: Arc::clone(&current_on_fn.arguments[mod_api_on_fn.arguments.len()].name),
+					parameter_type: current_on_fn.arguments[mod_api_on_fn.arguments.len()].ty.clone(),
+				});
+			}
+			for (param, arg) in mod_api_on_fn.arguments.iter().zip(current_on_fn.arguments.iter()) {
+				if param.name != arg.name {
+					return Err(TypePropogatorError::OnFnParameterNameMismatch {
+						function_name: Arc::clone(&current_on_fn.name),
+						got_name: Arc::clone(&arg.name),
+						expected_name: Arc::clone(&param.name),
+					});
+				}
+				if param.ty != arg.ty {
+					return Err(TypePropogatorError::OnFnParameterTypeMismatch {
+						function_name: Arc::clone(&current_on_fn.name),
+						parameter_name: Arc::clone(&param.name),
+						got_type: arg.ty.clone(),
+						expected_type: param.ty.clone(),
+					});
+				}
+			}
+			// These should only be set inside self.fill_statements
+			debug_assert!(self.local_variables.len() == 0);
+			debug_assert!(self.num_while_loops_deep == 0);
+			debug_assert!(self.current_fn_calls_helper_fn == false);
+			debug_assert!(self.current_fn_has_while_loop == false);
+			debug_assert!(self.current_fn_name == None);
+
+			self.current_fn_name = Some(Arc::clone(&current_on_fn.name));
+			self.push_scope();
+			for arg in &current_on_fn.arguments {
+				self.add_local_variable(Arc::clone(&arg.name), arg.ty.clone())?;
+			}
+			self.fill_statements(&ast.helper_fn_signatures, &mut current_on_fn.body_statements, &GrugType::Void)?;
+			self.pop_scope();
+
+			debug_assert!(self.current_fn_name.as_ref() == Some(&current_on_fn.name));
+			self.current_fn_name = None;
+
+			current_on_fn.calls_helper_fn = self.current_fn_calls_helper_fn;
+			current_on_fn.has_while_loop = self.current_fn_has_while_loop;
+			self.current_fn_calls_helper_fn = false;
+			self.current_fn_has_while_loop  = false;
+		}
+		let entity_on_functions = &self.grug_state.mod_api.entities().get(&*entity_name)
+			.expect("already checked that entity exists").on_fns;
+		for on_fn in on_functions {
+			if entity_on_functions.iter().find(|(name, entity_on_fn)| &**name == &*on_fn.name).is_none() {
+				return Err(TypePropogatorError::OnFnDoesNotExist {
+					function_name: Arc::clone(&on_fn.name),
+					entity_name: Arc::clone(&entity.name),
+				});
+			}
+		}
+		
 
 		for statement in &mut ast.global_statements {
 			match statement {
-				GlobalStatement::GlobalVariableStatement{
-					name,
-					ty,
-					assignment_expr,
-				} => {
-					self.check_global_expr(assignment_expr, &*name)?;
-					let result_ty = self.fill_expr(&ast.helper_fn_signatures, assignment_expr)?;
-					
-					// global expr cant call helper function and this has been checked
-					debug_assert!(!self.current_fn_calls_helper_fn);
-
-					if let ExprType::LiteralExpr{expr: LiteralExpr::IdentifierExpr{name, ..}, ..} = &assignment_expr.ty 
-						&& &**name == "me" {
-						// grug_assert(!streq(global->assignment_expr.literal.string, "me"), "Global variables can't be assigned 'me'");
-						return Err(TypePropogatorError::GlobalCantBeAssignedMe {
-							name: Arc::clone(name),
-						});
-					}
-					if *ty != (GrugType::Id{custom_name: None}) && &result_ty != ty {
-					// if &result_ty != ty {
-						return Err(TypePropogatorError::VariableTypeMismatch {
-							name: Arc::clone(name),
-							got_type: result_ty.clone(),
-							expected_type: ty.clone(),
-						});
-					}
-					self.add_global_variable(Arc::clone(name), result_ty)?;
-				}
-				GlobalStatement::GlobalOnFunction{
-					name,
-					arguments,
-					body_statements,
-					calls_helper_fn,
-					has_while_loop,
-				} => {
-					let (on_fn_index, grug_on_fn) = entity.get_on_fn(&**name).ok_or_else(|| TypePropogatorError::OnFnDoesNotExist{
-						function_name: Arc::clone(name),
-						entity_name: Arc::clone(&entity.name),
-					})?;
-					if on_fn_index < previous_on_fn_index {
-						return Err(TypePropogatorError::OutOfOrderOnFn {
-							entity_name: Arc::from(entity_name),
-							on_fn_name: Arc::clone(&grug_on_fn.name),
-						});
-					}
-					previous_on_fn_index = grug_on_fn.index;
-					if grug_on_fn.arguments.len() > arguments.len() {
-						return Err(TypePropogatorError::TooFewParameters{
-							function_name: Arc::clone(name),
-							expected_name: Arc::clone(&grug_on_fn.arguments[arguments.len()].name),
-							expected_type: grug_on_fn.arguments[arguments.len()].ty.clone(),
-						});
-					} else if grug_on_fn.arguments.len() < arguments.len() {
-						return Err(TypePropogatorError::TooManyParameters{
-							function_name: Arc::clone(name),
-							parameter_name: Arc::clone(&arguments[grug_on_fn.arguments.len()].name),
-							parameter_type: arguments[grug_on_fn.arguments.len()].ty.clone(),
-						});
-					}
-					for (param, arg) in grug_on_fn.arguments.iter().zip(arguments.iter()) {
-						if param.name != arg.name {
-							return Err(TypePropogatorError::OnFnParameterNameMismatch {
-								function_name: Arc::clone(name),
-								got_name: Arc::clone(&arg.name),
-								expected_name: Arc::clone(&param.name),
-							});
-						}
-						if param.ty != arg.ty {
-							return Err(TypePropogatorError::OnFnParameterTypeMismatch {
-								function_name: Arc::clone(name),
-								parameter_name: Arc::clone(&param.name),
-								got_type: arg.ty.clone(),
-								expected_type: param.ty.clone(),
-							});
-						}
-					}
-					// These should only be set inside self.fill_statements
-					debug_assert!(self.local_variables.len() == 0);
-					debug_assert!(self.num_while_loops_deep == 0);
-					debug_assert!(self.current_fn_calls_helper_fn == false);
-					debug_assert!(self.current_fn_has_while_loop == false);
-					debug_assert!(self.current_fn_name == None);
-
-					self.current_fn_name = Some(Arc::clone(name));
-					self.push_scope();
-					for arg in arguments {
-						self.add_local_variable(Arc::clone(&arg.name), arg.ty.clone())?;
-					}
-					self.fill_statements(&ast.helper_fn_signatures, body_statements, &GrugType::Void)?;
-					self.pop_scope();
-
-					debug_assert!(self.current_fn_name.as_ref() == Some(name));
-					self.current_fn_name = None;
-
-					*calls_helper_fn = self.current_fn_calls_helper_fn;
-					*has_while_loop = self.current_fn_has_while_loop;
-					self.current_fn_calls_helper_fn = false;
-					self.current_fn_has_while_loop  = false;
-				}
-				GlobalStatement::GlobalEmptyLine => (),
-				GlobalStatement::GlobalHelperFunction {
+				GlobalStatement::Variable(_) => (),
+				GlobalStatement::OnFunction(_) => (),
+				GlobalStatement::EmptyLine => (),
+				GlobalStatement::HelperFunction(HelperFunction{
 					name,
 					arguments,
 					body_statements,
 					calls_helper_fn,
 					has_while_loop,
 					return_ty,
-				} => {
+				}) => {
 					debug_assert!(self.local_variables.len() == 0);
 					debug_assert!(self.num_while_loops_deep == 0);
 					debug_assert!(self.current_fn_calls_helper_fn == false);
@@ -749,7 +767,7 @@ impl<'a> TypePropogator<'a> {
 					self.current_fn_calls_helper_fn = false;
 					self.current_fn_has_while_loop  = false;
 				}
-				GlobalStatement::GlobalComment{..} => (),
+				GlobalStatement::Comment{..} => (),
 			}
 		}
 		Ok(())
