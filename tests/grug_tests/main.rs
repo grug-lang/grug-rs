@@ -1,4 +1,5 @@
 #![deny(warnings)]
+#![allow(static_mut_refs)]
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
 use grug_rs::state::GrugState;
@@ -10,64 +11,67 @@ mod test_bindings {
 	use grug_rs::frontend;
 	use grug_rs::serde;
 	use std::ffi::{c_char, CStr, CString};
-	use std::sync::{Mutex, Arc,};
+	use std::sync::Arc;
 	use std::mem::ManuallyDrop;
 
-	pub static GLOBAL_TEST_STATE: Mutex<Option<GrugState>> = Mutex::new(None);
-	pub static CURRENT_GRUG_FILE: Mutex<Option<Arc<GrugFile>>> = Mutex::new(None);
-	pub static CURRENT_GRUG_ENTITY: Mutex<Option<GrugEntity>> = Mutex::new(None);
-	pub static CURRENT_PATH: Mutex<Option<&str>> = Mutex::new(None);
-	pub static ERROR_FUNCTION_MESSAGE: Mutex<Option<&str>> = Mutex::new(None);
+	pub static mut GLOBAL_TEST_STATE: Option<GrugState> = None;
+	pub static mut CURRENT_GRUG_FILE: Option<Arc<GrugFile>> = None;
+	pub static mut CURRENT_GRUG_ENTITY: Option<GrugEntity> = None;
+	pub static mut CURRENT_PATH: Option<&str> = None;
+
 	pub extern "C" fn compile_grug_file(path: *const c_char) -> *const c_char {
-		let path = unsafe{CStr::from_ptr(path)}.to_str().unwrap();
-		*CURRENT_PATH.lock().unwrap() = Some(path);
-		let ret_val = match frontend::compile_grug_file(GLOBAL_TEST_STATE.lock().unwrap().as_ref().unwrap(), path) {
-			Ok(file) => {
-				*CURRENT_GRUG_FILE.lock().unwrap() = Some(Arc::new(file));
-				std::ptr::null()
-			},
-			Err(err) => ManuallyDrop::new(CString::new(format!("{}", err)).unwrap()).as_ptr() as *const c_char,
-		};
-		ret_val
+		unsafe {
+			let path = CStr::from_ptr(path).to_str().unwrap();
+			CURRENT_PATH = Some(path);
+			let ret_val = match frontend::compile_grug_file(GLOBAL_TEST_STATE.as_ref().unwrap(), path) {
+				Ok(file) => {
+					CURRENT_GRUG_FILE = Some(Arc::new(file));
+					std::ptr::null()
+				},
+				Err(err) => ManuallyDrop::new(CString::new(format!("{}", err)).unwrap()).as_ptr() as *const c_char,
+			};
+			ret_val
+		}
 	}
 	pub extern "C" fn init_globals_fn_dispatcher () {
-		unsafe{GLOBAL_TEST_STATE.lock().unwrap().as_mut().unwrap().set_next_id(42)};
-		*CURRENT_GRUG_ENTITY.lock().unwrap() = Some(
-			GLOBAL_TEST_STATE
-				.lock().unwrap()
-				.as_mut().unwrap()
-				.create_entity(CURRENT_GRUG_FILE.lock().unwrap().as_ref().unwrap())
-				.expect("runtime error")
-		)
+		unsafe {
+			GLOBAL_TEST_STATE.as_ref().unwrap().clear_error();
+			GLOBAL_TEST_STATE.as_ref().unwrap().set_next_id(42);
+			CURRENT_GRUG_ENTITY = Some(
+				GLOBAL_TEST_STATE
+					.as_ref().unwrap()
+					.create_entity(CURRENT_GRUG_FILE.as_ref().unwrap())
+					.expect("runtime error")
+			)
+		}
 	}
 	#[allow(unused_variables)]
 	pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, values: *const GrugValue) {
-		*ERROR_FUNCTION_MESSAGE.lock().unwrap() = None;
-		let fn_name = unsafe{CStr::from_ptr(fn_name)}.to_str().unwrap();
-		
-		let (kind, msg) = match unsafe{GLOBAL_TEST_STATE.lock().unwrap().as_mut().unwrap()
-			.call_on_function_raw(CURRENT_GRUG_ENTITY.lock().unwrap().as_mut().unwrap(), fn_name, values)}
-		{
-			Err(RuntimeError::StackOverflow) => (0, ManuallyDrop::new(CString::new(format!("{}", RuntimeError::StackOverflow)).unwrap()).as_ptr()),
-			Err(RuntimeError::ExceededTimeLimit) => (1, ManuallyDrop::new(CString::new(format!("{}", RuntimeError::ExceededTimeLimit)).unwrap()).as_ptr()),
-			Ok(_) => {
-				if let Some(msg) = *ERROR_FUNCTION_MESSAGE.lock().unwrap() {
-					(2, msg.as_ptr().cast())
-				} else {
-					return;
-				}
+		unsafe {
+			let fn_name = CStr::from_ptr(fn_name).to_str().unwrap();
+			
+			let (kind, msg) = match GLOBAL_TEST_STATE.as_ref().unwrap()
+				.call_on_function_raw(CURRENT_GRUG_ENTITY.as_ref().unwrap(), fn_name, values)
+			{
+				Err(RuntimeError::StackOverflow) => (0, ManuallyDrop::new(CString::new(format!("{}", RuntimeError::StackOverflow)).unwrap()).as_ptr()),
+				Err(RuntimeError::ExceededTimeLimit) => (1, ManuallyDrop::new(CString::new(format!("{}", RuntimeError::ExceededTimeLimit)).unwrap()).as_ptr()),
+				Err(err@RuntimeError::GameFunctionError{..}) => (2, ManuallyDrop::new(CString::new(format!("{}", err)).unwrap()).as_ptr()),
+				Err(RuntimeError::FunctionArgumentCountMismatch {
+					expected: _,
+					got: _,
+				}) => return,
+				Ok(_) => return,
+			};
+			if !GLOBAL_TEST_STATE.as_ref().unwrap().handled_error.get() {
+				GLOBAL_TEST_STATE.as_ref().unwrap().set_handled_error();
+				grug_tests_runtime_error_handler(
+					msg, 
+					kind,
+					fn_name.as_ptr().cast(),
+					CURRENT_PATH.unwrap().as_ptr().cast(),
+				);
 			}
-			Err(RuntimeError::FunctionArgumentCountMismatch {
-				expected: _,
-				got: _,
-			}) => return,
-		};
-		unsafe{grug_tests_runtime_error_handler(
-			msg, 
-			kind,
-			fn_name.as_ptr().cast(),
-			CURRENT_PATH.lock().unwrap().unwrap().as_ptr().cast(),
-		)};
+		}
 	}
 	#[allow(unused_variables)]
 	pub extern "C" fn dump_file_to_json (input_grug_path: *const c_char, output_json_path: *const c_char) -> i32 {
@@ -97,7 +101,9 @@ mod test_bindings {
 	}
 	#[allow(unused_variables)]
 	pub extern "C" fn game_fn_error (msg: *const c_char) {
-		*ERROR_FUNCTION_MESSAGE.lock().unwrap() = Some(unsafe{CStr::from_ptr(msg).to_str().unwrap()});
+		unsafe {
+			GLOBAL_TEST_STATE.as_ref().unwrap().set_error(CStr::from_ptr(msg).to_str().unwrap())
+		}
 	}
 
 	#[allow(non_camel_case_types)]
@@ -246,7 +252,9 @@ fn main () {
 	let state = GrugState::new("src/grug-tests/mod_api.json", grug_tests_path.to_str().unwrap(), game_functions).unwrap();
 	// register_game_functions(&mut state);
 		
-	*GLOBAL_TEST_STATE.lock().unwrap() = Some(state);
+	unsafe {
+		GLOBAL_TEST_STATE = Some(state);
+	}
 
 	std::panic::set_hook(Box::new(|info| {
 		_ = std::io::stdout().write_fmt(

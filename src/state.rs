@@ -3,9 +3,10 @@ use crate::error::GrugError;
 use crate::backend::{GrugEntity, GrugFile, UninitGrugEntity};
 use crate::types::{GlobalStatement, GrugValue, Expr, ExprType, LiteralExpr, UnaryOperator, BinaryOperator, GrugType, Argument, Statement, GlobalVariable, OnFunction};
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use std::time::{Instant, Duration};
 use std::ffi::CStr;
 use std::fmt::Write;
@@ -61,17 +62,65 @@ type GameFnPtrValueArgless = extern "C" fn () -> GrugValue;
 pub struct GrugState {
 	pub(crate) mod_api: ModApi,
 	pub(crate) mods_dir_path: PathBuf,
-	pub(crate) next_id: u64,
+	pub(crate) next_id: AtomicU64,
 	pub(crate) game_functions: HashMap<&'static str, GameFnPtr>,
 
 	// should be moved into backend later
-	local_variables: Vec<Vec<HashMap<Arc<str>, GrugValue>>>,
-	current_fn_call_depth: usize,
-	call_start_time: Instant,
+	call_start_time: Cell<Instant>,
+	error: Cell<Option<&'static str>>,
+	pub handled_error: Cell<bool>,
 }
 
-// const ON_FN_TIME_LIMIT: u64 = 10; // ms
-const ON_FN_TIME_LIMIT: u64 = 2000000; // ms
+pub struct CallStack {
+	local_variables: Vec<Vec<HashMap<Arc<str>, GrugValue>>>,
+}
+
+impl CallStack {
+	fn new() -> Self {
+		Self {
+			local_variables: Vec::new(),
+		}
+	}
+	
+	fn pop_scope(&mut self) {
+		self.local_variables.last_mut()
+			.expect("must already have a stack frame").pop()
+			.expect("must have scope");
+	}
+
+	fn add_local_variable(&mut self, name: Arc<str>, value: GrugValue) {
+		assert!(self.local_variables.last_mut()
+			.expect("must have stack frame").last_mut()
+			.expect("last frame must have scope").insert(name, value)
+			.is_none(), "variable already exists");
+	}
+
+	fn pop_stack_frame(&mut self) {
+		self.local_variables.pop().expect("must have stack frame");
+	}
+
+	fn push_scope(&mut self) {
+		self.local_variables.last_mut()
+			.expect("must already have a stack frame")
+			.push(HashMap::new());
+	}
+
+	fn push_stack_frame(&mut self) {
+		self.local_variables.push(Vec::new());
+	}
+
+	fn get_local_variable(&mut self, name: &str) -> Option<&mut GrugValue> {
+		for scope in self.local_variables.last_mut()?{
+			if let Some(val) = scope.get_mut(name) {
+				return Some(val)
+			}
+		}
+		None
+	}
+}
+
+const ON_FN_TIME_LIMIT: u64 = 100; // ms
+// const ON_FN_TIME_LIMIT: u64 = 2000000; // ms
 
 const MAX_RECURSION_LIMIT: usize = 100;
 
@@ -91,22 +140,21 @@ impl GrugState {
 		Ok(Self {
 			mod_api,
 			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
-			next_id: 0,
+			next_id: AtomicU64::new(0),
 			game_functions,
-			local_variables: Vec::new(),
-			current_fn_call_depth: 0,
-			call_start_time: Instant::now()
+			call_start_time: Cell::new(Instant::now()),
+			error: Cell::new(None),
+			handled_error: Cell::new(false),
 		})
 	}
 
-	pub fn create_entity(&mut self, file: &Arc<GrugFile>) -> Result<GrugEntity, RuntimeError> {
+	pub fn create_entity(&self, file: &Arc<GrugFile>) -> Result<GrugEntity, RuntimeError> {
 		let me_id = self.get_id();
 		let mut temp_entity = UninitGrugEntity {
 			id: me_id, 
-			global_variables: HashMap::from([(Arc::from("me"), GrugValue{id:me_id})]),
+			global_variables: HashMap::from([(Arc::from("me"), Cell::new(GrugValue{id:me_id}))]),
 			file: Arc::clone(file),
 		};
-		self.reset_steady_state();
 		self.init_global_variables(&mut temp_entity, &file.global_variables)?;
 		
 		Ok(GrugEntity {
@@ -116,27 +164,36 @@ impl GrugState {
 		})
 	}
 
-	pub fn get_id(&mut self) -> u64 {
-		let next_id = self.next_id;
-		self.next_id += 1;
-		next_id
+	pub fn get_id(&self) -> u64 {
+		self.next_id.fetch_add(1, Ordering::Relaxed)
 	}
 
-	pub unsafe fn set_next_id(&mut self, next_id: u64) {
-		self.next_id = next_id;
+	pub unsafe fn set_next_id(&self, next_id: u64) {
+		self.next_id.store(next_id, Ordering::Relaxed);
 	}
 
-	fn init_global_variables(&mut self, entity: &mut UninitGrugEntity, globals: &[GlobalVariable]) -> Result<(), RuntimeError> {
-		self.current_fn_call_depth += 1;
-		self.call_start_time = Instant::now();
+	fn init_global_variables(&self, entity: &mut UninitGrugEntity, globals: &[GlobalVariable]) -> Result<(), RuntimeError> {
+		self.call_start_time.set(Instant::now());
 		globals.iter().map(|variable| {
 			let value = self.init_global_exprs(entity, &variable.assignment_expr)?;
-			entity.global_variables.insert(Arc::clone(&variable.name), value);
+			entity.global_variables.insert(Arc::clone(&variable.name), Cell::new(value));
 			Ok(())
 		}).collect::<Result<Vec<_>, _>>()?;
-		self.current_fn_call_depth -= 1;
-		debug_assert!(self.current_fn_call_depth == 0);
 		Ok(())
+	}
+
+	pub fn clear_error(&self) {
+		self.error.set(None);
+		self.handled_error.set(false);
+	}
+
+	pub fn set_error(&self, error: &'static str) {
+		self.error.set(Some(error));
+		self.handled_error.set(false);
+	}
+
+	pub fn set_handled_error(&self) {
+		self.handled_error.set(true);
 	}
 }
 
@@ -149,29 +206,20 @@ enum GrugControlFlow {
 
 // should be moved into backend later
 impl GrugState {
-	fn reset_steady_state(&mut self) {
-		self.local_variables.clear();
-		self.current_fn_call_depth = 0;
-	}
-
-	fn assert_steady_state(&self) {
-		debug_assert!(self.local_variables.len() == 0);
-		debug_assert!(self.current_fn_call_depth == 0);
-	}
-
-	pub unsafe fn call_on_function_raw(&mut self, entity: &mut GrugEntity, function_name: &str, values: *const GrugValue) -> Result<(), RuntimeError> {
+	pub unsafe fn call_on_function_raw(&self, entity: &GrugEntity, function_name: &str, values: *const GrugValue) -> Result<(), RuntimeError> {
 		let file = Arc::clone(&entity.file);
 		for on_function in &file.on_functions {
 			if &*on_function.name != function_name {
 				continue;
 			}
-			debug_assert!(self.local_variables.len() == 0);
 			let values = if on_function.arguments.len() == 0 {
 				&[]
 			} else {
 				unsafe{std::slice::from_raw_parts(values, on_function.arguments.len())}
 			};
+			self.call_start_time.set(Instant::now());
 			self.run_function(
+				&mut CallStack::new(),
 				entity, 
 				&on_function.arguments, 
 				values,
@@ -181,22 +229,27 @@ impl GrugState {
 		Ok(())
 	}
 
-	pub fn call_on_function(&mut self, entity: &mut GrugEntity, function_name: &str, values: &[GrugValue]) -> Result<(), RuntimeError> {
+	pub fn call_on_function(&self, entity: &GrugEntity, function_name: &str, values: &[GrugValue]) -> Result<(), RuntimeError> {
 		let file = Arc::clone(&entity.file);
 		for on_function in &file.on_functions {
 			if &*on_function.name != function_name {
 				continue;
 			}
-			self.assert_steady_state();
-			self.run_function(entity, &on_function.arguments, values, &on_function.body_statements)?;
-			self.assert_steady_state();
+			self.call_start_time.set(Instant::now());
+			self.run_function(
+				&mut CallStack::new(), 
+				entity, 
+				&on_function.arguments, 
+				values, 
+				&on_function.body_statements
+			)?;
 			break;
 		}
 		Ok(())
 	}
 
-	fn run_function(&mut self, entity: &mut GrugEntity, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
-		if self.current_fn_call_depth > MAX_RECURSION_LIMIT {
+	fn run_function(&self, call_stack: &mut CallStack, entity: &GrugEntity, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
+		if call_stack.local_variables.len() > MAX_RECURSION_LIMIT {
 			return Err(RuntimeError::StackOverflow)
 		}
 		if arguments.len() != values.len() {
@@ -205,15 +258,13 @@ impl GrugState {
 				got: values.len(),
 			});
 		}
-		self.push_stack_frame();
-		self.push_scope();
+		call_stack.push_stack_frame();
+		call_stack.push_scope();
 
 		for (argument, value) in arguments.iter().zip(values) {
-			self.add_local_variable(Arc::clone(&argument.name), *value);
+			call_stack.add_local_variable(Arc::clone(&argument.name), *value);
 		}
-		self.current_fn_call_depth += 1;
-		let value = self.run_statements(entity, statements)?;
-		self.current_fn_call_depth -= 1;
+		let value = self.run_statements(call_stack, entity, statements)?;
 		let value = match value {
 			GrugControlFlow::Return(value) => value,
 			GrugControlFlow::None          => GrugValue{void: ()},
@@ -221,13 +272,13 @@ impl GrugState {
 			GrugControlFlow::Continue      => unreachable!(),
 		};
 
-		self.pop_scope();
-		self.pop_stack_frame();
+		call_stack.pop_scope();
+		call_stack.pop_stack_frame();
 		Ok(value)
 	}
 
-	fn run_statements(&mut self, entity: &mut GrugEntity, statements: &[Statement]) -> Result<GrugControlFlow, RuntimeError> {
-		self.push_scope();
+	fn run_statements(&self, call_stack: &mut CallStack, entity: &GrugEntity, statements: &[Statement]) -> Result<GrugControlFlow, RuntimeError> {
+		call_stack.push_scope();
 		let mut ret_val = GrugControlFlow::None;
 		'outer: for statement in statements {
 			match statement {
@@ -236,23 +287,23 @@ impl GrugState {
 					ty,
 					assignment_expr,
 				} => {
-					let assignment_expr = self.run_expr(entity, assignment_expr)?;
+					let assignment_expr = self.run_expr(call_stack, entity, assignment_expr)?;
 					if let Some(_) = ty {
-						self.add_local_variable(Arc::clone(name), assignment_expr);
+						call_stack.add_local_variable(Arc::clone(name), assignment_expr);
 					} else {
-						*(if let Some(var) = self.get_local_variable(&**name) {
-							var
+						if let Some(var) = call_stack.get_local_variable(&**name) {
+							*var = assignment_expr;
 						} else if let Some(var) = entity.get_global_variable(&**name) {
-							var
+							var.set(assignment_expr);
 						} else {
 							panic!("variable not found");
-						}) = assignment_expr;
+						}
 					}
 				},
 				Statement::CallStatement {
 					expr
 				} => {
-					self.run_expr(entity, expr)?;
+					self.run_expr(call_stack, entity, expr)?;
 				},
 				Statement::IfStatement{
 					condition,
@@ -260,10 +311,10 @@ impl GrugState {
 					else_if_statements,
 					else_statements,
 				} => {
-					let condition = unsafe{self.run_expr(entity, condition)?.bool};
+					let condition = unsafe{self.run_expr(call_stack, entity, condition)?.bool};
 					// if statement
 					if condition != 0 {
-						let control_flow = self.run_statements(entity, if_statements)?;
+						let control_flow = self.run_statements(call_stack, entity, if_statements)?;
 						if let GrugControlFlow::None = control_flow {
 							continue;
 						} else {
@@ -273,9 +324,9 @@ impl GrugState {
 					} else {
 						// else if statements
 						for (condition, else_if_statements) in else_if_statements {
-							let condition = unsafe{self.run_expr(entity, condition)?.bool};
+							let condition = unsafe{self.run_expr(call_stack, entity, condition)?.bool};
 							if condition != 0 {
-								let control_flow = self.run_statements(entity, else_if_statements)?;
+								let control_flow = self.run_statements(call_stack, entity, else_if_statements)?;
 								if let GrugControlFlow::None = control_flow {
 									// go to the next outer statment if any else if
 									// condition was true and there was no return
@@ -288,7 +339,7 @@ impl GrugState {
 						}
 						// else statements
 						if let Some(else_statements) = else_statements {
-							let control_flow = self.run_statements(entity, else_statements)?;
+							let control_flow = self.run_statements(call_stack, entity, else_statements)?;
 							if let GrugControlFlow::None = control_flow {
 								continue;
 							} else {
@@ -302,7 +353,7 @@ impl GrugState {
 					expr,
 				} => {
 					if let Some(expr) = expr {
-						ret_val = GrugControlFlow::Return(self.run_expr(entity, expr)?);
+						ret_val = GrugControlFlow::Return(self.run_expr(call_stack, entity, expr)?);
 					} else {
 						ret_val = GrugControlFlow::Return(GrugValue{void: ()});
 					}
@@ -313,11 +364,11 @@ impl GrugState {
 					statements,
 				} => {
 					loop {
-						let condition = unsafe{self.run_expr(entity, condition)?.bool};
+						let condition = unsafe{self.run_expr(call_stack, entity, condition)?.bool};
 						if condition == 0 {
 							break;
 						}
-						match self.run_statements(entity, statements)? {
+						match self.run_statements(call_stack, entity, statements)? {
 							GrugControlFlow::Return(value) => {
 								ret_val = GrugControlFlow::Return(value);
 								break 'outer;
@@ -342,12 +393,12 @@ impl GrugState {
 				Statement::EmptyLineStatement => (),
 			}
 		}
-		self.pop_scope();
+		call_stack.pop_scope();
 		Ok(ret_val)
 	}
 
-	fn init_global_exprs(&mut self, entity: &mut UninitGrugEntity, expr: &Expr) -> Result<GrugValue, RuntimeError> {
-		if Instant::elapsed(&self.call_start_time) > Duration::from_millis(ON_FN_TIME_LIMIT) {
+	fn init_global_exprs(&self, entity: &mut UninitGrugEntity, expr: &Expr) -> Result<GrugValue, RuntimeError> {
+		if Instant::elapsed(&self.call_start_time.get()) > Duration::from_millis(ON_FN_TIME_LIMIT) {
 			return Err(RuntimeError::ExceededTimeLimit);
 		}
 		Ok(match &expr.ty {
@@ -375,8 +426,9 @@ impl GrugState {
 					LiteralExpr::IdentifierExpr {
 						name,
 					} => {
-						*entity.global_variables.get(name)
+						entity.global_variables.get(name)
 							.expect("variable not found")
+							.get()
 					}
 				}
 			},
@@ -396,22 +448,46 @@ impl GrugState {
 				operands,
 				operator,
 			} => {
-				let values = (self.init_global_exprs(entity, &operands.0)?, self.init_global_exprs(entity, &operands.1)?);
-				debug_assert!(operands.0.result_ty == operands.1.result_ty);
+				let first_value = self.init_global_exprs(entity, &operands.0)?; 
+				let mut second_value = || self.init_global_exprs(entity, &operands.1);
+				debug_assert!(GrugType::match_non_exact(operands.0.result_ty.as_ref().unwrap(), operands.1.result_ty.as_ref().unwrap()));
+				// debug_assert!(operands.0.result_ty == operands.1.result_ty || matches!((&operands.0.result_ty, &operands.1.result_ty), (Some(GrugType::Id{custom_name: None}), Some(GrugType::Id{..})) | (Some(GrugType::Id{..}), Some(GrugType::Id{custom_name: None}))));
 				match (operator, &operands.0.result_ty) {
-					(BinaryOperator::Or,             Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{values.0.bool | values.1.bool}},
-					(BinaryOperator::And,            Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{(values.0.bool == 0 && values.1.bool == 0) as u8}},
-					(BinaryOperator::DoubleEquals,   _                     )  => unimplemented!(),
-					(BinaryOperator::NotEquals,      _                     )  => unimplemented!(),
-					(BinaryOperator::Greater,        Some(GrugType::Number))  => GrugValue{bool: unsafe{values.0.number > values.1.number} as u8},
-					(BinaryOperator::GreaterEquals,  Some(GrugType::Number))  => GrugValue{bool: unsafe{values.0.number >= values.1.number} as u8},
-					(BinaryOperator::Less,           Some(GrugType::Number))  => GrugValue{bool: unsafe{values.0.number < values.1.number} as u8},
-					(BinaryOperator::LessEquals,     Some(GrugType::Number))  => GrugValue{bool: unsafe{values.0.number <= values.1.number} as u8},
-					(BinaryOperator::Plus,           Some(GrugType::Number))  => GrugValue{number: unsafe{values.0.number + values.1.number}},
-					(BinaryOperator::Minus,          Some(GrugType::Number))  => GrugValue{number: unsafe{values.0.number - values.1.number}},
-					(BinaryOperator::Multiply,       Some(GrugType::Number))  => GrugValue{number: unsafe{values.0.number * values.1.number}},
-					(BinaryOperator::Division,       Some(GrugType::Number))  => GrugValue{number: unsafe{values.0.number / values.1.number}},
-					(BinaryOperator::Remainder,      Some(GrugType::Number))  => GrugValue{number: unsafe{values.0.number % values.1.number}},
+					(BinaryOperator::Or,             Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{first_value.bool | second_value()?.bool}},
+					(BinaryOperator::And,            Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{(first_value.bool != 0 && second_value()?.bool != 0) as u8}},
+					(BinaryOperator::DoubleEquals,   Some(ty)              )  => {
+						let value = match ty {
+							GrugType::Bool => !unsafe{(first_value.bool == 0) ^ (second_value()?.bool == 0)},
+							GrugType::Number => unsafe{first_value.number == second_value()?.number},
+							GrugType::Id{..} => unsafe{first_value.id == second_value()?.id},
+							GrugType::String => {
+								unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
+							},
+							_ => unreachable!(),
+						};
+						GrugValue{bool: value as u8}
+					},
+					(BinaryOperator::NotEquals,      Some(ty)              )  => {
+						let value = match ty {
+							GrugType::Bool => unsafe{(first_value.bool == 0) ^ (second_value()?.bool == 0)}
+							GrugType::Number => unsafe{first_value.number != second_value()?.number}
+							GrugType::Id{..} => unsafe{first_value.id != second_value()?.id}
+							GrugType::String => {
+								!unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
+							}
+							_ => unreachable!(),
+						};
+						GrugValue{bool: value as u8}
+					},
+					(BinaryOperator::Greater,        Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number > second_value()?.number} as u8},
+					(BinaryOperator::GreaterEquals,  Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number >= second_value()?.number} as u8},
+					(BinaryOperator::Less,           Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number < second_value()?.number} as u8},
+					(BinaryOperator::LessEquals,     Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number <= second_value()?.number} as u8},
+					(BinaryOperator::Plus,           Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number + second_value()?.number}},
+					(BinaryOperator::Minus,          Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number - second_value()?.number}},
+					(BinaryOperator::Multiply,       Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number * second_value()?.number}},
+					(BinaryOperator::Division,       Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number / second_value()?.number}},
+					(BinaryOperator::Remainder,      Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number % second_value()?.number}},
 					_ => unreachable!(),
 				}
 			}
@@ -425,14 +501,18 @@ impl GrugState {
 				let values = arguments.iter().map(|argument| self.init_global_exprs(entity, argument)).collect::<Result<Vec<_>, _>>()?;
 				let game_fn = self.game_functions.get(&**function_name).expect("can't find game function");
 				let return_ty = &self.mod_api.game_functions().get(function_name).unwrap().return_ty;
-				match (values.len(), return_ty) {
-					(0, GrugType::Void) => unreachable!(),
-					(_, GrugType::Void) => unreachable!(),
-					// (0, GrugType::Void) => unsafe{(game_fn.void_argless)(); GrugValue{void: ()}},
-					// (_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
+				let ret_val = match (values.len(), return_ty) {
+					(0, GrugType::Void) => unsafe{(game_fn.void_argless)(); GrugValue{void: ()}},
 					(0, _             ) => unsafe{(game_fn.value_argless)()},
+					(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
 					(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
+				};
+				if let Some(err) = self.error.get() {
+					return Err(RuntimeError::GameFunctionError{
+						message: err,
+					})
 				}
+				ret_val
 			}
 			ExprType::ParenthesizedExpr{
 				expr,
@@ -444,8 +524,8 @@ impl GrugState {
 		})
 	}
 
-	fn run_expr(&mut self, entity: &mut GrugEntity, expr: &Expr) -> Result<GrugValue, RuntimeError> {
-		if Instant::elapsed(&self.call_start_time) > Duration::from_millis(ON_FN_TIME_LIMIT) {
+	fn run_expr(&self, call_stack: &mut CallStack, entity: &GrugEntity, expr: &Expr) -> Result<GrugValue, RuntimeError> {
+		if Instant::elapsed(&self.call_start_time.get()) > Duration::from_millis(ON_FN_TIME_LIMIT) {
 			return Err(RuntimeError::ExceededTimeLimit);
 		}
 		Ok(match &expr.ty {
@@ -473,8 +553,13 @@ impl GrugState {
 					LiteralExpr::IdentifierExpr{
 						name,
 					} => {
-						*self.get_local_variable(name).or_else(|| entity.get_global_variable(name))
-							.expect("could not find variable")
+						if let Some(var) = call_stack.get_local_variable(name) {
+							*var
+						} else {
+							entity.get_global_variable(name)
+								.expect("could not find variable")
+								.get()
+						}
 					},
 				}
 			},
@@ -482,7 +567,7 @@ impl GrugState {
 				operator,
 				expr,
 			} => {
-				let mut value = self.run_expr(entity, &expr)?;
+				let mut value = self.run_expr(call_stack, entity, &expr)?;
 				match (operator, &expr.result_ty) {
 					(UnaryOperator::Not, Some(GrugType::Bool)) => unsafe{value.bool = (value.bool == 0) as u8},
 					(UnaryOperator::Minus, Some(GrugType::Number)) => unsafe{value.number = -value.number},
@@ -494,8 +579,8 @@ impl GrugState {
 				operands,
 				operator,
 			} => {
-				let first_value = self.run_expr(entity, &operands.0)?; 
-				let mut second_value = || self.run_expr(entity, &operands.1);
+				let first_value = self.run_expr(call_stack, entity, &operands.0)?; 
+				let mut second_value = || self.run_expr(call_stack, entity, &operands.1);
 				debug_assert!(GrugType::match_non_exact(operands.0.result_ty.as_ref().unwrap(), operands.1.result_ty.as_ref().unwrap()));
 				// debug_assert!(operands.0.result_ty == operands.1.result_ty || matches!((&operands.0.result_ty, &operands.1.result_ty), (Some(GrugType::Id{custom_name: None}), Some(GrugType::Id{..})) | (Some(GrugType::Id{..}), Some(GrugType::Id{custom_name: None}))));
 				match (operator, &operands.0.result_ty) {
@@ -544,12 +629,12 @@ impl GrugState {
 				col: _,
 			} if function_name.starts_with("helper_") => {
 				let file = Arc::clone(&entity.file);
-				let values = arguments.iter().map(|argument| self.run_expr(entity, argument)).collect::<Result<Vec<_>, _>>()?;
+				let values = arguments.iter().map(|argument| self.run_expr(call_stack, entity, argument)).collect::<Result<Vec<_>, _>>()?;
 				for helper_fn in &file.helper_functions {
 					if helper_fn.name != *function_name {
 						continue;
 					}
-					return Ok(self.run_function(entity, &*helper_fn.arguments, &values, &*helper_fn.body_statements)?);
+					return Ok(self.run_function(call_stack, entity, &*helper_fn.arguments, &values, &*helper_fn.body_statements)?);
 				}
 				unreachable!("helper function not found");
 			}
@@ -559,67 +644,40 @@ impl GrugState {
 				line: _,
 				col: _,
 			} => {
-				let values = arguments.iter().map(|argument| self.run_expr(entity, argument)).collect::<Result<Vec<_>, _>>()?;
+				let values = arguments.iter().map(|argument| self.run_expr(call_stack, entity, argument)).collect::<Result<Vec<_>, _>>()?;
 				let game_fn = self.game_functions.get(&**function_name).expect("can't find game function");
 				let return_ty = &self.mod_api.game_functions().get(function_name).unwrap().return_ty;
-				match (values.len(), return_ty) {
+				let ret_val = match (values.len(), return_ty) {
 					(0, GrugType::Void) => unsafe{(game_fn.void_argless)(); GrugValue{void: ()}},
 					(0, _             ) => unsafe{(game_fn.value_argless)()},
 					(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
 					(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
+				};
+				if let Some(err) = self.error.get() {
+					return Err(RuntimeError::GameFunctionError{
+						message: err,
+					})
 				}
+				ret_val
 			}
 			ExprType::ParenthesizedExpr{
 				expr,
 				line: _,
 				col: _,
 			} => {
-				self.run_expr(entity, expr)?
+				self.run_expr(call_stack, entity, expr)?
 			}
 		})
 	}
-	
-	fn pop_scope(&mut self) {
-		self.local_variables.last_mut()
-			.expect("must already have a stack frame").pop()
-			.expect("must have scope");
-	}
-
-	fn add_local_variable(&mut self, name: Arc<str>, value: GrugValue) {
-		assert!(self.local_variables.last_mut()
-			.expect("must have stack frame").last_mut()
-			.expect("last frame must have scope").insert(name, value)
-			.is_none(), "variable already exists");
-	}
-
-	fn pop_stack_frame(&mut self) {
-		self.local_variables.pop().expect("must have stack frame");
-	}
-
-	fn push_scope(&mut self) {
-		self.local_variables.last_mut()
-			.expect("must already have a stack frame")
-			.push(HashMap::new());
-	}
-
-	fn push_stack_frame(&mut self) {
-		self.local_variables.push(Vec::new());
-	}
-
-	fn get_local_variable(&mut self, name: &str) -> Option<&mut GrugValue> {
-		for scope in self.local_variables.last_mut()?{
-			if let Some(val) = scope.get_mut(name) {
-				return Some(val)
-			}
-		}
-		None
-	}
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RuntimeError {
 	ExceededTimeLimit,
 	StackOverflow,
+	GameFunctionError{
+		message: &'static str,
+	},
 	FunctionArgumentCountMismatch {
 		expected: usize,
 		got: usize,
@@ -629,8 +687,9 @@ pub enum RuntimeError {
 impl std::fmt::Display for RuntimeError {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
-			Self::ExceededTimeLimit => write!(f, "{:?}", self),
+			Self::ExceededTimeLimit => write!(f, "Took longer than {} milliseconds to run", ON_FN_TIME_LIMIT),
 			Self::StackOverflow => write!(f, "Stack overflow, so check for accidental infinite recursion"),
+			Self::GameFunctionError{message} => write!(f, "{}", message),
 			Self::FunctionArgumentCountMismatch {
 				expected: _,
 				got: _,
