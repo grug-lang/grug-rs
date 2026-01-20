@@ -3,7 +3,7 @@ name = "gruggers"
 version = "0.1.0"
 edition = "2024"
 description = "rust implementation of the grug language"
-license = "MIT License"
+license = "MIT"
 
 [dependencies]
 json = "0.12.4"
