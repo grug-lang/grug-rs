@@ -2,14 +2,14 @@
 #![allow(static_mut_refs)]
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
-use grug_rs::state::GrugState;
+use gruggers::state::GrugState;
 
 mod test_bindings {
-	use grug_rs::state::{GrugState, RuntimeError};
-	use grug_rs::backend::{GrugFile, GrugEntity};
-	use grug_rs::types::{GrugValue};
-	use grug_rs::frontend;
-	use grug_rs::serde;
+	use gruggers::state::{GrugState, RuntimeError};
+	use gruggers::backend::{GrugFile, GrugEntity};
+	use gruggers::types::{GrugValue};
+	use gruggers::frontend;
+	use gruggers::serde;
 	use std::ffi::{c_char, CStr, CString};
 	use std::sync::Arc;
 	use std::mem::ManuallyDrop;
@@ -144,8 +144,8 @@ mod test_bindings {
 use test_bindings::*;
 
 mod game_fn_bindings {
-	use grug_rs::types::GrugValue;
-	use grug_rs::state::GameFnPtr;
+	use gruggers::types::GrugValue;
+	use gruggers::state::GameFnPtr;
 	use std::collections::HashMap;
 	#[link(name = "tests", kind="dylib")]
 	unsafe extern "C" {
