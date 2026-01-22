@@ -3,13 +3,22 @@ use std::ffi::{CString, c_char, c_double};
 use crate::ntstring::NTStr;
 // TODO Unnest some of these enums
 
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq)]
+pub struct GrugId(u64);
+
+impl GrugId {
+	pub(crate) fn new(id: u64) -> Self {
+		Self(id)
+	}
+}
+
 #[repr(C)]
-#[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
 pub union GrugValue {
 	pub number: c_double,
 	pub bool: u8,
-	pub id: u64,
+	pub id: GrugId,
 	pub string: *const c_char,
 	pub void: (),
 }

@@ -1,4 +1,4 @@
-use crate::types::{GlobalStatement, GrugValue, GlobalVariable, OnFunction, HelperFunction};
+use crate::types::{GlobalStatement, GrugValue, GlobalVariable, OnFunction, HelperFunction, GrugId};
 use std::cell::Cell;
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -10,13 +10,13 @@ pub struct GrugFile {
 }
 
 pub struct UninitGrugEntity {
-	pub(crate) id: u64,
+	pub(crate) id: GrugId,
 	pub(crate) global_variables: HashMap<Arc<str>, Cell<GrugValue>>,
 	pub(crate) file: Arc<GrugFile>,
 }
 
 pub struct GrugEntity {
-	pub(crate) id: u64,
+	pub(crate) id: GrugId,
 	pub(crate) global_variables: HashMap<Arc<str>, Cell<GrugValue>>,
 	pub(crate) file: Arc<GrugFile>,
 }
@@ -26,3 +26,4 @@ impl GrugEntity {
 		self.global_variables.get(name)
 	}
 }
+

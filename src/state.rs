@@ -1,7 +1,7 @@
 use crate::mod_api::{ModApi, get_mod_api, ModApiError};
 use crate::error::GrugError;
 use crate::backend::{GrugEntity, GrugFile, UninitGrugEntity};
-use crate::types::{GlobalStatement, GrugValue, Expr, ExprType, LiteralExpr, UnaryOperator, BinaryOperator, GrugType, Argument, Statement, GlobalVariable, OnFunction};
+use crate::types::{GlobalStatement, GrugValue, Expr, ExprType, LiteralExpr, UnaryOperator, BinaryOperator, GrugType, Argument, Statement, GlobalVariable, OnFunction, GrugId};
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -64,7 +64,7 @@ pub struct GrugState {
 	pub(crate) mods_dir_path: PathBuf,
 	pub(crate) next_id: AtomicU64,
 	pub(crate) game_functions: HashMap<&'static str, GameFnPtr>,
-
+	
 	// should be moved into backend later
 	call_start_time: Cell<Instant>,
 	error: Cell<Option<&'static str>>,
@@ -164,8 +164,8 @@ impl GrugState {
 		})
 	}
 
-	pub fn get_id(&self) -> u64 {
-		self.next_id.fetch_add(1, Ordering::Relaxed)
+	pub fn get_id(&self) -> GrugId {
+		GrugId::new(self.next_id.fetch_add(1, Ordering::Relaxed))
 	}
 
 	pub unsafe fn set_next_id(&self, next_id: u64) {
