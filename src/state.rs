@@ -1,14 +1,13 @@
 use crate::mod_api::{ModApi, get_mod_api, ModApiError};
 use crate::error::GrugError;
-use crate::backend::{GrugEntity, GrugFile, UninitGrugEntity, Backend, RuntimeError};
-use crate::types::{GrugValue, Expr, ExprType, LiteralExpr, UnaryOperator, BinaryOperator, GrugType, Argument, Statement, GlobalVariable, GrugId};
+use crate::backend::{UninitGrugEntity, Backend, RuntimeError};
+use crate::types::{GrugValue, GlobalVariable, GrugId};
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
-use std::time::{Instant, Duration};
-use std::ffi::CStr;
+use std::time::Instant;
 
 #[repr(C)]
 pub union GameFnPtr {
@@ -71,28 +70,36 @@ pub struct GrugState {
 	pub handled_error: Cell<bool>,
 }
 impl GrugState {
-	pub fn new<'a, J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, game_functions: HashMap<&'static str, GameFnPtr>) -> Result<Self, GrugError<'a>> {
+	pub fn new<'a, J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D) -> Result<Self, GrugError<'a>> {
 		let mod_api_text = std::fs::read_to_string(mod_api_path).unwrap();
 		let mod_api = get_mod_api(&mod_api_text)?;
 
-		for game_fn_name in mod_api.game_functions().keys() {
-			if !game_functions.contains_key(&**game_fn_name) {
-				Err(ModApiError::GameFnNotProvided{
-					game_fn_name: String::from(&**game_fn_name),
-				})?;
-			}
-		}
-		
 		Ok(Self {
 			mod_api,
 			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
 			next_id: AtomicU64::new(0),
-			game_functions,
+			game_functions: HashMap::new(),
 			backend: Backend::new(),
 			call_start_time: Cell::new(Instant::now()),
 			error: Cell::new(None),
 			handled_error: Cell::new(false),
 		})
+	}
+
+	pub fn register_game_fn<F: Into<GameFnPtr>>(&mut self, name: &'static str, ptr: F) {
+		self.game_functions.insert(name, ptr.into());
+	}
+
+	pub fn all_game_fns_registered(&self) -> bool {
+		for game_fn_name in self.mod_api.game_functions().keys() {
+			if !self.game_functions.contains_key(&**game_fn_name) {
+				return false;
+				// Err(ModApiError::GameFnNotProvided{
+				// 	game_fn_name: String::from(&**game_fn_name),
+				// })?;
+			}
+		}
+		return true;
 	}
 
 	pub fn get_id(&self) -> GrugId {
@@ -109,16 +116,6 @@ impl GrugState {
 
 	pub fn create_entity(&self, file_path: &str) -> Result<GrugId, RuntimeError> {
 		self.backend.create_entity(self, file_path)
-	}
-
-	fn init_global_variables(&self, entity: &mut UninitGrugEntity, globals: &[GlobalVariable]) -> Result<(), RuntimeError> {
-		self.call_start_time.set(Instant::now());
-		globals.iter().map(|variable| {
-			let value = self.backend.init_global_exprs(self, entity, &variable.assignment_expr)?;
-			entity.global_variables.insert(Arc::clone(&variable.name), Cell::new(value));
-			Ok(())
-		}).collect::<Result<Vec<_>, _>>()?;
-		Ok(())
 	}
 
 	pub fn clear_entities(&mut self) {
@@ -140,13 +137,6 @@ impl GrugState {
 	}
 }
 
-enum GrugControlFlow {
-	Return(GrugValue),
-	Break,
-	Continue,
-	None,
-}
-
 // should be moved into backend later
 impl GrugState {
 	/// # SAFETY 
@@ -154,7 +144,9 @@ impl GrugState {
 	/// the number of arguments expected by `function_name`. If there are no arguments, 
 	/// `values` may be null
 	pub unsafe fn call_on_function_raw(&self, entity: GrugId, function_name: &str, values: *const GrugValue) -> Result<(), RuntimeError> {
-		self.backend.call_on_function_raw(self, entity, function_name, values)
+		unsafe {
+			self.backend.call_on_function_raw(self, entity, function_name, values)
+		}
 	}
 
 	pub fn call_on_function(&self, entity: GrugId, function_name: &str, values: &[GrugValue]) -> Result<(), RuntimeError> {

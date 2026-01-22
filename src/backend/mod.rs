@@ -31,7 +31,7 @@ const ON_FN_TIME_LIMIT: u64 = 100; // ms
 const MAX_RECURSION_LIMIT: usize = 100;
 
 pub mod interpreter {
-	use crate::types::{GlobalStatement, GrugValue, GlobalVariable, OnFunction, HelperFunction, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator};
+	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator};
 	use super::{GrugEntity, RuntimeError, UninitGrugEntity, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT, GrugFile};
 	use crate::state::GrugState;
 	use crate::cachemap::CacheMap;

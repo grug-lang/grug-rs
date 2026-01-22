@@ -1,0 +1,6 @@
+on_bark(message: string) {
+    print_string(message)
+    if message == "arf" {
+        print_string(message)
+    }
+}

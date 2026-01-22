@@ -1,0 +1,29 @@
+{
+	"entities": {
+		"dog": {
+			"description": "An actor that can fight.",
+			"on_functions": {
+				"on_bark": {
+					"description": "Called when the entity is supposed to bark",
+					"arguments": [
+						{
+							"name": "message",
+							"type": "string"
+						}
+					]
+				}
+			}
+		}
+	},
+	"game_functions": {
+		"print_string": {
+			"description": "Prints a string",
+			"arguments": [
+				{
+					"name": "msg",
+					"type": "string"
+				}
+			]
+		}
+	}
+}

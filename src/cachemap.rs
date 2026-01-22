@@ -25,19 +25,19 @@ impl<K: Hash + Eq, V> CacheMap<K, V> {
 		Some(unsafe{&*(&**self.0.borrow().get(key)? as *const _)})
 	}
 
-	pub fn get_or_insert_with<Q, KF, VF>(&self, key: &Q, kf: KF, vf: VF) -> &V where 
-		K: Borrow<Q>,
-		Q: Hash + Eq + ?Sized,
-		KF: FnOnce() -> K,
-		VF: FnOnce() -> V,
-	{
-		if let Some(value) = self.0.borrow().get(key) {
-			return unsafe{&*(&**value as *const _)};
-		} else {
-			self.0.borrow_mut().insert(kf(), Box::new(vf()));
-			self.get(key).unwrap()
-		}
-	}
+	// pub fn get_or_insert_with<Q, KF, VF>(&self, key: &Q, kf: KF, vf: VF) -> &V where 
+	// 	K: Borrow<Q>,
+	// 	Q: Hash + Eq + ?Sized,
+	// 	KF: FnOnce() -> K,
+	// 	VF: FnOnce() -> V,
+	// {
+	// 	if let Some(value) = self.0.borrow().get(key) {
+	// 		return unsafe{&*(&**value as *const _)};
+	// 	} else {
+	// 		self.0.borrow_mut().insert(kf(), Box::new(vf()));
+	// 		self.get(key).unwrap()
+	// 	}
+	// }
 
 	pub fn try_insert(&self, k: K, v: V) -> Result<(), (K, V)> {
 		let mut borrow = self.0.borrow_mut();
