@@ -234,7 +234,7 @@ pub fn tokenize(file_text: &str) -> Result<Vec<Token<'_>>, TokenizerError> {
 
 		// Spaces
 		let lit_len = b" ".len();
-		if &file_text[i..(i+lit_len)] == &*b" " {
+		if file_text[i..(i+lit_len)] == *b" " {
 			let old_i = i;
 			while i < file_text.len() && file_text[i] == b' ' {
 				i += 1;

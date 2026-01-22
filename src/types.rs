@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::ffi::{CString, c_char, c_double};
+use std::ffi::{c_char, c_double};
 use crate::ntstring::NTStr;
 // TODO Unnest some of these enums
 
@@ -52,7 +52,7 @@ impl GrugType {
 			(Bool, Bool) => true,
 			(Number, Number) => true,
 			(String, String) => true,
-			(Id{custom_name: custom_name_1}, Id{custom_name: custom_name_2}) => custom_name_1 == custom_name_2 || *custom_name_1 == None || *custom_name_2 == None,
+			(Id{custom_name: custom_name_1}, Id{custom_name: custom_name_2}) => custom_name_1 == custom_name_2 || custom_name_1.is_none() || custom_name_2.is_none(),
 			(
 				Resource {
 					extension: extension_1,
@@ -60,7 +60,7 @@ impl GrugType {
 				Resource {
 					extension: extension_2,
 				}, 
-			) => extension_1 == extension_2 || &**extension_1 == "" || &**extension_2 == "",
+			) => extension_1 == extension_2 || extension_1.is_empty() || extension_2.is_empty(),
 			(
 				Entity {
 					ty: ty_1,
@@ -68,7 +68,7 @@ impl GrugType {
 				Entity {
 					ty: ty_2,
 				}, 
-			) => ty_1 == ty_2 || *ty_1 == None || *ty_2 == None,
+			) => ty_1 == ty_2 || ty_1.is_none() || ty_2.is_none(),
 			_ => false,
 		}
 	}

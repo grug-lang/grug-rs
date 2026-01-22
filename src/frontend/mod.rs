@@ -24,7 +24,7 @@ pub fn compile_grug_file<'a>(state: &GrugState, path: &'a str) -> Result<GrugFil
 
 	let tokens = tokenizer::tokenize(&file_text)?;
 
-	let mut ast = parser::parse(&*tokens)?;
+	let mut ast = parser::parse(&tokens)?;
 	
 	TypePropogator::new(state, mod_name.into()).fill_result_types(entity_type, &mut ast)?;
 
@@ -41,11 +41,11 @@ pub fn compile_grug_file<'a>(state: &GrugState, path: &'a str) -> Result<GrugFil
 		}
 	});
 
-	return Ok(GrugFile{
+	Ok(GrugFile{
 		global_variables,
 		on_functions,
 		helper_functions,
-	});
+	})
 }
 
 fn get_mod_name<'a> (path: &'a str) -> Result<&'a str, GrugError<'a>> {
@@ -62,7 +62,7 @@ fn get_entity_type(path: &str) -> Result<&str, FileNameError<'_>> {
 	if entity_type.len() > MAX_FILE_ENTITY_TYPE_LENGTH {
 		return Err(FileNameError::EntityLenExceedsMaxLen{path, entity_len: entity_type.len()});
 	}
-	if entity_type.len() == 0 {
+	if entity_type.is_empty() {
 		return Err(FileNameError::EntityMissing{path});
 	}
 	check_custom_id_is_pascal(entity_type)
@@ -74,7 +74,7 @@ fn check_custom_id_is_pascal(entity_type: &str) -> Result<&str, FileNameError<'_
 		return Err(FileNameError::EntityNotPascalCase1{entity_type});
 	};
 	for ch in chars {
-		if !(ch.is_uppercase() || ch.is_lowercase() || ch.is_digit(10)) {
+		if !(ch.is_uppercase() || ch.is_lowercase() || ch.is_ascii_digit()) {
 			return Err(FileNameError::EntityNotPascalCase2{entity_type, wrong_char: ch});
 		}
 	}

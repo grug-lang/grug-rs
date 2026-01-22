@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::ops::{DerefMut, Deref};
+use std::ops::Deref;
 use std::ffi::CStr;
 
 #[repr(transparent)]
@@ -7,7 +7,7 @@ pub struct NTStr(str);
 
 impl NTStr {
 	pub fn arc_from_str (value: &str) -> Arc<Self> {
-		let mut arc = Arc::into_raw(Arc::<[u8]>::new_uninit_slice(value.len() + 1));
+		let arc = Arc::into_raw(Arc::<[u8]>::new_uninit_slice(value.len() + 1));
 
 		unsafe{
 			std::ptr::copy(value.as_ptr(), arc.cast_mut().cast(), value.len());
@@ -33,7 +33,7 @@ impl<'a> TryFrom<&'a str> for &'a NTStr {
 	type Error = ();
 	fn try_from(value: &str) -> Result<&NTStr, Self::Error> {
 		if *value.as_bytes().last().ok_or(())? == b'\0' {
-			Ok(unsafe {std::mem::transmute(value)})
+			Ok(unsafe {std::mem::transmute::<&str, &NTStr>(value)})
 		}
 		else {
 			Err(())

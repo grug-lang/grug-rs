@@ -6,7 +6,7 @@ pub fn dump_file_to_json<'a> (grug_path: &'a str, output_path: &'a str) -> Resul
 
 	let tokens = tokenizer::tokenize(&file_text)?;
 
-	let ast = parser::parse(&*tokens)?;
+	let ast = parser::parse(&tokens)?;
 	
 	let string = ast_to_json(&ast.global_statements);
 
@@ -478,7 +478,7 @@ mod de {
 				_ => unreachable!(),
 			}
 		} else {
-			return Err(JsonDeserializeError::GlobalStatementNotObject)
+			Err(JsonDeserializeError::GlobalStatementNotObject)
 		}
 	}
 
@@ -568,7 +568,7 @@ mod de {
 						let value@JsonValue::Array(else_block) = else_block else {
 							return Err(JsonDeserializeError::ElseBlockNotArray);
 						};
-						if else_block.len() > 0 {
+						if !else_block.is_empty() {
 							output.push_str(" else ");
 							apply_statements(value, indentation + 1, output)?;
 						}
@@ -602,7 +602,7 @@ mod de {
 					output.push_str("return");
 					if let Ok(expr) = get_object_field(statement, "expr", "return") {
 						output.push_str(" ");
-						apply_expr(get_object_field(statement, "expr", "return")?, output)?;
+						apply_expr(expr, output)?;
 					}
 				}
 				"empty_line" => (),
@@ -720,7 +720,7 @@ mod de {
 				parent_context: String::from(parent_context),
 				field_name: field,
 			}),
-			value => Ok(&value),
+			value => Ok(value),
 		}
 	}
 }

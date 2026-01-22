@@ -367,7 +367,7 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 			newline_allowed = true;
 			newline_required = true;
 			just_seen_global = true;
-		} else if let Ok(&[ref name_token, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && name_token.value.starts_with("on_") {
+		} else if let Ok([name_token, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && name_token.value.starts_with("on_") {
 			// Cannot have global function after helper function
 			if seen_helper_fn {
 				return Err(ParserError::OnFunctionAfterHelperFunctions{
@@ -388,7 +388,7 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 			let on_fn = ast.parse_on_fn(&mut tokens)?;
 			let (on_fn_name, on_fn_arguments) = if let GlobalStatement::OnFunction(OnFunction{name, arguments, ..}) = &on_fn {(Arc::clone(name), arguments)} else {unreachable!()};
 
-			if ast.on_fn_signatures.get(&on_fn_name).is_some() {
+			if ast.on_fn_signatures.contains_key(&on_fn_name) {
 				return Err(ParserError::AlreadyDefinedOnFn{
 					on_fn_name,
 				});
@@ -405,7 +405,7 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 
 			just_seen_global = false;
 			consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
-		} else if let Ok(&[ref name_token, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && name_token.value.starts_with("helper_") {
+		} else if let Ok([name_token, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && name_token.value.starts_with("helper_") {
 			// expect newline after each item
 			if newline_required {
 				return Err(ParserError::ExpectedNewLine{
@@ -419,7 +419,7 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 			let (helper_fn_name, return_ty, helper_fn_arguments) = if let GlobalStatement::HelperFunction(HelperFunction{name, return_ty, arguments, ..}) = &helper_fn {(Arc::clone(name), return_ty.clone(), arguments)} else {unreachable!()};
 			seen_helper_fn = true;
 
-			if ast.helper_fn_signatures.get(&helper_fn_name).is_some() {
+			if ast.helper_fn_signatures.contains_key(&helper_fn_name) {
 				return Err(ParserError::AlreadyDefinedHelperFunction{
 					helper_fn_name,
 				});
@@ -434,7 +434,7 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 
 			just_seen_global = false;
 			consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
-		} else if let Ok(&[ref token]) = consume_next_token_types(&mut tokens, &[TokenType::NewLine]) {
+		} else if let Ok([token]) = consume_next_token_types(&mut tokens, &[TokenType::NewLine]) {
 			if !newline_allowed {
 				return Err(ParserError::NewlineNotAllowed{
 					line: token.line,
@@ -449,7 +449,7 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 			last_newline_location = (token.line, token.col);
 			
 			ast.global_statements.push(GlobalStatement::EmptyLine);
-		} else if let Ok(&[ref comment_token]) = consume_next_token_types(&mut tokens, &[TokenType::Comment]) {
+		} else if let Ok([comment_token]) = consume_next_token_types(&mut tokens, &[TokenType::Comment]) {
 			newline_allowed = true;
 
 			ast.global_statements.push(GlobalStatement::Comment{
@@ -509,7 +509,7 @@ impl AST {
 		consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 
 		// return type
-		let return_ty = if let Ok(&[_, ref type_token]) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Word]) {
+		let return_ty = if let Ok([_, type_token]) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Word]) {
 			match self.parse_type(type_token)? {
 				GrugType::Resource{..} => return Err(ParserError::HelperFnReturnTypeCantBeResource{
 					fn_name: fn_name.to_string(),
@@ -632,7 +632,7 @@ impl AST {
 
 		while !is_end_of_block(tokens, indentation)? {
 			// newlines
-			if let Ok(&[ref token]) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
+			if let Ok([token]) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
 				if !newline_allowed {
 					return Err(ParserError::NewlineNotAllowed{
 						line: token.line,
@@ -700,7 +700,7 @@ impl AST {
 				let mut else_if_statements = Vec::new();
 				let mut else_statements = None;
 
-				while let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]) {
+				while consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]).is_ok() {
 					let [space_token, if_token] = peek_next_tokens(tokens)?;
 					if TokenType::Space == space_token.ty && TokenType::If == if_token.ty {
 						consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
@@ -891,18 +891,18 @@ impl AST {
 		
 		let assignment_expr = self.parse_expression(tokens, 0)?;
 		
-		return Ok(GlobalStatement::Variable(GlobalVariable{
+		Ok(GlobalStatement::Variable(GlobalVariable{
 			name: global_name.into(),
 			ty: global_type,
 			assignment_expr,
-		}));
+		}))
 	}
 
 	// Recursive descent parsing adapted from the implementation in grug:
 	// https://github.com/grug-lang/grug
 	fn parse_expression<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
 		assert_parsing_depth(parsing_depth)?;
-		return self.parse_or(tokens, parsing_depth + 1);
+		self.parse_or(tokens, parsing_depth + 1)
 	}
 
 	// or -> and + " " + "||" + and
@@ -911,7 +911,7 @@ impl AST {
 		assert_parsing_depth(parsing_depth)?;
 		let mut expr = self.parse_and(tokens, parsing_depth + 1)?;
 
-		while let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Or]) {
+		while consume_next_token_types(tokens, &[TokenType::Space, TokenType::Or]).is_ok() {
 			let left_expr = expr;
 			consume_space(tokens)?;
 			let right_expr = self.parse_and(tokens, parsing_depth + 1)?;
@@ -923,7 +923,7 @@ impl AST {
 				result_ty: None,
 			};
 		}
-		return Ok(expr);
+		Ok(expr)
 	}
 	
 	// and -> equality + " " + "||" + equality
@@ -932,7 +932,7 @@ impl AST {
 		assert_parsing_depth(parsing_depth)?;
 		let mut expr = self.parse_equality(tokens, parsing_depth + 1)?;
 
-		while let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::And]) {
+		while consume_next_token_types(tokens, &[TokenType::Space, TokenType::And]).is_ok() {
 			let left_expr = expr;
 			consume_space(tokens)?;
 			let right_expr = self.parse_equality(tokens, parsing_depth + 1)?;
@@ -944,7 +944,7 @@ impl AST {
 				result_ty: None,
 			};
 		}
-		return Ok(expr);
+		Ok(expr)
 	}
 	
 	// equality -> comparison + " " + ("==" | "!=") + comparison
@@ -954,7 +954,7 @@ impl AST {
 		let mut expr = self.parse_comparison(tokens, parsing_depth + 1)?;
 
 		loop {
-			if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::DoubleEquals]) {
+			if consume_next_token_types(tokens, &[TokenType::Space, TokenType::DoubleEquals]).is_ok() {
 				let left_expr = expr;
 				consume_space(tokens)?;
 				let right_expr = self.parse_comparison(tokens, parsing_depth + 1)?;
@@ -965,7 +965,7 @@ impl AST {
 					},
 					result_ty: None,
 				};
-			} else if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::NotEquals]) {
+			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::NotEquals]).is_ok() {
 				let left_expr = expr;
 				consume_space(tokens)?;
 				let right_expr = self.parse_comparison(tokens, parsing_depth + 1)?;
@@ -980,7 +980,7 @@ impl AST {
 				break
 			}
 		}
-		return Ok(expr);
+		Ok(expr)
 	}
 
 	fn parse_comparison<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
@@ -988,7 +988,7 @@ impl AST {
 		let mut expr = self.parse_term(tokens, parsing_depth + 1)?;
 
 		loop {
-			if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Greater]) {
+			if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Greater]).is_ok() {
 				let left_expr = expr;
 				consume_space(tokens)?;
 				let right_expr = self.parse_term(tokens, parsing_depth + 1)?;
@@ -999,7 +999,7 @@ impl AST {
 					},
 					result_ty: None,
 				};
-			} else if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::GreaterEquals]) {
+			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::GreaterEquals]).is_ok() {
 				let left_expr = expr;
 				consume_space(tokens)?;
 				let right_expr = self.parse_term(tokens, parsing_depth + 1)?;
@@ -1010,7 +1010,7 @@ impl AST {
 					},
 					result_ty: None,
 				};
-			} else if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Less]) {
+			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Less]).is_ok() {
 				let left_expr = expr;
 				consume_space(tokens)?;
 				let right_expr = self.parse_term(tokens, parsing_depth + 1)?;
@@ -1021,7 +1021,7 @@ impl AST {
 					},
 					result_ty: None,
 				};
-			} else if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::LessEquals]) {
+			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::LessEquals]).is_ok() {
 				let left_expr = expr;
 				consume_space(tokens)?;
 				let right_expr = self.parse_term(tokens, parsing_depth + 1)?;
@@ -1036,7 +1036,7 @@ impl AST {
 				break
 			}
 		}
-		return Ok(expr);
+		Ok(expr)
 	}
 
 	fn parse_term<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
@@ -1044,7 +1044,7 @@ impl AST {
 		let mut expr = self.parse_factor(tokens, parsing_depth + 1)?;
 
 		loop {
-			if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Plus]) {
+			if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Plus]).is_ok() {
 				let left_expr = expr;
 				consume_space(tokens)?;
 				let right_expr = self.parse_factor(tokens, parsing_depth + 1)?;
@@ -1055,7 +1055,7 @@ impl AST {
 					},
 					result_ty: None,
 				};
-			} else if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Minus]) {
+			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Minus]).is_ok() {
 				let left_expr = expr;
 				consume_space(tokens)?;
 				let right_expr = self.parse_factor(tokens, parsing_depth + 1)?;
@@ -1070,7 +1070,7 @@ impl AST {
 				break
 			}
 		}
-		return Ok(expr);
+		Ok(expr)
 	}
 
 	fn parse_factor<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
@@ -1078,7 +1078,7 @@ impl AST {
 		let mut expr = self.parse_unary(tokens, parsing_depth + 1)?;
 
 		loop {
-			if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Star]) {
+			if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Star]).is_ok() {
 				let left_expr = expr;
 				consume_space(tokens)?;
 				let right_expr = self.parse_unary(tokens, parsing_depth + 1)?;
@@ -1089,7 +1089,7 @@ impl AST {
 					},
 					result_ty: None,
 				};
-			} else if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::ForwardSlash]) {
+			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::ForwardSlash]).is_ok() {
 				let left_expr = expr;
 				consume_space(tokens)?;
 				let right_expr = self.parse_unary(tokens, parsing_depth + 1)?;
@@ -1100,14 +1100,14 @@ impl AST {
 					},
 					result_ty: None,
 				};
-			} else if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Percent]) {
+			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Percent]).is_ok() {
 				let left_expr = expr;
 				consume_space(tokens)?;
 				let right_expr = self.parse_unary(tokens, parsing_depth + 1)?;
 				expr = Expr {
 					ty: ExprType::BinaryExpr{
 						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::Division,
+						operator: BinaryOperator::Remainder,
 					},
 					result_ty: None,
 				};
@@ -1115,13 +1115,13 @@ impl AST {
 				break
 			}
 		}
-		return Ok(expr);
+		Ok(expr)
 	}
 
 	fn parse_unary<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
 		assert_parsing_depth(parsing_depth)?;
 
-		if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Minus]) {
+		if consume_next_token_types(tokens, &[TokenType::Minus]).is_ok() {
 			Ok(Expr {
 				ty: ExprType::UnaryExpr{
 					operator: UnaryOperator::Minus,
@@ -1129,7 +1129,7 @@ impl AST {
 				},
 				result_ty: None,
 			})
-		} else if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Not]) {
+		} else if consume_next_token_types(tokens, &[TokenType::Not]).is_ok() {
 			consume_space(tokens)?;
 			Ok(Expr {
 				ty: ExprType::UnaryExpr{
@@ -1162,10 +1162,10 @@ impl AST {
 					if name.starts_with("helper_") {
 						self.called_helper_fns.insert(Arc::clone(&name));
 					}
-					if let Ok(&[ref close_paren_token]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
+					if let Ok([close_paren_token]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
 						return Ok(Expr{
 							ty: ExprType::CallExpr {
-								function_name: name.into(),
+								function_name: name,
 								arguments: Vec::new(),
 								line: close_paren_token.line,
 								col: close_paren_token.col,
@@ -1178,12 +1178,12 @@ impl AST {
 
 					loop {
 						arguments.push(self.parse_expression(tokens, parsing_depth + 1)?);
-						if !consume_next_token_types(tokens, &[TokenType::Comma]).is_ok() {
+						if consume_next_token_types(tokens, &[TokenType::Comma]).is_err() {
 							let [close_paren_token] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 							return Ok(Expr{
 								ty: ExprType::CallExpr {
-									function_name: name.into(),
-									arguments: arguments,
+									function_name: name,
+									arguments,
 									line: close_paren_token.line,
 									col: close_paren_token.col,
 								},
@@ -1195,7 +1195,7 @@ impl AST {
 				}
 				_ => {
 					let (line, col) = expr.ty.get_last_known_location();
-					return Err(ParserError::UnexpectedOpenParenthesis{
+					Err(ParserError::UnexpectedOpenParenthesis{
 						got_ty: expr.ty,
 						line, 
 						col,
@@ -1217,14 +1217,14 @@ impl AST {
 				let expr = self.parse_expression(tokens, parsing_depth + 1)?;
 				let close_paren = &consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?[0];
 
-				return Ok(Expr{
+				Ok(Expr{
 					ty: ExprType::ParenthesizedExpr{
 						expr: Box::new(expr),
 						line: close_paren.line,
 						col: close_paren.col,
 					},
 					result_ty: None,
-				});
+				})
 			}
 			Token{ty: TokenType::True, line, col, ..} => {
 				Ok(Expr{
@@ -1250,7 +1250,7 @@ impl AST {
 				Ok(Expr{
 					ty: ExprType::LiteralExpr{
 						expr: LiteralExpr::StringExpr {
-							value: NTStr::arc_from_str(*value),
+							value: NTStr::arc_from_str(value),
 						},
 						line: *line,
 						col: *col
@@ -1317,7 +1317,7 @@ impl AST {
 		}
 	}
 	
-	fn parse_type<'a>(&mut self, type_token: &Token) -> Result<GrugType, ParserError> {
+	fn parse_type(&mut self, type_token: &Token) -> Result<GrugType, ParserError> {
 		if type_token.ty != TokenType::Word {
 			return Err (ParserError::MissingType{
 				line: type_token.line,
@@ -1389,7 +1389,7 @@ fn assert_next_token_types<'a>(tokens: &std::slice::Iter<'a, Token<'a>>, expecte
 	if tokens.len() < expected.len() {
 		return Err(ParserError::OutOfTokensError);
 	}
-	for (Token{ty: got_ty, line, col, ..}, expected_ty) in tokens.clone().zip(expected.into_iter()) {
+	for (Token{ty: got_ty, line, col, ..}, expected_ty) in tokens.clone().zip(expected) {
 		if got_ty != expected_ty {
 			return Err(ParserError::GotWrongToken{
 				expected: *expected_ty,
@@ -1406,7 +1406,7 @@ fn assert_next_token_types<'a>(tokens: &std::slice::Iter<'a, Token<'a>>, expecte
 fn consume_next_token_types<'a, const N: usize>(tokens: &'_ mut std::slice::Iter<'a, Token<'a>>, expected: &'_ [TokenType; N]) -> Result<&'a [Token<'a>; N], ParserError> {
 	assert_next_token_types(tokens, expected)?;
 	let ret_val = &tokens.as_slice()[..expected.len()];
-	*tokens = tokens.as_slice()[expected.len()..].into_iter();
+	*tokens = tokens.as_slice()[expected.len()..].iter();
 	Ok(unsafe{&*(ret_val as *const [Token] as *const [Token; N])})
 }
 
@@ -1415,7 +1415,7 @@ fn get_next_token<'a> (tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&
 }
 
 fn peek_next_token<'a> (tokens: &std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
-	tokens.as_slice().get(0).ok_or(ParserError::OutOfTokensError)
+	tokens.as_slice().first().ok_or(ParserError::OutOfTokensError)
 }
 
 fn peek_next_tokens<'a, const N: usize> (tokens: &std::slice::Iter<'a, Token<'a>>) -> Result<&'a [Token<'a>; N], ParserError> {

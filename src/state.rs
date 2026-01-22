@@ -1,7 +1,7 @@
 use crate::mod_api::{ModApi, get_mod_api, ModApiError};
 use crate::error::GrugError;
 use crate::backend::{GrugEntity, GrugFile, UninitGrugEntity};
-use crate::types::{GlobalStatement, GrugValue, Expr, ExprType, LiteralExpr, UnaryOperator, BinaryOperator, GrugType, Argument, Statement, GlobalVariable, OnFunction, GrugId};
+use crate::types::{GrugValue, Expr, ExprType, LiteralExpr, UnaryOperator, BinaryOperator, GrugType, Argument, Statement, GlobalVariable, GrugId};
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use std::time::{Instant, Duration};
 use std::ffi::CStr;
-use std::fmt::Write;
 
 #[repr(C)]
 pub union GameFnPtr {
@@ -40,7 +39,7 @@ mod from_impls {
 	impl From<GameFnPtrValue> for GameFnPtr {
 		fn from (value: GameFnPtrValue) -> Self {
 			Self {
-				value: value,
+				value,
 			}
 		}
 	}
@@ -130,7 +129,7 @@ impl GrugState {
 		let mod_api = get_mod_api(&mod_api_text)?;
 
 		for game_fn_name in mod_api.game_functions().keys() {
-			if let None = game_functions.get(&**game_fn_name) {
+			if !game_functions.contains_key(&**game_fn_name) {
 				Err(ModApiError::GameFnNotProvided{
 					game_fn_name: String::from(&**game_fn_name),
 				})?;
@@ -151,14 +150,12 @@ impl GrugState {
 	pub fn create_entity(&self, file: &Arc<GrugFile>) -> Result<GrugEntity, RuntimeError> {
 		let me_id = self.get_id();
 		let mut temp_entity = UninitGrugEntity {
-			id: me_id, 
 			global_variables: HashMap::from([(Arc::from("me"), Cell::new(GrugValue{id:me_id}))]),
 			file: Arc::clone(file),
 		};
 		self.init_global_variables(&mut temp_entity, &file.global_variables)?;
 		
 		Ok(GrugEntity {
-			id: temp_entity.id,
 			global_variables: temp_entity.global_variables,
 			file: temp_entity.file,
 		})
@@ -168,6 +165,10 @@ impl GrugState {
 		GrugId::new(self.next_id.fetch_add(1, Ordering::Relaxed))
 	}
 
+	/// # Safety
+	/// There is no memory safety issue here. 
+	/// But this may cause older entities to be replaced 
+	/// by newer ones with no warning if the ids start overlapping
 	pub unsafe fn set_next_id(&self, next_id: u64) {
 		self.next_id.store(next_id, Ordering::Relaxed);
 	}
@@ -206,13 +207,17 @@ enum GrugControlFlow {
 
 // should be moved into backend later
 impl GrugState {
+	/// # SAFETY 
+	/// `values` must point to an array of values with length equal to
+	/// the number of arguments expected by `function_name`. If there are no arguments, 
+	/// `values` may be null
 	pub unsafe fn call_on_function_raw(&self, entity: &GrugEntity, function_name: &str, values: *const GrugValue) -> Result<(), RuntimeError> {
 		let file = Arc::clone(&entity.file);
 		for on_function in &file.on_functions {
 			if &*on_function.name != function_name {
 				continue;
 			}
-			let values = if on_function.arguments.len() == 0 {
+			let values = if on_function.arguments.is_empty() {
 				&[]
 			} else {
 				unsafe{std::slice::from_raw_parts(values, on_function.arguments.len())}
@@ -288,16 +293,14 @@ impl GrugState {
 					assignment_expr,
 				} => {
 					let assignment_expr = self.run_expr(call_stack, entity, assignment_expr)?;
-					if let Some(_) = ty {
+					if ty.is_some() {
 						call_stack.add_local_variable(Arc::clone(name), assignment_expr);
+					} else if let Some(var) = call_stack.get_local_variable(name) {
+						*var = assignment_expr;
+					} else if let Some(var) = entity.get_global_variable(name) {
+						var.set(assignment_expr);
 					} else {
-						if let Some(var) = call_stack.get_local_variable(&**name) {
-							*var = assignment_expr;
-						} else if let Some(var) = entity.get_global_variable(&**name) {
-							var.set(assignment_expr);
-						} else {
-							panic!("variable not found");
-						}
+						panic!("variable not found");
 					}
 				},
 				Statement::CallStatement {
@@ -436,7 +439,7 @@ impl GrugState {
 				operator,
 				expr,
 			} => {
-				let mut value = self.init_global_exprs(entity, &expr)?;
+				let mut value = self.init_global_exprs(entity, expr)?;
 				match (operator, &expr.result_ty) {
 					(UnaryOperator::Not, Some(GrugType::Bool)) => unsafe{value.bool = (value.bool == 0) as u8},
 					(UnaryOperator::Minus, Some(GrugType::Number)) => unsafe{value.number = -value.number},
@@ -567,7 +570,7 @@ impl GrugState {
 				operator,
 				expr,
 			} => {
-				let mut value = self.run_expr(call_stack, entity, &expr)?;
+				let mut value = self.run_expr(call_stack, entity, expr)?;
 				match (operator, &expr.result_ty) {
 					(UnaryOperator::Not, Some(GrugType::Bool)) => unsafe{value.bool = (value.bool == 0) as u8},
 					(UnaryOperator::Minus, Some(GrugType::Number)) => unsafe{value.number = -value.number},
@@ -634,7 +637,7 @@ impl GrugState {
 					if helper_fn.name != *function_name {
 						continue;
 					}
-					return Ok(self.run_function(call_stack, entity, &*helper_fn.arguments, &values, &*helper_fn.body_statements)?);
+					return self.run_function(call_stack, entity, &helper_fn.arguments, &values, &helper_fn.body_statements);
 				}
 				unreachable!("helper function not found");
 			}

@@ -26,7 +26,7 @@ pub struct ModApiEntity {
 
 impl ModApiEntity {
 	pub fn get_on_fn(&self, name: &str) -> Option<(usize, &ModApiOnFn)> {
-		self.on_fns.iter().enumerate().find_map(|(i, (fn_name, func))| (name == &**fn_name).then(|| (i, func)))
+		self.on_fns.iter().enumerate().find_map(|(i, (fn_name, func))| (name == &**fn_name).then_some((i, func)))
 	}
 }
 
@@ -253,7 +253,7 @@ pub fn get_mod_api(mod_api_text: &str) -> Result<ModApi, ModApiError> {
 						argument_name: argument_name.to_string(),
 					})?.into();
 					GrugType::Entity {
-						ty: (&*entity_type != "").then(|| entity_type)
+						ty: (!entity_type.is_empty()).then_some(entity_type)
 					}
 				},
 				"resource" => {
