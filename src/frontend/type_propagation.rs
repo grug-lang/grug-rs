@@ -956,7 +956,7 @@ impl<'a> TypePropogator<'a> {
 	// out parameter self.current_on_fn_calls_helper_fn
 	fn fill_expr(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, assignment_expr: &mut Expr) -> Result<GrugType, TypePropogatorError> {
 		// MUST be None before type propogation
-		assert!(assignment_expr.result_ty.is_some());
+		assert!(assignment_expr.result_ty.is_none());
 		let result_ty = match assignment_expr.ty {
 			ExprType::LiteralExpr{
 				ref mut expr,

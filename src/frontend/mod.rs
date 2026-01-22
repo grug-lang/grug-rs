@@ -14,38 +14,42 @@ pub mod tokenizer;
 
 pub mod parser;
 
-pub fn compile_grug_file<'a>(state: &GrugState, path: &'a str) -> Result<GrugFile, GrugError<'a>> {
-	let mod_name = get_mod_name(path)?;
-	let entity_type = get_entity_type(path)?;
+impl GrugState {
+	pub fn compile_grug_file<'a>(&mut self, path: &'a str) -> Result<(), GrugError<'a>> {
+		let mod_name = get_mod_name(path)?;
+		let entity_type = get_entity_type(path)?;
 
-	let mut path_buf = state.mods_dir_path.clone();
-	path_buf.push(path);
-	let file_text = std::fs::read_to_string(path_buf).unwrap();
+		let mut path_buf = self.mods_dir_path.clone();
+		path_buf.push(path);
+		let file_text = std::fs::read_to_string(path_buf).unwrap();
 
-	let tokens = tokenizer::tokenize(&file_text)?;
+		let tokens = tokenizer::tokenize(&file_text)?;
 
-	let mut ast = parser::parse(&tokens)?;
-	
-	TypePropogator::new(state, mod_name.into()).fill_result_types(entity_type, &mut ast)?;
+		let mut ast = parser::parse(&tokens)?;
+		
+		TypePropogator::new(self, mod_name.into()).fill_result_types(entity_type, &mut ast)?;
 
-	let mut global_variables = Vec::new();
-	let mut on_functions = Vec::new();
-	let mut helper_functions = Vec::new();
+		let mut global_variables = Vec::new();
+		let mut on_functions = Vec::new();
+		let mut helper_functions = Vec::new();
 
-	ast.global_statements.into_iter().for_each(|statement| {
-		match statement {
-			GlobalStatement::Variable(st@GlobalVariable      {..}) => global_variables.push(st),
-			GlobalStatement::OnFunction(st@OnFunction        {..}) => on_functions.push(st),
-			GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),
-			_ => (),
-		}
-	});
+		ast.global_statements.into_iter().for_each(|statement| {
+			match statement {
+				GlobalStatement::Variable(st@GlobalVariable      {..}) => global_variables.push(st),
+				GlobalStatement::OnFunction(st@OnFunction        {..}) => on_functions.push(st),
+				GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),
+				_ => (),
+			}
+		});
 
-	Ok(GrugFile{
-		global_variables,
-		on_functions,
-		helper_functions,
-	})
+		let file = GrugFile{
+			global_variables,
+			on_functions,
+			helper_functions,
+		};
+		self.backend.insert_file(String::from(path), file);
+		Ok(())
+	}
 }
 
 fn get_mod_name<'a> (path: &'a str) -> Result<&'a str, GrugError<'a>> {

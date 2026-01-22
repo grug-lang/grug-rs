@@ -4,8 +4,14 @@ use crate::ntstring::NTStr;
 // TODO Unnest some of these enums
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub struct GrugId(u64);
+
+impl std::fmt::Display for GrugId {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		self.0.fmt(f)
+	}
+}
 
 impl GrugId {
 	pub(crate) fn new(id: u64) -> Self {

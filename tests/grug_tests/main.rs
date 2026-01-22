@@ -5,27 +5,24 @@ use std::mem::ManuallyDrop;
 use gruggers::state::GrugState;
 
 mod test_bindings {
-	use gruggers::state::{GrugState, RuntimeError};
-	use gruggers::backend::{GrugFile, GrugEntity};
-	use gruggers::types::{GrugValue};
-	use gruggers::frontend;
+	use gruggers::state::{GrugState};
+	use gruggers::backend::RuntimeError;
+	use gruggers::types::{GrugValue, GrugId};
 	use gruggers::serde;
 	use std::ffi::{c_char, CStr, CString};
-	use std::sync::Arc;
 	use std::mem::ManuallyDrop;
 
 	pub static mut GLOBAL_TEST_STATE: Option<GrugState> = None;
-	pub static mut CURRENT_GRUG_FILE: Option<Arc<GrugFile>> = None;
-	pub static mut CURRENT_GRUG_ENTITY: Option<GrugEntity> = None;
+	pub static mut CURRENT_GRUG_ENTITY: Option<GrugId> = None;
 	pub static mut CURRENT_PATH: Option<&str> = None;
 
 	pub extern "C" fn compile_grug_file(path: *const c_char) -> *const c_char {
 		unsafe {
+			GLOBAL_TEST_STATE.as_mut().unwrap().clear_entities();
 			let path = CStr::from_ptr(path).to_str().unwrap();
 			CURRENT_PATH = Some(path);
-			let ret_val = match frontend::compile_grug_file(GLOBAL_TEST_STATE.as_ref().unwrap(), path) {
-				Ok(file) => {
-					CURRENT_GRUG_FILE = Some(Arc::new(file));
+			let ret_val = match GLOBAL_TEST_STATE.as_mut().unwrap().compile_grug_file(path) {
+				Ok(_) => {
 					std::ptr::null()
 				},
 				Err(err) => ManuallyDrop::new(CString::new(format!("{}", err)).unwrap()).as_ptr() as *const c_char,
@@ -40,7 +37,7 @@ mod test_bindings {
 			CURRENT_GRUG_ENTITY = Some(
 				GLOBAL_TEST_STATE
 					.as_ref().unwrap()
-					.create_entity(CURRENT_GRUG_FILE.as_ref().unwrap())
+					.create_entity(CURRENT_PATH.unwrap())
 					.expect("runtime error")
 			)
 		}
@@ -51,11 +48,13 @@ mod test_bindings {
 			let fn_name = CStr::from_ptr(fn_name).to_str().unwrap();
 			
 			let (kind, msg) = match GLOBAL_TEST_STATE.as_ref().unwrap()
-				.call_on_function_raw(CURRENT_GRUG_ENTITY.as_ref().unwrap(), fn_name, values)
+				.call_on_function_raw(CURRENT_GRUG_ENTITY.unwrap(), fn_name, values)
 			{
 				Err(RuntimeError::StackOverflow) => (0, ManuallyDrop::new(CString::new(format!("{}", RuntimeError::StackOverflow)).unwrap()).as_ptr()),
 				Err(RuntimeError::ExceededTimeLimit) => (1, ManuallyDrop::new(CString::new(format!("{}", RuntimeError::ExceededTimeLimit)).unwrap()).as_ptr()),
 				Err(err@RuntimeError::GameFunctionError{..}) => (2, ManuallyDrop::new(CString::new(format!("{}", err)).unwrap()).as_ptr()),
+				Err(RuntimeError::FileNotCompiled{..}) => return,
+				Err(RuntimeError::EntityDoesNotExist{..}) => return,
 				Err(RuntimeError::FunctionArgumentCountMismatch {
 					expected: _,
 					got: _,
