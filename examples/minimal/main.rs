@@ -22,8 +22,8 @@ fn main () {
 	state.register_game_fn("print_string", print_string as extern "C" fn(_));
 	assert!(state.all_game_fns_registered());
 
-	state.compile_grug_file("goldie/first-dog.grug").unwrap();
-	let dog = state.create_entity("goldie/first-dog.grug").unwrap();
+	state.compile_grug_file("goldie/first-Dog.grug").unwrap();
+	let dog = state.create_entity("goldie/first-Dog.grug").unwrap();
 
 	while true {
 		state.call_on_function(dog, "on_bark", &[GrugValue{string: c"woof".as_ptr().cast()}]);

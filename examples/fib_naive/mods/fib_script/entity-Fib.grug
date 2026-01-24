@@ -1,0 +1,35 @@
+on_fib_naive(number: number) {
+    print_number(helper_fib_naive(number))
+}
+
+on_fib_iterative(number: number) {
+    result: number = 0
+    if number < 0 {
+        result = 0
+    }
+    if number == 1 {
+        result = 1
+    } else {
+        a: number = 1
+        b: number = 1
+        i: number = 2
+        while i < number {
+            temp: number = a + b
+            a = b
+            b = temp
+            i = i + 1
+        }
+        result = b
+    }
+    print_number(result)
+}
+
+helper_fib_naive(n: number) number {
+    if n <= 1 {
+        return 0
+    }
+    if (n == 1 or n == 2) {
+        return 1
+    }
+    return helper_fib_naive(n - 1) + helper_fib_naive(n - 2)
+}

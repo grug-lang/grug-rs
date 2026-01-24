@@ -1,6 +1,6 @@
 {
 	"entities": {
-		"dog": {
+		"Dog": {
 			"description": "An actor that can fight.",
 			"on_functions": {
 				"on_bark": {
