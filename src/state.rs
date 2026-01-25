@@ -1,6 +1,6 @@
 use crate::mod_api::{ModApi, get_mod_api, ModApiError};
 use crate::error::GrugError;
-use crate::backend::{UninitGrugEntity, Backend, RuntimeError};
+use crate::backend::{Backend, RuntimeError};
 use crate::types::{GrugValue, GlobalVariable, GrugId};
 
 use std::cell::Cell;

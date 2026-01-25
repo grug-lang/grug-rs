@@ -9,22 +9,6 @@ pub struct GrugFile {
 	pub(crate) helper_functions: Vec<HelperFunction>,
 }
 
-pub struct UninitGrugEntity {
-	pub(crate) global_variables: HashMap<Arc<str>, Cell<GrugValue>>,
-	pub(crate) file: Arc<GrugFile>,
-}
-
-pub struct GrugEntity {
-	pub(crate) global_variables: HashMap<Arc<str>, Cell<GrugValue>>,
-	pub(crate) file: Arc<GrugFile>,
-}
-
-impl GrugEntity {
-	pub(crate) fn get_global_variable(&self, name: &str) -> Option<&Cell<GrugValue>> {
-		self.global_variables.get(name)
-	}
-}
-
 const ON_FN_TIME_LIMIT: u64 = 100; // ms
 // const ON_FN_TIME_LIMIT: u64 = 2000000; // ms
 
@@ -32,7 +16,7 @@ const MAX_RECURSION_LIMIT: usize = 100;
 
 pub mod interpreter {
 	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator};
-	use super::{GrugEntity, RuntimeError, UninitGrugEntity, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT, GrugFile};
+	use super::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT, GrugFile};
 	use crate::state::GrugState;
 	use crate::cachemap::CacheMap;
 
@@ -41,6 +25,23 @@ pub mod interpreter {
 	use std::collections::HashMap;
 	use std::ffi::CStr;
 	use std::time::{Duration, Instant};
+
+	pub struct UninitGrugEntity {
+		pub(crate) global_variables: HashMap<Arc<str>, Cell<GrugValue>>,
+		pub(crate) file: Arc<GrugFile>,
+	}
+
+	pub struct GrugEntity {
+		pub(crate) global_variables: HashMap<Arc<str>, Cell<GrugValue>>,
+		pub(crate) file: Arc<GrugFile>,
+	}
+
+	impl GrugEntity {
+		pub(crate) fn get_global_variable(&self, name: &str) -> Option<&Cell<GrugValue>> {
+			self.global_variables.get(name)
+		}
+	}
+
 
 	pub struct Backend {
 		files: HashMap<String, Arc<GrugFile>>,

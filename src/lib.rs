@@ -21,11 +21,11 @@ mod cachemap;
 // 		"mod_api_path",
 // 		"mods_path",
 // );
-// for func in funcs {
+// for func in game_funcs {
 // 	state.register_fn(func.name, func.ptr);
 // }
 // if !state.all_game_fns_registered() {
-// 	return 0;
+// 	return 1;
 // }
 // state.compile_grug_file("test/hello-A.grug");
 // let id = state.create_entity("test/hello-A.grug")
@@ -33,3 +33,6 @@ mod cachemap;
 
 // TODO: implementation errors like 'too many statements in block' should not be grug errors
 // TODO: Better Error handling
+// TODO: Bytecode interpreter
+// TODO: ModsDir struct 
+// TODO: Standard Library

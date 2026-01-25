@@ -1,3 +1,5 @@
+memo_list: List = list_number()
+
 on_fib_naive(number: number) {
     print_number(helper_fib_naive(number))
 }
@@ -22,6 +24,30 @@ on_fib_iterative(number: number) {
         result = b
     }
     print_number(result)
+}
+
+on_fib_memoized(number: number) {
+    helper_fib_memo(number)
+    # print_number(helper_fib_memo(number))
+    # print_list_number(memo_list)
+}
+
+on_print_list() {
+    print_list_number(memo_list)
+}
+
+helper_fib_memo(x: number) number {
+    if list_number_len(memo_list) > x {
+        return list_number_get(memo_list, x)
+    }
+    if x == 0 or x == 1 {
+        list_number_push(memo_list, 1)
+        return 1
+    }
+    a: number = helper_fib_memo(x - 1)
+    b: number = helper_fib_memo(x - 2)
+    list_number_push(memo_list, a + b)
+    return a + b
 }
 
 helper_fib_naive(n: number) number {
