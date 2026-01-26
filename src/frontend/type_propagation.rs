@@ -633,8 +633,7 @@ impl<'a> TypePropogator<'a> {
 					name: Arc::clone(name),
 				});
 			}
-			if variable.ty != (GrugType::Id{custom_name: None}) && result_ty != variable.ty {
-			// if &result_ty != ty {
+			if !(variable.ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && result_ty != variable.ty {
 				return Err(TypePropogatorError::VariableTypeMismatch {
 					name: Arc::clone(&variable.name),
 					got_type: result_ty.clone(),
