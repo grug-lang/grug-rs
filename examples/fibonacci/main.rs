@@ -150,10 +150,10 @@ fn main () {
 		STATE.compile_grug_file("fib_script/entity-Fib.grug").unwrap();
 		let script = STATE.create_entity("fib_script/entity-Fib.grug").unwrap();
 
-		let naive_id = STATE.get_on_fn_id("Fib", "on_fib_naive");
-		let iterative_id = STATE.get_on_fn_id("Fib", "on_fib_iterative");
-		let memo_id = STATE.get_on_fn_id("Fib", "on_fib_memoized");
-		let memo_print_id = STATE.get_on_fn_id("Fib", "on_print_list");
+		let naive_id = STATE.get_on_fn_id("Fib", "on_fib_naive").unwrap();
+		let iterative_id = STATE.get_on_fn_id("Fib", "on_fib_iterative").unwrap();
+		let memo_id = STATE.get_on_fn_id("Fib", "on_fib_memoized").unwrap();
+		let memo_print_id = STATE.get_on_fn_id("Fib", "on_print_list").unwrap();
 
 		println!("Naive implementation");
 		for i in 0..10 {

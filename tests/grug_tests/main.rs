@@ -53,7 +53,7 @@ mod test_bindings {
 				.to_str().unwrap()
 				.split_once("-").unwrap()
 				.1;
-			let fn_id = GLOBAL_TEST_STATE.as_ref().unwrap().get_on_fn_id(entity_type, fn_name);
+			let fn_id = GLOBAL_TEST_STATE.as_ref().unwrap().get_on_fn_id(entity_type, fn_name).unwrap();
 			
 			let (kind, msg) = match GLOBAL_TEST_STATE.as_ref().unwrap()
 				.call_on_function_raw(CURRENT_GRUG_ENTITY.unwrap(), fn_id, values)
@@ -193,42 +193,42 @@ mod game_fn_bindings {
         safe fn game_fn_box_number(values: *const GrugValue) -> GrugValue;
 	}
 	pub fn register_game_functions(state: &mut GrugState) {
-		state.register_game_fn("nothing", game_fn_nothing as extern "C" fn());
-		state.register_game_fn("magic", game_fn_magic as extern "C" fn() -> _);
-		state.register_game_fn("initialize", game_fn_initialize as extern "C" fn(_));
-		state.register_game_fn("initialize_bool", game_fn_initialize_bool as extern "C" fn(_));
-		state.register_game_fn("identity", game_fn_identity as extern "C" fn(_) -> _);
-		state.register_game_fn("max", game_fn_max as extern "C" fn(_) -> _);
-		state.register_game_fn("say", game_fn_say as extern "C" fn(_));
-		state.register_game_fn("sin", game_fn_sin as extern "C" fn(_) -> _);
-		state.register_game_fn("cos", game_fn_cos as extern "C" fn(_) -> _);
-		state.register_game_fn("mega", game_fn_mega as extern "C" fn(_));
-		state.register_game_fn("get_false", game_fn_get_false as extern "C" fn() -> _);
-		state.register_game_fn("set_is_happy", game_fn_set_is_happy as extern "C" fn(_));
-		state.register_game_fn("mega_f32", game_fn_mega_f32 as extern "C" fn(_));
-		state.register_game_fn("mega_i32", game_fn_mega_i32 as extern "C" fn(_));
-		state.register_game_fn("draw", game_fn_draw as extern "C" fn(_));
-		state.register_game_fn("blocked_alrm", game_fn_blocked_alrm as extern "C" fn());
-		state.register_game_fn("spawn", game_fn_spawn as extern "C" fn(_));
-		state.register_game_fn("has_resource", game_fn_has_resource as extern "C" fn(_) -> _);
-		state.register_game_fn("has_entity", game_fn_has_entity as extern "C" fn(_) -> _);
-		state.register_game_fn("has_string", game_fn_has_string as extern "C" fn(_) -> _);
-		state.register_game_fn("get_opponent", game_fn_get_opponent as extern "C" fn() -> _);
-		state.register_game_fn("set_d", game_fn_set_d as extern "C" fn(_));
-		state.register_game_fn("set_opponent", game_fn_set_opponent as extern "C" fn(_));
-		state.register_game_fn("motherload", game_fn_motherload as extern "C" fn(_));
-		state.register_game_fn("motherload_subless", game_fn_motherload_subless as extern "C" fn(_));
-		state.register_game_fn("offset_32_bit_f32", game_fn_offset_32_bit_f32 as extern "C" fn(_));
-		state.register_game_fn("offset_32_bit_i32", game_fn_offset_32_bit_i32 as extern "C" fn(_));
-		state.register_game_fn("offset_32_bit_string", game_fn_offset_32_bit_string as extern "C" fn(_));
-		state.register_game_fn("talk", game_fn_talk as extern "C" fn(_));
-		state.register_game_fn("get_position", game_fn_get_position as extern "C" fn(_) -> _);
-		state.register_game_fn("set_position", game_fn_set_position as extern "C" fn(_));
-		state.register_game_fn("cause_game_fn_error", game_fn_cause_game_fn_error as extern "C" fn());
-		state.register_game_fn("call_on_b_fn", game_fn_call_on_b_fn as extern "C" fn());
-		state.register_game_fn("store", game_fn_store as extern "C" fn(_));
-		state.register_game_fn("retrieve", game_fn_retrieve as extern "C" fn() -> _);
-		state.register_game_fn("box_number", game_fn_box_number as extern "C" fn(_) -> _);
+		_ = state.register_game_fn("nothing", game_fn_nothing as extern "C" fn());
+		_ = state.register_game_fn("magic", game_fn_magic as extern "C" fn() -> _);
+		_ = state.register_game_fn("initialize", game_fn_initialize as extern "C" fn(_));
+		_ = state.register_game_fn("initialize_bool", game_fn_initialize_bool as extern "C" fn(_));
+		_ = state.register_game_fn("identity", game_fn_identity as extern "C" fn(_) -> _);
+		_ = state.register_game_fn("max", game_fn_max as extern "C" fn(_) -> _);
+		_ = state.register_game_fn("say", game_fn_say as extern "C" fn(_));
+		_ = state.register_game_fn("sin", game_fn_sin as extern "C" fn(_) -> _);
+		_ = state.register_game_fn("cos", game_fn_cos as extern "C" fn(_) -> _);
+		_ = state.register_game_fn("mega", game_fn_mega as extern "C" fn(_));
+		_ = state.register_game_fn("get_false", game_fn_get_false as extern "C" fn() -> _);
+		_ = state.register_game_fn("set_is_happy", game_fn_set_is_happy as extern "C" fn(_));
+		_ = state.register_game_fn("mega_f32", game_fn_mega_f32 as extern "C" fn(_));
+		_ = state.register_game_fn("mega_i32", game_fn_mega_i32 as extern "C" fn(_));
+		_ = state.register_game_fn("draw", game_fn_draw as extern "C" fn(_));
+		_ = state.register_game_fn("blocked_alrm", game_fn_blocked_alrm as extern "C" fn());
+		_ = state.register_game_fn("spawn", game_fn_spawn as extern "C" fn(_));
+		_ = state.register_game_fn("has_resource", game_fn_has_resource as extern "C" fn(_) -> _);
+		_ = state.register_game_fn("has_entity", game_fn_has_entity as extern "C" fn(_) -> _);
+		_ = state.register_game_fn("has_string", game_fn_has_string as extern "C" fn(_) -> _);
+		_ = state.register_game_fn("get_opponent", game_fn_get_opponent as extern "C" fn() -> _);
+		_ = state.register_game_fn("set_d", game_fn_set_d as extern "C" fn(_));
+		_ = state.register_game_fn("set_opponent", game_fn_set_opponent as extern "C" fn(_));
+		_ = state.register_game_fn("motherload", game_fn_motherload as extern "C" fn(_));
+		_ = state.register_game_fn("motherload_subless", game_fn_motherload_subless as extern "C" fn(_));
+		_ = state.register_game_fn("offset_32_bit_f32", game_fn_offset_32_bit_f32 as extern "C" fn(_));
+		_ = state.register_game_fn("offset_32_bit_i32", game_fn_offset_32_bit_i32 as extern "C" fn(_));
+		_ = state.register_game_fn("offset_32_bit_string", game_fn_offset_32_bit_string as extern "C" fn(_));
+		_ = state.register_game_fn("talk", game_fn_talk as extern "C" fn(_));
+		_ = state.register_game_fn("get_position", game_fn_get_position as extern "C" fn(_) -> _);
+		_ = state.register_game_fn("set_position", game_fn_set_position as extern "C" fn(_));
+		_ = state.register_game_fn("cause_game_fn_error", game_fn_cause_game_fn_error as extern "C" fn());
+		_ = state.register_game_fn("call_on_b_fn", game_fn_call_on_b_fn as extern "C" fn());
+		_ = state.register_game_fn("store", game_fn_store as extern "C" fn(_));
+		_ = state.register_game_fn("retrieve", game_fn_retrieve as extern "C" fn() -> _);
+		_ = state.register_game_fn("box_number", game_fn_box_number as extern "C" fn(_) -> _);
 	}
 }
 use game_fn_bindings::*;

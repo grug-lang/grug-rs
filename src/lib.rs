@@ -11,7 +11,7 @@ pub mod error;
 pub mod state;
 
 // pub mod capi;
-mod xar;
+pub mod xar;
 
 mod ntstring;
 

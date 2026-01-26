@@ -138,7 +138,7 @@ impl GrugState {
 }
 
 #[derive(Debug)]
-enum StateError {
+pub enum StateError {
 	UnknownEntityType{
 		entity_type: String
 	},

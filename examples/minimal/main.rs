@@ -22,7 +22,7 @@ fn main () {
 
 	state.compile_grug_file("goldie/first-Dog.grug").unwrap();
 	let dog = state.create_entity("goldie/first-Dog.grug").unwrap();
-	let on_bark_id = state.get_on_fn_id("Dog", "on_bark");
+	let on_bark_id = state.get_on_fn_id("Dog", "on_bark").unwrap();
 
 	loop {
 		state.call_on_function(dog, on_bark_id, &[GrugValue{string: c"woof".as_ptr().cast()}]).unwrap();
