@@ -19,7 +19,7 @@ impl ModApi {
 
 #[derive(Debug)]
 pub struct ModApiEntity {
-	pub(super) name: Arc<str>,
+	#[allow(dead_code)]
 	pub(super) description: Option<String>,
 	pub(super) on_fns: Vec<(Arc<str>, ModApiOnFn)>,
 }
@@ -32,14 +32,14 @@ impl ModApiEntity {
 
 #[derive(Debug)]
 pub struct ModApiOnFn {
-	pub(super) name: Arc<str>, 
+	#[allow(dead_code)]
 	pub(super) description: Option<String>,
 	pub(super) arguments: Vec<Argument>,
 }
 
 #[derive(Debug)]
 pub struct ModApiGameFn {
-	pub(super) name: Arc<str>,
+	#[allow(dead_code)]
 	pub(super) description: Option<String>,
 	pub(super) return_ty: GrugType,
 	pub(super) arguments: Vec<Argument>,
@@ -197,14 +197,11 @@ pub fn get_mod_api(mod_api_text: &str) -> Result<ModApi, ModApiError> {
 			}).collect::<Result<Vec<_>, ModApiError>>()?;
 			let fn_name = Arc::from(fn_name);
 			Ok((Arc::clone(&fn_name), ModApiOnFn{
-				name: fn_name,
 				description,
 				arguments,
 			}))
 		}).collect::<Result<Vec<_>, _>>()?;
-		let entity_name = Arc::from(entity_name);
-		Ok((Arc::clone(&entity_name), ModApiEntity{
-			name: entity_name,
+		Ok((Arc::from(entity_name), ModApiEntity{
 			description,
 			on_fns
 		}))
@@ -301,7 +298,6 @@ pub fn get_mod_api(mod_api_text: &str) -> Result<ModApi, ModApiError> {
 		};
 		let fn_name = Arc::from(fn_name);
 		Ok((Arc::clone(&fn_name), ModApiGameFn{
-			name: fn_name,
 			return_ty,
 			description,
 			arguments

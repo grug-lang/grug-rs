@@ -3,9 +3,58 @@ use std::ffi::{c_char, c_double};
 use crate::ntstring::NTStr;
 // TODO Unnest some of these enums
 
+#[repr(C)]
+pub union GameFnPtr {
+	pub void: GameFnPtrVoid,
+	pub void_argless: GameFnPtrVoidArgless,
+	pub value: GameFnPtrValue,
+	pub value_argless: GameFnPtrValueArgless,
+}
+
+mod from_impls {
+	use super::*;
+	impl From<GameFnPtrVoid> for GameFnPtr {
+		fn from (value: GameFnPtrVoid) -> Self {
+			Self {
+				void: value,
+			}
+		}
+	}
+
+	impl From<GameFnPtrVoidArgless> for GameFnPtr {
+		fn from (value: GameFnPtrVoidArgless) -> Self {
+			Self {
+				void_argless: value,
+			}
+		}
+	}
+
+	impl From<GameFnPtrValue> for GameFnPtr {
+		fn from (value: GameFnPtrValue) -> Self {
+			Self {
+				value,
+			}
+		}
+	}
+
+	impl From<GameFnPtrValueArgless> for GameFnPtr {
+		fn from (value: GameFnPtrValueArgless) -> Self {
+			Self {
+				value_argless: value,
+			}
+		}
+	}
+}
+
+pub type GameFnPtrVoid = extern "C" fn (args: *const GrugValue);
+pub type GameFnPtrVoidArgless = extern "C" fn ();
+pub type GameFnPtrValue = extern "C" fn (args: *const GrugValue) -> GrugValue;
+pub type GameFnPtrValueArgless = extern "C" fn () -> GrugValue;
+
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub struct GrugId(u64);
+pub type GrugScriptId = GrugId;
 
 impl std::fmt::Display for GrugId {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -18,6 +67,8 @@ impl GrugId {
 		Self(id)
 	}
 }
+
+pub type GrugOnFnId = u64;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -289,15 +340,18 @@ pub struct Argument {
 	pub(super) ty: GrugType,
 }
 
+#[derive(Debug)]
+pub struct Variable {
+	pub name: Arc<str>,
+	pub ty: Option<GrugType>,
+	pub assignment_expr: Expr,
+}
+
 // TODO: remove Statement suffix from these variants
 // TODO: Statements needs location information
 #[derive(Debug)]
 pub enum Statement {
-	VariableStatement{
-		name: Arc<str>,
-		ty: Option<GrugType>,
-		assignment_expr: Expr,
-	},
+	Variable(Variable),
 	CallStatement {
 		expr: Expr
 	},

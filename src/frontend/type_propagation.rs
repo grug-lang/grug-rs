@@ -2,34 +2,15 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use crate::ntstring::NTStr;
-use crate::types::*;
+use crate::types::{self, *};
 use crate::state::GrugState;
 use crate::frontend::parser::AST;
-
-type GrugIDType = *mut ();
-
-#[allow(dead_code)]
-enum GrugValue {
-	_Bool(bool),
-	_I32(i32),
-	_F32(f32),
-	_String(String),
-	_Id(GrugIDType),
-	_Resource(String),
-	_Entity(GrugIDType),
-	Uninitialized,
-}
-struct Variable {
-	name: Arc<str>,
-	ty: GrugType,
-	value: GrugValue,
-}
 
 pub(super) struct TypePropogator<'a> {
 	grug_state: &'a GrugState,
 	current_mod_name: String,
-	global_variables: HashMap<Arc<str>, Variable>,
-	local_variables: Vec<HashMap<Arc<str>, Variable>>,
+	global_variables: HashMap<Arc<str>, GrugType>,
+	local_variables: Vec<HashMap<Arc<str>, GrugType>>,
 	num_while_loops_deep: usize,
 	current_fn_calls_helper_fn: bool,
 	current_fn_has_while_loop: bool,
@@ -649,8 +630,7 @@ impl<'a> TypePropogator<'a> {
 			.iter_mut().filter_map(|st| match st {GlobalStatement::OnFunction(x) => Some(x), _ => None})
 			.collect::<Vec<_>>();
 		for (on_fn_name, mod_api_on_fn) in 
-			self.grug_state.mod_api.entities().get(&*entity_name)
-			.expect("already verified that entity exists").on_fns.iter()
+			entity.on_fns.iter()
 		{
 			let Some((current_index, current_on_fn)) = 
 				on_functions.iter_mut().enumerate()
@@ -719,13 +699,12 @@ impl<'a> TypePropogator<'a> {
 			self.current_fn_calls_helper_fn = false;
 			self.current_fn_has_while_loop  = false;
 		}
-		let entity_on_functions = &self.grug_state.mod_api.entities().get(&*entity_name)
-			.expect("already checked that entity exists").on_fns;
+		let entity_on_functions = entity.on_fns;
 		for on_fn in on_functions {
 			if !entity_on_functions.iter().any(|(name, _)| **name == *on_fn.name) {
 				return Err(TypePropogatorError::OnFnDoesNotExist {
 					function_name: Arc::clone(&on_fn.name),
-					entity_name: Arc::clone(&entity.name),
+					entity_name: Arc::clone(&entity_name),
 				});
 			}
 		}
@@ -777,15 +756,15 @@ impl<'a> TypePropogator<'a> {
 		self.push_scope();
 		for statement in &mut *statements {
 			match statement {
-				Statement::VariableStatement {
+				Statement::Variable(types::Variable {
 					name,
 					ty,
 					assignment_expr
-				} => {
+				}) => {
 					let result_ty = self.fill_expr(helper_fns, assignment_expr)?;
 					
 					if let Some(ty) = ty {
-						if self.get_variable(name).is_some() {
+						if self.get_variable_type(name).is_some() {
 							return Err(TypePropogatorError::VariableAlreadyExists{
 								variable_name: Arc::clone(name),
 							});
@@ -801,25 +780,25 @@ impl<'a> TypePropogator<'a> {
 							self.add_local_variable(Arc::clone(name), ty.clone())?
 						}
 					} else {
-						let var = if let Some(var) = self.get_global_variable(name) {
-							if matches!(var.ty, GrugType::Id {..}) {
+						let ty = if let Some(ty) = self.get_global_variable_type(name) {
+							if matches!(ty, GrugType::Id {..}) {
 								return Err(TypePropogatorError::GlobalIdsCantBeReassigned);
 							}
-							var
-						} else if let Some(var) = self.get_local_variable(name) {
-							var
+							ty
+						} else if let Some(ty) = self.get_local_variable_type(name) {
+							ty
 						} else {
 							return Err(TypePropogatorError::CantAssignBecauseVariableDoesntExist {
 								name: Arc::clone(name),
 							});
 						};
 
-						if !(var.ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && var.ty != result_ty {
+						if !(ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && ty != result_ty {
 						// if result_ty != var.ty {
 							return Err(TypePropogatorError::VariableTypeMismatch {
 								name: Arc::clone(name),
 								got_type: result_ty.clone(),
-								expected_type: var.ty.clone(),
+								expected_type: ty.clone(),
 							});
 						}
 					}
@@ -983,12 +962,12 @@ impl<'a> TypePropogator<'a> {
 					LiteralExpr::IdentifierExpr{
 						name
 					} => {
-						let var = self.get_variable(&*name).ok_or_else(|| TypePropogatorError::VariableDoesNotExist{
+						let ty = self.get_variable_type(&*name).ok_or_else(|| TypePropogatorError::VariableDoesNotExist{
 							name: Arc::clone(name),
 							line,
 							col,
 						})?;
-						var.ty.clone()
+						ty.clone()
 					},
 					LiteralExpr::NumberExpr{
 						..
@@ -1278,12 +1257,12 @@ impl<'a> TypePropogator<'a> {
 		}
 	}
 
-	fn get_variable(&self, var_name: &str) -> Option<&Variable> {
+	fn get_variable_type(&self, var_name: &str) -> Option<GrugType> {
 		// TODO: also do local variables
-		if let var@Some(_) = self.get_local_variable(var_name) {
+		if let var@Some(_) = self.get_local_variable_type(var_name) {
 			var
 		} else {
-			self.get_global_variable(var_name)
+			self.get_global_variable_type(var_name)
 		}
 	}
 
@@ -1295,21 +1274,21 @@ impl<'a> TypePropogator<'a> {
 		self.local_variables.pop().unwrap();
 	}
 
-	fn get_local_variable(&self, var_name: &str) -> Option<&Variable> {
+	fn get_local_variable_type(&self, var_name: &str) -> Option<GrugType> {
 		for scope in self.local_variables.iter().rev() {
 			if let var@Some(_) = scope.get(var_name) {
-				return var;
+				return var.cloned();
 			}
 		}
 		None
 	}
 
-	fn get_global_variable(&self, var_name: &str) -> Option<&Variable> {
-		self.global_variables.get(var_name)
+	fn get_global_variable_type(&self, var_name: &str) -> Option<GrugType> {
+		self.global_variables.get(var_name).cloned()
 	}
 
 	fn add_local_variable(&mut self, name: Arc<str>, ty: GrugType) -> Result<(), TypePropogatorError> {
-		if self.get_global_variable(&name).is_some() {
+		if self.get_global_variable_type(&name).is_some() {
 			return Err(TypePropogatorError::LocalVariableShadowedByGlobal{
 				name,
 			});
@@ -1318,11 +1297,7 @@ impl<'a> TypePropogator<'a> {
 			Entry::Occupied(_) => return Err(TypePropogatorError::LocalVariableShadowedByLocal{
 				name,
 			})?,
-			Entry::Vacant(x) => {x.insert(Variable{
-				name,
-				ty,
-				value: GrugValue::Uninitialized,
-			});},
+			Entry::Vacant(x) => {x.insert(ty);},
 		}
 		Ok(())
 	}
@@ -1332,11 +1307,7 @@ impl<'a> TypePropogator<'a> {
 			Entry::Occupied(_) => return Err(TypePropogatorError::GlobalVariableShadowed{
 				name,
 			})?,
-			Entry::Vacant(x) => {x.insert(Variable{
-				name,
-				ty,
-				value: GrugValue::Uninitialized,
-			});},
+			Entry::Vacant(x) => {x.insert(ty);},
 		}
 		Ok(())
 	}

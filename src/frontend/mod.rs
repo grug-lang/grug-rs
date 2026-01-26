@@ -29,6 +29,7 @@ impl GrugState {
 		
 		TypePropogator::new(self, mod_name.into()).fill_result_types(entity_type, &mut ast)?;
 
+		// let mod_api_entity = self.mod_api.entities.get(entity_type);
 		let mut global_variables = Vec::new();
 		let mut on_functions = Vec::new();
 		let mut helper_functions = Vec::new();

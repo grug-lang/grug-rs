@@ -254,21 +254,21 @@ mod ser {
 
 	fn serialize_statement(statement: &Statement) -> JsonValue {
 		match statement {
-			Statement::VariableStatement{
+			Statement::Variable(Variable{
 				name,
 				ty: Some(ty),
 				assignment_expr,
-			} => object! {
+			}) => object! {
 				"kind": "variable",
 				"name": &**name,
 				"type": serialize_type(ty),
 				"assignment_expr": serialize_expr(assignment_expr),
 			},
-			Statement::VariableStatement{
+			Statement::Variable(Variable{
 				name,
 				ty: None,
 				assignment_expr,
-			} => object! {
+			}) => object! {
 				"name": &**name,
 				"kind": "variable",
 				"assignment_expr": serialize_expr(assignment_expr),
@@ -351,6 +351,7 @@ mod de {
 	#[derive(Debug)]
 	pub enum JsonDeserializeError {
 		RootNotArray,
+		#[allow(dead_code)]
 		FieldMissing {
 			parent_context: String,
 			field_name: &'static str,

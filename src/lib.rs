@@ -10,6 +10,8 @@ pub mod serde;
 pub mod error;
 pub mod state;
 
+// pub mod capi;
+
 mod ntstring;
 
 mod cachemap;

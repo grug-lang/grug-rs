@@ -1,61 +1,13 @@
-use crate::mod_api::{ModApi, get_mod_api, ModApiError};
+use crate::mod_api::{ModApi, get_mod_api};
 use crate::error::GrugError;
 use crate::backend::{Backend, RuntimeError};
-use crate::types::{GrugValue, GlobalVariable, GrugId};
+use crate::types::{GrugValue, GrugId, GameFnPtr};
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::sync::{atomic::{AtomicU64, Ordering}};
 use std::time::Instant;
-
-#[repr(C)]
-pub union GameFnPtr {
-	pub void: GameFnPtrVoid,
-	pub void_argless: GameFnPtrVoidArgless,
-	pub value: GameFnPtrValue,
-	pub value_argless: GameFnPtrValueArgless,
-}
-
-mod from_impls {
-	use super::*;
-	impl From<GameFnPtrVoid> for GameFnPtr {
-		fn from (value: GameFnPtrVoid) -> Self {
-			Self {
-				void: value,
-			}
-		}
-	}
-
-	impl From<GameFnPtrVoidArgless> for GameFnPtr {
-		fn from (value: GameFnPtrVoidArgless) -> Self {
-			Self {
-				void_argless: value,
-			}
-		}
-	}
-
-	impl From<GameFnPtrValue> for GameFnPtr {
-		fn from (value: GameFnPtrValue) -> Self {
-			Self {
-				value,
-			}
-		}
-	}
-
-	impl From<GameFnPtrValueArgless> for GameFnPtr {
-		fn from (value: GameFnPtrValueArgless) -> Self {
-			Self {
-				value_argless: value,
-			}
-		}
-	}
-}
-
-type GameFnPtrVoid = extern "C" fn (args: *const GrugValue);
-type GameFnPtrVoidArgless = extern "C" fn ();
-type GameFnPtrValue = extern "C" fn (args: *const GrugValue) -> GrugValue;
-type GameFnPtrValueArgless = extern "C" fn () -> GrugValue;
 
 pub struct GrugState {
 	pub(crate) mod_api: ModApi,

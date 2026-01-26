@@ -840,11 +840,11 @@ impl AST {
 
 		consume_space(tokens)?;
 		let assignment_expr = self.parse_expression(tokens, parsing_depth + 1)?;
-		Ok(Statement::VariableStatement{
+		Ok(Statement::Variable(Variable{
 			name: local_name.into(),
 			ty,
 			assignment_expr,
-		})
+		}))
 	}
 
 	// global -> word + ":" + type + " =" + expr;

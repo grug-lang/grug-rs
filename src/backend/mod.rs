@@ -1,7 +1,4 @@
-use crate::types::{GrugValue, GlobalVariable, OnFunction, HelperFunction, GrugId};
-use std::sync::Arc;
-use std::collections::HashMap;
-use std::cell::Cell;
+use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugId};
 #[derive(Debug)]
 pub struct GrugFile {
 	pub(crate) global_variables: Vec<GlobalVariable>,
@@ -15,7 +12,7 @@ const ON_FN_TIME_LIMIT: u64 = 100; // ms
 const MAX_RECURSION_LIMIT: usize = 100;
 
 pub mod interpreter {
-	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator};
+	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable};
 	use super::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT, GrugFile};
 	use crate::state::GrugState;
 	use crate::cachemap::CacheMap;
@@ -25,11 +22,6 @@ pub mod interpreter {
 	use std::collections::HashMap;
 	use std::ffi::CStr;
 	use std::time::{Duration, Instant};
-
-	pub struct UninitGrugEntity {
-		pub(crate) global_variables: HashMap<Arc<str>, Cell<GrugValue>>,
-		pub(crate) file: Arc<GrugFile>,
-	}
 
 	pub struct GrugEntity {
 		pub(crate) global_variables: HashMap<Arc<str>, Cell<GrugValue>>,
@@ -175,16 +167,11 @@ pub mod interpreter {
 			let me_id = state.get_id();
 			let file = self.files.get(file_path).ok_or(RuntimeError::FileNotCompiled{file_path: String::from(file_path)})?;
 
-			let mut temp_entity = UninitGrugEntity {
+			let mut entity = GrugEntity {
 				global_variables: HashMap::from([(Arc::from("me"), Cell::new(GrugValue{id:me_id}))]),
 				file: Arc::clone(file),
 			};
-			self.init_global_variables(state, &mut temp_entity, &file.global_variables)?;
-
-			let entity = GrugEntity {
-			    global_variables: temp_entity.global_variables,
-			    file: temp_entity.file,
-			};
+			self.init_global_variables(state, &mut entity, &file.global_variables)?;
 
 			if self.entities.try_insert(me_id, entity).is_err() {
 				panic!();
@@ -226,11 +213,11 @@ pub mod interpreter {
 			let mut ret_val = GrugControlFlow::None;
 			'outer: for statement in statements {
 				match statement {
-					Statement::VariableStatement{
+					Statement::Variable(Variable{
 						name,
 						ty,
 						assignment_expr,
-					} => {
+					}) => {
 						let assignment_expr = self.run_expr(call_stack, state, entity, assignment_expr)?;
 						if let Some(_) = ty {
 							call_stack.add_local_variable(Arc::clone(name), assignment_expr);
@@ -341,7 +328,7 @@ pub mod interpreter {
 			Ok(ret_val)
 		}
 
-		pub(crate) fn init_global_exprs(&self, state: &GrugState, entity: &mut UninitGrugEntity, expr: &Expr) -> Result<GrugValue, RuntimeError> {
+		pub(crate) fn init_global_exprs(&self, state: &GrugState, entity: &mut GrugEntity, expr: &Expr) -> Result<GrugValue, RuntimeError> {
 			if Instant::elapsed(&state.call_start_time.get()) > Duration::from_millis(ON_FN_TIME_LIMIT) {
 				return Err(RuntimeError::ExceededTimeLimit);
 			}
@@ -614,7 +601,7 @@ pub mod interpreter {
 			})
 		}
 
-		fn init_global_variables(&self, state: &GrugState, entity: &mut UninitGrugEntity, globals: &[GlobalVariable]) -> Result<(), RuntimeError> {
+		fn init_global_variables(&self, state: &GrugState, entity: &mut GrugEntity, globals: &[GlobalVariable]) -> Result<(), RuntimeError> {
 			state.call_start_time.set(Instant::now());
 			globals.iter().map(|variable| {
 				let value = self.init_global_exprs(state, entity, &variable.assignment_expr)?;
