@@ -10,6 +10,7 @@ mod test_bindings {
 	use gruggers::types::{GrugValue, GrugId};
 	use gruggers::serde;
 	use std::ffi::{c_char, CStr, CString};
+	use std::path::PathBuf;
 	use std::mem::ManuallyDrop;
 
 	pub static mut GLOBAL_TEST_STATE: Option<GrugState> = None;
@@ -46,9 +47,16 @@ mod test_bindings {
 	pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, values: *const GrugValue) {
 		unsafe {
 			let fn_name = CStr::from_ptr(fn_name).to_str().unwrap();
+			let entity_type = PathBuf::from(CURRENT_PATH.unwrap());
+			let entity_type = entity_type
+				.file_prefix().unwrap()
+				.to_str().unwrap()
+				.split_once("-").unwrap()
+				.1;
+			let fn_id = GLOBAL_TEST_STATE.as_ref().unwrap().get_on_fn_id(entity_type, fn_name);
 			
 			let (kind, msg) = match GLOBAL_TEST_STATE.as_ref().unwrap()
-				.call_on_function_raw(CURRENT_GRUG_ENTITY.unwrap(), fn_name, values)
+				.call_on_function_raw(CURRENT_GRUG_ENTITY.unwrap(), fn_id, values)
 			{
 				Err(RuntimeError::StackOverflow) => (0, ManuallyDrop::new(CString::new(format!("{}", RuntimeError::StackOverflow)).unwrap()).as_ptr()),
 				Err(RuntimeError::ExceededTimeLimit) => (1, ManuallyDrop::new(CString::new(format!("{}", RuntimeError::ExceededTimeLimit)).unwrap()).as_ptr()),

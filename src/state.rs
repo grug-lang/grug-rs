@@ -1,7 +1,7 @@
 use crate::mod_api::{ModApi, get_mod_api};
 use crate::error::GrugError;
 use crate::backend::{Backend, RuntimeError};
-use crate::types::{GrugValue, GrugId, GameFnPtr};
+use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId};
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -36,6 +36,14 @@ impl GrugState {
 			error: Cell::new(None),
 			handled_error: Cell::new(false),
 		})
+	}
+
+	pub fn get_on_fn_id(&self, entity_type: &str, on_fn_name: &str) -> GrugOnFnId {
+		self.mod_api.entities().get(entity_type)
+			.expect("unknown entity")
+			.get_on_fn(on_fn_name)
+			.unwrap()
+			.0 as u64
 	}
 
 	pub fn register_game_fn<F: Into<GameFnPtr>>(&mut self, name: &'static str, ptr: F) {
@@ -95,13 +103,13 @@ impl GrugState {
 	/// `values` must point to an array of values with length equal to
 	/// the number of arguments expected by `function_name`. If there are no arguments, 
 	/// `values` may be null
-	pub unsafe fn call_on_function_raw(&self, entity: GrugId, function_name: &str, values: *const GrugValue) -> Result<(), RuntimeError> {
+	pub unsafe fn call_on_function_raw(&self, entity: GrugId, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
 		unsafe {
-			self.backend.call_on_function_raw(self, entity, function_name, values)
+			self.backend.call_on_function_raw(self, entity, on_fn_id, values)
 		}
 	}
 
-	pub fn call_on_function(&self, entity: GrugId, function_name: &str, values: &[GrugValue]) -> Result<(), RuntimeError> {
-		self.backend.call_on_function(self, entity, function_name, values)
+	pub fn call_on_function(&self, entity: GrugId, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
+		self.backend.call_on_function(self, entity, on_fn_id, values)
 	}
 }

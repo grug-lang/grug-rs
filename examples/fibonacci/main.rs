@@ -1,11 +1,8 @@
 #![allow(static_mut_refs)]
-use gruggers::*;
 use gruggers::state::GrugState;
-use gruggers::error::GrugError;
 use gruggers::types::GrugValue;
 
 use std::ffi::CStr;
-use std::time::Duration;
 
 mod game_fns {
 	use super::*;
@@ -147,39 +144,40 @@ fn main () {
 		state.register_game_fn("list_number_get", list_number_get as extern "C" fn(_) -> _);
 		state.register_game_fn("list_number_set", list_number_set as extern "C" fn(_));
 		assert!(state.all_game_fns_registered());
-		unsafe{ STATE.write(state) };
-		unsafe{ OBJECTS.write(HashMap::new()) };
+		 STATE.write(state);
+		 OBJECTS.write(HashMap::new());
 
 		STATE.compile_grug_file("fib_script/entity-Fib.grug").unwrap();
 		let script = STATE.create_entity("fib_script/entity-Fib.grug").unwrap();
 
+		let naive_id = STATE.get_on_fn_id("Fib", "on_fib_naive");
+		let iterative_id = STATE.get_on_fn_id("Fib", "on_fib_iterative");
+		let memo_id = STATE.get_on_fn_id("Fib", "on_fib_memoized");
+		let memo_print_id = STATE.get_on_fn_id("Fib", "on_print_list");
+
 		println!("Naive implementation");
 		for i in 0..10 {
-			let Ok(_) = STATE.call_on_function(script, "on_fib_naive", &[GrugValue{number:i as f64}]) else {
+			let Ok(_) = STATE.call_on_function(script, naive_id, &[GrugValue{number:i as f64}]) else {
 				break
 			};
 		}
 		
 		println!("iterative implementation");
-		for i in (0..10) {
+		for i in 0..10 {
 			print!("{i} : ");
-			let Ok(_) = STATE.call_on_function(script, "on_fib_iterative", &[GrugValue{number:i as f64}]) else {
+			let Ok(_) = STATE.call_on_function(script, iterative_id, &[GrugValue{number:i as f64}]) else {
 				break
 			};
 		}
 
 		println!("memoized implementation");
-		for i in (0..1000) {
+		for i in 0..10 {
 			// print!("{i} : ");
-			let Ok(_) = STATE.call_on_function(script, "on_fib_memoized", &[GrugValue{number:i as f64}]) else {
+			let Ok(_) = STATE.call_on_function(script, memo_id, &[GrugValue{number:i as f64}]) else {
 				break
 			};
 		}
-		STATE.call_on_function(script, "on_print_list", &[]).unwrap();
+		
+		STATE.call_on_function(script, memo_print_id, &[]).unwrap();
 	}
 }
-
-mod std_lib {
-	
-}
-use std_lib::*;

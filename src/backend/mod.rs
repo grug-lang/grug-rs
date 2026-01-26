@@ -2,7 +2,7 @@ use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugId};
 #[derive(Debug)]
 pub struct GrugFile {
 	pub(crate) global_variables: Vec<GlobalVariable>,
-	pub(crate) on_functions: Vec<OnFunction>,
+	pub(crate) on_functions: Vec<Option<OnFunction>>,
 	pub(crate) helper_functions: Vec<HelperFunction>,
 }
 
@@ -12,7 +12,7 @@ const ON_FN_TIME_LIMIT: u64 = 100; // ms
 const MAX_RECURSION_LIMIT: usize = 100;
 
 pub mod interpreter {
-	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable};
+	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId};
 	use super::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT, GrugFile};
 	use crate::state::GrugState;
 	use crate::cachemap::CacheMap;
@@ -108,54 +108,51 @@ pub mod interpreter {
 			self.files.insert(path, Arc::new(file));
 		}
 
-		pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: GrugId, function_name: &str, values: *const GrugValue) -> Result<(), RuntimeError> {
+		pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: GrugId, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
 			let Some(entity) = self.entities.get(&entity) else {
 				return Err(RuntimeError::EntityDoesNotExist{id: entity});
 			};
 			let file = Arc::clone(&entity.file);
-			for on_function in &file.on_functions {
-				if &*on_function.name != function_name {
-					continue;
-				}
-				let values = if on_function.arguments.len() == 0 {
-					&[]
-				} else {
-					unsafe{std::slice::from_raw_parts(values, on_function.arguments.len())}
-				};
-				state.call_start_time.set(Instant::now());
-				self.run_function(
-					&mut CallStack::new(),
-					state,
-					entity, 
-					&on_function.arguments, 
-					values,
-					&on_function.body_statements
-				)?;
-				break;
-			}
+			let Some(on_function) = &file.on_functions[on_fn_id as usize] else {
+				panic!("function not available");
+			};
+
+			let values = if on_function.arguments.len() == 0 {
+				&[]
+			} else {
+				unsafe{std::slice::from_raw_parts(values, on_function.arguments.len())}
+			};
+
+			state.call_start_time.set(Instant::now());
+			self.run_function(
+				&mut CallStack::new(),
+				state,
+				entity, 
+				&on_function.arguments, 
+				values,
+				&on_function.body_statements
+			)?;
 			Ok(())
 		}
 
-		pub fn call_on_function(&self, state: &GrugState, entity: GrugId, function_name: &str, values: &[GrugValue]) -> Result<(), RuntimeError> {
+		pub fn call_on_function(&self, state: &GrugState, entity: GrugId, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
 			let Some(entity) = self.entities.get(&entity) else {
 				return Err(RuntimeError::EntityDoesNotExist{id: entity});
 			};
 			let file = Arc::clone(&entity.file);
-			for on_function in &file.on_functions {
-				if &*on_function.name != function_name {
-					continue;
-				}
-				state.call_start_time.set(Instant::now());
-				self.run_function(
-					&mut CallStack::new(), 
-					state,
-					entity, 
-					&on_function.arguments, 
-					values, 
-					&on_function.body_statements
-				)?;
-				break;
-			}
+			let Some(on_function) = &file.on_functions[on_fn_id as usize] else {
+				panic!("function not available");
+			};
+
+			state.call_start_time.set(Instant::now());
+			self.run_function(
+				&mut CallStack::new(),
+				state,
+				entity, 
+				&on_function.arguments, 
+				values,
+				&on_function.body_statements
+			)?;
 			Ok(())
 		}
 

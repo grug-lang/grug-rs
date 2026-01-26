@@ -3,11 +3,12 @@ use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use crate::ntstring::NTStr;
 use crate::types::{self, *};
-use crate::state::GrugState;
 use crate::frontend::parser::AST;
+use crate::mod_api::{ModApiEntity, ModApiGameFn};
 
 pub(super) struct TypePropogator<'a> {
-	grug_state: &'a GrugState,
+	entity: &'a ModApiEntity,
+	game_fns: &'a HashMap<Arc<str>, ModApiGameFn>,
 	current_mod_name: String,
 	global_variables: HashMap<Arc<str>, GrugType>,
 	local_variables: Vec<HashMap<Arc<str>, GrugType>>,
@@ -576,9 +577,10 @@ impl From<EntityValidationError> for TypePropogatorError {
 }
 
 impl<'a> TypePropogator<'a> {
-	pub fn new (state: &'a GrugState, mod_name: String) -> Self {
+	pub fn new (entity: &'a ModApiEntity, game_fns: &'a HashMap<Arc<str>, ModApiGameFn>, mod_name: String) -> Self {
 		Self {
-			grug_state: state,
+			entity,
+			game_fns,
 			current_mod_name: mod_name,
 			global_variables: HashMap::new(),
 			local_variables: Vec::new(),
@@ -591,9 +593,6 @@ impl<'a> TypePropogator<'a> {
 
 	pub fn fill_result_types(&mut self, entity_name: &str, ast: &mut AST) -> Result<(), TypePropogatorError> {
 		let entity_name = Arc::from(entity_name);
-		let entity = self.grug_state.mod_api.entities().get(&*entity_name).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
-			entity_name: Arc::clone(&entity_name),
-		})?;
 		
 		self.add_global_variable(Arc::from("me"), GrugType::Id{custom_name: Some(Arc::clone(&entity_name))})?;
 
@@ -630,7 +629,7 @@ impl<'a> TypePropogator<'a> {
 			.iter_mut().filter_map(|st| match st {GlobalStatement::OnFunction(x) => Some(x), _ => None})
 			.collect::<Vec<_>>();
 		for (on_fn_name, mod_api_on_fn) in 
-			entity.on_fns.iter()
+			self.entity.on_fns.iter()
 		{
 			let Some((current_index, current_on_fn)) = 
 				on_functions.iter_mut().enumerate()
@@ -699,7 +698,7 @@ impl<'a> TypePropogator<'a> {
 			self.current_fn_calls_helper_fn = false;
 			self.current_fn_has_while_loop  = false;
 		}
-		let entity_on_functions = entity.on_fns;
+		let entity_on_functions = &self.entity.on_fns;
 		for on_fn in on_functions {
 			if !entity_on_functions.iter().any(|(name, _)| **name == *on_fn.name) {
 				return Err(TypePropogatorError::OnFnDoesNotExist {
@@ -708,7 +707,6 @@ impl<'a> TypePropogator<'a> {
 				});
 			}
 		}
-		
 
 		for statement in &mut ast.global_statements {
 			match statement {
@@ -1077,7 +1075,7 @@ impl<'a> TypePropogator<'a> {
 				if let Some((return_ty, sig_arguments)) = helper_fns.get(function_name) {
 					self.check_arguments(function_name, sig_arguments, arguments)?;
 					return_ty.clone()
-				} else if let Some(game_fn) = self.grug_state.mod_api.game_functions().get(function_name) {
+				} else if let Some(game_fn) = self.game_fns.get(function_name) {
 					self.check_arguments(function_name, &game_fn.arguments, arguments)?;
 					game_fn.return_ty.clone()
 				} else if function_name.starts_with("on_") {

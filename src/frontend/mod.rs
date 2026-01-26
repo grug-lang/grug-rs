@@ -7,6 +7,8 @@ use crate::error::GrugError;
 use crate::state::GrugState;
 use crate::backend::GrugFile;
 use crate::types::{GlobalStatement, GlobalVariable, OnFunction, HelperFunction};
+
+use std::sync::Arc;
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 pub(crate) const SPACES_PER_INDENT: usize = 4;
 
@@ -26,18 +28,26 @@ impl GrugState {
 		let tokens = tokenizer::tokenize(&file_text)?;
 
 		let mut ast = parser::parse(&tokens)?;
+
+		let entity = self.mod_api.entities().get(&*entity_type).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
+			entity_name: Arc::from(entity_type),
+		})?;
+		let game_functions = self.mod_api.game_functions();
 		
-		TypePropogator::new(self, mod_name.into()).fill_result_types(entity_type, &mut ast)?;
+		TypePropogator::new(entity, game_functions, mod_name.into()).fill_result_types(entity_type, &mut ast)?;
 
 		// let mod_api_entity = self.mod_api.entities.get(entity_type);
 		let mut global_variables = Vec::new();
-		let mut on_functions = Vec::new();
+		let mut on_functions = (0..entity.on_fns.len()).map(|_| None).collect::<Vec<_>>();
 		let mut helper_functions = Vec::new();
 
 		ast.global_statements.into_iter().for_each(|statement| {
 			match statement {
 				GlobalStatement::Variable(st@GlobalVariable      {..}) => global_variables.push(st),
-				GlobalStatement::OnFunction(st@OnFunction        {..}) => on_functions.push(st),
+				GlobalStatement::OnFunction(st@OnFunction        {..}) => {
+					let (i, _) = entity.get_on_fn(&st.name).unwrap();
+					on_functions[i] = Some(st);
+				}
 				GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),
 				_ => (),
 			}
