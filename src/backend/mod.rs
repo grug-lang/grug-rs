@@ -33,8 +33,7 @@ pub mod interpreter {
 			self.global_variables.get(name)
 		}
 	}
-
-
+	
 	pub struct Backend {
 		files: HashMap<String, Arc<GrugFile>>,
 		entities: CacheMap<GrugId, GrugEntity>,
@@ -175,6 +174,10 @@ pub mod interpreter {
 			}
 			Ok(me_id)
 		}
+
+		// pub fn destroy_entity(&self, state: &GrugState, entity_id: GrugId) -> Result<GrugId, RuntimeError> {
+			
+		// }
 
 		fn run_function(&self, call_stack: &mut CallStack, state: &GrugState, entity: &GrugEntity, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
 			if call_stack.local_variables.len() > MAX_RECURSION_LIMIT {

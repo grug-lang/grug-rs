@@ -5,7 +5,7 @@ use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId};
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{atomic::{AtomicU64, Ordering}};
 use std::time::Instant;
 
@@ -21,10 +21,10 @@ pub struct GrugState {
 	pub(crate)error: Cell<Option<&'static str>>,
 	pub handled_error: Cell<bool>,
 }
+
 impl GrugState {
 	pub fn new<'a, J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D) -> Result<Self, GrugError<'a>> {
-		let mod_api_text = std::fs::read_to_string(mod_api_path).unwrap();
-		let mod_api = get_mod_api(&mod_api_text)?;
+		let mod_api = get_mod_api(&mod_api_path)?;
 
 		Ok(Self {
 			mod_api,
@@ -38,16 +38,35 @@ impl GrugState {
 		})
 	}
 
-	pub fn get_on_fn_id(&self, entity_type: &str, on_fn_name: &str) -> GrugOnFnId {
-		self.mod_api.entities().get(entity_type)
-			.expect("unknown entity")
+	pub fn get_on_fn_id(&self, entity_type: &str, on_fn_name: &str) -> Result<GrugOnFnId, StateError> {
+		Ok(self.mod_api.entities().get(entity_type)
+			.ok_or(StateError::UnknownEntityType{
+				entity_type: String::from(entity_type)
+			})?
 			.get_on_fn(on_fn_name)
-			.unwrap()
-			.0 as u64
+			.ok_or(StateError::UnknownOnFunction{
+				entity_type: String::from(entity_type), 
+				on_function_name: String::from(on_fn_name)}
+			)?
+			.0 as u64)
 	}
 
-	pub fn register_game_fn<F: Into<GameFnPtr>>(&mut self, name: &'static str, ptr: F) {
-		self.game_functions.insert(name, ptr.into());
+	pub fn register_game_fn<F: Into<GameFnPtr>>(&mut self, name: &'static str, ptr: F) -> Result<(), StateError> {
+		if !self.mod_api.game_functions().contains_key(name) {
+			Err(StateError::UnknownGameFunction{
+				game_function_name: name,
+			})
+		} else {
+			match self.game_functions.entry(name) {
+				Entry::Occupied(_) => Err(StateError::ReregisteringGameFunction{
+					game_function_name: name,
+				}),
+				Entry::Vacant(x) => {
+					x.insert(ptr.into());
+					Ok(())
+				}
+			}
+		}
 	}
 
 	pub fn all_game_fns_registered(&self) -> bool {
@@ -77,6 +96,10 @@ impl GrugState {
 	pub fn create_entity(&self, file_path: &str) -> Result<GrugId, RuntimeError> {
 		self.backend.create_entity(self, file_path)
 	}
+
+	// pub fn destroy_entity(&mut self, entity_id: GrugId) -> Result<(), RuntimeError> {
+	// 	self.backend.destroy_entity(self, entity_id)
+	// }
 
 	pub fn clear_entities(&mut self) {
 		self.backend.clear_entities();
@@ -111,5 +134,42 @@ impl GrugState {
 
 	pub fn call_on_function(&self, entity: GrugId, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
 		self.backend.call_on_function(self, entity, on_fn_id, values)
+	}
+}
+
+#[derive(Debug)]
+enum StateError {
+	UnknownEntityType{
+		entity_type: String
+	},
+	UnknownOnFunction {
+		entity_type: String,
+		on_function_name: String,
+	},
+	UnknownGameFunction {
+		game_function_name: &'static str,
+	},
+	ReregisteringGameFunction {
+		game_function_name: &'static str,
+	}
+}
+
+impl std::fmt::Display for StateError {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			Self::UnknownEntityType{
+				entity_type,
+			} => write!(f, "mod api does not define an entity named {}", entity_type),
+			Self::UnknownOnFunction {
+				entity_type,
+				on_function_name,
+			} => write!(f, "'{}' does not contain an on_function named '{}'", entity_type, on_function_name),
+			Self::UnknownGameFunction {
+				game_function_name,
+			} => write!(f, "Game function named '{}' is not found in mod_api.json", game_function_name),
+			Self::ReregisteringGameFunction {
+				game_function_name,
+			} => write!(f, "Game function named '{}' has already been registered", game_function_name),
+		}
 	}
 }

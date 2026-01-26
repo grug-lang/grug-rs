@@ -1,5 +1,6 @@
 use crate::types::*;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -49,6 +50,7 @@ pub struct ModApiGameFn {
 #[derive(Debug)]
 pub enum ModApiError{
 	JsonError(json::Error),
+	IOError(std::io::Error),
 	EntitiesNotObject,
 	OnFunctionsNotObject{
 		entity_name: String,
@@ -120,8 +122,15 @@ impl From<json::Error> for ModApiError {
 	}
 }
 
-pub fn get_mod_api(mod_api_text: &str) -> Result<ModApi, ModApiError> {
-	let mod_api_json = json::parse(mod_api_text)?;
+impl From<std::io::Error> for ModApiError {
+	fn from(other: std::io::Error) -> ModApiError {
+		ModApiError::IOError(other)
+	}
+}
+
+pub fn get_mod_api<P: AsRef<Path>>(mod_api_path: P) -> Result<ModApi, ModApiError> {
+	let mod_api_text = std::fs::read_to_string(mod_api_path)?;
+	let mod_api_json = json::parse(&mod_api_text)?;
 	// "entities" object
 	let entities = &mod_api_json["entities"];
 	if !entities.is_object() {
@@ -309,5 +318,3 @@ pub fn get_mod_api(mod_api_text: &str) -> Result<ModApi, ModApiError> {
 		game_functions
 	})
 }
-
-// pub static MOD_API: OnceLock<ModApi> = std::sync::OnceLock::new();

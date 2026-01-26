@@ -3,6 +3,7 @@ use crate::frontend::tokenizer::TokenizerError;
 use crate::frontend::parser::ParserError;
 use crate::frontend::type_propagation::TypePropogatorError;
 use crate::mod_api::ModApiError;
+
 #[derive(Debug)]
 pub enum GrugError<'a> {
 	FileNameError(FileNameError<'a>),

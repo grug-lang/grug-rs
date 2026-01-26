@@ -11,6 +11,7 @@ pub mod error;
 pub mod state;
 
 // pub mod capi;
+mod xar;
 
 mod ntstring;
 
@@ -33,6 +34,7 @@ mod cachemap;
 // let id = state.create_entity("test/hello-A.grug")
 // id.call_on_fn("on_b", grug_args![25, 30, 32]);
 
+// TODO: Debug info to backends
 // TODO: implementation errors like 'too many statements in block' should not be grug errors
 // TODO: Better Error handling
 // TODO: Bytecode interpreter
