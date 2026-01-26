@@ -20,8 +20,8 @@ fn main () {
 	state.register_game_fn("print_string", print_string as extern "C" fn(_));
 	assert!(state.all_game_fns_registered());
 
-	state.compile_grug_file("goldie/first-Dog.grug").unwrap();
-	let dog = state.create_entity("goldie/first-Dog.grug").unwrap();
+	let id = state.compile_grug_file("goldie/first-Dog.grug").unwrap();
+	let dog = state.create_entity(id).unwrap();
 	let on_bark_id = state.get_on_fn_id("Dog", "on_bark").unwrap();
 
 	loop {

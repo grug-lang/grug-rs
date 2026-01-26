@@ -12,31 +12,48 @@ const ON_FN_TIME_LIMIT: u64 = 100; // ms
 const MAX_RECURSION_LIMIT: usize = 100;
 
 pub mod interpreter {
-	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId};
+	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId, GrugScriptId};
 	use super::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT, GrugFile};
 	use crate::state::GrugState;
 	use crate::cachemap::CacheMap;
 
 	use std::sync::Arc;
 	use std::cell::Cell;
-	use std::collections::HashMap;
+	use std::collections::{HashMap, hash_map::Entry};
 	use std::ffi::CStr;
 	use std::time::{Duration, Instant};
 
-	pub struct GrugEntity {
+	pub struct GrugEntityData {
 		pub(crate) global_variables: HashMap<Arc<str>, Cell<GrugValue>>,
 		pub(crate) file: Arc<GrugFile>,
 	}
 
-	impl GrugEntity {
+	impl GrugEntityData {
 		pub(crate) fn get_global_variable(&self, name: &str) -> Option<&Cell<GrugValue>> {
 			self.global_variables.get(name)
 		}
 	}
+
+	// struct CompiledFile {
+	// 	file: GrugFile,
+	// 	entities: Vec<XarHandle<'static, GrugEntity>>,
+	// 	data: ErasedXar,
+	// }
+
+	// pub struct Backend {
+	// 	files: CacheMap<GrugFileId, CompiledFile>,
+	// 	file_id_map: CacheMap<String, GrugFileId>,
+	// 	next_id: Cell<usize>,
+	// }
+	// pub fn insert_file(&mut self, path: &str, file: GrugFile) -> GrugFileId {
+		
+	// }
 	
 	pub struct Backend {
-		files: HashMap<String, Arc<GrugFile>>,
-		entities: CacheMap<GrugId, GrugEntity>,
+		files: HashMap<GrugScriptId, Arc<GrugFile>>,
+		file_id_map: HashMap<String, GrugScriptId>,
+		entities: CacheMap<GrugId, GrugEntityData>,
+		next_id: u64,
 	}
 
 	struct CallStack {
@@ -99,12 +116,30 @@ pub mod interpreter {
 		pub fn new() -> Self {
 			Self {
 				files: HashMap::new(),
+				file_id_map: HashMap::new(),
 				entities: CacheMap::new(),
+				next_id: 0,
 			}
 		}
 
-		pub fn insert_file(&mut self, path: String, file: GrugFile) {
-			self.files.insert(path, Arc::new(file));
+		fn get_next_script_id(&mut self) -> GrugScriptId {
+			let id = self.next_id;
+			self.next_id += 1;
+			GrugId::new(id)
+		}
+
+		pub fn insert_file(&mut self, path: String, file: GrugFile) -> GrugScriptId {
+			let next_id = self.get_next_script_id();
+			match self.file_id_map.entry(path) {
+				Entry::Occupied(x) => {
+					todo!()
+				},
+				Entry::Vacant(x) => {
+					x.insert(next_id);
+					self.files.insert(next_id, Arc::new(file));
+					next_id
+				}
+			}
 		}
 
 		pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: GrugId, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
@@ -155,15 +190,12 @@ pub mod interpreter {
 			Ok(())
 		}
 
-		pub fn clear_entities(&mut self) {
-			self.entities.as_mut_map().clear();
-		}
-
-		pub fn create_entity(&self, state: &GrugState, file_path: &str) -> Result<GrugId, RuntimeError> {
+		pub fn create_entity(&self, state: &GrugState, script_id: GrugScriptId) -> Result<GrugId, RuntimeError> {
 			let me_id = state.get_id();
-			let file = self.files.get(file_path).ok_or(RuntimeError::FileNotCompiled{file_path: String::from(file_path)})?;
+			let file = self.files.get(&script_id)
+				.expect("file not compiled");
 
-			let mut entity = GrugEntity {
+			let mut entity = GrugEntityData {
 				global_variables: HashMap::from([(Arc::from("me"), Cell::new(GrugValue{id:me_id}))]),
 				file: Arc::clone(file),
 			};
@@ -175,11 +207,15 @@ pub mod interpreter {
 			Ok(me_id)
 		}
 
+		pub fn clear_entities(&mut self) {
+			self.entities.as_mut_map().clear()
+		}
+
 		// pub fn destroy_entity(&self, state: &GrugState, entity_id: GrugId) -> Result<GrugId, RuntimeError> {
 			
 		// }
 
-		fn run_function(&self, call_stack: &mut CallStack, state: &GrugState, entity: &GrugEntity, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
+		fn run_function(&self, call_stack: &mut CallStack, state: &GrugState, entity: &GrugEntityData, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
 			if call_stack.local_variables.len() > MAX_RECURSION_LIMIT {
 				return Err(RuntimeError::StackOverflow)
 			}
@@ -208,7 +244,7 @@ pub mod interpreter {
 			Ok(value)
 		}
 
-		fn run_statements(&self, call_stack: &mut CallStack, state: &GrugState, entity: &GrugEntity, statements: &[Statement]) -> Result<GrugControlFlow, RuntimeError> {
+		fn run_statements(&self, call_stack: &mut CallStack, state: &GrugState, entity: &GrugEntityData, statements: &[Statement]) -> Result<GrugControlFlow, RuntimeError> {
 			call_stack.push_scope();
 			let mut ret_val = GrugControlFlow::None;
 			'outer: for statement in statements {
@@ -328,7 +364,7 @@ pub mod interpreter {
 			Ok(ret_val)
 		}
 
-		pub(crate) fn init_global_exprs(&self, state: &GrugState, entity: &mut GrugEntity, expr: &Expr) -> Result<GrugValue, RuntimeError> {
+		pub(crate) fn init_global_exprs(&self, state: &GrugState, entity: &mut GrugEntityData, expr: &Expr) -> Result<GrugValue, RuntimeError> {
 			if Instant::elapsed(&state.call_start_time.get()) > Duration::from_millis(ON_FN_TIME_LIMIT) {
 				return Err(RuntimeError::ExceededTimeLimit);
 			}
@@ -455,7 +491,7 @@ pub mod interpreter {
 			})
 		}
 
-		fn run_expr(&self, call_stack: &mut CallStack, state: &GrugState, entity: &GrugEntity, expr: &Expr) -> Result<GrugValue, RuntimeError> {
+		fn run_expr(&self, call_stack: &mut CallStack, state: &GrugState, entity: &GrugEntityData, expr: &Expr) -> Result<GrugValue, RuntimeError> {
 			if Instant::elapsed(&state.call_start_time.get()) > Duration::from_millis(ON_FN_TIME_LIMIT) {
 				return Err(RuntimeError::ExceededTimeLimit);
 			}
@@ -601,7 +637,7 @@ pub mod interpreter {
 			})
 		}
 
-		fn init_global_variables(&self, state: &GrugState, entity: &mut GrugEntity, globals: &[GlobalVariable]) -> Result<(), RuntimeError> {
+		fn init_global_variables(&self, state: &GrugState, entity: &mut GrugEntityData, globals: &[GlobalVariable]) -> Result<(), RuntimeError> {
 			state.call_start_time.set(Instant::now());
 			globals.iter().map(|variable| {
 				let value = self.init_global_exprs(state, entity, &variable.assignment_expr)?;

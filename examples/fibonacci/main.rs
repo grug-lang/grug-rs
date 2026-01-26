@@ -147,8 +147,8 @@ fn main () {
 		 STATE.write(state);
 		 OBJECTS.write(HashMap::new());
 
-		STATE.compile_grug_file("fib_script/entity-Fib.grug").unwrap();
-		let script = STATE.create_entity("fib_script/entity-Fib.grug").unwrap();
+		let script_id = STATE.compile_grug_file("fib_script/entity-Fib.grug").unwrap();
+		let script = STATE.create_entity(script_id).unwrap();
 
 		let naive_id = STATE.get_on_fn_id("Fib", "on_fib_naive").unwrap();
 		let iterative_id = STATE.get_on_fn_id("Fib", "on_fib_iterative").unwrap();

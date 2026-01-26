@@ -7,7 +7,7 @@ use gruggers::state::GrugState;
 mod test_bindings {
 	use gruggers::state::{GrugState};
 	use gruggers::backend::RuntimeError;
-	use gruggers::types::{GrugValue, GrugId};
+	use gruggers::types::{GrugValue, GrugId, GrugScriptId};
 	use gruggers::serde;
 	use std::ffi::{c_char, CStr, CString};
 	use std::path::PathBuf;
@@ -15,6 +15,7 @@ mod test_bindings {
 
 	pub static mut GLOBAL_TEST_STATE: Option<GrugState> = None;
 	pub static mut CURRENT_GRUG_ENTITY: Option<GrugId> = None;
+	pub static mut CURRENT_SCRIPT_ID: Option<GrugScriptId> = None;
 	pub static mut CURRENT_PATH: Option<&str> = None;
 
 	pub extern "C" fn compile_grug_file(path: *const c_char) -> *const c_char {
@@ -23,7 +24,8 @@ mod test_bindings {
 			let path = CStr::from_ptr(path).to_str().unwrap();
 			CURRENT_PATH = Some(path);
 			let ret_val = match GLOBAL_TEST_STATE.as_mut().unwrap().compile_grug_file(path) {
-				Ok(_) => {
+				Ok(id) => {
+					CURRENT_SCRIPT_ID = Some(id);
 					std::ptr::null()
 				},
 				Err(err) => ManuallyDrop::new(CString::new(format!("{}", err)).unwrap()).as_ptr() as *const c_char,
@@ -38,7 +40,7 @@ mod test_bindings {
 			CURRENT_GRUG_ENTITY = Some(
 				GLOBAL_TEST_STATE
 					.as_ref().unwrap()
-					.create_entity(CURRENT_PATH.unwrap())
+					.create_entity(CURRENT_SCRIPT_ID.unwrap())
 					.expect("runtime error")
 			)
 		}

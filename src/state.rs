@@ -1,7 +1,8 @@
 use crate::mod_api::{ModApi, get_mod_api};
 use crate::error::GrugError;
 use crate::backend::{Backend, RuntimeError};
-use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId};
+use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId};
+use crate::xar::Xar;
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,8 @@ pub struct GrugState {
 	pub(crate) mods_dir_path: PathBuf,
 	pub(crate) next_id: AtomicU64,
 	pub(crate) game_functions: HashMap<&'static str, GameFnPtr>,
+
+	pub(crate) entities: Xar<GrugEntity>,
 	
 	pub(crate) backend: Backend,
 	// should be moved into backend later
@@ -31,6 +34,7 @@ impl GrugState {
 			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
 			next_id: AtomicU64::new(0),
 			game_functions: HashMap::new(),
+			entities: Xar::new(),
 			backend: Backend::new(),
 			call_start_time: Cell::new(Instant::now()),
 			error: Cell::new(None),
@@ -93,8 +97,8 @@ impl GrugState {
 		self.next_id.store(next_id, Ordering::Relaxed);
 	}
 
-	pub fn create_entity(&self, file_path: &str) -> Result<GrugId, RuntimeError> {
-		self.backend.create_entity(self, file_path)
+	pub fn create_entity(&self, script_id: GrugId) -> Result<GrugId, RuntimeError> {
+		self.backend.create_entity(self, script_id)
 	}
 
 	// pub fn destroy_entity(&mut self, entity_id: GrugId) -> Result<(), RuntimeError> {
@@ -135,6 +139,13 @@ impl GrugState {
 	pub fn call_on_function(&self, entity: GrugId, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
 		self.backend.call_on_function(self, entity, on_fn_id, values)
 	}
+}
+
+pub type ErasedPtr = *mut ();
+pub struct GrugEntity {
+	id: GrugId,
+	file_id: GrugScriptId,
+	members: ErasedPtr,
 }
 
 #[derive(Debug)]

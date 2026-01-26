@@ -6,7 +6,7 @@
 use crate::error::GrugError;
 use crate::state::GrugState;
 use crate::backend::GrugFile;
-use crate::types::{GlobalStatement, GlobalVariable, OnFunction, HelperFunction};
+use crate::types::{GlobalStatement, GlobalVariable, OnFunction, HelperFunction, GrugScriptId};
 
 use std::sync::Arc;
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
@@ -17,7 +17,7 @@ pub mod tokenizer;
 pub mod parser;
 
 impl GrugState {
-	pub fn compile_grug_file<'a>(&mut self, path: &'a str) -> Result<(), GrugError<'a>> {
+	pub fn compile_grug_file<'a>(&mut self, path: &'a str) -> Result<GrugScriptId, GrugError<'a>> {
 		let mod_name = get_mod_name(path)?;
 		let entity_type = get_entity_type(path)?;
 
@@ -58,8 +58,7 @@ impl GrugState {
 			on_functions,
 			helper_functions,
 		};
-		self.backend.insert_file(String::from(path), file);
-		Ok(())
+		Ok(self.backend.insert_file(String::from(path), file))
 	}
 }
 
