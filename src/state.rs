@@ -2,7 +2,7 @@ use crate::mod_api::{ModApi, get_mod_api};
 use crate::error::GrugError;
 use crate::backend::{Backend, RuntimeError};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId};
-use crate::xar::Xar;
+use crate::xar::{Xar, ErasedPtr, XarHandle};
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -97,16 +97,20 @@ impl GrugState {
 		self.next_id.store(next_id, Ordering::Relaxed);
 	}
 
-	pub fn create_entity(&self, file_id: GrugScriptId) -> Result<GrugId, RuntimeError> {
+	pub fn create_entity(&self, file_id: GrugScriptId) -> Result<XarHandle<'_, GrugEntity>, RuntimeError> {
 		self.backend.create_entity(self, file_id)
 	}
 
-	// pub fn destroy_entity(&mut self, entity_id: GrugId) -> Result<(), RuntimeError> {
-	// 	self.backend.destroy_entity(self, entity_id)
-	// }
+	pub fn insert_entity(&self, entity: GrugEntity) -> XarHandle<'_, GrugEntity>{
+		self.entities.insert(entity)
+	}
+
+	pub fn destroy_entity<'a>(&'a mut self, entity_id: XarHandle<'a, GrugEntity>) {
+		self.backend.destroy_entity(self, entity_id)
+	}
 
 	pub fn clear_entities(&mut self) {
-		self.backend.clear_entities();
+		self.backend.clear_entities(&self.entities);
 	}
 
 	pub fn clear_error(&self) {
@@ -130,22 +134,32 @@ impl GrugState {
 	/// `values` must point to an array of values with length equal to
 	/// the number of arguments expected by `function_name`. If there are no arguments, 
 	/// `values` may be null
-	pub unsafe fn call_on_function_raw(&self, entity: GrugId, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
+	pub unsafe fn call_on_function_raw(&self, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
 		unsafe {
 			self.backend.call_on_function_raw(self, entity, on_fn_id, values)
 		}
 	}
 
-	pub fn call_on_function(&self, entity: GrugId, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
+	pub fn call_on_function(&self, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
 		self.backend.call_on_function(self, entity, on_fn_id, values)
 	}
 }
 
-pub type ErasedPtr = *mut ();
+#[derive(Debug)]
 pub struct GrugEntity {
-	id: GrugId,
-	file_id: GrugScriptId,
-	members: ErasedPtr,
+	pub id: GrugId,
+	pub file_id: GrugScriptId,
+	pub members: ErasedPtr<'static>,
+}
+
+impl GrugEntity {
+	pub(crate) fn new(id: GrugId, file_id: GrugScriptId, members: ErasedPtr<'static>) -> Self {
+		Self {
+			id,
+			file_id,
+			members
+		}
+	}
 }
 
 #[derive(Debug)]

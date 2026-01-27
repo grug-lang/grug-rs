@@ -14,18 +14,19 @@ const MAX_RECURSION_LIMIT: usize = 100;
 pub mod interpreter {
 	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId, GrugScriptId};
 	use super::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT, GrugFile};
-	use crate::state::GrugState;
+	use crate::state::{GrugState, GrugEntity};
 	use crate::cachemap::CacheMap;
+	use crate::xar::{Xar, XarHandle, ErasedXar};
 
 	use std::sync::Arc;
-	use std::cell::Cell;
-	use std::collections::{HashMap, hash_map::Entry};
+	use std::cell::{Cell, RefCell};
+	use std::collections::HashMap;
 	use std::ffi::CStr;
 	use std::time::{Duration, Instant};
+	use std::alloc::Layout;
 
 	pub struct GrugEntityData {
 		pub(crate) global_variables: HashMap<Arc<str>, Cell<GrugValue>>,
-		pub(crate) file: Arc<GrugFile>,
 	}
 
 	impl GrugEntityData {
@@ -34,28 +35,29 @@ pub mod interpreter {
 		}
 	}
 
-	// struct CompiledFile {
-	// 	file: GrugFile,
-	// 	entities: Vec<XarHandle<'static, GrugEntity>>,
-	// 	data: ErasedXar,
-	// }
-
-	// pub struct Backend {
-	// 	files: CacheMap<GrugFileId, CompiledFile>,
-	// 	file_id_map: CacheMap<String, GrugFileId>,
-	// 	next_id: Cell<usize>,
-	// }
-	// pub fn insert_file(&mut self, path: &str, file: GrugFile) -> GrugFileId {
-		
-	// }
-	
-	pub struct Backend {
-		files: HashMap<GrugScriptId, Arc<GrugFile>>,
-		file_id_map: HashMap<String, GrugScriptId>,
-		entities: CacheMap<GrugId, GrugEntityData>,
-		next_id: u64,
+	#[derive(Debug)]
+	struct CompiledFile {
+		file: GrugFile,
+		entities: RefCell<Vec<XarHandle<'static, GrugEntity>>>,
+		data: ErasedXar,
 	}
 
+	impl CompiledFile {
+		fn new(file: GrugFile) -> Self {
+			Self {
+				file,
+				entities: RefCell::new(Vec::new()),
+				data: ErasedXar::new(Layout::new::<GrugEntityData>()),
+			}
+		}
+	}
+	
+	pub struct Backend {
+		files: CacheMap<GrugScriptId, CompiledFile>,
+		file_id_map: CacheMap<String, GrugScriptId>,
+		next_id: u64,
+	}
+	
 	struct CallStack {
 		local_variables: Vec<Vec<HashMap<Arc<str>, GrugValue>>>,
 	}
@@ -115,9 +117,8 @@ pub mod interpreter {
 	impl Backend {
 		pub fn new() -> Self {
 			Self {
-				files: HashMap::new(),
-				file_id_map: HashMap::new(),
-				entities: CacheMap::new(),
+				files: CacheMap::new(),
+				file_id_map: CacheMap::new(),
 				next_id: 0,
 			}
 		}
@@ -128,26 +129,25 @@ pub mod interpreter {
 			GrugId::new(id)
 		}
 
-		pub fn insert_file(&mut self, path: String, file: GrugFile) -> GrugScriptId {
-			let next_id = self.get_next_script_id();
-			match self.file_id_map.entry(path) {
-				Entry::Occupied(_) => {
-					todo!()
+		pub fn insert_file(&mut self, path: &str, file: GrugFile) -> GrugScriptId {
+			match self.file_id_map.get(path) {
+				Some(_id) => {	
+					todo!();
 				},
-				Entry::Vacant(x) => {
-					x.insert(next_id);
-					self.files.insert(next_id, Arc::new(file));
+				None => {
+					let next_id = self.get_next_script_id();
+					self.file_id_map.try_insert(String::from(path), next_id).unwrap();
+					self.files.try_insert(next_id, CompiledFile::new(file)).unwrap();
 					next_id
 				}
 			}
 		}
 
-		pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: GrugId, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
-			let Some(entity) = self.entities.get(&entity) else {
-				return Err(RuntimeError::EntityDoesNotExist{id: entity});
-			};
-			let file = Arc::clone(&entity.file);
-			let Some(on_function) = &file.on_functions[on_fn_id as usize] else {
+		pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
+			let file = &self.files.get(&entity.file_id)
+				.expect("file already created");
+
+			let Some(on_function) = &file.file.on_functions[on_fn_id as usize] else {
 				panic!("function not available");
 			};
 
@@ -161,7 +161,8 @@ pub mod interpreter {
 			self.run_function(
 				&mut CallStack::new(),
 				state,
-				entity, 
+				file,
+				unsafe{entity.members.as_ref()}, 
 				&on_function.arguments, 
 				values,
 				&on_function.body_statements
@@ -169,12 +170,11 @@ pub mod interpreter {
 			Ok(())
 		}
 
-		pub fn call_on_function(&self, state: &GrugState, entity: GrugId, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
-			let Some(entity) = self.entities.get(&entity) else {
-				return Err(RuntimeError::EntityDoesNotExist{id: entity});
-			};
-			let file = Arc::clone(&entity.file);
-			let Some(on_function) = &file.on_functions[on_fn_id as usize] else {
+		pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
+			let file = &self.files.get(&entity.file_id)
+				.expect("file already created");
+
+			let Some(on_function) = &file.file.on_functions[on_fn_id as usize] else {
 				panic!("function not available");
 			};
 
@@ -182,7 +182,8 @@ pub mod interpreter {
 			self.run_function(
 				&mut CallStack::new(),
 				state,
-				entity, 
+				file,
+				unsafe{entity.members.as_ref()}, 
 				&on_function.arguments, 
 				values,
 				&on_function.body_statements
@@ -190,32 +191,40 @@ pub mod interpreter {
 			Ok(())
 		}
 
-		pub fn create_entity(&self, state: &GrugState, script_id: GrugScriptId) -> Result<GrugId, RuntimeError> {
+		pub fn create_entity<'a>(&self, state: &'a GrugState, script_id: GrugScriptId) -> Result<XarHandle<'a, GrugEntity>, RuntimeError> {
 			let me_id = state.get_id();
 			let file = self.files.get(&script_id)
-				.expect("file not compiled");
+				.expect("file already compiled");
 
 			let mut entity = GrugEntityData {
 				global_variables: HashMap::from([(Arc::from("me"), Cell::new(GrugValue{id:me_id}))]),
-				file: Arc::clone(file),
 			};
-			self.init_global_variables(state, &mut entity, &file.global_variables)?;
+			self.init_global_variables(state, &mut entity, &file.file.global_variables)?;
+			let data = unsafe{file.data.insert(entity).detach_lifetime()};
+			let entity = unsafe{state.insert_entity(GrugEntity::new(me_id, script_id, data)).detach_lifetime()};
+			file.entities.borrow_mut().push(unsafe{entity.cloned_ref()});
 
-			if self.entities.try_insert(me_id, entity).is_err() {
-				panic!();
-			}
-			Ok(me_id)
+			Ok(entity)
 		}
 
-		pub fn clear_entities(&mut self) {
-			self.entities.clear()
+		pub fn clear_entities(&mut self, entities: &Xar<GrugEntity>) {
+			self.files.iter_mut().for_each(|(_, file)| {
+				file.entities.get_mut().drain(..).for_each(|entity| {
+					unsafe{entities.delete(entity)};
+				})
+			});
 		}
 
-		// pub fn destroy_entity(&self, state: &GrugState, entity_id: GrugId) -> Result<GrugId, RuntimeError> {
-			
-		// }
+		pub fn destroy_entity<'a>(&self, state: &'a GrugState, entity: XarHandle<'a, GrugEntity>) {
+			let file = self.files.get(&entity.file_id)
+				.expect("file compiled");
+			file.entities.borrow_mut().extract_if(.., |en| std::ptr::eq(&**en, &*entity))
+				// SAFETY: an entity stored within self.files must have come from this same state
+				// the user passes in the only other XarHandle to this entity (modulo unsafe)
+				.for_each(|entity| unsafe{state.entities.delete(entity)});
+		}
 
-		fn run_function(&self, call_stack: &mut CallStack, state: &GrugState, entity: &GrugEntityData, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
+		fn run_function(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
 			if call_stack.local_variables.len() > MAX_RECURSION_LIMIT {
 				return Err(RuntimeError::StackOverflow)
 			}
@@ -231,7 +240,7 @@ pub mod interpreter {
 			for (argument, value) in arguments.iter().zip(values) {
 				call_stack.add_local_variable(Arc::clone(&argument.name), *value);
 			}
-			let value = self.run_statements(call_stack, state, entity, statements)?;
+			let value = self.run_statements(call_stack, state, file, entity, statements)?;
 			let value = match value {
 				GrugControlFlow::Return(value) => value,
 				GrugControlFlow::None          => GrugValue{void: ()},
@@ -244,7 +253,7 @@ pub mod interpreter {
 			Ok(value)
 		}
 
-		fn run_statements(&self, call_stack: &mut CallStack, state: &GrugState, entity: &GrugEntityData, statements: &[Statement]) -> Result<GrugControlFlow, RuntimeError> {
+		fn run_statements(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, statements: &[Statement]) -> Result<GrugControlFlow, RuntimeError> {
 			call_stack.push_scope();
 			let mut ret_val = GrugControlFlow::None;
 			'outer: for statement in statements {
@@ -254,7 +263,7 @@ pub mod interpreter {
 						ty,
 						assignment_expr,
 					}) => {
-						let assignment_expr = self.run_expr(call_stack, state, entity, assignment_expr)?;
+						let assignment_expr = self.run_expr(call_stack, state, file, entity, assignment_expr)?;
 						if let Some(_) = ty {
 							call_stack.add_local_variable(Arc::clone(name), assignment_expr);
 						} else {
@@ -270,7 +279,7 @@ pub mod interpreter {
 					Statement::CallStatement {
 						expr
 					} => {
-						self.run_expr(call_stack, state, entity, expr)?;
+						self.run_expr(call_stack, state, file, entity, expr)?;
 					},
 					Statement::IfStatement{
 						condition,
@@ -278,10 +287,10 @@ pub mod interpreter {
 						else_if_statements,
 						else_statements,
 					} => {
-						let condition = unsafe{self.run_expr(call_stack, state, entity, condition)?.bool};
+						let condition = unsafe{self.run_expr(call_stack, state, file, entity, condition)?.bool};
 						// if statement
 						if condition != 0 {
-							let control_flow = self.run_statements(call_stack, state, entity, if_statements)?;
+							let control_flow = self.run_statements(call_stack, state, file, entity, if_statements)?;
 							if let GrugControlFlow::None = control_flow {
 								continue;
 							} else {
@@ -291,9 +300,9 @@ pub mod interpreter {
 						} else {
 							// else if statements
 							for (condition, else_if_statements) in else_if_statements {
-								let condition = unsafe{self.run_expr(call_stack, state, entity, condition)?.bool};
+								let condition = unsafe{self.run_expr(call_stack, state, file, entity, condition)?.bool};
 								if condition != 0 {
-									let control_flow = self.run_statements(call_stack, state, entity, else_if_statements)?;
+									let control_flow = self.run_statements(call_stack, state, file, entity, else_if_statements)?;
 									if let GrugControlFlow::None = control_flow {
 										// go to the next outer statment if any else if
 										// condition was true and there was no return
@@ -306,7 +315,7 @@ pub mod interpreter {
 							}
 							// else statements
 							if let Some(else_statements) = else_statements {
-								let control_flow = self.run_statements(call_stack, state, entity, else_statements)?;
+								let control_flow = self.run_statements(call_stack, state, file, entity, else_statements)?;
 								if let GrugControlFlow::None = control_flow {
 									continue;
 								} else {
@@ -320,7 +329,7 @@ pub mod interpreter {
 						expr,
 					} => {
 						if let Some(expr) = expr {
-							ret_val = GrugControlFlow::Return(self.run_expr(call_stack, state, entity, expr)?);
+							ret_val = GrugControlFlow::Return(self.run_expr(call_stack, state, file, entity, expr)?);
 						} else {
 							ret_val = GrugControlFlow::Return(GrugValue{void: ()});
 						}
@@ -331,11 +340,11 @@ pub mod interpreter {
 						statements,
 					} => {
 						loop {
-							let condition = unsafe{self.run_expr(call_stack, state, entity, condition)?.bool};
+							let condition = unsafe{self.run_expr(call_stack, state, file, entity, condition)?.bool};
 							if condition == 0 {
 								break;
 							}
-							match self.run_statements(call_stack, state, entity, statements)? {
+							match self.run_statements(call_stack, state, file, entity, statements)? {
 								GrugControlFlow::Return(value) => {
 									ret_val = GrugControlFlow::Return(value);
 									break 'outer;
@@ -362,6 +371,151 @@ pub mod interpreter {
 			}
 			call_stack.pop_scope();
 			Ok(ret_val)
+		}
+
+		fn run_expr(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, expr: &Expr) -> Result<GrugValue, RuntimeError> {
+			if Instant::elapsed(&state.call_start_time.get()) > Duration::from_millis(ON_FN_TIME_LIMIT) {
+				return Err(RuntimeError::ExceededTimeLimit);
+			}
+			Ok(match &expr.ty {
+				ExprType::LiteralExpr{
+					expr,
+					line: _,
+					col: _,
+				} => {
+					match expr {
+						LiteralExpr::TrueExpr => GrugValue{bool: 1},
+						LiteralExpr::FalseExpr => GrugValue{bool: 0},
+						LiteralExpr::StringExpr{
+							value
+						} => GrugValue{string: value.as_ptr().cast()},
+						LiteralExpr::ResourceExpr{
+							value
+						} => GrugValue{string: value.as_ptr().cast()},
+						LiteralExpr::EntityExpr{
+							value
+						} => GrugValue{string: value.as_ptr().cast()},
+						LiteralExpr::NumberExpr {
+							value,
+							string: _,
+						} => GrugValue{number: *value},
+						LiteralExpr::IdentifierExpr{
+							name,
+						} => {
+							if let Some(var) = call_stack.get_local_variable(name) {
+								*var
+							} else {
+								entity.get_global_variable(name)
+									.expect("could not find variable")
+									.get()
+							}
+						},
+					}
+				},
+				ExprType::UnaryExpr{
+					operator,
+					expr,
+				} => {
+					let mut value = self.run_expr(call_stack, state, file, entity, &expr)?;
+					match (operator, &expr.result_ty) {
+						(UnaryOperator::Not, Some(GrugType::Bool)) => unsafe{value.bool = (value.bool == 0) as u8},
+						(UnaryOperator::Minus, Some(GrugType::Number)) => unsafe{value.number = -value.number},
+						_ => unreachable!(),
+					}
+					value
+				}
+				ExprType::BinaryExpr{
+					operands,
+					operator,
+				} => {
+					let first_value = self.run_expr(call_stack, state, file, entity, &operands.0)?; 
+					let mut second_value = || self.run_expr(call_stack, state, file, entity, &operands.1);
+					debug_assert!(GrugType::match_non_exact(operands.0.result_ty.as_ref().unwrap(), operands.1.result_ty.as_ref().unwrap()));
+					// debug_assert!(operands.0.result_ty == operands.1.result_ty || matches!((&operands.0.result_ty, &operands.1.result_ty), (Some(GrugType::Id{custom_name: None}), Some(GrugType::Id{..})) | (Some(GrugType::Id{..}), Some(GrugType::Id{custom_name: None}))));
+					match (operator, &operands.0.result_ty) {
+						(BinaryOperator::Or,             Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{first_value.bool | second_value()?.bool}},
+						(BinaryOperator::And,            Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{(first_value.bool != 0 && second_value()?.bool != 0) as u8}},
+						(BinaryOperator::DoubleEquals,   Some(ty)              )  => {
+							let value = match ty {
+								GrugType::Bool => !unsafe{(first_value.bool == 0) ^ (second_value()?.bool == 0)},
+								GrugType::Number => unsafe{first_value.number == second_value()?.number},
+								GrugType::Id{..} => unsafe{first_value.id == second_value()?.id},
+								GrugType::String => {
+									unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
+								},
+								_ => unreachable!(),
+							};
+							GrugValue{bool: value as u8}
+						},
+						(BinaryOperator::NotEquals,      Some(ty)              )  => {
+							let value = match ty {
+								GrugType::Bool => unsafe{(first_value.bool == 0) ^ (second_value()?.bool == 0)}
+								GrugType::Number => unsafe{first_value.number != second_value()?.number}
+								GrugType::Id{..} => unsafe{first_value.id != second_value()?.id}
+								GrugType::String => {
+									!unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
+								}
+								_ => unreachable!(),
+							};
+							GrugValue{bool: value as u8}
+						},
+						(BinaryOperator::Greater,        Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number > second_value()?.number} as u8},
+						(BinaryOperator::GreaterEquals,  Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number >= second_value()?.number} as u8},
+						(BinaryOperator::Less,           Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number < second_value()?.number} as u8},
+						(BinaryOperator::LessEquals,     Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number <= second_value()?.number} as u8},
+						(BinaryOperator::Plus,           Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number + second_value()?.number}},
+						(BinaryOperator::Minus,          Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number - second_value()?.number}},
+						(BinaryOperator::Multiply,       Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number * second_value()?.number}},
+						(BinaryOperator::Division,       Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number / second_value()?.number}},
+						(BinaryOperator::Remainder,      Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number % second_value()?.number}},
+						_ => unreachable!(),
+					}
+				}
+				ExprType::CallExpr{
+					function_name,
+					arguments,
+					line: _,
+					col: _,
+				} if function_name.starts_with("helper_") => {
+					let values = arguments.iter().map(|argument| self.run_expr(call_stack, state, file, entity, argument)).collect::<Result<Vec<_>, _>>()?;
+					for helper_fn in &file.file.helper_functions {
+						if helper_fn.name != *function_name {
+							continue;
+						}
+						return Ok(self.run_function(call_stack, state, file, entity, &*helper_fn.arguments, &values, &*helper_fn.body_statements)?);
+					}
+					unreachable!("helper function not found");
+				}
+				ExprType::CallExpr{
+					function_name,
+					arguments,
+					line: _,
+					col: _,
+				} => {
+					let values = arguments.iter().map(|argument| self.run_expr(call_stack, state, file, entity, argument)).collect::<Result<Vec<_>, _>>()?;
+					let game_fn = state.game_functions.get(&**function_name).expect("can't find game function");
+					let return_ty = &state.mod_api.game_functions().get(function_name).unwrap().return_ty;
+					let ret_val = match (values.len(), return_ty) {
+						(0, GrugType::Void) => unsafe{(game_fn.void_argless)(); GrugValue{void: ()}},
+						(0, _             ) => unsafe{(game_fn.value_argless)()},
+						(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
+						(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
+					};
+					if let Some(err) = state.error.get() {
+						return Err(RuntimeError::GameFunctionError{
+							message: err,
+						})
+					}
+					ret_val
+				}
+				ExprType::ParenthesizedExpr{
+					expr,
+					line: _,
+					col: _,
+				} => {
+					self.run_expr(call_stack, state, file, entity, expr)?
+				}
+			})
 		}
 
 		pub(crate) fn init_global_exprs(&self, state: &GrugState, entity: &mut GrugEntityData, expr: &Expr) -> Result<GrugValue, RuntimeError> {
@@ -487,152 +641,6 @@ pub mod interpreter {
 					col: _,
 				} => {
 					self.init_global_exprs(state, entity, expr)?
-				}
-			})
-		}
-
-		fn run_expr(&self, call_stack: &mut CallStack, state: &GrugState, entity: &GrugEntityData, expr: &Expr) -> Result<GrugValue, RuntimeError> {
-			if Instant::elapsed(&state.call_start_time.get()) > Duration::from_millis(ON_FN_TIME_LIMIT) {
-				return Err(RuntimeError::ExceededTimeLimit);
-			}
-			Ok(match &expr.ty {
-				ExprType::LiteralExpr{
-					expr,
-					line: _,
-					col: _,
-				} => {
-					match expr {
-						LiteralExpr::TrueExpr => GrugValue{bool: 1},
-						LiteralExpr::FalseExpr => GrugValue{bool: 0},
-						LiteralExpr::StringExpr{
-							value
-						} => GrugValue{string: value.as_ptr().cast()},
-						LiteralExpr::ResourceExpr{
-							value
-						} => GrugValue{string: value.as_ptr().cast()},
-						LiteralExpr::EntityExpr{
-							value
-						} => GrugValue{string: value.as_ptr().cast()},
-						LiteralExpr::NumberExpr {
-							value,
-							string: _,
-						} => GrugValue{number: *value},
-						LiteralExpr::IdentifierExpr{
-							name,
-						} => {
-							if let Some(var) = call_stack.get_local_variable(name) {
-								*var
-							} else {
-								entity.get_global_variable(name)
-									.expect("could not find variable")
-									.get()
-							}
-						},
-					}
-				},
-				ExprType::UnaryExpr{
-					operator,
-					expr,
-				} => {
-					let mut value = self.run_expr(call_stack, state, entity, &expr)?;
-					match (operator, &expr.result_ty) {
-						(UnaryOperator::Not, Some(GrugType::Bool)) => unsafe{value.bool = (value.bool == 0) as u8},
-						(UnaryOperator::Minus, Some(GrugType::Number)) => unsafe{value.number = -value.number},
-						_ => unreachable!(),
-					}
-					value
-				}
-				ExprType::BinaryExpr{
-					operands,
-					operator,
-				} => {
-					let first_value = self.run_expr(call_stack, state, entity, &operands.0)?; 
-					let mut second_value = || self.run_expr(call_stack, state, entity, &operands.1);
-					debug_assert!(GrugType::match_non_exact(operands.0.result_ty.as_ref().unwrap(), operands.1.result_ty.as_ref().unwrap()));
-					// debug_assert!(operands.0.result_ty == operands.1.result_ty || matches!((&operands.0.result_ty, &operands.1.result_ty), (Some(GrugType::Id{custom_name: None}), Some(GrugType::Id{..})) | (Some(GrugType::Id{..}), Some(GrugType::Id{custom_name: None}))));
-					match (operator, &operands.0.result_ty) {
-						(BinaryOperator::Or,             Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{first_value.bool | second_value()?.bool}},
-						(BinaryOperator::And,            Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{(first_value.bool != 0 && second_value()?.bool != 0) as u8}},
-						(BinaryOperator::DoubleEquals,   Some(ty)              )  => {
-							let value = match ty {
-								GrugType::Bool => !unsafe{(first_value.bool == 0) ^ (second_value()?.bool == 0)},
-								GrugType::Number => unsafe{first_value.number == second_value()?.number},
-								GrugType::Id{..} => unsafe{first_value.id == second_value()?.id},
-								GrugType::String => {
-									unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
-								},
-								_ => unreachable!(),
-							};
-							GrugValue{bool: value as u8}
-						},
-						(BinaryOperator::NotEquals,      Some(ty)              )  => {
-							let value = match ty {
-								GrugType::Bool => unsafe{(first_value.bool == 0) ^ (second_value()?.bool == 0)}
-								GrugType::Number => unsafe{first_value.number != second_value()?.number}
-								GrugType::Id{..} => unsafe{first_value.id != second_value()?.id}
-								GrugType::String => {
-									!unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
-								}
-								_ => unreachable!(),
-							};
-							GrugValue{bool: value as u8}
-						},
-						(BinaryOperator::Greater,        Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number > second_value()?.number} as u8},
-						(BinaryOperator::GreaterEquals,  Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number >= second_value()?.number} as u8},
-						(BinaryOperator::Less,           Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number < second_value()?.number} as u8},
-						(BinaryOperator::LessEquals,     Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number <= second_value()?.number} as u8},
-						(BinaryOperator::Plus,           Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number + second_value()?.number}},
-						(BinaryOperator::Minus,          Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number - second_value()?.number}},
-						(BinaryOperator::Multiply,       Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number * second_value()?.number}},
-						(BinaryOperator::Division,       Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number / second_value()?.number}},
-						(BinaryOperator::Remainder,      Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number % second_value()?.number}},
-						_ => unreachable!(),
-					}
-				}
-				ExprType::CallExpr{
-					function_name,
-					arguments,
-					line: _,
-					col: _,
-				} if function_name.starts_with("helper_") => {
-					let file = Arc::clone(&entity.file);
-					let values = arguments.iter().map(|argument| self.run_expr(call_stack, state, entity, argument)).collect::<Result<Vec<_>, _>>()?;
-					for helper_fn in &file.helper_functions {
-						if helper_fn.name != *function_name {
-							continue;
-						}
-						return Ok(self.run_function(call_stack, state, entity, &*helper_fn.arguments, &values, &*helper_fn.body_statements)?);
-					}
-					unreachable!("helper function not found");
-				}
-				ExprType::CallExpr{
-					function_name,
-					arguments,
-					line: _,
-					col: _,
-				} => {
-					let values = arguments.iter().map(|argument| self.run_expr(call_stack, state, entity, argument)).collect::<Result<Vec<_>, _>>()?;
-					let game_fn = state.game_functions.get(&**function_name).expect("can't find game function");
-					let return_ty = &state.mod_api.game_functions().get(function_name).unwrap().return_ty;
-					let ret_val = match (values.len(), return_ty) {
-						(0, GrugType::Void) => unsafe{(game_fn.void_argless)(); GrugValue{void: ()}},
-						(0, _             ) => unsafe{(game_fn.value_argless)()},
-						(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
-						(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
-					};
-					if let Some(err) = state.error.get() {
-						return Err(RuntimeError::GameFunctionError{
-							message: err,
-						})
-					}
-					ret_val
-				}
-				ExprType::ParenthesizedExpr{
-					expr,
-					line: _,
-					col: _,
-				} => {
-					self.run_expr(call_stack, state, entity, expr)?
 				}
 			})
 		}

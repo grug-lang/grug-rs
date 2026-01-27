@@ -6,6 +6,8 @@ use std::cell::Cell;
 
 mod xar {
 	use super::*;
+
+	// TODO: Test get_mut of XarHandle
 	/// A growable exponential array 
 	/// Insertion returns a pinned pointer to a value.
 	/// The values inside the Xar are not dropped unless delete is called with a pointer to the item
@@ -210,6 +212,10 @@ mod xar {
 			unsafe{& (*self.0.as_ptr()).value}
 		}
 
+		pub fn get_mut(&mut self) -> &mut T {
+			unsafe{&mut (*self.0.as_ptr()).value}
+		}
+
 		/// # SAFETY 
 		/// XarHandle is not Clone or Copy.  This is to ensure that there is only
 		/// ever one pointer to a slot which statically ensures that a slot can
@@ -250,6 +256,12 @@ mod xar {
 		type Target = T;
 		fn deref(&self) -> &Self::Target {
 			self.get_ref()
+		}
+	}
+
+	impl<'a, T> std::ops::DerefMut for XarHandle<'a, T> {
+		fn deref_mut(&mut self) -> &mut Self::Target {
+			self.get_mut()
 		}
 	}
 
@@ -318,27 +330,25 @@ mod erased_xar {
 		}
 
 		pub unsafe fn write_value<T>(self, value: T) {
-			let value_bytes = std::slice::from_raw_parts(&value as *const T as *const u8, size_of::<T>());
-			unsafe{self.write_bytes(value_bytes)};
-			std::mem::forget(value);
+			unsafe{self.0.cast::<T>().write(value)};
 		}
 
 		pub unsafe fn detach_lifetime(self) -> ErasedPtr<'static> {
-			std::mem::transmute::<Self, ErasedPtr<'static>>(self)
+			unsafe{std::mem::transmute::<Self, ErasedPtr<'static>>(self)}
 		}
 
 		/// Reads the value as is
 		pub unsafe fn read<T>(self) -> T {
-			self.0.as_ptr().cast::<T>().read()
+			unsafe{self.0.as_ptr().cast::<T>().read()}
 		}
 
-		pub fn byte_add(self, bytes: usize) -> Self {
+		pub unsafe fn byte_add(self, bytes: usize) -> Self {
 			unsafe{Self(self.0.byte_add(bytes), PhantomData)}
 		}
 
 		/// Drops the value at the pointee
 		pub unsafe fn drop_in_place<T>(self) {
-			self.0.as_ptr().cast::<T>().drop_in_place()
+			unsafe{self.0.as_ptr().cast::<T>().drop_in_place()}
 		}
 	}
 
@@ -356,6 +366,14 @@ mod erased_xar {
 				committed: Cell::new(0),
 				inner: Self::create_inner(item_layout),
 			}
+		}
+
+		/// SAFETY: Layout of T must match the layout used to create the ErasedXar
+		pub unsafe fn insert<T>(&self, value: T) -> ErasedPtr<'_> {
+			debug_assert!(Layout::new::<T>() == unsafe{(*self.inner.as_ptr()).item_layout});
+			let ret_val = self.get_slot();
+			unsafe{ret_val.write_value(value)};
+			ret_val
 		}
 
 		pub fn get_slot(&self) -> ErasedPtr<'_> {
@@ -401,9 +419,7 @@ mod erased_xar {
 			chunk_size
 		}
 
-		fn alloc_chunk(&self, bucket_idx: usize) -> ErasedPtr {
-			let chunk_size = self.chunk_size(bucket_idx);
-
+		fn alloc_chunk(&self, bucket_idx: usize) -> ErasedPtr<'_> {
 			let layout = self.chunk_layout(bucket_idx);
 			let ptr = unsafe{alloc(layout)}.cast::<()>();
 			if ptr.is_null() {
@@ -441,7 +457,7 @@ mod erased_xar {
 		}
 
 		pub unsafe fn delete<F: FnOnce(ErasedPtr)>(&self, handle: ErasedPtr) {
-			self.delete_with(handle, |_| {})
+			unsafe{self.delete_with(handle, |_| {})}
 		}
 
 		fn calc_location(&self, idx: usize) -> (usize, usize) {
@@ -506,6 +522,29 @@ mod erased_xar {
 			}
 			let layout = Layout::new::<XarInner>();
 			unsafe{dealloc(self.inner.as_ptr().cast::<u8>(), layout)};
+		}
+	}
+
+	mod trait_impls {
+		use super::*;
+
+		use std::fmt::{Debug, Formatter};
+
+		impl Debug for ErasedXar {
+			fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+				f.debug_struct("ErasedXar")
+					.field("committed", &self.committed.get())
+					.field("layout", unsafe{&(*self.inner.as_ptr()).item_layout})
+					.finish()
+			}
+		}
+
+		impl<'a> std::fmt::Debug for ErasedPtr<'a> {
+			fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+				f.debug_struct("ErasedPtr")
+					.field("ptr", &self.0)
+					.finish()
+			}
 		}
 	}
 

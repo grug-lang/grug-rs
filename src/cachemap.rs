@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use std::collections::hash_map::{self, Entry};
 use std::cell::RefCell;
 use std::borrow::Borrow;
 use std::hash::Hash;
@@ -10,7 +10,6 @@ pub struct CacheMap<K, V> {
 	values: Xar<V>,
 	map: RefCell<HashMap<K, XarHandle<'static, V>>>,
 }
-// pub struct CacheMap<K, V>(RefCell<HashMap<K, Box<V>>>);
 
 impl<K, V> CacheMap<K, V> {
 	pub fn new() -> Self {
@@ -21,11 +20,15 @@ impl<K, V> CacheMap<K, V> {
 	}
 
 	pub fn clear(&mut self) {
-		self.map.get_mut().drain().for_each(|(_, V)| {
+		self.map.get_mut().drain().for_each(|(_, v)| {
 			unsafe{
-				self.values.delete(V);
+				self.values.delete(v);
 			}
 		})
+	}
+
+	pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
+		IterMut::new(self.map.get_mut().iter_mut())
 	}
 }
 
@@ -87,5 +90,25 @@ impl<K: Hash + Eq + Debug, V: Debug> Debug for CacheMap<K, V> {
 impl<K, V> Drop for CacheMap<K, V> {
 	fn drop(&mut self) {
 		self.clear()
+	}
+}
+
+pub struct IterMut<'a, K: 'a, V: 'a> {
+	inner: hash_map::IterMut<'a, K, XarHandle<'static, V>>,
+}
+
+impl<'a, K: 'a, V: 'a> IterMut<'a, K, V> {
+	fn new(inner: hash_map::IterMut<'a, K, XarHandle<'static, V>>) -> Self {
+		Self {
+			inner
+		}
+	}
+}
+
+impl<'a, K: 'a, V: 'a> Iterator for IterMut<'a, K, V> {
+	type Item = (&'a K, &'a mut V);
+	fn next(&mut self) -> Option<Self::Item> {
+		let (k, v) = self.inner.next()?;
+		Some((k, v.get_mut()))
 	}
 }

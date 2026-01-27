@@ -5,16 +5,16 @@ use std::mem::ManuallyDrop;
 use gruggers::state::GrugState;
 
 mod test_bindings {
-	use gruggers::state::{GrugState};
+	use gruggers::state::{GrugState, GrugEntity};
 	use gruggers::backend::RuntimeError;
-	use gruggers::types::{GrugValue, GrugId, GrugScriptId};
+	use gruggers::types::{GrugValue, GrugScriptId};
 	use gruggers::serde;
 	use std::ffi::{c_char, CStr, CString};
 	use std::path::PathBuf;
 	use std::mem::ManuallyDrop;
 
 	pub static mut GLOBAL_TEST_STATE: Option<GrugState> = None;
-	pub static mut CURRENT_GRUG_ENTITY: Option<GrugId> = None;
+	pub static mut CURRENT_GRUG_ENTITY: Option<&'static GrugEntity> = None;
 	pub static mut CURRENT_SCRIPT_ID: Option<GrugScriptId> = None;
 	pub static mut CURRENT_PATH: Option<&str> = None;
 
@@ -42,6 +42,8 @@ mod test_bindings {
 					.as_ref().unwrap()
 					.create_entity(CURRENT_SCRIPT_ID.unwrap())
 					.expect("runtime error")
+					.detach_lifetime()
+					.get_ref()
 			)
 		}
 	}

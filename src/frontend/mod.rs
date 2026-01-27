@@ -58,7 +58,7 @@ impl GrugState {
 			on_functions,
 			helper_functions,
 		};
-		Ok(self.backend.insert_file(String::from(path), file))
+		Ok(self.backend.insert_file(path, file))
 	}
 }
 

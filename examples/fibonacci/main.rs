@@ -158,7 +158,7 @@ fn main () {
 
 		println!("Naive implementation");
 		for i in 0..10 {
-			let Ok(_) = STATE.call_on_function(script, naive_id, &[GrugValue{number:i as f64}]) else {
+			let Ok(_) = STATE.call_on_function(&*script, naive_id, &[GrugValue{number:i as f64}]) else {
 				break
 			};
 		}
@@ -166,7 +166,7 @@ fn main () {
 		println!("iterative implementation");
 		for i in 0..10 {
 			print!("{i} : ");
-			let Ok(_) = STATE.call_on_function(script, iterative_id, &[GrugValue{number:i as f64}]) else {
+			let Ok(_) = STATE.call_on_function(&*script, iterative_id, &[GrugValue{number:i as f64}]) else {
 				break
 			};
 		}
@@ -174,11 +174,11 @@ fn main () {
 		println!("memoized implementation");
 		for i in 0..10 {
 			// print!("{i} : ");
-			let Ok(_) = STATE.call_on_function(script, memo_id, &[GrugValue{number:i as f64}]) else {
+			let Ok(_) = STATE.call_on_function(&*script, memo_id, &[GrugValue{number:i as f64}]) else {
 				break
 			};
 		}
 		
-		STATE.call_on_function(script, memo_print_id, &[]).unwrap();
+		STATE.call_on_function(&*script, memo_print_id, &[]).unwrap();
 	}
 }
