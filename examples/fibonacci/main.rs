@@ -1,3 +1,4 @@
+#![deny(warnings)]
 #![allow(static_mut_refs)]
 use gruggers::state::GrugState;
 use gruggers::types::GrugValue;
@@ -132,17 +133,17 @@ impl<T> std::ops::DerefMut for UnsafeStatic<T> {
 fn main () {
 	unsafe {
 		let mut state = GrugState::new("examples/fibonacci/mod_api.json", "examples/fibonacci/mods").unwrap();
-		state.register_game_fn("print_string", print_string as extern "C" fn(_));
-		state.register_game_fn("print_number", print_number as extern "C" fn(_));
-		state.register_game_fn("list_number", list_number as extern "C" fn() -> _);
-		state.register_game_fn("print_list_number", print_list_number as extern "C" fn(_));
-		state.register_game_fn("list_number_insert", list_number_insert as extern "C" fn(_));
-		state.register_game_fn("list_number_remove", list_number_remove as extern "C" fn(_) -> _);
-		state.register_game_fn("list_number_push", list_number_push as extern "C" fn(_));
-		state.register_game_fn("list_number_pop", list_number_pop as extern "C" fn(_) -> _);
-		state.register_game_fn("list_number_len", list_number_len as extern "C" fn(_) -> _);
-		state.register_game_fn("list_number_get", list_number_get as extern "C" fn(_) -> _);
-		state.register_game_fn("list_number_set", list_number_set as extern "C" fn(_));
+		state.register_game_fn("print_string", print_string as extern "C" fn(_)).unwrap();
+		state.register_game_fn("print_number", print_number as extern "C" fn(_)).unwrap();
+		state.register_game_fn("list_number", list_number as extern "C" fn() -> _).unwrap();
+		state.register_game_fn("print_list_number", print_list_number as extern "C" fn(_)).unwrap();
+		state.register_game_fn("list_number_insert", list_number_insert as extern "C" fn(_)).unwrap();
+		state.register_game_fn("list_number_remove", list_number_remove as extern "C" fn(_) -> _).unwrap();
+		state.register_game_fn("list_number_push", list_number_push as extern "C" fn(_)).unwrap();
+		state.register_game_fn("list_number_pop", list_number_pop as extern "C" fn(_) -> _).unwrap();
+		state.register_game_fn("list_number_len", list_number_len as extern "C" fn(_) -> _).unwrap();
+		state.register_game_fn("list_number_get", list_number_get as extern "C" fn(_) -> _).unwrap();
+		state.register_game_fn("list_number_set", list_number_set as extern "C" fn(_)).unwrap();
 		assert!(state.all_game_fns_registered());
 		 STATE.write(state);
 		 OBJECTS.write(HashMap::new());
