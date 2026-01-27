@@ -2,8 +2,9 @@ use crate::mod_api::{ModApi, get_mod_api};
 use crate::error::GrugError;
 use crate::backend::{Backend, RuntimeError};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId};
-use crate::xar::{Xar, ErasedPtr, XarHandle};
+use crate::xar::{Xar, XarHandle};
 
+use std::ptr::NonNull;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, hash_map::Entry};
@@ -98,19 +99,21 @@ impl GrugState {
 	}
 
 	pub fn create_entity(&self, file_id: GrugScriptId) -> Result<XarHandle<'_, GrugEntity>, RuntimeError> {
-		self.backend.create_entity(self, file_id)
+		let entity = self.entities.insert(unsafe{GrugEntity::new_uninit(self.get_id(), file_id)});
+		self.backend.init_entity(self, entity.get_ref())?;
+		Ok(entity)
 	}
 
-	pub fn insert_entity(&self, entity: GrugEntity) -> XarHandle<'_, GrugEntity>{
-		self.entities.insert(entity)
-	}
-
-	pub fn destroy_entity<'a>(&'a mut self, entity_id: XarHandle<'a, GrugEntity>) {
-		self.backend.destroy_entity(self, entity_id)
+	pub fn destroy_entity<'a>(&'a mut self, entity: XarHandle<'a, GrugEntity>) {
+		self.backend.destroy_entity_data(&*entity);
+		// SAFETY: an entity stored within self.files must have come from this same state
+		// the user passes in the only other XarHandle to this entity (modulo unsafe)
+		unsafe{self.entities.delete(entity)};
 	}
 
 	pub fn clear_entities(&mut self) {
-		self.backend.clear_entities(&self.entities);
+		self.backend.clear_entities();
+		self.entities.clear();
 	}
 
 	pub fn clear_error(&self) {
@@ -149,15 +152,17 @@ impl GrugState {
 pub struct GrugEntity {
 	pub id: GrugId,
 	pub file_id: GrugScriptId,
-	pub members: ErasedPtr<'static>,
+	pub members: Cell<NonNull<()>>,
 }
 
 impl GrugEntity {
-	pub(crate) fn new(id: GrugId, file_id: GrugScriptId, members: ErasedPtr<'static>) -> Self {
+	/// SAFETY: The members of the returned entity are uninitialized
+	/// This data must be initialized before it is actually used as an entity
+	pub unsafe fn new_uninit(id: GrugId, file_id: GrugScriptId) -> Self {
 		Self {
 			id,
 			file_id,
-			members
+			members: Cell::new(NonNull::dangling())
 		}
 	}
 }

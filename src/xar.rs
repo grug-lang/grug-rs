@@ -208,11 +208,20 @@ mod xar {
 			Self(ptr, PhantomData)
 		}
 
+		/// SAFETY: The pointer MUST be derived from a XarHandle of the same type
+		pub unsafe fn from_ptr(ptr: NonNull<T>) -> Self {
+			Self(ptr.cast(), PhantomData)
+		}
+
 		pub fn get_ref(&self) -> &'a T {
 			unsafe{& (*self.0.as_ptr()).value}
 		}
 
 		pub fn get_mut(&mut self) -> &mut T {
+			unsafe{&mut (*self.0.as_ptr()).value}
+		}
+
+		pub fn into_mut(self) -> &'a mut T {
 			unsafe{&mut (*self.0.as_ptr()).value}
 		}
 
@@ -284,15 +293,40 @@ mod xar {
 		#[test]
 		fn xar_test_2 () {
 			let x = Xar::new();
-			let x_1 = x.insert(25);
-			let x_2 = x.insert(26);
-			let x_3 = x.insert(27);
-			let x_4 = x.insert(28);
+			let mut x_1 = x.insert(25);
+			let mut x_2 = x.insert(26);
+			let mut x_3 = x.insert(27);
+			let mut x_4 = x.insert(28);
 			assert_eq!(25, *x_1);
 			assert_eq!(26, *x_2);
 			assert_eq!(27, *x_3);
 			assert_eq!(28, *x_4);
+
+			*x_1 += 5;
+			*x_2 += 5;
+			*x_3 += 5;
+			*x_4 += 5;
+
+			assert_eq!(30, *x_1);
+			assert_eq!(31, *x_2);
+			assert_eq!(32, *x_3);
+			assert_eq!(33, *x_4);
 			eprintln!("{:?}", x_1);
+		}
+
+		#[test]
+		fn xar_test_3 () {
+			let x = Xar::new();
+			let mut vec = Vec::new();
+			for i in 0..1000 {
+				vec.push(x.insert(i).into_mut());
+			}
+			for i in 0..1000 {
+				*vec[i] *= 2;
+			}
+			for i in 0..1000 {
+				assert_eq!(*vec[i], 2 * i);
+			}
 		}
 	}
 }
@@ -349,6 +383,10 @@ mod erased_xar {
 		/// Drops the value at the pointee
 		pub unsafe fn drop_in_place<T>(self) {
 			unsafe{self.0.as_ptr().cast::<T>().drop_in_place()}
+		}
+
+		pub fn as_ptr(self) -> NonNull<()> {
+			self.0
 		}
 	}
 
@@ -552,7 +590,7 @@ mod erased_xar {
 	mod test {
 		use super::*;
 		#[test]
-		fn xar_test_3 () {
+		fn xar_test_1 () {
 			let x = ErasedXar::new(Layout::new::<usize>());
 			assert_eq!(x.first_chunk_size(), 8);
 			assert_eq!(x.calc_location(0), (0, 0));
@@ -566,7 +604,7 @@ mod erased_xar {
 		}
 
 		#[test]
-		fn xar_test_4 () {
+		fn xar_test_2 () {
 			let x = ErasedXar::new(Layout::new::<usize>());
 			let x_1 = x.get_slot();
 			let x_2 = x.get_slot();

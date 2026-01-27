@@ -16,8 +16,9 @@ pub mod interpreter {
 	use super::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT, GrugFile};
 	use crate::state::{GrugState, GrugEntity};
 	use crate::cachemap::CacheMap;
-	use crate::xar::{Xar, XarHandle, ErasedXar};
+	use crate::xar::ErasedXar;
 
+	use std::ptr::NonNull;
 	use std::sync::Arc;
 	use std::cell::{Cell, RefCell};
 	use std::collections::HashMap;
@@ -38,7 +39,7 @@ pub mod interpreter {
 	#[derive(Debug)]
 	struct CompiledFile {
 		file: GrugFile,
-		entities: RefCell<Vec<XarHandle<'static, GrugEntity>>>,
+		entities: RefCell<Vec<NonNull<GrugEntity>>>,
 		data: ErasedXar,
 	}
 
@@ -162,7 +163,7 @@ pub mod interpreter {
 				&mut CallStack::new(),
 				state,
 				file,
-				unsafe{entity.members.as_ref()}, 
+				unsafe{entity.members.get().cast::<GrugEntityData>().as_ref()}, 
 				&on_function.arguments, 
 				values,
 				&on_function.body_statements
@@ -183,7 +184,7 @@ pub mod interpreter {
 				&mut CallStack::new(),
 				state,
 				file,
-				unsafe{entity.members.as_ref()}, 
+				unsafe{entity.members.get().cast::<GrugEntityData>().as_ref()}, 
 				&on_function.arguments, 
 				values,
 				&on_function.body_statements
@@ -191,37 +192,33 @@ pub mod interpreter {
 			Ok(())
 		}
 
-		pub fn create_entity<'a>(&self, state: &'a GrugState, script_id: GrugScriptId) -> Result<XarHandle<'a, GrugEntity>, RuntimeError> {
-			let me_id = state.get_id();
-			let file = self.files.get(&script_id)
+		pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> Result<(), RuntimeError> {
+			let file = self.files.get(&entity.file_id)
 				.expect("file already compiled");
 
-			let mut entity = GrugEntityData {
-				global_variables: HashMap::from([(Arc::from("me"), Cell::new(GrugValue{id:me_id}))]),
+			let mut data = GrugEntityData {
+				global_variables: HashMap::from([(Arc::from("me"), Cell::new(GrugValue{id:entity.id}))]),
 			};
-			self.init_global_variables(state, &mut entity, &file.file.global_variables)?;
-			let data = unsafe{file.data.insert(entity).detach_lifetime()};
-			let entity = unsafe{state.insert_entity(GrugEntity::new(me_id, script_id, data)).detach_lifetime()};
-			file.entities.borrow_mut().push(unsafe{entity.cloned_ref()});
+			self.init_global_variables(state, &mut data, &file.file.global_variables)?;
 
-			Ok(entity)
+			let data = unsafe{file.data.insert(data)};
+			file.entities.borrow_mut().push(NonNull::from_ref(entity));
+			entity.members.set(data.as_ptr());
+
+			Ok(())
 		}
 
-		pub fn clear_entities(&mut self, entities: &Xar<GrugEntity>) {
+		pub fn clear_entities(&mut self) {
 			self.files.iter_mut().for_each(|(_, file)| {
-				file.entities.get_mut().drain(..).for_each(|entity| {
-					unsafe{entities.delete(entity)};
-				})
+				file.entities.get_mut().clear();
 			});
 		}
 
-		pub fn destroy_entity<'a>(&self, state: &'a GrugState, entity: XarHandle<'a, GrugEntity>) {
+		pub fn destroy_entity_data(&self, entity: &GrugEntity) {
 			let file = self.files.get(&entity.file_id)
 				.expect("file compiled");
-			file.entities.borrow_mut().extract_if(.., |en| std::ptr::eq(&**en, &*entity))
-				// SAFETY: an entity stored within self.files must have come from this same state
-				// the user passes in the only other XarHandle to this entity (modulo unsafe)
-				.for_each(|entity| unsafe{state.entities.delete(entity)});
+			file.entities.borrow_mut().extract_if(.., |en| std::ptr::eq(en.as_ptr().cast_const(), entity))
+				.for_each(|_| {});
 		}
 
 		fn run_function(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
