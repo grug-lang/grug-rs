@@ -131,7 +131,7 @@ pub mod interpreter {
 		pub fn insert_file(&mut self, path: String, file: GrugFile) -> GrugScriptId {
 			let next_id = self.get_next_script_id();
 			match self.file_id_map.entry(path) {
-				Entry::Occupied(x) => {
+				Entry::Occupied(_) => {
 					todo!()
 				},
 				Entry::Vacant(x) => {
@@ -208,7 +208,7 @@ pub mod interpreter {
 		}
 
 		pub fn clear_entities(&mut self) {
-			self.entities.as_mut_map().clear()
+			self.entities.clear()
 		}
 
 		// pub fn destroy_entity(&self, state: &GrugState, entity_id: GrugId) -> Result<GrugId, RuntimeError> {

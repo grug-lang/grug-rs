@@ -97,8 +97,8 @@ impl GrugState {
 		self.next_id.store(next_id, Ordering::Relaxed);
 	}
 
-	pub fn create_entity(&self, script_id: GrugId) -> Result<GrugId, RuntimeError> {
-		self.backend.create_entity(self, script_id)
+	pub fn create_entity(&self, file_id: GrugScriptId) -> Result<GrugId, RuntimeError> {
+		self.backend.create_entity(self, file_id)
 	}
 
 	// pub fn destroy_entity(&mut self, entity_id: GrugId) -> Result<(), RuntimeError> {

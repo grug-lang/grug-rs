@@ -203,24 +203,50 @@ impl<'a, T> XarHandle<'a, T> {
 		Self(ptr, PhantomData)
 	}
 
+	pub fn get_ref(&self) -> &'a T {
+		unsafe{& (*self.0.as_ptr()).value}
+	}
+
 	/// # SAFETY 
-	/// XarHandle is not Clone or Copy.
-	/// This is to ensure that there is only ever one pointer to a slot which 
-	/// statically ensures that a slot can only be dropped once
+	/// XarHandle is not Clone or Copy.  This is to ensure that there is only
+	/// ever one pointer to a slot which statically ensures that a slot can
+	/// only be dropped once
 	/// 
-	/// Sometimes though, it may be necessary to store this pointer in multiple places. 
-	/// This means that it is now possible to have a double drop of a slot. 
+	/// Sometimes though, it may be necessary to store this pointer in multiple
+	/// places.  This means that it is now possible to have a double drop of a
+	/// slot. 
 	///
-	/// The caller must ensure that only a single one of these values is passed to delete
-	pub unsafe fn clone(&self) -> Self {
+	/// The caller must ensure that only a single one of these values is passed
+	/// to delete
+	pub unsafe fn cloned_ref(&self) -> Self {
 		Self(self.0, self.1)
 	}
+
+	/// # SAFETY 
+	/// Some of the safety guarantees of Xar require the returned handles to be
+	/// tied to its own lifetime. This makes storing these handles problematic
+	/// sometimes. 
+	///
+	/// Take care when using the returned handle to ensure that the value is
+	/// only used for as long as it is allowed to 
+	pub unsafe fn detach_lifetime(self) -> XarHandle<'static, T> {
+		unsafe{
+			std::mem::transmute::<Self, XarHandle<'static, T>>(self)
+		}
+	}
 }
+
+impl<'a, T: PartialEq> PartialEq for XarHandle<'a, T> {
+	fn eq(&self, other: &Self) -> bool {
+		(&**self).eq(&**other)
+	}
+}
+impl<'a, T: Eq> Eq for XarHandle<'a, T> {}
 
 impl<'a, T> std::ops::Deref for XarHandle<'a, T> {
 	type Target = T;
 	fn deref(&self) -> &Self::Target {
-		unsafe{& (*self.0.as_ptr()).value}
+		self.get_ref()
 	}
 }
 

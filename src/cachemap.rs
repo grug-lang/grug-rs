@@ -4,15 +4,28 @@ use std::cell::RefCell;
 use std::borrow::Borrow;
 use std::hash::Hash;
 
-pub struct CacheMap<K, V>(RefCell<HashMap<K, Box<V>>>);
+use crate::xar::{Xar, XarHandle};
+
+pub struct CacheMap<K, V> {
+	values: Xar<V>,
+	map: RefCell<HashMap<K, XarHandle<'static, V>>>,
+}
+// pub struct CacheMap<K, V>(RefCell<HashMap<K, Box<V>>>);
 
 impl<K, V> CacheMap<K, V> {
 	pub fn new() -> Self {
-		Self(RefCell::new(HashMap::new()))
+		Self {
+			values: Xar::new(),
+			map: RefCell::new(HashMap::new()),
+		}
 	}
 
-	pub fn as_mut_map(&mut self) -> &mut HashMap<K, Box<V>> {
-		unsafe{&mut *(self.0.get_mut() as *mut _)}
+	pub fn clear(&mut self) {
+		self.map.get_mut().drain().for_each(|(_, V)| {
+			unsafe{
+				self.values.delete(V);
+			}
+		})
 	}
 }
 
@@ -21,8 +34,7 @@ impl<K: Hash + Eq, V> CacheMap<K, V> {
 		K: Borrow<Q>,
 		Q: Hash + Eq + ?Sized,
 	{
-		// transmute lifetimes
-		Some(unsafe{&*(&**self.0.borrow().get(key)? as *const _)})
+		Some(unsafe{self.map.borrow().get(key)?.cloned_ref().detach_lifetime().get_ref()})
 	}
 
 	// pub fn get_or_insert_with<Q, KF, VF>(&self, key: &Q, kf: KF, vf: VF) -> &V where 
@@ -40,14 +52,14 @@ impl<K: Hash + Eq, V> CacheMap<K, V> {
 	// }
 
 	pub fn try_insert(&self, k: K, v: V) -> Result<(), (K, V)> {
-		let mut borrow = self.0.borrow_mut();
+		let mut borrow = self.map.borrow_mut();
 		let borrow = &mut *borrow;
 		if borrow.get(&k).is_some() {
 			Err((k, v))
 		} else {
 			match borrow.entry(k) {
 				Entry::Vacant(x) => {
-					x.insert_entry(Box::new(v));
+					x.insert_entry(unsafe{self.values.insert(v).detach_lifetime()});
 					Ok(())
 				}
 				_ => unreachable!()
@@ -58,7 +70,7 @@ impl<K: Hash + Eq, V> CacheMap<K, V> {
 
 impl<K: Hash + Eq, V: PartialEq> PartialEq for CacheMap<K, V> {
 	fn eq(&self, other: &Self) -> bool {
-		self.0.borrow().eq(&other.0.borrow())
+		self.map.borrow().eq(&other.map.borrow())
 	}
 }
 
@@ -68,6 +80,12 @@ impl<K: Hash + Eq, V: Eq> Eq for CacheMap<K, V> {
 use std::fmt::{Debug, Formatter};
 impl<K: Hash + Eq + Debug, V: Debug> Debug for CacheMap<K, V> {
 	fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-		self.0.borrow().fmt(f)
+		self.map.borrow().fmt(f)
+	}
+}
+
+impl<K, V> Drop for CacheMap<K, V> {
+	fn drop(&mut self) {
+		self.clear()
 	}
 }
