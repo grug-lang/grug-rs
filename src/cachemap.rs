@@ -8,6 +8,12 @@ use crate::xar::{Xar, XarHandle};
 
 pub struct CacheMap<K, V> {
 	values: Xar<V>,
+	/// The XarHandle here is unique. 
+	/// We only give out shared references to the data with a lifetime tied to
+	/// a shared borrow of self.
+	///
+	/// Deletion is only done with a mutable reference to self which
+	/// invalidates all existing shared references which makes it okay.
 	map: RefCell<HashMap<K, XarHandle<'static, V>>>,
 }
 
@@ -21,6 +27,7 @@ impl<K, V> CacheMap<K, V> {
 
 	pub fn clear(&mut self) {
 		self.map.get_mut().drain().for_each(|(_, v)| {
+			// SAFETY: all handles in self.map come from self.values
 			unsafe{
 				self.values.delete(v);
 			}
@@ -37,7 +44,9 @@ impl<K: Hash + Eq, V> CacheMap<K, V> {
 		K: Borrow<Q>,
 		Q: Hash + Eq + ?Sized,
 	{
-		Some(unsafe{self.map.borrow().get(key)?.cloned_ref().detach_lifetime().get_ref()})
+		// SAFETY: We only give out shared references to the value behind the XarHandle
+		// and the lifetime is restrained by self.
+		Some(unsafe{self.map.borrow().get(key)?.get_ref()})
 	}
 
 	// pub fn get_or_insert_with<Q, KF, VF>(&self, key: &Q, kf: KF, vf: VF) -> &V where 
@@ -62,6 +71,7 @@ impl<K: Hash + Eq, V> CacheMap<K, V> {
 		} else {
 			match borrow.entry(k) {
 				Entry::Vacant(x) => {
+					// SAFETY: We never give out a XarHandle or a reference with a static lifetime
 					x.insert_entry(unsafe{self.values.insert(v).detach_lifetime()});
 					Ok(())
 				}
@@ -73,7 +83,25 @@ impl<K: Hash + Eq, V> CacheMap<K, V> {
 
 impl<K: Hash + Eq, V: PartialEq> PartialEq for CacheMap<K, V> {
 	fn eq(&self, other: &Self) -> bool {
-		self.map.borrow().eq(&other.map.borrow())
+		let other = other.map.borrow();
+		let self_map = self.map.borrow();
+		for (k, v_0) in self_map.iter() {
+			match other.get(k) {
+				None => return false,
+				// getting a shared reference is okay if we have a shared reference to self
+				Some(v_1) if unsafe{v_0.get_ref() != v_1.get_ref()} => return false,
+				_ => (),
+			}
+		}
+		for (k, v_0) in other.iter() {
+			match self_map.get(k) {
+				None => return false,
+				// getting a shared reference is okay if we have a shared reference to self
+				Some(v_1) if unsafe{v_0.get_ref() != v_1.get_ref()} => return false,
+				_ => (),
+			}
+		}
+		return true
 	}
 }
 
@@ -109,6 +137,8 @@ impl<'a, K: 'a, V: 'a> Iterator for IterMut<'a, K, V> {
 	type Item = (&'a K, &'a mut V);
 	fn next(&mut self) -> Option<Self::Item> {
 		let (k, v) = self.inner.next()?;
-		Some((k, v.get_mut()))
+		// SAFETY: IterMut comes from a &mut CacheMap which allows mutable
+		// access to the data
+		Some((k, unsafe{v.get_mut()}))
 	}
 }

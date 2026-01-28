@@ -64,6 +64,19 @@ struct grug_init_settings {
     char const* mods_folder;
 };
 
+// alternative allocator api
+typedef void  (*drop_fn_t   )(void* allocator);
+typedef void* (*alloc_fn_t  )(void* allocator, size_t size, size_t align);
+typedef void  (*dealloc_fn_t)(void* allocator, void* ptr);
+typedef void* (*realloc_fn_t)(void* allocator, void* old_ptr, size_t old_size, size_t old_align, size_t new_size, size_t new_align);
+
+struct grug_allocator_vtable {
+	drop_fn_t drop;
+	alloc_fn_t alloc;
+	dealloc_fn_t dealloc;
+	realloc_fn_t realloc;
+};
+
 struct grug_init_settings grug_default_settings(void);
 
 struct grug_state* grug_init(struct grug_init_settings settings);

@@ -5,9 +5,9 @@ use std::mem::ManuallyDrop;
 use gruggers::state::GrugState;
 
 mod test_bindings {
-	use gruggers::state::{GrugState, GrugEntity};
+	use gruggers::state::GrugState;
 	use gruggers::backend::RuntimeError;
-	use gruggers::types::{GrugValue, GrugScriptId};
+	use gruggers::types::{GrugValue, GrugScriptId, GrugEntity};
 	use gruggers::serde;
 	use std::ffi::{c_char, CStr, CString};
 	use std::path::PathBuf;
@@ -62,21 +62,15 @@ mod test_bindings {
 			let (kind, msg) = match GLOBAL_TEST_STATE.as_ref().unwrap()
 				.call_on_function_raw(CURRENT_GRUG_ENTITY.unwrap(), fn_id, values)
 			{
-				Err(RuntimeError::StackOverflow) => (0, ManuallyDrop::new(CString::new(format!("{}", RuntimeError::StackOverflow)).unwrap()).as_ptr()),
-				Err(RuntimeError::ExceededTimeLimit) => (1, ManuallyDrop::new(CString::new(format!("{}", RuntimeError::ExceededTimeLimit)).unwrap()).as_ptr()),
-				Err(err@RuntimeError::GameFunctionError{..}) => (2, ManuallyDrop::new(CString::new(format!("{}", err)).unwrap()).as_ptr()),
-				Err(RuntimeError::FileNotCompiled{..}) => return,
-				Err(RuntimeError::EntityDoesNotExist{..}) => return,
-				Err(RuntimeError::FunctionArgumentCountMismatch {
-					expected: _,
-					got: _,
-				}) => return,
+				Err(RuntimeError::StackOverflow) => (0, CString::new(format!("{}", RuntimeError::StackOverflow)).unwrap()),
+				Err(RuntimeError::ExceededTimeLimit) => (1, CString::new(format!("{}", RuntimeError::ExceededTimeLimit)).unwrap()),
+				Err(err@RuntimeError::GameFunctionError{..}) => (2, CString::new(format!("{}", err)).unwrap()),
 				Ok(_) => return,
 			};
 			if !GLOBAL_TEST_STATE.as_ref().unwrap().handled_error.get() {
 				GLOBAL_TEST_STATE.as_ref().unwrap().set_handled_error();
 				grug_tests_runtime_error_handler(
-					msg, 
+					msg.as_ptr(), 
 					kind,
 					fn_name.as_ptr().cast(),
 					CURRENT_PATH.unwrap().as_ptr().cast(),

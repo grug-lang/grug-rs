@@ -190,18 +190,24 @@ mod xar {
 			unsafe{dealloc(self.inner.as_ptr().cast::<u8>(), layout)};
 		}
 	}
-
+	
+	/// An unsafe pointer to a slot in a Xar
+	/// 
+	/// All access to the underlying data is unsafe.
+	/// Users are encouraged to create a newtype around this handle to select
+	/// either shared or unique semantics based on what they require.
+	///
+	/// The value in the slot is leaked if the XarHandle to it is dropped. 
+	/// The only way to drop the value is to pass it back to the owning Xar
+	/// which will also free the slot
 	#[repr(transparent)]
 	pub struct XarHandle<'a, T> (NonNull<XarStorage<T>>, PhantomData<&'a ()>);
-
-	impl<'a, T: std::fmt::Debug> std::fmt::Debug for XarHandle<'a, T> {
-		fn fmt (&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-			f.debug_struct("XarHandle")
-				.field("location", &self.0)
-				.field("value", &**self)
-				.finish()
+	impl<'a, T> Clone for XarHandle<'a, T> {
+		fn clone(&self) -> Self {
+			Self::new(self.0)
 		}
 	}
+	impl<'a, T> Copy for XarHandle<'a, T> {}
 
 	impl<'a, T> XarHandle<'a, T> {
 		fn new(ptr: NonNull<XarStorage<T>>) -> Self {
@@ -213,31 +219,12 @@ mod xar {
 			Self(ptr.cast(), PhantomData)
 		}
 
-		pub fn get_ref(&self) -> &'a T {
+		pub unsafe fn get_ref(self) -> &'a T {
 			unsafe{& (*self.0.as_ptr()).value}
 		}
 
-		pub fn get_mut(&mut self) -> &mut T {
+		pub unsafe fn get_mut(self) -> &'a mut T {
 			unsafe{&mut (*self.0.as_ptr()).value}
-		}
-
-		pub fn into_mut(self) -> &'a mut T {
-			unsafe{&mut (*self.0.as_ptr()).value}
-		}
-
-		/// # SAFETY 
-		/// XarHandle is not Clone or Copy.  This is to ensure that there is only
-		/// ever one pointer to a slot which statically ensures that a slot can
-		/// only be dropped once
-		/// 
-		/// Sometimes though, it may be necessary to store this pointer in multiple
-		/// places.  This means that it is now possible to have a double drop of a
-		/// slot. 
-		///
-		/// The caller must ensure that only a single one of these values is passed
-		/// to delete
-		pub unsafe fn cloned_ref(&self) -> Self {
-			Self(self.0, self.1)
 		}
 
 		/// # SAFETY 
@@ -254,23 +241,11 @@ mod xar {
 		}
 	}
 
-	impl<'a, T: PartialEq> PartialEq for XarHandle<'a, T> {
-		fn eq(&self, other: &Self) -> bool {
-			(&**self).eq(&**other)
-		}
-	}
-	impl<'a, T: Eq> Eq for XarHandle<'a, T> {}
-
-	impl<'a, T> std::ops::Deref for XarHandle<'a, T> {
-		type Target = T;
-		fn deref(&self) -> &Self::Target {
-			self.get_ref()
-		}
-	}
-
-	impl<'a, T> std::ops::DerefMut for XarHandle<'a, T> {
-		fn deref_mut(&mut self) -> &mut Self::Target {
-			self.get_mut()
+	impl<'a, T: std::fmt::Debug> std::fmt::Debug for XarHandle<'a, T> {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+			f.debug_struct("XarHandle")
+				.field("ptr", &self.0)
+				.finish()
 		}
 	}
 

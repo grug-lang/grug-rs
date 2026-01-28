@@ -17,7 +17,7 @@ pub mod tokenizer;
 pub mod parser;
 
 impl GrugState {
-	pub fn compile_grug_file<'a>(&mut self, path: &'a str) -> Result<GrugScriptId, GrugError<'a>> {
+	pub fn compile_grug_file<'a>(&self, path: &'a str) -> Result<GrugScriptId, GrugError<'a>> {
 		let mod_name = get_mod_name(path)?;
 		let entity_type = get_entity_type(path)?;
 

@@ -1,5 +1,8 @@
 use std::sync::Arc;
 use std::ffi::{c_char, c_double};
+use std::cell::Cell;
+use std::ptr::NonNull;
+use crate::xar::XarHandle;
 use crate::ntstring::NTStr;
 // TODO Unnest some of these enums
 
@@ -153,6 +156,55 @@ impl std::fmt::Display for GrugType {
 			Self::Entity {
 				ty: None,
 			} => write!(f, "entity"),
+		}
+	}
+}
+
+/// A pointer to a grug entity. Only allows shared access to the data and does
+/// not allow copying or cloning. Lifetime of shared borrows are limited to the lifetime of self
+#[repr(transparent)]
+pub struct GrugEntityHandle<'a>(XarHandle<'a, GrugEntity>);
+
+impl<'a> GrugEntityHandle<'a> {
+	/// SAFETY: inner can only be deleted by deleting the returned value
+	/// The returned value is allowed to create a shared reference to the data at any time 
+	pub(crate) unsafe fn new(inner: XarHandle<'a, GrugEntity>) -> Self {
+		Self(inner)
+	}
+
+	pub(crate) fn into_inner(self) -> XarHandle<'a, GrugEntity> {
+		self.0
+	}
+}
+
+impl<'a> AsRef<GrugEntity> for GrugEntityHandle<'a> {
+	fn as_ref(&self) -> &GrugEntity {
+		unsafe{self.0.get_ref()}
+	}
+}
+
+impl<'a> std::ops::Deref for GrugEntityHandle<'a> {
+	type Target = GrugEntity;
+	fn deref(&self) -> &Self::Target {
+		unsafe{self.0.get_ref()}
+	}
+}
+
+#[derive(Debug)]
+pub struct GrugEntity {
+	pub id: GrugId,
+	pub file_id: GrugScriptId,
+	pub members: Cell<NonNull<()>>,
+}
+
+impl GrugEntity {
+	/// SAFETY: The members of the returned entity are uninitialized
+	/// This data must be initialized before it is actually used as an entity
+	pub unsafe fn new_uninit(id: GrugId, file_id: GrugScriptId) -> Self {
+		Self {
+			id,
+			file_id,
+			members: Cell::new(NonNull::dangling())
 		}
 	}
 }

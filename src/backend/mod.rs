@@ -1,4 +1,4 @@
-use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugId};
+use crate::types::{GlobalVariable, OnFunction, HelperFunction};
 #[derive(Debug)]
 pub struct GrugFile {
 	pub(crate) global_variables: Vec<GlobalVariable>,
@@ -6,15 +6,11 @@ pub struct GrugFile {
 	pub(crate) helper_functions: Vec<HelperFunction>,
 }
 
-const ON_FN_TIME_LIMIT: u64 = 100; // ms
-// const ON_FN_TIME_LIMIT: u64 = 2000000; // ms
-
-const MAX_RECURSION_LIMIT: usize = 100;
-
 pub mod interpreter {
-	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId, GrugScriptId};
-	use super::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT, GrugFile};
-	use crate::state::{GrugState, GrugEntity};
+	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId, GrugScriptId, GrugEntity};
+	use super::GrugFile;
+	use crate::error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
+	use crate::state::GrugState;
 	use crate::cachemap::CacheMap;
 	use crate::xar::ErasedXar;
 
@@ -56,7 +52,7 @@ pub mod interpreter {
 	pub struct Backend {
 		files: CacheMap<GrugScriptId, CompiledFile>,
 		file_id_map: CacheMap<String, GrugScriptId>,
-		next_id: u64,
+		next_id: Cell<u64>,
 	}
 	
 	struct CallStack {
@@ -120,19 +116,22 @@ pub mod interpreter {
 			Self {
 				files: CacheMap::new(),
 				file_id_map: CacheMap::new(),
-				next_id: 0,
+				next_id: Cell::new(0),
 			}
 		}
 
-		fn get_next_script_id(&mut self) -> GrugScriptId {
-			let id = self.next_id;
-			self.next_id += 1;
+		fn get_next_script_id(&self) -> GrugScriptId {
+			let id = self.next_id.get();
+			self.next_id.set(id + 1);
 			GrugId::new(id)
 		}
 
-		pub fn insert_file(&mut self, path: &str, file: GrugFile) -> GrugScriptId {
+		pub fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId {
 			match self.file_id_map.get(path) {
-				Some(_id) => {	
+				Some(id) => {	
+					let _compiled_file = self.files.get(id)
+						.expect("id exists in file_id_map so it must exist in files");
+					
 					todo!();
 				},
 				None => {
@@ -214,11 +213,24 @@ pub mod interpreter {
 			});
 		}
 
-		pub fn destroy_entity_data(&self, entity: &GrugEntity) {
+		/// # SAFETY
+		/// Must only return true if the entity is found in the backend based
+		/// on pointer equality and has been removed. Value equality of the
+		/// entity is not sufficient.
+		///
+		/// This return value is used to delete the entity from the owning
+		/// state. If the entity is not found, It is assumed to be from a
+		/// different GrugState and is just leaked instead of erroneously being
+		/// deleted
+		pub unsafe fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
 			let file = self.files.get(&entity.file_id)
 				.expect("file compiled");
-			file.entities.borrow_mut().extract_if(.., |en| std::ptr::eq(en.as_ptr().cast_const(), entity))
-				.for_each(|_| {});
+			let Some((i, _)) = file.entities.borrow().iter().enumerate().find(|(_, en)| std::ptr::eq(en.as_ptr().cast_const(), entity)) else {
+				// not found
+				return false;
+			};
+			file.entities.borrow_mut().swap_remove(i);
+			return true;
 		}
 
 		fn run_function(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
@@ -226,10 +238,7 @@ pub mod interpreter {
 				return Err(RuntimeError::StackOverflow)
 			}
 			if arguments.len() != values.len() {
-				return Err(RuntimeError::FunctionArgumentCountMismatch {
-					expected: arguments.len(),
-					got: values.len(),
-				});
+				panic!("argument count mismatch")
 			}
 			call_stack.push_stack_frame();
 			call_stack.push_scope();
@@ -655,37 +664,3 @@ pub mod interpreter {
 }
 pub use interpreter::Backend;
 
-#[derive(Debug, Clone)]
-pub enum RuntimeError {
-	ExceededTimeLimit,
-	StackOverflow,
-	GameFunctionError{
-		message: &'static str,
-	},
-	EntityDoesNotExist{
-		id: GrugId,
-	},
-	FunctionArgumentCountMismatch {
-		expected: usize,
-		got: usize,
-	},
-	FileNotCompiled {
-		file_path: String, 
-	}
-}
-
-impl std::fmt::Display for RuntimeError {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		match self {
-			Self::ExceededTimeLimit => write!(f, "Took longer than {} milliseconds to run", ON_FN_TIME_LIMIT),
-			Self::StackOverflow => write!(f, "Stack overflow, so check for accidental infinite recursion"),
-			Self::GameFunctionError{message} => write!(f, "{}", message),
-			Self::FileNotCompiled{file_path} => write!(f, "{} hasn't been compiled yet", file_path),
-			Self::EntityDoesNotExist{id} => write!(f, "entity with id {} does not exist", id),
-			Self::FunctionArgumentCountMismatch {
-				expected: _,
-				got: _,
-			} => write!(f, "{:?}", self),
-		}
-	}
-}

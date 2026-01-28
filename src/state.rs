@@ -1,15 +1,47 @@
 use crate::mod_api::{ModApi, get_mod_api};
-use crate::error::GrugError;
-use crate::backend::{Backend, RuntimeError};
-use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId};
-use crate::xar::{Xar, XarHandle};
+use crate::error::{GrugError, RuntimeError};
+use crate::backend::Backend;
+use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
+use crate::xar::Xar;
 
-use std::ptr::NonNull;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{atomic::{AtomicU64, Ordering}};
 use std::time::Instant;
+
+#[repr(C)]
+pub struct GrugInitSettings<'a> {
+	pub mod_api_path: &'a str,
+	pub mods_dir_path: &'a str,
+	pub runtime_error_handler: fn(reason: String, err_kind: u32, on_fn_name: String, script_path: String),
+	
+	// custom allocation support (currently ignored)
+	// TODO: Is this even a good idea
+	// This allocator has to be a malloc/free style allocator (no arenas, only
+	// page allocators and default c style allocators)
+	// Might as well use those directly.
+	//
+	// But then again, if the game knows all memory is allocated by this
+	// allocator, it can deallocate memory allocated by grug
+	//
+	// alloc_data: Option<GrugAllocator>,
+}
+
+impl Default for GrugInitSettings<'static> {
+	fn default () -> Self {
+		Self {
+			mod_api_path: "./mod_api.json",
+			mods_dir_path: "./mods",
+			runtime_error_handler: default_runtime_error_handler,
+		}
+	}
+}
+
+pub fn default_runtime_error_handler(reason: String, _err_kind: u32, on_fn_name: String, script_path: String) {
+	println!("Runtime Error: {} in function {} in script {}", reason, on_fn_name, script_path);
+	std::process::exit(1);
+}
 
 pub struct GrugState {
 	pub(crate) mod_api: ModApi,
@@ -98,17 +130,20 @@ impl GrugState {
 		self.next_id.store(next_id, Ordering::Relaxed);
 	}
 
-	pub fn create_entity(&self, file_id: GrugScriptId) -> Result<XarHandle<'_, GrugEntity>, RuntimeError> {
+	pub fn create_entity(&self, file_id: GrugScriptId) -> Result<GrugEntityHandle<'_>, RuntimeError> {
 		let entity = self.entities.insert(unsafe{GrugEntity::new_uninit(self.get_id(), file_id)});
-		self.backend.init_entity(self, entity.get_ref())?;
+		let entity = unsafe{GrugEntityHandle::new(entity)};
+		self.backend.init_entity(self, &entity)?;
 		Ok(entity)
 	}
 
-	pub fn destroy_entity<'a>(&'a mut self, entity: XarHandle<'a, GrugEntity>) {
-		self.backend.destroy_entity_data(&*entity);
-		// SAFETY: an entity stored within self.files must have come from this same state
-		// the user passes in the only other XarHandle to this entity (modulo unsafe)
-		unsafe{self.entities.delete(entity)};
+	pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) {
+		if unsafe{self.backend.destroy_entity_data(&*entity)} {
+			// SAFETY: an entity stored within self.files must have come from
+			// this same state because of the return value of the above
+			// function. GrugEntityHandle contains the only other handle to the entity storage
+			unsafe{self.entities.delete(entity.into_inner())};
+		}
 	}
 
 	pub fn clear_entities(&mut self) {
@@ -145,25 +180,6 @@ impl GrugState {
 
 	pub fn call_on_function(&self, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
 		self.backend.call_on_function(self, entity, on_fn_id, values)
-	}
-}
-
-#[derive(Debug)]
-pub struct GrugEntity {
-	pub id: GrugId,
-	pub file_id: GrugScriptId,
-	pub members: Cell<NonNull<()>>,
-}
-
-impl GrugEntity {
-	/// SAFETY: The members of the returned entity are uninitialized
-	/// This data must be initialized before it is actually used as an entity
-	pub unsafe fn new_uninit(id: GrugId, file_id: GrugScriptId) -> Self {
-		Self {
-			id,
-			file_id,
-			members: Cell::new(NonNull::dangling())
-		}
 	}
 }
 
