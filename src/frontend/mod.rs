@@ -5,7 +5,7 @@
 // #![deny(warnings)]
 use crate::error::GrugError;
 use crate::state::GrugState;
-use crate::backend::GrugFile;
+use crate::backend::{GrugFile, Backend};
 use crate::types::{GlobalStatement, GlobalVariable, OnFunction, HelperFunction, GrugScriptId};
 
 use std::sync::Arc;

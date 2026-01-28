@@ -10,7 +10,7 @@ pub struct GrugFile {
 
 pub mod interpreter {
 	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId, GrugScriptId, GrugEntity};
-	use super::GrugFile;
+	use super::{GrugFile, Backend};
 	use crate::error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
 	use crate::state::GrugState;
 	use crate::cachemap::CacheMap;
@@ -126,113 +126,6 @@ pub mod interpreter {
 			let id = self.next_id.get();
 			self.next_id.set(id + 1);
 			GrugId::new(id)
-		}
-
-		pub fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId {
-			match self.file_id_map.get(path) {
-				Some(id) => {	
-					let _compiled_file = self.files.get(id)
-						.expect("id exists in file_id_map so it must exist in files");
-					
-					todo!();
-				},
-				None => {
-					let next_id = self.get_next_script_id();
-					self.file_id_map.try_insert(String::from(path), next_id).unwrap();
-					self.files.try_insert(next_id, CompiledFile::new(file)).unwrap();
-					next_id
-				}
-			}
-		}
-
-		pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
-			let file = &self.files.get(&entity.file_id)
-				.expect("file already created");
-
-			let Some(on_function) = &file.file.on_functions[on_fn_id as usize] else {
-				panic!("function not available");
-			};
-
-			let values = if on_function.arguments.len() == 0 {
-				&[]
-			} else {
-				unsafe{std::slice::from_raw_parts(values, on_function.arguments.len())}
-			};
-
-			state.call_start_time.set(Instant::now());
-			self.run_function(
-				&mut CallStack::new(),
-				state,
-				file,
-				unsafe{entity.members.get().cast::<GrugEntityData>().as_ref()}, 
-				&on_function.arguments, 
-				values,
-				&on_function.body_statements
-			)?;
-			Ok(())
-		}
-
-		pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
-			let file = &self.files.get(&entity.file_id)
-				.expect("file already created");
-
-			let Some(on_function) = &file.file.on_functions[on_fn_id as usize] else {
-				panic!("function not available");
-			};
-
-			state.call_start_time.set(Instant::now());
-			self.run_function(
-				&mut CallStack::new(),
-				state,
-				file,
-				unsafe{entity.members.get().cast::<GrugEntityData>().as_ref()}, 
-				&on_function.arguments, 
-				values,
-				&on_function.body_statements
-			)?;
-			Ok(())
-		}
-
-		pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> Result<(), RuntimeError> {
-			let file = self.files.get(&entity.file_id)
-				.expect("file already compiled");
-
-			let mut data = GrugEntityData {
-				global_variables: HashMap::from([(Arc::from("me"), Cell::new(GrugValue{id:entity.id}))]),
-			};
-			self.init_global_variables(state, &mut data, &file.file.global_variables)?;
-
-			let data = unsafe{file.data.insert(data)};
-			file.entities.borrow_mut().push(NonNull::from_ref(entity));
-			entity.members.set(data.as_ptr());
-
-			Ok(())
-		}
-
-		pub fn clear_entities(&mut self) {
-			self.files.iter_mut().for_each(|(_, file)| {
-				file.entities.get_mut().clear();
-			});
-		}
-
-		/// # SAFETY
-		/// Must only return true if the entity is found in the backend based
-		/// on pointer equality and has been removed. Value equality of the
-		/// entity is not sufficient.
-		///
-		/// This return value is used to delete the entity from the owning
-		/// state. If the entity is not found, It is assumed to be from a
-		/// different GrugState and is just leaked instead of erroneously being
-		/// deleted
-		pub unsafe fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
-			let file = self.files.get(&entity.file_id)
-				.expect("file compiled");
-			let Some((i, _)) = file.entities.borrow().iter().enumerate().find(|(_, en)| std::ptr::eq(en.as_ptr().cast_const(), entity)) else {
-				// not found
-				return false;
-			};
-			file.entities.borrow_mut().swap_remove(i);
-			return true;
 		}
 
 		fn run_function(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
@@ -660,6 +553,106 @@ pub mod interpreter {
 				entity.global_variables.insert(Arc::clone(&variable.name), Cell::new(value));
 				Ok(())
 			}).collect::<Result<Vec<_>, _>>()?;
+			Ok(())
+		}
+	}
+
+	unsafe impl Backend for Interpreter {
+		fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId {
+			match self.file_id_map.get(path) {
+				Some(id) => {	
+					let _compiled_file = self.files.get(id)
+						.expect("id exists in file_id_map so it must exist in files");
+					
+					todo!();
+				},
+				None => {
+					let next_id = self.get_next_script_id();
+					self.file_id_map.try_insert(String::from(path), next_id).unwrap();
+					self.files.try_insert(next_id, CompiledFile::new(file)).unwrap();
+					next_id
+				}
+			}
+		}
+
+		fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> Result<(), RuntimeError> {
+			let file = self.files.get(&entity.file_id)
+				.expect("file already compiled");
+
+			let mut data = GrugEntityData {
+				global_variables: HashMap::from([(Arc::from("me"), Cell::new(GrugValue{id:entity.id}))]),
+			};
+			self.init_global_variables(state, &mut data, &file.file.global_variables)?;
+
+			let data = unsafe{file.data.insert(data)};
+			file.entities.borrow_mut().push(NonNull::from_ref(entity));
+			entity.members.set(data.as_ptr());
+
+			Ok(())
+		}
+
+		fn clear_entities(&mut self) {
+			self.files.iter_mut().for_each(|(_, file)| {
+				file.entities.get_mut().clear();
+			});
+		}
+
+		fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
+			let file = self.files.get(&entity.file_id)
+				.expect("file compiled");
+			let Some((i, _)) = file.entities.borrow().iter().enumerate().find(|(_, en)| std::ptr::eq(en.as_ptr().cast_const(), entity)) else {
+				// not found
+				return false;
+			};
+			file.entities.borrow_mut().swap_remove(i);
+			return true;
+		}
+
+		unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
+			let file = &self.files.get(&entity.file_id)
+				.expect("file already created");
+
+			let Some(on_function) = &file.file.on_functions[on_fn_id as usize] else {
+				panic!("function not available");
+			};
+
+			let values = if on_function.arguments.len() == 0 {
+				&[]
+			} else {
+				unsafe{std::slice::from_raw_parts(values, on_function.arguments.len())}
+			};
+
+			state.call_start_time.set(Instant::now());
+			self.run_function(
+				&mut CallStack::new(),
+				state,
+				file,
+				unsafe{entity.members.get().cast::<GrugEntityData>().as_ref()}, 
+				&on_function.arguments, 
+				values,
+				&on_function.body_statements
+			)?;
+			Ok(())
+		}
+
+		fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
+			let file = &self.files.get(&entity.file_id)
+				.expect("file already created");
+
+			let Some(on_function) = &file.file.on_functions[on_fn_id as usize] else {
+				panic!("function not available");
+			};
+
+			state.call_start_time.set(Instant::now());
+			self.run_function(
+				&mut CallStack::new(),
+				state,
+				file,
+				unsafe{entity.members.get().cast::<GrugEntityData>().as_ref()}, 
+				&on_function.arguments, 
+				values,
+				&on_function.body_statements
+			)?;
 			Ok(())
 		}
 	}

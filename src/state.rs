@@ -1,6 +1,6 @@
 use crate::mod_api::{ModApi, get_mod_api};
 use crate::error::{GrugError, RuntimeError};
-use crate::backend::Interpreter;
+use crate::backend::{Interpreter, Backend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
 use crate::xar::Xar;
 
@@ -138,7 +138,7 @@ impl GrugState {
 	}
 
 	pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) {
-		if unsafe{self.backend.destroy_entity_data(&*entity)} {
+		if self.backend.destroy_entity_data(&*entity) {
 			// SAFETY: an entity stored within self.files must have come from
 			// this same state because of the return value of the above
 			// function. GrugEntityHandle contains the only other handle to the entity storage
