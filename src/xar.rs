@@ -268,24 +268,24 @@ mod xar {
 		#[test]
 		fn xar_test_2 () {
 			let x = Xar::new();
-			let mut x_1 = x.insert(25);
-			let mut x_2 = x.insert(26);
-			let mut x_3 = x.insert(27);
-			let mut x_4 = x.insert(28);
-			assert_eq!(25, *x_1);
-			assert_eq!(26, *x_2);
-			assert_eq!(27, *x_3);
-			assert_eq!(28, *x_4);
+			let x_1 = x.insert(25);
+			let x_2 = x.insert(26);
+			let x_3 = x.insert(27);
+			let x_4 = x.insert(28);
+			assert_eq!(25, unsafe{*x_1.get_ref()});
+			assert_eq!(26, unsafe{*x_2.get_ref()});
+			assert_eq!(27, unsafe{*x_3.get_ref()});
+			assert_eq!(28, unsafe{*x_4.get_ref()});
 
-			*x_1 += 5;
-			*x_2 += 5;
-			*x_3 += 5;
-			*x_4 += 5;
+			*unsafe{x_1.get_mut()} += 5;
+			*unsafe{x_2.get_mut()} += 5;
+			*unsafe{x_3.get_mut()} += 5;
+			*unsafe{x_4.get_mut()} += 5;
 
-			assert_eq!(30, *x_1);
-			assert_eq!(31, *x_2);
-			assert_eq!(32, *x_3);
-			assert_eq!(33, *x_4);
+			assert_eq!(30, unsafe{*x_1.get_ref()});
+			assert_eq!(31, unsafe{*x_2.get_ref()});
+			assert_eq!(32, unsafe{*x_3.get_ref()});
+			assert_eq!(33, unsafe{*x_4.get_ref()});
 			eprintln!("{:?}", x_1);
 		}
 
@@ -294,7 +294,7 @@ mod xar {
 			let x = Xar::new();
 			let mut vec = Vec::new();
 			for i in 0..1000 {
-				vec.push(x.insert(i).into_mut());
+				unsafe{vec.push(x.insert(i).get_mut())};
 			}
 			for i in 0..1000 {
 				*vec[i] *= 2;

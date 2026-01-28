@@ -1,6 +1,6 @@
 use crate::mod_api::{ModApi, get_mod_api};
 use crate::error::{GrugError, RuntimeError};
-use crate::backend::Backend;
+use crate::backend::Interpreter;
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
 use crate::xar::Xar;
 
@@ -51,7 +51,7 @@ pub struct GrugState {
 
 	pub(crate) entities: Xar<GrugEntity>,
 	
-	pub(crate) backend: Backend,
+	pub(crate) backend: Interpreter,
 	// should be moved into backend later
 	pub(crate)call_start_time: Cell<Instant>,
 	pub(crate)error: Cell<Option<&'static str>>,
@@ -68,7 +68,7 @@ impl GrugState {
 			next_id: AtomicU64::new(0),
 			game_functions: HashMap::new(),
 			entities: Xar::new(),
-			backend: Backend::new(),
+			backend: Interpreter::new(),
 			call_start_time: Cell::new(Instant::now()),
 			error: Cell::new(None),
 			handled_error: Cell::new(false),

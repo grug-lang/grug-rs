@@ -6,15 +6,15 @@ use gruggers::state::GrugState;
 
 mod test_bindings {
 	use gruggers::state::GrugState;
-	use gruggers::backend::RuntimeError;
-	use gruggers::types::{GrugValue, GrugScriptId, GrugEntity};
+	use gruggers::error::RuntimeError;
+	use gruggers::types::{GrugValue, GrugScriptId, GrugEntityHandle};
 	use gruggers::serde;
 	use std::ffi::{c_char, CStr, CString};
 	use std::path::PathBuf;
 	use std::mem::ManuallyDrop;
 
 	pub static mut GLOBAL_TEST_STATE: Option<GrugState> = None;
-	pub static mut CURRENT_GRUG_ENTITY: Option<&'static GrugEntity> = None;
+	pub static mut CURRENT_GRUG_ENTITY: Option<GrugEntityHandle<'static>> = None;
 	pub static mut CURRENT_SCRIPT_ID: Option<GrugScriptId> = None;
 	pub static mut CURRENT_PATH: Option<&str> = None;
 
@@ -42,8 +42,6 @@ mod test_bindings {
 					.as_ref().unwrap()
 					.create_entity(CURRENT_SCRIPT_ID.unwrap())
 					.expect("runtime error")
-					.detach_lifetime()
-					.get_ref()
 			)
 		}
 	}
@@ -60,7 +58,7 @@ mod test_bindings {
 			let fn_id = GLOBAL_TEST_STATE.as_ref().unwrap().get_on_fn_id(entity_type, fn_name).unwrap();
 			
 			let (kind, msg) = match GLOBAL_TEST_STATE.as_ref().unwrap()
-				.call_on_function_raw(CURRENT_GRUG_ENTITY.unwrap(), fn_id, values)
+				.call_on_function_raw(&CURRENT_GRUG_ENTITY.as_ref().unwrap(), fn_id, values)
 			{
 				Err(RuntimeError::StackOverflow) => (0, CString::new(format!("{}", RuntimeError::StackOverflow)).unwrap()),
 				Err(RuntimeError::ExceededTimeLimit) => (1, CString::new(format!("{}", RuntimeError::ExceededTimeLimit)).unwrap()),

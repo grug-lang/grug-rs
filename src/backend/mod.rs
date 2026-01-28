@@ -1,4 +1,6 @@
-use crate::types::{GlobalVariable, OnFunction, HelperFunction};
+use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugScriptId, GrugEntity, GrugOnFnId, GrugValue};
+use crate::state::GrugState;
+use crate::error::RuntimeError;
 #[derive(Debug)]
 pub struct GrugFile {
 	pub(crate) global_variables: Vec<GlobalVariable>,
@@ -49,7 +51,7 @@ pub mod interpreter {
 		}
 	}
 	
-	pub struct Backend {
+	pub struct Interpreter {
 		files: CacheMap<GrugScriptId, CompiledFile>,
 		file_id_map: CacheMap<String, GrugScriptId>,
 		next_id: Cell<u64>,
@@ -111,7 +113,7 @@ pub mod interpreter {
 	}
 
 	// should be moved into backend later
-	impl Backend {
+	impl Interpreter {
 		pub fn new() -> Self {
 			Self {
 				files: CacheMap::new(),
@@ -662,5 +664,69 @@ pub mod interpreter {
 		}
 	}
 }
-pub use interpreter::Backend;
+pub use interpreter::Interpreter;
 
+pub unsafe trait Backend {
+	/// The AST of a typechecked grug file is provided to let the backend do
+	/// further transforms and lower to bytecode or even machine code
+	/// 
+	/// Each path must be associated with a single GrugScriptId. If the same
+	/// path is provided again, the old file must be replaced and the member
+	/// data of any entities created from the old file must be regenerated.
+	/// Importantly, the GrugScriptId associated with the new file must be the
+	/// same as the only associated with the old file.
+	///
+	fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId;
+	/// Initialize the member data of the newly created entity. When this
+	/// function is called, the member field of `entity` points to garbage and
+	/// must not be deinitialized. The GrugScriptId to be used is obtained from
+	/// the file_id member of `entity`. 
+	///
+	/// `entity` is pinned until it is deinitialized by a call to
+	/// `destroy_entity_data` or `insert_file` with the same path as its
+	/// current GrugScriptId. The reference must be stored as a raw pointer
+	/// within self so that it can be used during `destroy_entity_data` to
+	/// check for pointer equality. 
+	/// It is safe to use that pointer as a &GrugEntity in the meantime.
+	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> Result<(), RuntimeError>;
+	/// Deinitialize all the data associated with all entities. The pointers
+	/// stored during `init_entity` must be used to get access to the entity data.
+	/// The entities can only be accessed as a &GrugEntity even self is available with an exclusive reference
+	fn clear_entities(&mut self);
+	/// Deinitialize the data associated with `entity`. 
+	///
+	/// # IMPORTANT!!!!
+	/// Before deinitializing the data, ensure that the address of `entity`
+	/// matches the address of a pointer stored during a previous call to
+	/// `init_entity`. If `entity` does not match any stored pointer, the data
+	/// MUST NOT be deinitialized and the return value MUST BE `false`.
+	///
+	///	If true is returned, the data should be deinitialized and the pointer
+	///	MUST be removed from storage.
+	///
+	/// It is safe to never deinitialize the data and return false everytime. 
+	fn destroy_entity_data(&self, entity: &GrugEntity) -> bool;
+
+	/// Run the on function with id `on_fn_id` of the script associated with `entity`.
+	/// The id of an on_ function is based on its order within mod_Api.json. 
+	///
+	/// GrugFile.on_function stores the on_ function data based on the order
+	/// within mod_api.json. The backend is responsible for preserving the
+	/// mapping from id to on_ function code after all required transformations
+	///
+	/// # SAFETY: `values` must point to an array of GrugValues of at least as
+	/// many elements as the number of arguments to the on_ function
+	///
+	/// If the number of arguments is 0, then `values` is allowed to be null
+	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError>;
+	/// Run the on function with id `on_fn_id` of the script associated with `entity`.
+	/// The id of an on_ function is based on its order within mod_Api.json. 
+	///
+	/// GrugFile.on_function stores the on_ function data based on the order
+	/// within mod_api.json. The backend is responsible for preserving the
+	/// mapping from id to on_ function code after all required transformations
+	///
+	/// # Panics: The length of `values` must exactly match the number of
+	/// expected arguments to the on_ function
+	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError>;
+}
