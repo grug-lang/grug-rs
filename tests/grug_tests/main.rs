@@ -8,6 +8,7 @@ mod test_bindings {
 	use gruggers::state::GrugState;
 	use gruggers::error::RuntimeError;
 	use gruggers::types::{GrugValue, GrugScriptId, GrugEntityHandle};
+	use gruggers::ntstring::NTStrPtr;
 	use gruggers::serde;
 	use std::ffi::{c_char, CStr, CString};
 	use std::path::PathBuf;
@@ -60,15 +61,15 @@ mod test_bindings {
 			let (kind, msg) = match GLOBAL_TEST_STATE.as_ref().unwrap()
 				.call_on_function_raw(&CURRENT_GRUG_ENTITY.as_ref().unwrap(), fn_id, values)
 			{
-				Err(RuntimeError::StackOverflow) => (0, CString::new(format!("{}", RuntimeError::StackOverflow)).unwrap()),
-				Err(RuntimeError::ExceededTimeLimit) => (1, CString::new(format!("{}", RuntimeError::ExceededTimeLimit)).unwrap()),
-				Err(err@RuntimeError::GameFunctionError{..}) => (2, CString::new(format!("{}", err)).unwrap()),
+				Err(RuntimeError::StackOverflow) => (0, (format!("{}", RuntimeError::StackOverflow))),
+				Err(RuntimeError::ExceededTimeLimit) => (1, (format!("{}", RuntimeError::ExceededTimeLimit))),
+				Err(err@RuntimeError::GameFunctionError{..}) => (2, String::from(GLOBAL_TEST_STATE.as_ref().unwrap().get_error().unwrap())),
 				Ok(_) => return,
 			};
 			if !GLOBAL_TEST_STATE.as_ref().unwrap().handled_error.get() {
 				GLOBAL_TEST_STATE.as_ref().unwrap().set_handled_error();
 				grug_tests_runtime_error_handler(
-					msg.as_ptr(), 
+					CString::new(msg).unwrap().as_ptr(), 
 					kind,
 					fn_name.as_ptr().cast(),
 					CURRENT_PATH.unwrap().as_ptr().cast(),
@@ -103,9 +104,9 @@ mod test_bindings {
 		}
 	}
 	#[allow(unused_variables)]
-	pub extern "C" fn game_fn_error (msg: *const c_char) {
+	pub extern "C" fn game_fn_error (msg: NTStrPtr<'static>) {
 		unsafe {
-			GLOBAL_TEST_STATE.as_ref().unwrap().set_error(CStr::from_ptr(msg).to_str().unwrap())
+			GLOBAL_TEST_STATE.as_ref().unwrap().set_error(msg.as_ntstr())
 		}
 	}
 
@@ -122,7 +123,7 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	pub type generate_file_from_json_t = extern "C" fn (*const c_char, *const c_char) -> i32;
 	#[allow(non_camel_case_types)]
-	pub type game_fn_error_t = extern "C" fn (*const c_char);
+	pub type game_fn_error_t = extern "C" fn (NTStrPtr<'static>);
 
 	#[link(name="tests", kind="dylib")]
 	unsafe extern "C" {

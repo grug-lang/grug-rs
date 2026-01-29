@@ -3,6 +3,7 @@ use crate::error::{GrugError, RuntimeError};
 use crate::backend::{Interpreter, Backend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
 use crate::xar::Xar;
+use crate::ntstring::NTStr;
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -54,7 +55,7 @@ pub struct GrugState {
 	pub(crate) backend: Interpreter,
 	// should be moved into backend later
 	pub(crate)call_start_time: Cell<Instant>,
-	pub(crate)error: Cell<Option<&'static str>>,
+	pub(crate)error: Cell<Option<&'static NTStr>>,
 	pub handled_error: Cell<bool>,
 }
 
@@ -156,7 +157,11 @@ impl GrugState {
 		self.handled_error.set(false);
 	}
 
-	pub fn set_error(&self, error: &'static str) {
+	pub fn get_error(&self) -> Option<&'static NTStr> {
+		self.error.get()
+	}
+
+	pub fn set_error(&self, error: &'static NTStr) {
 		self.error.set(Some(error));
 		self.handled_error.set(false);
 	}

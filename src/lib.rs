@@ -13,7 +13,7 @@ pub mod state;
 // pub mod capi;
 pub mod xar;
 
-mod ntstring;
+pub mod ntstring;
 
 mod cachemap;
 

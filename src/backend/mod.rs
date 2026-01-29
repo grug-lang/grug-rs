@@ -1,6 +1,10 @@
 use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugScriptId, GrugEntity, GrugOnFnId, GrugValue};
 use crate::state::GrugState;
 use crate::error::RuntimeError;
+
+use std::ptr::NonNull;
+use crate::ntstring::NTStrPtr;
+
 #[derive(Debug)]
 pub struct GrugFile {
 	pub(crate) global_variables: Vec<GlobalVariable>,
@@ -402,10 +406,8 @@ pub mod interpreter {
 						(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
 						(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
 					};
-					if let Some(err) = state.error.get() {
-						return Err(RuntimeError::GameFunctionError{
-							message: err,
-						})
+					if let Some(_) = state.error.get() {
+						return Err(RuntimeError::GameFunctionError);
 					}
 					ret_val
 				}
@@ -529,10 +531,8 @@ pub mod interpreter {
 						(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
 						(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
 					};
-					if let Some(err) = state.error.get() {
-						return Err(RuntimeError::GameFunctionError{
-							message: err,
-						})
+					if let Some(_) = state.error.get() {
+						return Err(RuntimeError::GameFunctionError)
 					}
 					ret_val
 				}
@@ -722,4 +722,18 @@ pub unsafe trait Backend {
 	/// # Panics: The length of `values` must exactly match the number of
 	/// expected arguments to the on_ function
 	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError>;
+}
+
+pub struct ErasedBackend {
+	pub data: NonNull<()>,
+	pub vtable: BackendVTable,
+}
+
+pub struct BackendVTable {
+	pub insert_file:          fn(data: NonNull<()>, path: NTStrPtr, file: GrugFile) -> GrugScriptId,
+	pub init_entity:          fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> Result<(), RuntimeError>,
+	pub clear_entities:       fn(data: NonNull<()>),
+	pub destroy_entity_data:  fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
+	pub call_on_function_raw: unsafe fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError>,
+	pub call_on_function:     fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError>,
 }
