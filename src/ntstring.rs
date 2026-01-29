@@ -19,8 +19,12 @@ impl NTStr {
 		}
 	}
 
-	fn as_str(&self) -> &str {
+	pub fn as_str(&self) -> &str {
 		&self.0[..(self.0.len() - 1)]
+	}
+
+	pub fn as_str_with_null(&self) -> &str {
+		&self.0
 	}
 
 	/// The last byte of `value` MUST be a null byte
@@ -35,6 +39,10 @@ impl NTStr {
 		} else {
 			None
 		}
+	}
+
+	pub fn as_ntstrptr(&self) -> NTStrPtr<'_> {
+		unsafe{NTStrPtr(NonNull::new_unchecked(self.as_str().as_ptr().cast_mut().cast::<i8>()), PhantomData)}
 	}
 }
 
@@ -84,7 +92,7 @@ impl AsRef<CStr> for NTStr {
 
 impl<'a> From<&'a NTStr> for String {
 	fn from(other: &'a NTStr) -> String {
-		String::from(other.as_str())
+		String::from(other.as_str_with_null())
 	}
 }
 
@@ -129,19 +137,31 @@ impl<'a> NTStrPtr<'a> {
 			i += 1;
 		}
 	}
+
+	pub fn as_str(self) -> &'a str {
+		self.as_ntstr().as_str()
+	}
+}
+
+impl<'a> From<&'a NTStr> for NTStrPtr<'a> {
+	fn from (other: &'a NTStr) -> Self {
+		other.as_ntstrptr()
+	}
 }
 
 #[macro_export]
 macro_rules! nt {
 	($lit: literal) => {
-		const {
-			let bytes = $lit.as_bytes();
-			let mut i = 0;
-			while i < bytes.len() {
-				assert!(bytes[i] != b'\0')
-				i += 1;
-			}
+		{
+			const {
+				let bytes = $lit.as_bytes();
+				let mut i = 0;
+				while i < bytes.len() {
+					assert!(bytes[i] != b'\0');
+					i += 1;
+				}
+			};
+			unsafe{::gruggers::ntstring::NTStr::from_str_unchecked(concat!($lit, "\0"))}
 		}
-		unsafe{NTStr::from_str_unchecked(concat!($lit, "\0"))};
 	}
 }

@@ -1,37 +1,37 @@
 #![deny(warnings)]
 #![allow(static_mut_refs)]
-use std::ffi::CString;
-use std::mem::ManuallyDrop;
 use gruggers::state::GrugState;
+use gruggers::nt;
 
 mod test_bindings {
 	use gruggers::state::GrugState;
 	use gruggers::error::RuntimeError;
 	use gruggers::types::{GrugValue, GrugScriptId, GrugEntityHandle};
-	use gruggers::ntstring::NTStrPtr;
+	use gruggers::ntstring::{NTStrPtr, NTStr};
 	use gruggers::serde;
-	use std::ffi::{c_char, CStr, CString};
 	use std::path::PathBuf;
-	use std::mem::ManuallyDrop;
 
 	pub static mut GLOBAL_TEST_STATE: Option<GrugState> = None;
 	pub static mut CURRENT_GRUG_ENTITY: Option<GrugEntityHandle<'static>> = None;
 	pub static mut CURRENT_SCRIPT_ID: Option<GrugScriptId> = None;
-	pub static mut CURRENT_PATH: Option<&str> = None;
+	pub static mut CURRENT_PATH: Option<&NTStr> = None;
 
-	pub extern "C" fn compile_grug_file(path: *const c_char) -> *const c_char {
+	pub extern "C" fn compile_grug_file(path: NTStrPtr<'static>) -> Option<NTStrPtr<'static>> {
 		unsafe {
 			GLOBAL_TEST_STATE.as_mut().unwrap().clear_entities();
-			let path = CStr::from_ptr(path).to_str().unwrap();
+			let path = path.as_ntstr();
 			CURRENT_PATH = Some(path);
-			let ret_val = match GLOBAL_TEST_STATE.as_mut().unwrap().compile_grug_file(path) {
+			match GLOBAL_TEST_STATE.as_mut().unwrap().compile_grug_file(path) {
 				Ok(id) => {
 					CURRENT_SCRIPT_ID = Some(id);
-					std::ptr::null()
+					None
 				},
-				Err(err) => ManuallyDrop::new(CString::new(format!("{}", err)).unwrap()).as_ptr() as *const c_char,
-			};
-			ret_val
+				Err(err) => {
+					let mut string = format!("{}", err);
+					string.push('\0');
+					Some(NTStr::from_str(String::leak(string)).unwrap().into())
+				}
+			}
 		}
 	}
 	pub extern "C" fn init_globals_fn_dispatcher () {
@@ -47,10 +47,10 @@ mod test_bindings {
 		}
 	}
 	#[allow(unused_variables)]
-	pub extern "C" fn on_fn_dispatcher (fn_name: *const c_char, values: *const GrugValue) {
+	pub extern "C" fn on_fn_dispatcher (fn_name: NTStrPtr<'static>, values: *const GrugValue) {
 		unsafe {
-			let fn_name = CStr::from_ptr(fn_name).to_str().unwrap();
-			let entity_type = PathBuf::from(CURRENT_PATH.unwrap());
+			let fn_name = fn_name.as_ntstr();
+			let entity_type = PathBuf::from(CURRENT_PATH.unwrap().as_str());
 			let entity_type = entity_type
 				.file_prefix().unwrap()
 				.to_str().unwrap()
@@ -61,26 +61,26 @@ mod test_bindings {
 			let (kind, msg) = match GLOBAL_TEST_STATE.as_ref().unwrap()
 				.call_on_function_raw(&CURRENT_GRUG_ENTITY.as_ref().unwrap(), fn_id, values)
 			{
-				Err(RuntimeError::StackOverflow) => (0, (format!("{}", RuntimeError::StackOverflow))),
-				Err(RuntimeError::ExceededTimeLimit) => (1, (format!("{}", RuntimeError::ExceededTimeLimit))),
+				Err(RuntimeError::StackOverflow) => (0, (format!("{}\0", RuntimeError::StackOverflow))),
+				Err(RuntimeError::ExceededTimeLimit) => (1, (format!("{}\0", RuntimeError::ExceededTimeLimit))),
 				Err(err@RuntimeError::GameFunctionError{..}) => (2, String::from(GLOBAL_TEST_STATE.as_ref().unwrap().get_error().unwrap())),
 				Ok(_) => return,
 			};
 			if !GLOBAL_TEST_STATE.as_ref().unwrap().handled_error.get() {
 				GLOBAL_TEST_STATE.as_ref().unwrap().set_handled_error();
 				grug_tests_runtime_error_handler(
-					CString::new(msg).unwrap().as_ptr(), 
+					NTStr::from_str(String::leak(msg)).unwrap().as_ntstrptr(),
 					kind,
-					fn_name.as_ptr().cast(),
-					CURRENT_PATH.unwrap().as_ptr().cast(),
+					fn_name.as_ntstrptr(),
+					CURRENT_PATH.as_ref().unwrap().as_ntstrptr(),
 				);
 			}
 		}
 	}
 	#[allow(unused_variables)]
-	pub extern "C" fn dump_file_to_json (input_grug_path: *const c_char, output_json_path: *const c_char) -> i32 {
-		let grug_path = unsafe{CStr::from_ptr(input_grug_path)}.to_str().unwrap();
-		let json_path = unsafe{CStr::from_ptr(output_json_path)}.to_str().unwrap();
+	pub extern "C" fn dump_file_to_json (input_grug_path: NTStrPtr<'static>, output_json_path: NTStrPtr<'static>) -> i32 {
+		let grug_path = input_grug_path.as_ntstr();
+		let json_path = output_json_path.as_ntstr();
 
 		match serde::dump_file_to_json(grug_path, json_path) {
 			Ok(()) => 0,
@@ -91,9 +91,9 @@ mod test_bindings {
 		}
 	}
 	#[allow(unused_variables)]
-	pub extern "C" fn generate_file_from_json (input_json_path: *const c_char, output_grug_path: *const c_char) -> i32 {
-		let input_json_path = unsafe{CStr::from_ptr(input_json_path)}.to_str().unwrap();
-		let output_grug_path = unsafe{CStr::from_ptr(output_grug_path)}.to_str().unwrap();
+	pub extern "C" fn generate_file_from_json (input_json_path: NTStrPtr<'static>, output_grug_path: NTStrPtr<'static>) -> i32 {
+		let output_grug_path = output_grug_path.as_ntstr();
+		let input_json_path = input_json_path.as_ntstr();
 
 		match serde::generate_file_from_json(input_json_path, output_grug_path) {
 			Ok(()) => 0,
@@ -113,35 +113,35 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	// pub type c_size_t = u64;
 	#[allow(non_camel_case_types)]
-	pub type compile_grug_file_t = extern "C" fn(*const c_char) -> *const c_char;
+	pub type compile_grug_file_t = extern "C" fn(NTStrPtr<'static>) -> Option<NTStrPtr<'static>>;
 	#[allow(non_camel_case_types)]
 	pub type init_globals_fn_dispatcher_t = extern "C" fn ();
 	#[allow(non_camel_case_types)]
-	pub type on_fn_dispatcher_t = extern "C" fn (*const c_char, *const GrugValue);
+	pub type on_fn_dispatcher_t = extern "C" fn (NTStrPtr<'static>, *const GrugValue);
 	#[allow(non_camel_case_types)]
-	pub type dump_file_to_json_t = extern "C" fn (*const c_char, *const c_char) -> i32;
+	pub type dump_file_to_json_t = extern "C" fn (NTStrPtr<'static>, NTStrPtr<'static>) -> i32;
 	#[allow(non_camel_case_types)]
-	pub type generate_file_from_json_t = extern "C" fn (*const c_char, *const c_char) -> i32;
+	pub type generate_file_from_json_t = extern "C" fn (NTStrPtr<'static>, NTStrPtr<'static>) -> i32;
 	#[allow(non_camel_case_types)]
 	pub type game_fn_error_t = extern "C" fn (NTStrPtr<'static>);
 
 	#[link(name="tests", kind="dylib")]
 	unsafe extern "C" {
 		pub fn grug_tests_runtime_error_handler(
-			reason: *const c_char,
+			reason: NTStrPtr<'static>,
 			ty: i32,
-			on_fn_name: *const c_char,
-			on_fn_path: *const c_char,
+			on_fn_name: NTStrPtr<'static>,
+			on_fn_path: NTStrPtr<'static>,
 		);
 		pub fn grug_tests_run(
-			tests_dir_path_: *const c_char, 
+			tests_dir_path_: NTStrPtr<'static>, 
 			compile_grug_file: compile_grug_file_t,
 			init_globals_fn_dispatcher_: init_globals_fn_dispatcher_t,
 			on_fn_dispatcher_: on_fn_dispatcher_t,
 			dump_file_to_json_: dump_file_to_json_t,
 			generate_file_from_json_: generate_file_from_json_t,
 			game_fn_error_: game_fn_error_t,
-			whitelisted_test_: *const c_char
+			whitelisted_test_: Option<NTStrPtr<'static>>
 		);
 	}
 }
@@ -233,23 +233,23 @@ use std::io::Write;
 
 #[test]
 fn main () {
-	let mut args = std::env::args().collect::<Vec<_>>();
+	// let mut args = std::env::args().collect::<Vec<_>>();
 
-	let mut whitelisted_test = std::ptr::null();
-	if args.len() == 3 {
-		whitelisted_test = ManuallyDrop::new(CString::new(args.pop().unwrap()).unwrap()).as_ptr();
-	} else if args.len() > 3 {
-		eprintln!("usage: cargo test -- grug_tests <whitelisted_test>");
-		std::process::exit(2);
-	}
+	// let mut whitelisted_test = std::ptr::null();
+	// if args.len() == 3 {
+	// 	whitelisted_test = ManuallyDrop::new(CString::new(args.pop().unwrap()).unwrap()).as_ptr();
+	// } else if args.len() > 3 {
+	// 	eprintln!("usage: cargo test -- grug_tests <whitelisted_test>");
+	// 	std::process::exit(2);
+	// }
 	// let grug_path = &*args[1];
 	// println!("{}", grug_path);
 
 	// let 
 
-	let grug_tests_path = c"src/grug-tests/tests";
+	let grug_tests_path = nt!("src/grug-tests/tests");
 
-	let mut state = GrugState::new("src/grug-tests/mod_api.json", grug_tests_path.to_str().unwrap()).unwrap();
+	let mut state = GrugState::new("src/grug-tests/mod_api.json", grug_tests_path.as_str()).unwrap();
 	// register_game_functions(&mut state);
 	register_game_functions(&mut state);
 	// let game_functions = get_game_functions();
@@ -267,14 +267,15 @@ fn main () {
 	}));
 	unsafe {
 		grug_tests_run(
-			grug_tests_path.as_ptr(),
+			grug_tests_path.as_ntstrptr(),
 			compile_grug_file,
 			init_globals_fn_dispatcher,
 			on_fn_dispatcher,
 			dump_file_to_json,
 			generate_file_from_json,
 			game_fn_error,
-			whitelisted_test,
+			None,
+			// whitelisted_test,
 		)
 	}
 	_ = std::panic::take_hook();
