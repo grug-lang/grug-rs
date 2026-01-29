@@ -1,6 +1,7 @@
 #![deny(warnings)]
 #![allow(static_mut_refs)]
 use gruggers::state::GrugState;
+use gruggers::ntstring::NTStr;
 use gruggers::nt;
 
 mod test_bindings {
@@ -233,19 +234,17 @@ use std::io::Write;
 
 #[test]
 fn main () {
-	// let mut args = std::env::args().collect::<Vec<_>>();
+	let mut args = std::env::args().collect::<Vec<_>>();
 
-	// let mut whitelisted_test = std::ptr::null();
-	// if args.len() == 3 {
-	// 	whitelisted_test = ManuallyDrop::new(CString::new(args.pop().unwrap()).unwrap()).as_ptr();
-	// } else if args.len() > 3 {
-	// 	eprintln!("usage: cargo test -- grug_tests <whitelisted_test>");
-	// 	std::process::exit(2);
-	// }
-	// let grug_path = &*args[1];
-	// println!("{}", grug_path);
-
-	// let 
+	let mut whitelisted_test = None;
+	if args.len() == 3 {
+		let mut test = args.pop().unwrap();
+		test.push('\0');
+		whitelisted_test = unsafe{Some(NTStr::from_str_unchecked(String::leak(test)).as_ntstrptr())};
+	} else if args.len() > 3 {
+		eprintln!("usage: cargo test -- grug_tests <whitelisted_test>");
+		std::process::exit(2);
+	}
 
 	let grug_tests_path = nt!("src/grug-tests/tests");
 
@@ -274,8 +273,7 @@ fn main () {
 			dump_file_to_json,
 			generate_file_from_json,
 			game_fn_error,
-			None,
-			// whitelisted_test,
+			whitelisted_test,
 		)
 	}
 	_ = std::panic::take_hook();
