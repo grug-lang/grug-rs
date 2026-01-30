@@ -4,7 +4,7 @@ use std::ffi::{CStr, c_char};
 use std::ptr::NonNull;
 use std::marker::PhantomData;
 
-/// represents a null terminated utf-8 string
+/// represents a utf-8 string with a single null byte at the end.
 #[repr(transparent)]
 pub struct NTStr(str);
 
@@ -19,6 +19,11 @@ impl NTStr {
 		}
 	}
 
+	// Does not include the null byte
+	pub fn len(&self) -> usize {
+		self.0.len() - 1
+	}
+
 	pub fn as_str(&self) -> &str {
 		&self.0[..(self.0.len() - 1)]
 	}
@@ -27,13 +32,16 @@ impl NTStr {
 		&self.0
 	}
 
-	/// The last byte of `value` MUST be a null byte
+	/// The last byte of `value` MUST be a null byte and there must be no other null byte in between
 	pub unsafe fn from_str_unchecked(value: &str) -> &Self {
 		unsafe {std::mem::transmute::<&str, &NTStr>(value)}
 	}
 	
 	pub fn from_str(value: &str) -> Option<&NTStr> {
 		if *value.as_bytes().last()? == b'\0' {
+			for byte in &value.as_bytes()[0..value.len()-1] {
+				if *byte == b'\0' {return None}
+			}
 			// SAFETY: last byte (if it exists) is null
 			unsafe{Some(Self::from_str_unchecked(value))}
 		} else {
@@ -42,7 +50,8 @@ impl NTStr {
 	}
 
 	pub fn as_ntstrptr(&self) -> NTStrPtr<'_> {
-		unsafe{NTStrPtr(NonNull::new_unchecked(self.as_str().as_ptr().cast_mut().cast::<i8>()), PhantomData)}
+		// SAFETY There is a null byte at the self.len()
+		unsafe{NTStrPtr::new(NonNull::from_ref(&self.0).cast::<i8>())}
 	}
 }
 
@@ -72,12 +81,6 @@ impl std::ops::Deref for NTStr {
 	}
 }
 
-impl std::ops::DerefMut for NTStr {
-	fn deref_mut(&mut self) -> &mut Self::Target {
-		&mut self.0
-	}
-}
-
 impl AsRef<str> for NTStr {
 	fn as_ref(&self) -> &str {
 		&self.0[..(self.0.len() - 1)]
@@ -86,6 +89,7 @@ impl AsRef<str> for NTStr {
 
 impl AsRef<CStr> for NTStr {
 	fn as_ref(&self) -> &CStr {
+		// SAFETY: There is a single null byte at the end
 		unsafe{CStr::from_bytes_with_nul_unchecked(self.0.as_bytes())}
 	}
 }
@@ -118,11 +122,15 @@ pub struct NTStrPtr<'a>(NonNull<c_char>, PhantomData<&'a ()>);
 const _: () = const {assert!(std::mem::size_of::<NTStrPtr>() ==  std::mem::size_of::<Option<NTStrPtr>>())};
 
 impl<'a> NTStrPtr<'a> {
-	pub fn as_cstr(self) -> &'a CStr {
+	unsafe fn new (ptr: NonNull<c_char>) -> Self {
+		Self(ptr, PhantomData)
+	}
+
+	pub fn to_cstr(self) -> &'a CStr {
 		unsafe{CStr::from_ptr(self.0.as_ptr().cast_const())}
 	}
 
-	pub fn as_ntstr(self) -> &'a NTStr {
+	pub fn to_ntstr(self) -> &'a NTStr {
 		let mut i = 0;
 		loop {
 			// SAFETY: buffer is okay to read upto the next null byte
@@ -138,8 +146,19 @@ impl<'a> NTStrPtr<'a> {
 		}
 	}
 
-	pub fn as_str(self) -> &'a str {
-		self.as_ntstr().as_str()
+	pub fn to_str(self) -> &'a str {
+		self.to_ntstr().as_str_with_null()
+	}
+	
+	/// SAFETY: There must be at least one null byte within the str
+	pub unsafe fn from_str_unchecked(value: &'a str) -> Self {
+		unsafe{Self::new(NonNull::from_ref(value).cast::<c_char>())}
+	}
+	
+	/// Expects a single null byte at the end of the string and no null bytes
+	/// in the rest of the string
+	pub fn from_str(value: &'a str) -> Option<Self> {
+		Some(NTStr::from_str(value)?.as_ntstrptr())
 	}
 }
 
@@ -163,5 +182,33 @@ macro_rules! nt {
 			};
 			unsafe{::gruggers::ntstring::NTStr::from_str_unchecked(concat!($lit, "\0"))}
 		}
+	}
+}
+
+/// An owned string buffer with a single null byte at the end and no other null
+/// bytes in between
+pub struct NTString(String);
+
+impl NTString {
+	pub const fn new() -> Self {
+		Self(String::new())
+	}
+
+	pub fn from_string(mut value: String) -> Option<Self> {
+		for byte in &value.as_bytes()[0..value.len()-1] {
+			if *byte == b'\0' {return None}
+		}
+		match value.as_bytes().last() {
+			Some(b'\0') => (),
+			_ => value.push('\0'),
+		}
+		Some(Self(value))
+	}
+}
+
+impl AsRef<NTStr> for NTString {
+	fn as_ref(&self) -> &NTStr {
+		// SAFETY: inner string matches requirement of NTStr
+		unsafe{NTStr::from_str_unchecked(&*self.0)}
 	}
 }
