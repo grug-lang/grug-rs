@@ -184,31 +184,3 @@ macro_rules! nt {
 		}
 	}
 }
-
-/// An owned string buffer with a single null byte at the end and no other null
-/// bytes in between
-pub struct NTString(String);
-
-impl NTString {
-	pub const fn new() -> Self {
-		Self(String::new())
-	}
-
-	pub fn from_string(mut value: String) -> Option<Self> {
-		for byte in &value.as_bytes()[0..value.len()-1] {
-			if *byte == b'\0' {return None}
-		}
-		match value.as_bytes().last() {
-			Some(b'\0') => (),
-			_ => value.push('\0'),
-		}
-		Some(Self(value))
-	}
-}
-
-impl AsRef<NTStr> for NTString {
-	fn as_ref(&self) -> &NTStr {
-		// SAFETY: inner string matches requirement of NTStr
-		unsafe{NTStr::from_str_unchecked(&*self.0)}
-	}
-}
