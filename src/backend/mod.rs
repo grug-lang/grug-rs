@@ -730,37 +730,37 @@ pub struct ErasedBackend {
 
 pub struct BackendVTable {
 	/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
-	insert_file         : unsafe fn(data: NonNull<()>, path: *const u8, path_len: usize, file: GrugFile) -> GrugScriptId,
-	init_entity         : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> Result<(), RuntimeError>,
-	clear_entities      : fn(data: NonNull<()>),
-	destroy_entity_data : fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
+	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, path: *const u8, path_len: usize, file: GrugFile) -> GrugScriptId,
+	pub(crate) init_entity         : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> Result<(), RuntimeError>,
+	pub(crate) clear_entities      : fn(data: NonNull<()>),
+	pub(crate) destroy_entity_data : fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
 	/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
-	call_on_function_raw: unsafe fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError>,
-	call_on_function    : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError>,
+	pub(crate) call_on_function_raw: unsafe fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError>,
+	pub(crate) call_on_function    : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError>,
 	// destroys the resources owned by the backend
-	drop                : fn(data: NonNull<()>),
+	pub(crate) drop                : fn(data: NonNull<()>),
 }
 
-// unsafe impl Backend for ErasedBackend {
-// 	fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId {
-// 		unsafe{(self.vtable.insert_file)(self.data, path.as_ptr(), path.len(), file)}
-// 	}
-// 	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> Result<(), RuntimeError> {
-// 		(self.vtable.init_entity)(self.data, state, entity)
-// 	}
-// 	fn clear_entities(&mut self) {
-// 		(self.vtable.clear_entities)(self.data)
-// 	}
-// 	fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
-// 		(self.vtable.destroy_entity_data)(self.data, entity)
-// 	}
-// 	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError>{
-// 		unsafe{(self.vtable.call_on_function_raw)(self.data, state, entity, on_fn_id, values)}
-// 	}
-// 	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
-// 		(self.vtable.call_on_function)(self.data, state, entity, on_fn_id, values)
-// 	}
-// }
+impl ErasedBackend {
+	pub fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId {
+		unsafe{(self.vtable.insert_file)(self.data, path.as_ptr(), path.len(), file)}
+	}
+	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> Result<(), RuntimeError> {
+		(self.vtable.init_entity)(self.data, state, entity)
+	}
+	pub fn clear_entities(&mut self) {
+		(self.vtable.clear_entities)(self.data)
+	}
+	pub fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
+		(self.vtable.destroy_entity_data)(self.data, entity)
+	}
+	pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError>{
+		unsafe{(self.vtable.call_on_function_raw)(self.data, state, entity, on_fn_id, values)}
+	}
+	pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
+		(self.vtable.call_on_function)(self.data, state, entity, on_fn_id, values)
+	}
+}
 
 impl Drop for ErasedBackend {
 	fn drop (&mut self) {

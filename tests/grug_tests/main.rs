@@ -20,7 +20,7 @@ mod test_bindings {
 	pub extern "C" fn compile_grug_file(path: NTStrPtr<'static>) -> Option<NTStrPtr<'static>> {
 		unsafe {
 			GLOBAL_TEST_STATE.as_mut().unwrap().clear_entities();
-			let path = path.as_ntstr();
+			let path = path.to_ntstr();
 			CURRENT_PATH = Some(path);
 			match GLOBAL_TEST_STATE.as_mut().unwrap().compile_grug_file(path) {
 				Ok(id) => {
@@ -50,7 +50,7 @@ mod test_bindings {
 	#[allow(unused_variables)]
 	pub extern "C" fn on_fn_dispatcher (fn_name: NTStrPtr<'static>, values: *const GrugValue) {
 		unsafe {
-			let fn_name = fn_name.as_ntstr();
+			let fn_name = fn_name.to_ntstr();
 			let entity_type = PathBuf::from(CURRENT_PATH.unwrap().as_str());
 			let entity_type = entity_type
 				.file_prefix().unwrap()
@@ -80,8 +80,8 @@ mod test_bindings {
 	}
 	#[allow(unused_variables)]
 	pub extern "C" fn dump_file_to_json (input_grug_path: NTStrPtr<'static>, output_json_path: NTStrPtr<'static>) -> i32 {
-		let grug_path = input_grug_path.as_ntstr();
-		let json_path = output_json_path.as_ntstr();
+		let grug_path = input_grug_path.to_ntstr();
+		let json_path = output_json_path.to_ntstr();
 
 		match serde::dump_file_to_json(grug_path, json_path) {
 			Ok(()) => 0,
@@ -93,8 +93,8 @@ mod test_bindings {
 	}
 	#[allow(unused_variables)]
 	pub extern "C" fn generate_file_from_json (input_json_path: NTStrPtr<'static>, output_grug_path: NTStrPtr<'static>) -> i32 {
-		let output_grug_path = output_grug_path.as_ntstr();
-		let input_json_path = input_json_path.as_ntstr();
+		let output_grug_path = output_grug_path.to_ntstr();
+		let input_json_path = input_json_path.to_ntstr();
 
 		match serde::generate_file_from_json(input_json_path, output_grug_path) {
 			Ok(()) => 0,
@@ -107,7 +107,7 @@ mod test_bindings {
 	#[allow(unused_variables)]
 	pub extern "C" fn game_fn_error (msg: NTStrPtr<'static>) {
 		unsafe {
-			GLOBAL_TEST_STATE.as_ref().unwrap().set_error(msg.as_ntstr())
+			GLOBAL_TEST_STATE.as_ref().unwrap().set_error(msg.to_ntstr())
 		}
 	}
 
