@@ -29,8 +29,8 @@ fn main () {
 	let on_bark_id = state.get_on_fn_id("Dog", "on_bark").unwrap();
 
 	loop {
-		state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: c"woof".as_ptr().cast()}]).unwrap();
-		state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: c"arf".as_ptr().cast()}]).unwrap();
+		if state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: c"woof".as_ptr().cast()}]) {panic!()};
+		if state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: c"arf".as_ptr().cast()}]) {panic!()};
 		std::thread::sleep(Duration::from_secs(1));
 	}
 }

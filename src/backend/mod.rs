@@ -1,6 +1,5 @@
 use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugScriptId, GrugEntity, GrugOnFnId, GrugValue};
 use crate::state::GrugState;
-use crate::error::RuntimeError;
 
 use std::ptr::NonNull;
 
@@ -125,15 +124,28 @@ pub mod interpreter {
 			}
 		}
 
+		// This should only happen during an error so its okay if its slow
+		pub fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str> {
+			// a path is never replaced once it is inserted into the map;
+			let string: &str = unsafe{&*(&**self.file_id_map.find_key(&script_id)? as *const _)};
+			Some(string)
+		}
+		
+		// This should only happen during an error so its okay if its slow
+		pub fn get_on_function_name(&self, script_id: GrugScriptId, on_fn_id: GrugOnFnId) -> Option<&str> {
+			Some(&self.files.get(&script_id)?.file.on_functions.get(on_fn_id as usize - 1)?.as_ref()?.name)
+		}
+
 		fn get_next_script_id(&self) -> GrugScriptId {
 			let id = self.next_id.get();
 			self.next_id.set(id + 1);
 			GrugId::new(id)
 		}
 
-		fn run_function(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Result<GrugValue, RuntimeError> {
+		fn run_function(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Option<GrugValue> {
 			if call_stack.local_variables.len() > MAX_RECURSION_LIMIT {
-				return Err(RuntimeError::StackOverflow)
+				state.set_runtime_error(RuntimeError::StackOverflow);
+				return None
 			}
 			if arguments.len() != values.len() {
 				panic!("argument count mismatch")
@@ -154,10 +166,10 @@ pub mod interpreter {
 
 			call_stack.pop_scope();
 			call_stack.pop_stack_frame();
-			Ok(value)
+			Some(value)
 		}
 
-		fn run_statements(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, statements: &[Statement]) -> Result<GrugControlFlow, RuntimeError> {
+		fn run_statements(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, statements: &[Statement]) -> Option<GrugControlFlow> {
 			call_stack.push_scope();
 			let mut ret_val = GrugControlFlow::None;
 			'outer: for statement in statements {
@@ -274,14 +286,15 @@ pub mod interpreter {
 				}
 			}
 			call_stack.pop_scope();
-			Ok(ret_val)
+			Some(ret_val)
 		}
 
-		fn run_expr(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, expr: &Expr) -> Result<GrugValue, RuntimeError> {
+		fn run_expr(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, expr: &Expr) -> Option<GrugValue> {
 			if Instant::elapsed(&state.call_start_time.get()) > Duration::from_millis(ON_FN_TIME_LIMIT) {
-				return Err(RuntimeError::ExceededTimeLimit);
+				state.set_runtime_error(RuntimeError::ExceededTimeLimit);
+				return None;
 			}
-			Ok(match &expr.ty {
+			Some(match &expr.ty {
 				ExprType::LiteralExpr{
 					expr,
 					line: _,
@@ -381,12 +394,12 @@ pub mod interpreter {
 					line: _,
 					col: _,
 				} if function_name.starts_with("helper_") => {
-					let values = arguments.iter().map(|argument| self.run_expr(call_stack, state, file, entity, argument)).collect::<Result<Vec<_>, _>>()?;
+					let values = arguments.iter().map(|argument| self.run_expr(call_stack, state, file, entity, argument)).collect::<Option<Vec<_>>>()?;
 					for helper_fn in &file.file.helper_functions {
 						if helper_fn.name != *function_name {
 							continue;
 						}
-						return Ok(self.run_function(call_stack, state, file, entity, &*helper_fn.arguments, &values, &*helper_fn.body_statements)?);
+						return Some(self.run_function(call_stack, state, file, entity, &*helper_fn.arguments, &values, &*helper_fn.body_statements)?);
 					}
 					unreachable!("helper function not found");
 				}
@@ -396,7 +409,7 @@ pub mod interpreter {
 					line: _,
 					col: _,
 				} => {
-					let values = arguments.iter().map(|argument| self.run_expr(call_stack, state, file, entity, argument)).collect::<Result<Vec<_>, _>>()?;
+					let values = arguments.iter().map(|argument| self.run_expr(call_stack, state, file, entity, argument)).collect::<Option<Vec<_>>>()?;
 					let game_fn = state.game_functions.get(&**function_name).expect("can't find game function");
 					let return_ty = &state.mod_api.game_functions().get(function_name).unwrap().return_ty;
 					let ret_val = match (values.len(), return_ty) {
@@ -405,8 +418,8 @@ pub mod interpreter {
 						(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
 						(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
 					};
-					if let Some(_) = state.error.get() {
-						return Err(RuntimeError::GameFunctionError);
+					if state.is_errorring.get() {
+						return None;
 					}
 					ret_val
 				}
@@ -420,11 +433,12 @@ pub mod interpreter {
 			})
 		}
 
-		pub(crate) fn init_global_exprs(&self, state: &GrugState, entity: &mut GrugEntityData, expr: &Expr) -> Result<GrugValue, RuntimeError> {
+		pub(crate) fn init_global_exprs(&self, state: &GrugState, entity: &mut GrugEntityData, expr: &Expr) -> Option<GrugValue> {
 			if Instant::elapsed(&state.call_start_time.get()) > Duration::from_millis(ON_FN_TIME_LIMIT) {
-				return Err(RuntimeError::ExceededTimeLimit);
+				state.set_runtime_error(RuntimeError::ExceededTimeLimit);
+				return None;
 			}
-			Ok(match &expr.ty {
+			Some(match &expr.ty {
 				ExprType::LiteralExpr{
 					expr,
 					line: _,
@@ -521,7 +535,7 @@ pub mod interpreter {
 					col: _,
 				} => {
 					debug_assert!(!function_name.starts_with("on_") && !function_name.starts_with("helper_"));
-					let values = arguments.iter().map(|argument| self.init_global_exprs(state, entity, argument)).collect::<Result<Vec<_>, _>>()?;
+					let values = arguments.iter().map(|argument| self.init_global_exprs(state, entity, argument)).collect::<Option<Vec<_>>>()?;
 					let game_fn = state.game_functions.get(&**function_name).expect("can't find game function");
 					let return_ty = &state.mod_api.game_functions().get(function_name).unwrap().return_ty;
 					let ret_val = match (values.len(), return_ty) {
@@ -530,8 +544,8 @@ pub mod interpreter {
 						(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
 						(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
 					};
-					if let Some(_) = state.error.get() {
-						return Err(RuntimeError::GameFunctionError)
+					if let true = state.is_errorring.get() {
+						return None;
 					}
 					ret_val
 				}
@@ -545,14 +559,14 @@ pub mod interpreter {
 			})
 		}
 
-		fn init_global_variables(&self, state: &GrugState, entity: &mut GrugEntityData, globals: &[GlobalVariable]) -> Result<(), RuntimeError> {
+		fn init_global_variables(&self, state: &GrugState, entity: &mut GrugEntityData, globals: &[GlobalVariable]) -> Option<()> {
 			state.call_start_time.set(Instant::now());
 			globals.iter().map(|variable| {
 				let value = self.init_global_exprs(state, entity, &variable.assignment_expr)?;
 				entity.global_variables.insert(Arc::clone(&variable.name), Cell::new(value));
-				Ok(())
-			}).collect::<Result<Vec<_>, _>>()?;
-			Ok(())
+				Some(())
+			}).collect::<Option<Vec<_>>>()?;
+			Some(())
 		}
 	}
 
@@ -574,20 +588,22 @@ pub mod interpreter {
 			}
 		}
 
-		fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> Result<(), RuntimeError> {
+		fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
 			let file = self.files.get(&entity.file_id)
 				.expect("file already compiled");
 
 			let mut data = GrugEntityData {
 				global_variables: HashMap::from([(Arc::from("me"), Cell::new(GrugValue{id:entity.id}))]),
 			};
-			self.init_global_variables(state, &mut data, &file.file.global_variables)?;
+			if self.init_global_variables(state, &mut data, &file.file.global_variables).is_none() {
+				return false;
+			}
 
 			let data = unsafe{file.data.insert(data)};
 			file.entities.borrow_mut().push(NonNull::from_ref(entity));
 			entity.members.set(data.as_ptr());
 
-			Ok(())
+			true
 		}
 
 		fn clear_entities(&mut self) {
@@ -607,11 +623,11 @@ pub mod interpreter {
 			return true;
 		}
 
-		unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
+		unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
 			let file = &self.files.get(&entity.file_id)
 				.expect("file already created");
 
-			let Some(on_function) = &file.file.on_functions[on_fn_id as usize] else {
+			let Some(on_function) = &file.file.on_functions[on_fn_id as usize - 1] else {
 				panic!("function not available");
 			};
 
@@ -630,15 +646,14 @@ pub mod interpreter {
 				&on_function.arguments, 
 				values,
 				&on_function.body_statements
-			)?;
-			Ok(())
+			).is_some()
 		}
 
-		fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
+		fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
 			let file = &self.files.get(&entity.file_id)
 				.expect("file already created");
 
-			let Some(on_function) = &file.file.on_functions[on_fn_id as usize] else {
+			let Some(on_function) = &file.file.on_functions[on_fn_id as usize - 1] else {
 				panic!("function not available");
 			};
 
@@ -651,8 +666,7 @@ pub mod interpreter {
 				&on_function.arguments, 
 				values,
 				&on_function.body_statements
-			)?;
-			Ok(())
+			).is_some()
 		}
 	}
 }
@@ -680,7 +694,8 @@ pub unsafe trait Backend {
 	/// within self so that it can be used during `destroy_entity_data` to
 	/// check for pointer equality. 
 	/// It is safe to use that pointer as a &GrugEntity in the meantime.
-	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> Result<(), RuntimeError>;
+	#[must_use]
+	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool;
 	/// Deinitialize all the data associated with all entities. The pointers
 	/// stored during `init_entity` must be used to get access to the entity data.
 	/// The entities can only be accessed as a &GrugEntity even self is available with an exclusive reference
@@ -697,6 +712,7 @@ pub unsafe trait Backend {
 	///	MUST be removed from storage.
 	///
 	/// It is safe to never deinitialize the data and return false everytime. 
+	#[must_use]
 	fn destroy_entity_data(&self, entity: &GrugEntity) -> bool;
 
 	/// Run the on function with id `on_fn_id` of the script associated with `entity`.
@@ -710,7 +726,8 @@ pub unsafe trait Backend {
 	/// many elements as the number of arguments to the on_ function
 	///
 	/// If the number of arguments is 0, then `values` is allowed to be null
-	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError>;
+	#[must_use]
+	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool;
 	/// Run the on function with id `on_fn_id` of the script associated with `entity`.
 	/// The id of an on_ function is based on its order within mod_Api.json. 
 	///
@@ -720,7 +737,8 @@ pub unsafe trait Backend {
 	///
 	/// # Panics: The length of `values` must exactly match the number of
 	/// expected arguments to the on_ function
-	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError>;
+	#[must_use]
+	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool;
 }
 
 // This check ensures that c code can safely zero the backend field in GrugInitSettings
@@ -737,12 +755,12 @@ pub struct ErasedBackend {
 pub struct BackendVTable {
 	/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
 	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, path: *const u8, path_len: usize, file: GrugFile) -> GrugScriptId,
-	pub(crate) init_entity         : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> Result<(), RuntimeError>,
+	pub(crate) init_entity         : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
 	pub(crate) clear_entities      : fn(data: NonNull<()>),
 	pub(crate) destroy_entity_data : fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
 	/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
-	pub(crate) call_on_function_raw: unsafe fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError>,
-	pub(crate) call_on_function    : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError>,
+	pub(crate) call_on_function_raw: unsafe fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool,
+	pub(crate) call_on_function    : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool,
 	// destroys the resources owned by the backend
 	pub(crate) drop                : fn(data: NonNull<()>),
 }
@@ -751,7 +769,7 @@ impl ErasedBackend {
 	pub fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId {
 		unsafe{(self.vtable.insert_file)(self.data, path.as_ptr(), path.len(), file)}
 	}
-	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> Result<(), RuntimeError> {
+	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
 		(self.vtable.init_entity)(self.data, state, entity)
 	}
 	pub fn clear_entities(&mut self) {
@@ -760,10 +778,10 @@ impl ErasedBackend {
 	pub fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
 		(self.vtable.destroy_entity_data)(self.data, entity)
 	}
-	pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError>{
+	pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
 		unsafe{(self.vtable.call_on_function_raw)(self.data, state, entity, on_fn_id, values)}
 	}
-	pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
+	pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
 		(self.vtable.call_on_function)(self.data, state, entity, on_fn_id, values)
 	}
 }
@@ -783,7 +801,7 @@ impl<T: Backend> From<T> for ErasedBackend {
 				file
 			)
 		}
-		fn init_entity<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> Result<(), RuntimeError> {
+		fn init_entity<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool {
 			T::init_entity(
 				unsafe{data.cast::<T>().as_ref()},
 				state, 
@@ -803,7 +821,7 @@ impl<T: Backend> From<T> for ErasedBackend {
 			)
 		}
 		/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
-		unsafe fn call_on_function_raw<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
+		unsafe fn call_on_function_raw<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
 			unsafe{T::call_on_function_raw(
 				data.cast::<T>().as_ref(),
 				state, 
@@ -812,7 +830,7 @@ impl<T: Backend> From<T> for ErasedBackend {
 				values
 			)}
 		}
-		fn call_on_function<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
+		fn call_on_function<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
 			T::call_on_function(
 				unsafe{data.cast::<T>().as_ref()},
 				state, 

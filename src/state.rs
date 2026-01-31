@@ -1,9 +1,8 @@
 use crate::mod_api::{ModApi, get_mod_api};
 use crate::error::{GrugError, RuntimeError};
-use crate::backend::{Interpreter, ErasedBackend};
+use crate::backend::{Backend, Interpreter, ErasedBackend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
 use crate::xar::Xar;
-use crate::ntstring::NTStr;
 
 use std::marker::PhantomData;
 use std::ptr::NonNull;
@@ -14,8 +13,8 @@ use std::sync::{atomic::{AtomicU64, Ordering}};
 use std::time::Instant;
 
 #[repr(C)]
-struct RuntimeErrorHandler {
-	data: Option<NonNull<()>>,
+pub struct RuntimeErrorHandler {
+	data: NonNull<()>,
 	drop: Option<extern "C" fn(data: Option<NonNull<()>>)>,
 	func: Option<for<'b> extern "C" fn(
 		data: NonNull<()>, 
@@ -32,10 +31,24 @@ struct RuntimeErrorHandler {
 impl RuntimeErrorHandler {
 	pub const fn new () -> Self {
 		Self {
-			data: None,
-			drop: None,
-			func: None,
+			data: NonNull::dangling(),
+			drop: None, 
+			func: None
 		}
+	}
+	fn handle_error(&self, kind: RuntimeError, message: &str, on_fn_name: &str, script_path: &str) {
+		if let Some(func) = self.func {
+			func(
+				self.data,
+				kind.into_code(),
+				NonNull::from_ref(message).cast::<u8>(),
+				message.len(),
+				NonNull::from_ref(on_fn_name).cast::<u8>(),
+				on_fn_name.len(),
+				NonNull::from_ref(script_path).cast::<u8>(),
+				script_path.len(),
+			)
+		} 
 	}
 }
 impl Default for RuntimeErrorHandler {
@@ -44,10 +57,10 @@ impl Default for RuntimeErrorHandler {
 	}
 }
 
-impl<F: for<'b> Fn(&'b str, u32, &'b str, &'b str)> From<F> for RuntimeErrorHandler {
+impl<F: for<'b> Fn(u32, &'b str, &'b str, &'b str)> From<F> for RuntimeErrorHandler {
 	fn from(f: F) -> Self {
 		let f = unsafe{NonNull::new_unchecked(Box::into_raw(Box::new(f)))}.cast::<()>();
-		extern "C" fn handler<F: for<'a> Fn(&'a str, u32, &'a str, &'a str)> (
+		extern "C" fn handler<F: for<'a> Fn(u32, &'a str, &'a str, &'a str)> (
 			data: NonNull<()>, 
 			err_kind: u32, 
 			reason: NonNull<u8>,
@@ -58,8 +71,8 @@ impl<F: for<'b> Fn(&'b str, u32, &'b str, &'b str)> From<F> for RuntimeErrorHand
 			script_path_len: usize,
 		) {
 			unsafe{(data.cast::<F>().as_ref())(
-				std::str::from_utf8_unchecked(std::slice::from_raw_parts(reason.as_ptr(), reason_len)),
 				err_kind,
+				std::str::from_utf8_unchecked(std::slice::from_raw_parts(reason.as_ptr(), reason_len)),
 				std::str::from_utf8_unchecked(std::slice::from_raw_parts(on_fn_name.as_ptr(), on_fn_name_len)),
 				std::str::from_utf8_unchecked(std::slice::from_raw_parts(script_path.as_ptr(), script_path_len)),
 			)};
@@ -68,7 +81,7 @@ impl<F: for<'b> Fn(&'b str, u32, &'b str, &'b str)> From<F> for RuntimeErrorHand
 			data.map(|x| unsafe{Box::from_raw(x.cast::<F>().as_ptr())});
 		}
 		Self {
-			data: Some(f),
+			data: f,
 			drop: Some(drop::<F> as extern "C" fn(_)),
 			func: Some(handler::<F> as extern "C" fn (_, _, _, _, _, _, _, _)),
 		}
@@ -123,12 +136,12 @@ impl<'a> GrugInitSettings<'a> {
 		self
 	}
 
-	pub fn set_backend(&mut self, backend: ErasedBackend) -> &mut Self {
-		self.backend = Some(backend);
+	pub fn set_backend<B: Backend>(&mut self, backend: B) -> &mut Self {
+		self.backend = Some(backend.into());
 		self
 	}
 
-	pub fn set_runtime_error_handler<F: for<'b> Fn(&'b str, u32, &'b str, &'b str)> (&mut self, f: F) -> &mut Self {
+	pub fn set_runtime_error_handler<F: for<'b> Fn(u32, &'b str, &'b str, &'b str)> (&mut self, f: F) -> &mut Self {
 		self.runtime_error_handler = f.into();
 		self
 	}
@@ -138,7 +151,8 @@ impl<'a> GrugInitSettings<'a> {
 			.unwrap_or("./mod_api.json");
 		let mods_dir_path = Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)
 			.unwrap_or("./mods");
-		GrugState::new(mod_api_path, mods_dir_path)
+
+		GrugState::new(mod_api_path, mods_dir_path, std::mem::take(&mut self.runtime_error_handler))
 	}
 
 	fn maybe_nt_or_length(ptr: Option<NonNull<u8>>, len: usize) -> Option<&'a str> {
@@ -169,28 +183,30 @@ impl Default for GrugInitSettings<'static> {
 	}
 }
 
-// pub fn default_runtime_error_handler(_err_kind: u32, reason: &'a str, on_fn_name: &str, script_path: &str) {
-// 	println!("Runtime Error: {} in function {} in script {}", reason, on_fn_name, script_path);
-// 	std::process::exit(1);
-// }
+pub fn default_runtime_error_handler(_err_kind: u32, reason: &str, on_fn_name: &str, script_path: &str) {
+	println!("Runtime Error: {} in function {} in script {}", reason, on_fn_name, script_path);
+	std::process::exit(1);
+}
 
 pub struct GrugState {
 	pub(crate) mod_api: ModApi,
 	pub(crate) mods_dir_path: PathBuf,
 	pub(crate) next_id: AtomicU64,
 	pub(crate) game_functions: HashMap<&'static str, GameFnPtr>,
+	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
 	pub(crate) entities: Xar<GrugEntity>,
 	
-	pub(crate) backend: ErasedBackend,
-	// should be moved into backend later
-	pub(crate)call_start_time: Cell<Instant>,
-	pub(crate)error: Cell<Option<&'static NTStr>>,
-	pub handled_error: Cell<bool>,
+	// pub(crate) backend: ErasedBackend,
+	pub(crate) backend: Interpreter,
+	pub(crate) current_script: Cell<Option<GrugScriptId>>,
+	pub(crate) current_on_fn_id: Cell<Option<GrugOnFnId>>,
+	pub(crate) call_start_time: Cell<Instant>,
+	pub(crate) is_errorring: Cell<bool>,
 }
 
 impl GrugState {
-	fn new<J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D) -> Result<Self, GrugError> {
+	fn new<J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, handler: RuntimeErrorHandler) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api(&mod_api_path)?;
 
 		Ok(Self {
@@ -198,11 +214,13 @@ impl GrugState {
 			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
 			next_id: AtomicU64::new(0),
 			game_functions: HashMap::new(),
+			runtime_error_handler: handler,
 			entities: Xar::new(),
 			backend: Interpreter::new().into(),
+			current_script: Cell::new(None),
+			current_on_fn_id: Cell::new(None),
 			call_start_time: Cell::new(Instant::now()),
-			error: Cell::new(None),
-			handled_error: Cell::new(false),
+			is_errorring: Cell::new(false),
 		})
 	}
 
@@ -216,7 +234,7 @@ impl GrugState {
 				entity_type: String::from(entity_type), 
 				on_function_name: String::from(on_fn_name)}
 			)?
-			.0 as u64)
+			.0 as u64 + 1)
 	}
 
 	pub fn register_game_fn<F: Into<GameFnPtr>>(&mut self, name: &'static str, ptr: F) -> Result<(), StateError> {
@@ -261,11 +279,25 @@ impl GrugState {
 		self.next_id.store(next_id, Ordering::Relaxed);
 	}
 
-	pub fn create_entity(&self, file_id: GrugScriptId) -> Result<GrugEntityHandle<'_>, RuntimeError> {
+	pub fn create_entity(&self, file_id: GrugScriptId) -> Option<GrugEntityHandle<'_>> {
+		let old_script   = self.current_script  .get();
+		let old_on_fn_id = self.current_on_fn_id.get();
+		self.current_script  .set(Some(file_id));
+		self.current_on_fn_id.set(Some(0));
+
 		let entity = self.entities.insert(unsafe{GrugEntity::new_uninit(self.get_id(), file_id)});
 		let entity = unsafe{GrugEntityHandle::new(entity)};
-		self.backend.init_entity(self, &entity)?;
-		Ok(entity)
+		let success = self.backend.init_entity(self, &entity);
+
+		self.current_script  .set(old_script);
+		self.current_on_fn_id.set(old_on_fn_id);
+
+		if success {
+			Some(entity)
+		} else {
+			unsafe{self.entities.delete(entity.into_inner());}
+			None
+		}
 	}
 
 	pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) {
@@ -277,27 +309,35 @@ impl GrugState {
 		}
 	}
 
+	pub fn set_runtime_error(&self, error: RuntimeError) {
+		self.is_errorring.set(true);
+		let Some(current_script) = self.current_script.get() else {
+			return
+		};
+		let Some(current_on_fn_id) = self.current_on_fn_id.get() else {
+			return
+		};
+		let current_on_fn_name = if current_on_fn_id == 0 {
+			"init_globals"
+		} else {
+			self.backend.get_on_function_name(current_script, current_on_fn_id).unwrap()
+		};
+		let message = format!("{}", error);
+		self.runtime_error_handler.handle_error(
+			error, 
+			&message,
+			current_on_fn_name,
+			self.backend.get_script_path(current_script).unwrap(),
+		);
+	}
+
 	pub fn clear_entities(&mut self) {
 		self.backend.clear_entities();
 		self.entities.clear();
 	}
 
 	pub fn clear_error(&self) {
-		self.error.set(None);
-		self.handled_error.set(false);
-	}
-
-	pub fn get_error(&self) -> Option<&'static NTStr> {
-		self.error.get()
-	}
-
-	pub fn set_error(&self, error: &'static NTStr) {
-		self.error.set(Some(error));
-		self.handled_error.set(false);
-	}
-
-	pub fn set_handled_error(&self) {
-		self.handled_error.set(true);
+		self.is_errorring.set(false);
 	}
 }
 
@@ -307,14 +347,36 @@ impl GrugState {
 	/// `values` must point to an array of values with length equal to
 	/// the number of arguments expected by `function_name`. If there are no arguments, 
 	/// `values` may be null
-	pub unsafe fn call_on_function_raw(&self, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> Result<(), RuntimeError> {
-		unsafe {
+	#[must_use]
+	pub unsafe fn call_on_function_raw(&self, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
+		let old_script   = self.current_script  .get();
+		let old_on_fn_id = self.current_on_fn_id.get();
+		self.current_script  .set(Some(entity.file_id));
+		self.current_on_fn_id.set(Some(on_fn_id));
+
+		let ret_val = unsafe {
 			self.backend.call_on_function_raw(self, entity, on_fn_id, values)
-		}
+		};
+
+		self.current_script  .set(old_script);
+		self.current_on_fn_id.set(old_on_fn_id);
+
+		ret_val
 	}
 
-	pub fn call_on_function(&self, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError> {
-		self.backend.call_on_function(self, entity, on_fn_id, values)
+	#[must_use]
+	pub fn call_on_function(&self, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
+		let old_script   = self.current_script  .get();
+		let old_on_fn_id = self.current_on_fn_id.get();
+		self.current_script  .set(Some(entity.file_id));
+		self.current_on_fn_id.set(Some(on_fn_id));
+
+		let ret_val = self.backend.call_on_function(self, entity, on_fn_id, values);
+
+		self.current_script  .set(old_script);
+		self.current_on_fn_id.set(old_on_fn_id);
+
+		ret_val
 	}
 }
 

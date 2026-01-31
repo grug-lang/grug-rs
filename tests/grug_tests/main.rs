@@ -1,7 +1,7 @@
 #![deny(warnings)]
 #![allow(static_mut_refs)]
 use gruggers::state::GrugInitSettings;
-use gruggers::ntstring::NTStr;
+use gruggers::ntstring::{NTStr, NTStrPtr};
 use gruggers::nt;
 
 mod test_bindings {
@@ -59,23 +59,8 @@ mod test_bindings {
 				.1;
 			let fn_id = GLOBAL_TEST_STATE.as_ref().unwrap().get_on_fn_id(entity_type, fn_name).unwrap();
 			
-			let (kind, msg) = match GLOBAL_TEST_STATE.as_ref().unwrap()
-				.call_on_function_raw(&CURRENT_GRUG_ENTITY.as_ref().unwrap(), fn_id, values)
-			{
-				Err(RuntimeError::StackOverflow) => (0, (format!("{}\0", RuntimeError::StackOverflow))),
-				Err(RuntimeError::ExceededTimeLimit) => (1, (format!("{}\0", RuntimeError::ExceededTimeLimit))),
-				Err(err@RuntimeError::GameFunctionError{..}) => (2, String::from(GLOBAL_TEST_STATE.as_ref().unwrap().get_error().unwrap())),
-				Ok(_) => return,
-			};
-			if !GLOBAL_TEST_STATE.as_ref().unwrap().handled_error.get() {
-				GLOBAL_TEST_STATE.as_ref().unwrap().set_handled_error();
-				grug_tests_runtime_error_handler(
-					NTStr::from_str(String::leak(msg)).unwrap().as_ntstrptr(),
-					kind,
-					fn_name.as_ntstrptr(),
-					CURRENT_PATH.as_ref().unwrap().as_ntstrptr(),
-				);
-			}
+			_ = GLOBAL_TEST_STATE.as_ref().unwrap()
+				.call_on_function_raw(&CURRENT_GRUG_ENTITY.as_ref().unwrap(), fn_id, values);
 		}
 	}
 	#[allow(unused_variables)]
@@ -107,7 +92,7 @@ mod test_bindings {
 	#[allow(unused_variables)]
 	pub extern "C" fn game_fn_error (msg: NTStrPtr<'static>) {
 		unsafe {
-			GLOBAL_TEST_STATE.as_ref().unwrap().set_error(msg.to_ntstr())
+			GLOBAL_TEST_STATE.as_ref().unwrap().set_runtime_error(RuntimeError::GameFunctionError{message: msg.to_str()});
 		}
 	}
 
@@ -128,11 +113,11 @@ mod test_bindings {
 
 	#[link(name="tests", kind="dylib")]
 	unsafe extern "C" {
-		pub fn grug_tests_runtime_error_handler(
-			reason: NTStrPtr<'static>,
+		pub fn grug_tests_runtime_error_handler<'a>(
+			reason: NTStrPtr<'a>,
 			ty: i32,
-			on_fn_name: NTStrPtr<'static>,
-			on_fn_path: NTStrPtr<'static>,
+			on_fn_name: NTStrPtr<'a>,
+			on_fn_path: NTStrPtr<'a>,
 		);
 		pub fn grug_tests_run(
 			tests_dir_path_: NTStrPtr<'static>, 
@@ -251,6 +236,21 @@ fn main () {
 	let mut state = GrugInitSettings::new()
 		.set_mod_api_path("src/grug-tests/mod_api.json")
 		.set_mods_dir(grug_tests_path.as_str())
+		.set_runtime_error_handler(|kind, msg, fn_name, script_path| {
+			let mut msg = String::from(msg);
+			msg.push('\0');
+			let mut fn_name = String::from(fn_name);
+			fn_name.push('\0');
+			let mut script_path = String::from(script_path);
+			script_path.push('\0');
+			unsafe{
+				grug_tests_runtime_error_handler (
+				NTStrPtr::from_str_unchecked(&msg),
+				kind as i32,
+				NTStrPtr::from_str_unchecked(&fn_name),
+				NTStrPtr::from_str_unchecked(&script_path),
+			)};
+		})
 		.build_state().unwrap();
 	// register_game_functions(&mut state);
 	register_game_functions(&mut state);

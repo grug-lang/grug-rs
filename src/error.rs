@@ -63,15 +63,25 @@ pub const ON_FN_TIME_LIMIT: u64 = 100; // ms
 
 pub const MAX_RECURSION_LIMIT: usize = 100;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[repr(u32)]
 pub enum RuntimeError {
-	ExceededTimeLimit = 0,
-	StackOverflow = 1,
-	GameFunctionError = 2,
-	// GameFunctionError{
-	// 	message: &'static str,
-	// },
+	ExceededTimeLimit,
+	StackOverflow,
+	// GameFunctionError,
+	GameFunctionError{
+		message: &'static str,
+	},
+}
+
+impl RuntimeError {
+	pub fn into_code(self) -> u32 {
+		match self {
+			Self::StackOverflow         => 0,
+			Self::ExceededTimeLimit     => 1,
+			Self::GameFunctionError{..} => 2,
+		}
+	}
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -79,7 +89,7 @@ impl std::fmt::Display for RuntimeError {
 		match self {
 			Self::ExceededTimeLimit => write!(f, "Took longer than {} milliseconds to run", ON_FN_TIME_LIMIT),
 			Self::StackOverflow => write!(f, "Stack overflow, so check for accidental infinite recursion"),
-			Self::GameFunctionError => write!(f, "game function error: "),
+			Self::GameFunctionError{message} => write!(f, "{}", message),
 		}
 	}
 }
