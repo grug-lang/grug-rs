@@ -51,7 +51,7 @@ impl NTStr {
 
 	pub fn as_ntstrptr(&self) -> NTStrPtr<'_> {
 		// SAFETY There is a null byte at the self.len()
-		unsafe{NTStrPtr::new(NonNull::from_ref(&self.0).cast::<i8>())}
+		unsafe{NTStrPtr::from_ptr(NonNull::from_ref(&self.0).cast::<i8>())}
 	}
 }
 
@@ -122,7 +122,7 @@ pub struct NTStrPtr<'a>(NonNull<c_char>, PhantomData<&'a ()>);
 const _: () = const {assert!(std::mem::size_of::<NTStrPtr>() ==  std::mem::size_of::<Option<NTStrPtr>>())};
 
 impl<'a> NTStrPtr<'a> {
-	unsafe fn new (ptr: NonNull<c_char>) -> Self {
+	pub unsafe fn from_ptr (ptr: NonNull<c_char>) -> Self {
 		Self(ptr, PhantomData)
 	}
 
@@ -152,7 +152,7 @@ impl<'a> NTStrPtr<'a> {
 	
 	/// SAFETY: There must be at least one null byte within the str
 	pub unsafe fn from_str_unchecked(value: &'a str) -> Self {
-		unsafe{Self::new(NonNull::from_ref(value).cast::<c_char>())}
+		unsafe{Self::from_ptr(NonNull::from_ref(value).cast::<c_char>())}
 	}
 	
 	/// Expects a single null byte at the end of the string and no null bytes

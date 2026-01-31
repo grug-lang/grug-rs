@@ -197,8 +197,8 @@ pub struct GrugState {
 
 	pub(crate) entities: Xar<GrugEntity>,
 	
-	// pub(crate) backend: ErasedBackend,
-	pub(crate) backend: Interpreter,
+	pub(crate) backend: ErasedBackend,
+	// pub(crate) backend: Interpreter,
 	pub(crate) current_script: Cell<Option<GrugScriptId>>,
 	pub(crate) current_on_fn_id: Cell<Option<GrugOnFnId>>,
 	pub(crate) call_start_time: Cell<Instant>,

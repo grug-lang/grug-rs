@@ -1,5 +1,6 @@
 use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugScriptId, GrugEntity, GrugOnFnId, GrugValue};
 use crate::state::GrugState;
+use crate::ntstring::NTStrPtr;
 
 use std::ptr::NonNull;
 
@@ -122,18 +123,6 @@ pub mod interpreter {
 				file_id_map: CacheMap::new(),
 				next_id: Cell::new(0),
 			}
-		}
-
-		// This should only happen during an error so its okay if its slow
-		pub fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str> {
-			// a path is never replaced once it is inserted into the map;
-			let string: &str = unsafe{&*(&**self.file_id_map.find_key(&script_id)? as *const _)};
-			Some(string)
-		}
-		
-		// This should only happen during an error so its okay if its slow
-		pub fn get_on_function_name(&self, script_id: GrugScriptId, on_fn_id: GrugOnFnId) -> Option<&str> {
-			Some(&self.files.get(&script_id)?.file.on_functions.get(on_fn_id as usize - 1)?.as_ref()?.name)
 		}
 
 		fn get_next_script_id(&self) -> GrugScriptId {
@@ -571,6 +560,18 @@ pub mod interpreter {
 	}
 
 	unsafe impl Backend for Interpreter {
+		// This should only happen during an error so its okay if its slow
+		fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str> {
+			// a path is never replaced once it is inserted into the map;
+			let string: &str = unsafe{&*(&**self.file_id_map.find_key(&script_id)? as *const _)};
+			Some(string)
+		}
+		
+		// This should only happen during an error so its okay if its slow
+		fn get_on_function_name(&self, script_id: GrugScriptId, on_fn_id: GrugOnFnId) -> Option<&str> {
+			Some(&self.files.get(&script_id)?.file.on_functions.get(on_fn_id as usize - 1)?.as_ref()?.name)
+		}
+
 		fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId {
 			match self.file_id_map.get(path) {
 				Some(id) => {	
@@ -673,6 +674,15 @@ pub mod interpreter {
 pub use interpreter::Interpreter;
 
 pub unsafe trait Backend {
+	/// Get the name of the path for the script associated with `script_id`
+	/// `script_id` must be a script id that was returned from a previous call
+	/// to `insert_file`, and the path returned must be the path that was
+	/// passed to that call
+	fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str>;
+	/// Get the name of the function at index `on_fn_id` for the file with id
+	/// `script_id`.
+	///
+	fn get_on_function_name(&self, script_id: GrugScriptId, on_fn_id: GrugOnFnId) -> Option<&str>;
 	/// The AST of a typechecked grug file is provided to let the backend do
 	/// further transforms and lower to bytecode or even machine code
 	/// 
@@ -681,7 +691,9 @@ pub unsafe trait Backend {
 	/// data of any entities created from the old file must be regenerated.
 	/// Importantly, the GrugScriptId associated with the new file must be the
 	/// same as the only associated with the old file.
-	///
+	/// 
+	/// A subsequent call to `get_script_path` with the returned GrugScriptId
+	/// must return the same path that was passed in
 	fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId;
 	/// Initialize the member data of the newly created entity. When this
 	/// function is called, the member field of `entity` points to garbage and
@@ -719,8 +731,11 @@ pub unsafe trait Backend {
 	/// The id of an on_ function is based on its order within mod_Api.json. 
 	///
 	/// GrugFile.on_function stores the on_ function data based on the order
-	/// within mod_api.json. The backend is responsible for preserving the
-	/// mapping from id to on_ function code after all required transformations
+	/// within mod_api.json. The function id MUST be 1 indexed based on the
+	/// mod_api. This is because id '0' indicates the implicit `init_globals`
+	/// function that initializes the entity's members. The backend is
+	/// responsible for preserving the mapping from id to on_ function code
+	/// after all required transformations
 	///
 	/// # SAFETY: `values` must point to an array of GrugValues of at least as
 	/// many elements as the number of arguments to the on_ function
@@ -732,8 +747,11 @@ pub unsafe trait Backend {
 	/// The id of an on_ function is based on its order within mod_Api.json. 
 	///
 	/// GrugFile.on_function stores the on_ function data based on the order
-	/// within mod_api.json. The backend is responsible for preserving the
-	/// mapping from id to on_ function code after all required transformations
+	/// within mod_api.json. The function id MUST be 1 indexed based on the
+	/// mod_api. This is because id '0' indicates the implicit `init_globals`
+	/// function that initializes the entity's members. The backend is
+	/// responsible for preserving the mapping from id to on_ function code
+	/// after all required transformations
 	///
 	/// # Panics: The length of `values` must exactly match the number of
 	/// expected arguments to the on_ function
@@ -753,6 +771,8 @@ pub struct ErasedBackend {
 
 #[repr(C)]
 pub struct BackendVTable {
+	pub(crate) get_script_path     : fn(data: NonNull<()>, script_id: GrugScriptId, out_len: &mut usize) -> Option<NonNull<()>>,
+	pub(crate) get_on_function_name: fn(data: NonNull<()>, script_id: GrugScriptId, on_fn_id: GrugOnFnId, out_len: &mut usize) -> Option<NonNull<()>>,
 	/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
 	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, path: *const u8, path_len: usize, file: GrugFile) -> GrugScriptId,
 	pub(crate) init_entity         : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
@@ -766,6 +786,24 @@ pub struct BackendVTable {
 }
 
 impl ErasedBackend {
+	pub fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str> {
+		let mut len = 0;
+		let ptr = (self.vtable.get_script_path)(self.data, script_id, &mut len)?;
+		if len == 0 {
+			unsafe{Some(NTStrPtr::from_ptr(ptr.cast::<i8>()).to_str())}
+		} else {
+			unsafe{Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr.cast::<u8>().as_ptr(), len)))}
+		}
+	}
+	pub fn get_on_function_name(&self, script_id: GrugScriptId, on_fn_id: GrugOnFnId) -> Option<&str> {
+		let mut len = 0;
+		let ptr = (self.vtable.get_on_function_name)(self.data, script_id, on_fn_id, &mut len)?;
+		if len == 0 {
+			unsafe{Some(NTStrPtr::from_ptr(ptr.cast::<i8>()).to_str())}
+		} else {
+			unsafe{Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr.cast::<u8>().as_ptr(), len)))}
+		}
+	}
 	pub fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId {
 		unsafe{(self.vtable.insert_file)(self.data, path.as_ptr(), path.len(), file)}
 	}
@@ -794,6 +832,23 @@ impl Drop for ErasedBackend {
 
 impl<T: Backend> From<T> for ErasedBackend {
 	fn from(other: T) -> Self {
+		fn get_script_path<T: Backend>(data: NonNull<()>, script_id: GrugScriptId, out_len: &mut usize) -> Option<NonNull<()>> {
+			let str = T::get_script_path(
+				unsafe{data.cast::<T>().as_ref()},
+				script_id,
+			)?;
+			*out_len = str.len();
+			Some(NonNull::from_ref(str).cast::<()>())
+		}
+		fn get_on_function_name<T: Backend>(data: NonNull<()>, script_id: GrugScriptId, on_fn_id: GrugOnFnId, out_len: &mut usize) -> Option<NonNull<()>> {
+			let str = T::get_on_function_name(
+				unsafe{data.cast::<T>().as_ref()},
+				script_id,
+				on_fn_id,
+			)?;
+			*out_len = str.len();
+			Some(NonNull::from_ref(str).cast::<()>())
+		}
 		unsafe fn insert_file<T: Backend>(data: NonNull<()>, path: *const u8, path_len: usize, file: GrugFile) -> GrugScriptId {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
@@ -847,6 +902,8 @@ impl<T: Backend> From<T> for ErasedBackend {
 		Self {
 			data: unsafe{NonNull::new_unchecked(Box::into_raw(Box::new(other))).cast::<()>()},
 			vtable: &BackendVTable {
+				get_script_path     : get_script_path::<T>,
+				get_on_function_name: get_on_function_name::<T>,
 				insert_file         : insert_file::<T>,
 				init_entity         : init_entity::<T>,
 				clear_entities      : clear_entities::<T>,
