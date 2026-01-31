@@ -673,6 +673,388 @@ pub mod interpreter {
 }
 pub use interpreter::Interpreter;
 
+pub mod bytecode {
+	use crate::types::{GrugValue, GrugId};
+	use crate::ntstring::NTStrPtr;
+	
+	#[derive(Debug, Clone, Copy)]
+	#[repr(u8)]
+	pub enum Op {
+		// 0x00
+		ReturnVoid,
+		// 0x01
+		ReturnValue,
+		// All the four following types have the same instruction
+		// representation. The variants just exist to make encoding easier
+		// 0x03
+		LoadQW {
+			bytes: [u8; 8],
+		},
+		// 0x03
+		LoadNumber {
+			number: f64,
+		},
+		// 0x03
+		LoadId {
+			id: GrugId,
+		},
+		// 0x03
+		LoadStr {
+			string: NTStrPtr<'static>,
+		},
+		// 0x04
+		LoadFalse,
+		// 0x05
+		LoadTrue,
+		// 0x06
+		Add,
+		// 0x07
+		Sub,
+		// 0x08
+		Mul,
+		// 0x09
+		Div,
+		// 0x0A
+		Rem,
+		// 0x0B
+		And,
+		// 0x0C
+		Or,
+		// 0x0D
+		Not,
+		// // 0x0E
+		// CmpEq,
+		// // 0x0F
+		// StrEq,
+		// // 0x10
+		// CmpG
+		// // 0x11
+		// CmpGe
+		// // 0x12
+		// CmpL
+		// // 0x13
+		// CmpLe
+	}
+
+	impl PartialEq for Op {
+		fn eq(&self, other: &Self) -> bool {
+			match (self, other) {
+				(Self::ReturnVoid, Self::ReturnVoid)       => true,
+				(Self::ReturnValue, Self::ReturnValue)     => true,
+				(Self::LoadQW{..} | Self::LoadNumber{..} | Self::LoadId{..} | Self::LoadStr{..}, 
+				Self::LoadQW{..} | Self::LoadNumber{..} | Self::LoadId{..} | Self::LoadStr{..}) => {
+					let self_bytes = match self {
+						Self::LoadQW{bytes} => bytes,
+						Self::LoadNumber{number} => &number.to_ne_bytes(),
+						Self::LoadId{id} => &id.to_inner().to_ne_bytes(),
+						Self::LoadStr{string} => &(string.as_ptr() as usize).to_ne_bytes(),
+						_ => unreachable!(),
+					};
+					let other_bytes = match other {
+						Self::LoadQW{bytes} => bytes,
+						Self::LoadNumber{number} => &number.to_ne_bytes(),
+						Self::LoadId{id} => &id.to_inner().to_ne_bytes(),
+						Self::LoadStr{string} => &(string.as_ptr() as usize).to_ne_bytes(),
+						_ => unreachable!(),
+					};
+					self_bytes == other_bytes
+				}
+				(Self::LoadFalse, Self::LoadFalse)         => true,
+				(Self::LoadTrue, Self::LoadTrue)           => true,
+				(Self::Add, Self::Add)                     => true,
+				(Self::Sub, Self::Sub)                     => true,
+				(Self::Mul, Self::Mul)                     => true,
+				(Self::Div, Self::Div)                     => true,
+				(Self::Rem, Self::Rem)                     => true,
+				(Self::And, Self::And)                     => true,
+				(Self::Or , Self::Or )                     => true,
+				(Self::Not, Self::Not)                     => true,
+				_ => false,
+			}
+		}
+	}
+
+	impl Op {
+		fn decode(bytes: &mut &[u8]) -> Option<Self> {
+			let (value, len) = match bytes.get(0)? {
+				0x00 => (Self::ReturnVoid, 1),
+				0x01 => (Self::ReturnValue, 1),
+				// LoadQW
+				// LoadNumber
+				// LoadId
+				// LoadStr
+				0x03 => {
+					let bytes = &bytes[1..];
+					let value = {
+						if bytes.len() < size_of::<f64>() {
+							return None;
+						}
+						unsafe{&*bytes.as_ptr().cast::<[u8; _]>()}
+					};
+					(Op::LoadQW{
+						bytes: *value,
+					}, 1 + size_of::<f64>())
+				}
+				// LoadTrue
+				0x04 => (Op::LoadFalse, 1),
+				// LoadFalse
+				0x05 => (Op::LoadTrue, 1),
+				0x06 => (Op::Add, 1),
+				0x07 => (Op::Sub, 1),
+				0x08 => (Op::Mul, 1),
+				0x09 => (Op::Div, 1),
+				0x0a => (Op::Rem, 1),
+				0x0b => (Op::And, 1),
+				0x0c => (Op::Or , 1),
+				0x0d => (Op::Not, 1),
+				_ => return None,
+			};
+			*bytes = &bytes[len..];
+			Some(value)
+		}
+	}
+
+	#[repr(transparent)]
+	pub struct Instructions(Vec<u8>);
+	pub struct Stack {
+		stack: Vec<GrugValue>,
+	}
+	impl Stack {
+		pub fn new() -> Self {
+			Self {
+				stack: Vec::new(),
+			}
+		}
+
+		pub unsafe fn run(&mut self, instructions: &Instructions, _start_loc: usize) -> Option<GrugValue> {
+			let mut stream = &*instructions.0;
+			while let Some(ins) = Op::decode(&mut stream) {
+				match ins {
+					Op::ReturnVoid     => return Some(GrugValue{void: ()}),
+					Op::ReturnValue    => return self.stack.pop(),
+					Op::LoadQW{bytes}  => self.stack.push(GrugValue::from_bytes(bytes)),
+					Op::LoadNumber{..} | 
+					Op::LoadStr{..}    | 
+					Op::LoadId{..}     => unreachable!(),
+					Op::LoadFalse      => self.stack.push(GrugValue{bool: 0}),
+					Op::LoadTrue       => self.stack.push(GrugValue{bool: 1}),
+					Op::Add            |
+					Op::Sub            |
+					Op::Mul            |
+					Op::Div            |
+					Op::Rem            => {
+						let second = unsafe{self.stack.pop()?.number};
+						let first = unsafe{self.stack.pop()?.number};
+						let value = match ins {
+							Op::Add => first + second,
+							Op::Sub => first - second,
+							Op::Mul => first * second,
+							Op::Div => first / second,
+							Op::Rem => first % second,
+							_ => unreachable!(),
+						};
+						self.stack.push(GrugValue{number: value});
+					}
+					Op::And            |
+					Op::Or             => {
+						let second = unsafe{self.stack.pop()?.bool};
+						let first = unsafe{self.stack.pop()?.bool};
+						let value = match ins {
+							Op::And => (first != 0) && (second != 0),
+							Op::Or  => (first != 0) || (second != 0),
+							_ => unreachable!(),
+						} as u8;
+						self.stack.push(GrugValue{bool: value});
+					}
+					Op::Not            => {
+						let value = unsafe{self.stack.pop()?.bool};
+						self.stack.push(GrugValue{bool: (value == 0) as u8});
+					}
+				}
+			}
+			None
+		}
+	}
+	impl Instructions {
+		pub fn new() -> Self {
+			Self(Vec::new())
+		}
+
+		pub fn clear(&mut self) { self.0.clear() }
+
+		pub fn push_op(&mut self, op: Op) {
+			match op {
+				Op::ReturnVoid  =>  self.0.push(0x00),
+				Op::ReturnValue => self.0.push(0x01),
+				Op::LoadQW{bytes}  => {
+					self.0.push(
+						0x03
+					);
+					self.0.extend_from_slice(&bytes);
+				}
+				Op::LoadNumber{number}  => {
+					self.0.push(
+						0x03
+					);
+					self.0.extend_from_slice(&number.to_ne_bytes());
+				}
+				Op::LoadId{id}  => {
+					self.0.push(
+						0x03
+					);
+					self.0.extend_from_slice(&id.to_inner().to_ne_bytes());
+				}
+				Op::LoadStr{string}  => {
+					self.0.push(
+						0x03
+					);
+					self.0.extend_from_slice(&string.as_ptr().expose_provenance().to_ne_bytes());
+				}
+				Op::LoadFalse =>  self.0.push(0x04),
+				Op::LoadTrue  =>  self.0.push(0x05),
+				Op::Add  =>  self.0.push(0x06),
+				Op::Sub  =>  self.0.push(0x07),
+				Op::Mul  =>  self.0.push(0x08),
+				Op::Div  =>  self.0.push(0x09),
+				Op::Rem  =>  self.0.push(0x0a),
+				Op::And  =>  self.0.push(0x0b),
+				Op::Or   =>  self.0.push(0x0c),
+				Op::Not  =>  self.0.push(0x0d),
+			}
+		}
+	}
+	#[cfg(test)]
+	mod test {
+		use super::*;
+		#[test]
+		fn vm_test_decoding() {
+			let mut stream = Instructions(Vec::new());
+			macro_rules! test_op {
+				($op: expr) => {{
+					stream.clear();
+					let op = $op;
+					stream.push_op(op);
+					assert_eq!(Op::decode(&mut &*stream.0), Some(op));
+				}}
+			}
+			test_op!(Op::ReturnVoid);
+			test_op!(Op::ReturnValue);
+			for i in 0..10_usize {
+				test_op!(Op::LoadQW{bytes: i.to_ne_bytes()})
+			}
+			for i in 0..10_usize {
+				test_op!(Op::LoadNumber{number: i as f64})
+			}
+			test_op!(Op::LoadFalse);
+			test_op!(Op::LoadTrue);
+			test_op!(Op::Add);
+			test_op!(Op::Sub);
+			test_op!(Op::Mul);
+			test_op!(Op::Div);
+			test_op!(Op::Rem);
+			test_op!(Op::And);
+			test_op!(Op::Or);
+			test_op!(Op::Not);
+		}
+		#[test]
+		fn vm_test_0() {
+			let stream = Instructions(Vec::new());
+			let mut vm = Stack::new();
+			assert!(unsafe{vm.run(&stream, 0).is_none()});
+		}
+
+		#[test]
+		fn vm_test_1() {
+			let mut stream = Instructions(Vec::new());
+			stream.push_op(Op::ReturnVoid);
+			let mut vm = Stack::new();
+			assert!(unsafe{vm.run(&stream, 0).is_some()});
+		}
+
+		#[test]
+		fn vm_test_2() {
+			let mut stream = Instructions(Vec::new());
+			stream.push_op(Op::LoadNumber{number:25.});
+			stream.push_op(Op::ReturnValue);
+			let mut vm = Stack::new();
+			assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.number == 25.)});
+		}
+
+		#[test]
+		fn vm_test_3() {
+			let mut stream = Instructions(Vec::new());
+			let mut vm = Stack::new();
+
+			for i in 0..25 {
+				for j in 1..25 {
+					let i = i as f64;
+					let j = j as f64;
+					stream.push_op(Op::LoadNumber{number:i});
+					stream.push_op(Op::LoadNumber{number:j});
+					stream.push_op(Op::Add);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.number == i + j)});
+					stream.clear();
+
+					stream.push_op(Op::LoadNumber{number:i});
+					stream.push_op(Op::LoadNumber{number:j});
+					stream.push_op(Op::Sub);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.number == i - j)});
+					stream.clear();
+
+					stream.push_op(Op::LoadNumber{number:i});
+					stream.push_op(Op::LoadNumber{number:j});
+					stream.push_op(Op::Mul);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.number == i * j)});
+					stream.clear();
+
+					stream.push_op(Op::LoadNumber{number:i});
+					stream.push_op(Op::LoadNumber{number:j});
+					stream.push_op(Op::Div);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.number == i / j)});
+					stream.clear();
+
+					stream.push_op(Op::LoadNumber{number:i});
+					stream.push_op(Op::LoadNumber{number:j});
+					stream.push_op(Op::Rem);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.number == i % j)});
+					stream.clear();
+				}
+			}
+		}
+
+		#[test]
+		fn vm_test_4() {
+			let mut stream = Instructions(Vec::new());
+			let mut vm = Stack::new();
+
+			for i in 0..1 {
+				for j in 0..1 {
+					let i = i != 0;
+					let j = j != 0;
+					if i {stream.push_op(Op::LoadTrue)} else {stream.push_op(Op::LoadFalse)};
+					if j {stream.push_op(Op::LoadTrue)} else {stream.push_op(Op::LoadFalse)};
+					stream.push_op(Op::And);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.bool == (i && j) as u8)});
+					stream.clear();
+
+					if i {stream.push_op(Op::LoadTrue)} else {stream.push_op(Op::LoadFalse)};
+					if j {stream.push_op(Op::LoadTrue)} else {stream.push_op(Op::LoadFalse)};
+					stream.push_op(Op::Or);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.bool == (i || j) as u8)});
+					stream.clear();
+				}
+			}
+		}
+	}
+}
+
 pub unsafe trait Backend {
 	/// Get the name of the path for the script associated with `script_id`
 	/// `script_id` must be a script id that was returned from a previous call
@@ -771,18 +1153,18 @@ pub struct ErasedBackend {
 
 #[repr(C)]
 pub struct BackendVTable {
-	pub(crate) get_script_path     : fn(data: NonNull<()>, script_id: GrugScriptId, out_len: &mut usize) -> Option<NonNull<()>>,
-	pub(crate) get_on_function_name: fn(data: NonNull<()>, script_id: GrugScriptId, on_fn_id: GrugOnFnId, out_len: &mut usize) -> Option<NonNull<()>>,
+	pub(crate) get_script_path     : extern "C" fn(data: NonNull<()>, script_id: GrugScriptId, out_len: &mut usize) -> Option<NonNull<()>>,
+	pub(crate) get_on_function_name: extern "C" fn(data: NonNull<()>, script_id: GrugScriptId, on_fn_id: GrugOnFnId, out_len: &mut usize) -> Option<NonNull<()>>,
 	/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
 	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, path: *const u8, path_len: usize, file: GrugFile) -> GrugScriptId,
-	pub(crate) init_entity         : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
-	pub(crate) clear_entities      : fn(data: NonNull<()>),
-	pub(crate) destroy_entity_data : fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
+	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
+	pub(crate) clear_entities      : extern "C" fn(data: NonNull<()>),
+	pub(crate) destroy_entity_data : extern "C" fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
 	/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
-	pub(crate) call_on_function_raw: unsafe fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool,
+	pub(crate) call_on_function_raw: unsafe extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool,
 	pub(crate) call_on_function    : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool,
 	// destroys the resources owned by the backend
-	pub(crate) drop                : fn(data: NonNull<()>),
+	pub(crate) drop                : extern "C" fn(data: NonNull<()>),
 }
 
 impl ErasedBackend {
@@ -832,7 +1214,7 @@ impl Drop for ErasedBackend {
 
 impl<T: Backend> From<T> for ErasedBackend {
 	fn from(other: T) -> Self {
-		fn get_script_path<T: Backend>(data: NonNull<()>, script_id: GrugScriptId, out_len: &mut usize) -> Option<NonNull<()>> {
+		extern "C" fn get_script_path<T: Backend>(data: NonNull<()>, script_id: GrugScriptId, out_len: &mut usize) -> Option<NonNull<()>> {
 			let str = T::get_script_path(
 				unsafe{data.cast::<T>().as_ref()},
 				script_id,
@@ -840,7 +1222,8 @@ impl<T: Backend> From<T> for ErasedBackend {
 			*out_len = str.len();
 			Some(NonNull::from_ref(str).cast::<()>())
 		}
-		fn get_on_function_name<T: Backend>(data: NonNull<()>, script_id: GrugScriptId, on_fn_id: GrugOnFnId, out_len: &mut usize) -> Option<NonNull<()>> {
+
+		extern "C" fn get_on_function_name<T: Backend>(data: NonNull<()>, script_id: GrugScriptId, on_fn_id: GrugOnFnId, out_len: &mut usize) -> Option<NonNull<()>> {
 			let str = T::get_on_function_name(
 				unsafe{data.cast::<T>().as_ref()},
 				script_id,
@@ -849,6 +1232,7 @@ impl<T: Backend> From<T> for ErasedBackend {
 			*out_len = str.len();
 			Some(NonNull::from_ref(str).cast::<()>())
 		}
+
 		unsafe fn insert_file<T: Backend>(data: NonNull<()>, path: *const u8, path_len: usize, file: GrugFile) -> GrugScriptId {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
@@ -856,7 +1240,8 @@ impl<T: Backend> From<T> for ErasedBackend {
 				file
 			)
 		}
-		fn init_entity<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool {
+
+		extern "C" fn init_entity<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool {
 			T::init_entity(
 				unsafe{data.cast::<T>().as_ref()},
 				state, 
@@ -864,19 +1249,20 @@ impl<T: Backend> From<T> for ErasedBackend {
 			)
 		}
 
-		fn clear_entities<T: Backend>(data: NonNull<()>) {
+		extern "C" fn clear_entities<T: Backend>(data: NonNull<()>) {
 			T::clear_entities(
 				unsafe{data.cast::<T>().as_mut()},
 			)
 		}
-		fn destroy_entity_data<T: Backend>(data: NonNull<()>, entity: &GrugEntity) -> bool {
+
+		extern "C" fn destroy_entity_data<T: Backend>(data: NonNull<()>, entity: &GrugEntity) -> bool {
 			T::destroy_entity_data(
 				unsafe{data.cast::<T>().as_ref()},
 				entity
 			)
 		}
 		/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
-		unsafe fn call_on_function_raw<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
+		unsafe extern "C" fn call_on_function_raw<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
 			unsafe{T::call_on_function_raw(
 				data.cast::<T>().as_ref(),
 				state, 
@@ -895,7 +1281,7 @@ impl<T: Backend> From<T> for ErasedBackend {
 			)
 		}
 		// destroys the resources owned by the backend
-		fn drop<T: Backend>(data: NonNull<()>) {
+		extern "C" fn drop<T: Backend>(data: NonNull<()>) {
 			_ = unsafe{Box::from_raw(data.cast::<T>().as_ptr())};
 		}
 

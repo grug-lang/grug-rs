@@ -66,21 +66,32 @@ impl std::fmt::Display for GrugId {
 }
 
 impl GrugId {
-	pub(crate) fn new(id: u64) -> Self {
+	pub fn new(id: u64) -> Self {
 		Self(id)
+	}
+
+	pub fn to_inner(self) -> u64 {
+		self.0
 	}
 }
 
 pub type GrugOnFnId = u64;
 
-#[repr(C)]
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub union GrugValue {
 	pub number: c_double,
 	pub bool: u8,
 	pub id: GrugId,
 	pub string: *const c_char,
 	pub void: (),
+}
+
+impl GrugValue {
+	pub fn from_bytes(bytes: [u8;8]) -> Self {
+		const _: () = const {assert!(std::mem::size_of::<GrugValue>() == std::mem::size_of::<[u8;8]>())};
+		unsafe{std::mem::transmute::<[u8;8], Self>(bytes)}
+	}
 }
 
 /// SAFETY: GrugValue is !Send and !Sync because of the *mut c_char within it

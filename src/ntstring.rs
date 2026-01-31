@@ -122,6 +122,9 @@ pub struct NTStrPtr<'a>(NonNull<c_char>, PhantomData<&'a ()>);
 const _: () = const {assert!(std::mem::size_of::<NTStrPtr>() ==  std::mem::size_of::<Option<NTStrPtr>>())};
 
 impl<'a> NTStrPtr<'a> {
+	pub fn as_ptr(self) -> *const u8 {
+		self.0.cast::<u8>().as_ptr().cast_const()
+	}
 	pub unsafe fn from_ptr (ptr: NonNull<c_char>) -> Self {
 		Self(ptr, PhantomData)
 	}
@@ -165,6 +168,12 @@ impl<'a> NTStrPtr<'a> {
 impl<'a> From<&'a NTStr> for NTStrPtr<'a> {
 	fn from (other: &'a NTStr) -> Self {
 		other.as_ntstrptr()
+	}
+}
+
+impl<'a> std::fmt::Debug for NTStrPtr<'a> {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		self.to_str().fmt(f)
 	}
 }
 
