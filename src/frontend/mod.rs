@@ -17,7 +17,7 @@ pub mod tokenizer;
 pub mod parser;
 
 impl GrugState {
-	pub fn compile_grug_file<'a>(&self, path: &'a str) -> Result<GrugScriptId, GrugError<'a>> {
+	pub fn compile_grug_file(&self, path: &str) -> Result<GrugScriptId, GrugError> {
 		let mod_name = get_mod_name(path)?;
 		let entity_type = get_entity_type(path)?;
 
@@ -62,64 +62,64 @@ impl GrugState {
 	}
 }
 
-fn get_mod_name<'a> (path: &'a str) -> Result<&'a str, GrugError<'a>> {
-	path.split_once('/').map(|x| x.0).ok_or(GrugError::FileNameError(FileNameError::FilePathDoesNotContainForwardSlash{path}))
+fn get_mod_name (path: &str) -> Result<&str, GrugError> {
+	path.split_once('/').map(|x| x.0).ok_or(GrugError::FileNameError(FileNameError::FilePathDoesNotContainForwardSlash{path: String::from(path)}))
 }
 
-fn get_entity_type(path: &str) -> Result<&str, FileNameError<'_>> {
+fn get_entity_type(path: &str) -> Result<&str, FileNameError> {
 	let (_, entity_type) = path.rsplit_once("-").ok_or(
-			FileNameError::EntityMissing{path}
+			FileNameError::EntityMissing{path: String::from(path)}
 		)?;
 	let (entity_type, _) = entity_type.rsplit_once(".").ok_or(
-			FileNameError::MissingPeriodInFileName{path}
+			FileNameError::MissingPeriodInFileName{path: String::from(path)}
 		)?;
 	if entity_type.len() > MAX_FILE_ENTITY_TYPE_LENGTH {
-		return Err(FileNameError::EntityLenExceedsMaxLen{path, entity_len: entity_type.len()});
+		return Err(FileNameError::EntityLenExceedsMaxLen{path: String::from(path), entity_len: entity_type.len()});
 	}
 	if entity_type.is_empty() {
-		return Err(FileNameError::EntityMissing{path});
+		return Err(FileNameError::EntityMissing{path: String::from(path)});
 	}
 	check_custom_id_is_pascal(entity_type)
 }
 
-fn check_custom_id_is_pascal(entity_type: &str) -> Result<&str, FileNameError<'_>> {
+fn check_custom_id_is_pascal(entity_type: &str) -> Result<&str, FileNameError> {
 	let mut chars = entity_type.chars();
 	let Some(_) = chars.next() else {
-		return Err(FileNameError::EntityNotPascalCase1{entity_type});
+		return Err(FileNameError::EntityNotPascalCase1{entity_type: String::from(entity_type)});
 	};
 	for ch in chars {
 		if !(ch.is_uppercase() || ch.is_lowercase() || ch.is_ascii_digit()) {
-			return Err(FileNameError::EntityNotPascalCase2{entity_type, wrong_char: ch});
+			return Err(FileNameError::EntityNotPascalCase2{entity_type: String::from(entity_type), wrong_char: ch});
 		}
 	}
 	Ok(entity_type)
 }
 
 #[derive(Debug)]
-pub enum FileNameError<'a> {
+pub enum FileNameError {
 	FilePathDoesNotContainForwardSlash{
-		path: &'a str
+		path: String
 	},
 	MissingPeriodInFileName {
-		path: &'a str
+		path: String
 	},
 	EntityLenExceedsMaxLen {
-		path: &'a str,
+		path: String,
 		entity_len: usize,
 	},
 	EntityMissing {
-		path: &'a str
+		path: String
 	},
 	EntityNotPascalCase1 {
-		entity_type: &'a str,
+		entity_type: String,
 	},
 	EntityNotPascalCase2 {
-		entity_type: &'a str,
+		entity_type: String,
 		wrong_char: char,
 	}
 }
 
-impl<'a> std::fmt::Display for FileNameError<'a> {
+impl std::fmt::Display for FileNameError {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
 			Self::FilePathDoesNotContainForwardSlash{

@@ -1,7 +1,7 @@
 use crate::error::GrugError;
 use crate::frontend::*;
 
-pub fn dump_file_to_json<'a> (grug_path: &'a str, output_path: &'a str) -> Result<(), GrugError<'a>> {
+pub fn dump_file_to_json (grug_path: &str, output_path: &str) -> Result<(), GrugError> {
 	let file_text = std::fs::read_to_string(grug_path).unwrap();
 
 	let tokens = tokenizer::tokenize(&file_text)?;
@@ -15,7 +15,7 @@ pub fn dump_file_to_json<'a> (grug_path: &'a str, output_path: &'a str) -> Resul
 	Ok(())
 }
 
-pub fn generate_file_from_json<'a> (json_path: &'a str, output_path: &'a str) -> Result<(), GrugError<'a>> {
+pub fn generate_file_from_json (json_path: &str, output_path: &str) -> Result<(), GrugError> {
 	let file_text = std::fs::read_to_string(json_path).unwrap();
 	// TODO: This should maybe have a proper error
 	let json_value = json::parse(&file_text).unwrap();

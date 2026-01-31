@@ -133,7 +133,7 @@ impl<'a> GrugInitSettings<'a> {
 		self
 	}
 
-	pub fn build_state(&mut self) -> Result<GrugState, GrugError<'a>> {
+	pub fn build_state(&mut self) -> Result<GrugState, GrugError> {
 		let mod_api_path = Self::maybe_nt_or_length(self.mod_api_path, self.mod_api_path_len)
 			.unwrap_or("./mod_api.json");
 		let mods_dir_path = Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)
@@ -190,7 +190,7 @@ pub struct GrugState {
 }
 
 impl GrugState {
-	fn new<'a, J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D) -> Result<Self, GrugError<'a>> {
+	fn new<J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api(&mod_api_path)?;
 
 		Ok(Self {
@@ -354,3 +354,4 @@ impl std::fmt::Display for StateError {
 		}
 	}
 }
+

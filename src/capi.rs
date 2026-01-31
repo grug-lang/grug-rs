@@ -129,6 +129,8 @@ typedef grug_runtime_error_type (*call_on_function_raw_t)(void* data, grug_state
 typedef grug_runtime_error_type (*call_on_function_t)(void* data, grug_state* grug_state, grug_entity* entity, grug_on_fn_id on_fn_id, grug_value* values, size_t values_count)
 typedef void (*backend_drop_t) (void* data);
 
+size_t grug_get_error_string(grug_state* gst, char* buffer, size_t buf_len);
+
 struct backend_vtable {
 	insert_file_t insert_file,
 	clear_entities_t clear_entities,
@@ -143,4 +145,27 @@ struct backend {
 	struct backend_vtable* vtable;
 };
 
-size_t grug_get_error_string(grug_state* gst, char* buffer, size_t buf_len);
+
+struct runtime_error_handler {
+	void* data;
+	void (*drop_fn)(void* data);
+	void (*handler)(
+		void* data,
+		grug_runtime_error_type err_kind,
+		char* reason,
+		size_t reason_len,
+		char* on_fn_name,
+		size_t on_fn_name_len,
+		char* script_path,
+		size_t script_path_len,
+	);
+};
+
+struct grug_init_settings {
+	char* mod_api_path;
+	size_t mod_api_path_len;
+	char* mods_dir_path;
+	size_t mods_dir_path_len;
+	struct runtime_error_handler runtime_error_handler;
+	struct backend backend;
+};

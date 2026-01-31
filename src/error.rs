@@ -5,16 +5,16 @@ use crate::frontend::type_propagation::TypePropogatorError;
 use crate::mod_api::ModApiError;
 
 #[derive(Debug)]
-pub enum GrugError<'a> {
-	FileNameError(FileNameError<'a>),
+pub enum GrugError {
+	FileNameError(FileNameError),
 	TokenizerError(TokenizerError),
 	ParserError(ParserError),
 	ModApiError(ModApiError),
 	TypePropogatorError(TypePropogatorError),
 }
 
-impl<'a> From<FileNameError<'a>> for GrugError<'a> {
-	fn from (from: FileNameError<'a>) -> Self {
+impl From<FileNameError> for GrugError {
+	fn from (from: FileNameError) -> Self {
 		// this extra single quote is needed to prevent a vim plugin from
 		// mishandling quotes in the rest of the file
 		// '
@@ -22,31 +22,31 @@ impl<'a> From<FileNameError<'a>> for GrugError<'a> {
 	}
 }
 
-impl<'a> From<TokenizerError> for GrugError<'a> {
+impl From<TokenizerError> for GrugError {
 	fn from (from: TokenizerError) -> Self {
 		Self::TokenizerError(from)
 	}
 }
 
-impl<'a> From<ParserError> for GrugError<'a> {
+impl From<ParserError> for GrugError {
 	fn from (from: ParserError) -> Self {
 		Self::ParserError(from)
 	}
 }
 
-impl<'a> From<ModApiError> for GrugError<'a> {
+impl From<ModApiError> for GrugError {
 	fn from(other: ModApiError) -> Self {
 		Self::ModApiError(other)
 	}
 }
 
-impl<'a> From<TypePropogatorError> for GrugError<'a> {
+impl From<TypePropogatorError> for GrugError {
 	fn from(other: TypePropogatorError) -> Self {
 		Self::TypePropogatorError(other)
 	}
 }
 
-impl<'a> std::fmt::Display for GrugError<'a> {
+impl std::fmt::Display for GrugError {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
 			Self::TokenizerError(error) => write!(f, "{}", error),
