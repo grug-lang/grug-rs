@@ -1,6 +1,6 @@
 #![deny(warnings)]
 #![allow(static_mut_refs)]
-use gruggers::state::GrugState;
+use gruggers::state::{GrugInitSettings, GrugState};
 use gruggers::types::GrugValue;
 
 use std::ffi::CStr;
@@ -132,7 +132,10 @@ impl<T> std::ops::DerefMut for UnsafeStatic<T> {
 
 fn main () {
 	unsafe {
-		let mut state = GrugState::new("examples/fibonacci/mod_api.json", "examples/fibonacci/mods").unwrap();
+		let mut state = GrugInitSettings::new()
+			.set_mod_api_path("examples/fibonacci/mod_api.json")
+			.set_mods_dir("examples/fibonacci/mods")
+			.build_state().unwrap();
 		state.register_game_fn("print_string", print_string as extern "C" fn(_)).unwrap();
 		state.register_game_fn("print_number", print_number as extern "C" fn(_)).unwrap();
 		state.register_game_fn("list_number", list_number as extern "C" fn() -> _).unwrap();

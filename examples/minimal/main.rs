@@ -1,5 +1,5 @@
 #![deny(warnings)]
-use gruggers::state::GrugState;
+use gruggers::state::GrugInitSettings;
 use gruggers::types::GrugValue;
 
 use std::ffi::CStr;
@@ -17,7 +17,10 @@ mod game_fns {
 use game_fns::*;
 
 fn main () {
-	let mut state = GrugState::new("examples/minimal/mod_api.json", "examples/minimal/mods").unwrap();
+	let mut state = GrugInitSettings::new()
+		.set_mods_dir("examples/minimal/mods")
+		.set_mod_api_path("examples/minimal/mod_api.json")
+		.build_state().unwrap();
 	state.register_game_fn("print_string", print_string as extern "C" fn(_)).unwrap();
 	assert!(state.all_game_fns_registered());
 

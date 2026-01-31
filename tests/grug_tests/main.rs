@@ -1,6 +1,6 @@
 #![deny(warnings)]
 #![allow(static_mut_refs)]
-use gruggers::state::GrugState;
+use gruggers::state::GrugInitSettings;
 use gruggers::ntstring::NTStr;
 use gruggers::nt;
 
@@ -248,7 +248,10 @@ fn main () {
 
 	let grug_tests_path = nt!("src/grug-tests/tests");
 
-	let mut state = GrugState::new("src/grug-tests/mod_api.json", grug_tests_path.as_str()).unwrap();
+	let mut state = GrugInitSettings::new()
+		.set_mod_api_path("src/grug-tests/mod_api.json")
+		.set_mods_dir(grug_tests_path.as_str())
+		.build_state().unwrap();
 	// register_game_functions(&mut state);
 	register_game_functions(&mut state);
 	// let game_functions = get_game_functions();

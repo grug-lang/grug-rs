@@ -5,6 +5,8 @@ use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugE
 use crate::xar::Xar;
 use crate::ntstring::NTStr;
 
+use std::marker::PhantomData;
+use std::ptr::NonNull;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, hash_map::Entry};
@@ -12,11 +14,78 @@ use std::sync::{atomic::{AtomicU64, Ordering}};
 use std::time::Instant;
 
 #[repr(C)]
+struct RuntimeErrorHandler {
+	data: Option<NonNull<()>>,
+	drop: Option<extern "C" fn(data: Option<NonNull<()>>)>,
+	func: Option<for<'b> extern "C" fn(
+		data: NonNull<()>, 
+		err_kind: u32, 
+		reason: NonNull<u8>,
+		reason_len: usize, 
+		on_fn_name: NonNull<u8>, 
+		on_fn_name_len: usize,
+		script_path: NonNull<u8>,
+		script_path_len: usize,
+	)>,
+}
+
+impl RuntimeErrorHandler {
+	pub const fn new () -> Self {
+		Self {
+			data: None,
+			drop: None,
+			func: None,
+		}
+	}
+}
+impl Default for RuntimeErrorHandler {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
+impl<F: for<'b> Fn(&'b str, u32, &'b str, &'b str)> From<F> for RuntimeErrorHandler {
+	fn from(f: F) -> Self {
+		let f = unsafe{NonNull::new_unchecked(Box::into_raw(Box::new(f)))}.cast::<()>();
+		extern "C" fn handler<F: for<'a> Fn(&'a str, u32, &'a str, &'a str)> (
+			data: NonNull<()>, 
+			err_kind: u32, 
+			reason: NonNull<u8>,
+			reason_len: usize, 
+			on_fn_name: NonNull<u8>, 
+			on_fn_name_len: usize,
+			script_path: NonNull<u8>,
+			script_path_len: usize,
+		) {
+			unsafe{(data.cast::<F>().as_ref())(
+				std::str::from_utf8_unchecked(std::slice::from_raw_parts(reason.as_ptr(), reason_len)),
+				err_kind,
+				std::str::from_utf8_unchecked(std::slice::from_raw_parts(on_fn_name.as_ptr(), on_fn_name_len)),
+				std::str::from_utf8_unchecked(std::slice::from_raw_parts(script_path.as_ptr(), script_path_len)),
+			)};
+		}
+		extern "C" fn drop<F>(data: Option<NonNull<()>>) {
+			data.map(|x| unsafe{Box::from_raw(x.cast::<F>().as_ptr())});
+		}
+		Self {
+			data: Some(f),
+			drop: Some(drop::<F> as extern "C" fn(_)),
+			func: Some(handler::<F> as extern "C" fn (_, _, _, _, _, _, _, _)),
+		}
+	}
+}
+
+#[repr(C)]
 pub struct GrugInitSettings<'a> {
-	pub mod_api_path: &'a str,
-	pub mods_dir_path: &'a str,
-	pub runtime_error_handler: fn(reason: String, err_kind: u32, on_fn_name: String, script_path: String),
-	
+	_marker: PhantomData<&'a ()>,
+	mod_api_path: Option<NonNull<u8>>,
+	mod_api_path_len: usize,
+	mods_dir_path: Option<NonNull<u8>>,
+	mods_dir_path_len: usize,
+	runtime_error_handler: RuntimeErrorHandler,
+
+	backend: Option<ErasedBackend>,
+
 	// custom allocation support (currently ignored)
 	// TODO: Is this even a good idea
 	// This allocator has to be a malloc/free style allocator (no arenas, only
@@ -29,20 +98,81 @@ pub struct GrugInitSettings<'a> {
 	// alloc_data: Option<GrugAllocator>,
 }
 
-impl Default for GrugInitSettings<'static> {
-	fn default () -> Self {
+impl<'a> GrugInitSettings<'a> {
+	pub const fn new() -> Self {
 		Self {
-			mod_api_path: "./mod_api.json",
-			mods_dir_path: "./mods",
-			runtime_error_handler: default_runtime_error_handler,
+			_marker: PhantomData,
+			mod_api_path: None,
+			mod_api_path_len: 0,
+			mods_dir_path: None,
+			mods_dir_path_len: 0,
+			runtime_error_handler: RuntimeErrorHandler::new(),
+			backend: None,
 		}
+	}
+
+	pub fn set_mods_dir(&mut self, dir: &'a str) -> &mut Self {
+		self.mods_dir_path = Some(NonNull::from_ref(dir).cast::<u8>());
+		self.mods_dir_path_len = dir.len();
+		self
+	}
+
+	pub fn set_mod_api_path(&mut self, mod_api: &'a str) -> &mut Self {
+		self.mod_api_path = Some(NonNull::from_ref(mod_api).cast::<u8>());
+		self.mod_api_path_len = mod_api.len();
+		self
+	}
+
+	pub fn set_backend(&mut self, backend: ErasedBackend) -> &mut Self {
+		self.backend = Some(backend);
+		self
+	}
+
+	pub fn set_runtime_error_handler<F: for<'b> Fn(&'b str, u32, &'b str, &'b str)> (&mut self, f: F) -> &mut Self {
+		self.runtime_error_handler = f.into();
+		self
+	}
+
+	pub fn build_state(&mut self) -> Result<GrugState, GrugError<'a>> {
+		let mod_api_path = Self::maybe_nt_or_length(self.mod_api_path, self.mod_api_path_len)
+			.unwrap_or("./mod_api.json");
+		let mods_dir_path = Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)
+			.unwrap_or("./mods");
+		GrugState::new(mod_api_path, mods_dir_path)
+	}
+
+	fn maybe_nt_or_length(ptr: Option<NonNull<u8>>, len: usize) -> Option<&'a str> {
+		// null terminated
+		if let Some(ptr) = ptr {
+			if len == 0 {
+				let mut i = 0;
+				loop {
+					if unsafe{ptr.add(i).read()} == b'\0' {
+						return Some(
+							unsafe{std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr.as_ptr(), i))}
+						)
+					}
+					i += 1;
+				}
+			} else {
+				Some(
+					unsafe{std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr.as_ptr(), len))}
+				)
+			}
+		} else {None}
 	}
 }
 
-pub fn default_runtime_error_handler(reason: String, _err_kind: u32, on_fn_name: String, script_path: String) {
-	println!("Runtime Error: {} in function {} in script {}", reason, on_fn_name, script_path);
-	std::process::exit(1);
+impl Default for GrugInitSettings<'static> {
+	fn default () -> Self {
+		Self::new()
+	}
 }
+
+// pub fn default_runtime_error_handler(_err_kind: u32, reason: &'a str, on_fn_name: &str, script_path: &str) {
+// 	println!("Runtime Error: {} in function {} in script {}", reason, on_fn_name, script_path);
+// 	std::process::exit(1);
+// }
 
 pub struct GrugState {
 	pub(crate) mod_api: ModApi,
@@ -60,7 +190,7 @@ pub struct GrugState {
 }
 
 impl GrugState {
-	pub fn new<'a, J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D) -> Result<Self, GrugError<'a>> {
+	fn new<'a, J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D) -> Result<Self, GrugError<'a>> {
 		let mod_api = get_mod_api(&mod_api_path)?;
 
 		Ok(Self {

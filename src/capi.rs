@@ -121,3 +121,26 @@ static inline union grug_value GRUG_ARG_ID(grug_id v) { union grug_value r; r._i
 #ifdef __cplusplus
 }
 #endif
+/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
+typedef grug_script_id (*insert_file_t)(void* data, char* path, size_t path_len, grug_file /* AST */ file);
+typedef void (*clear_entities_t)(void* data);
+typedef bool (*destroy_entity_data_t)(void* data, grug_entity* entity);
+typedef grug_runtime_error_type (*call_on_function_raw_t)(void* data, grug_state* grug_state, grug_entity* entity, grug_on_fn_id on_fn_id, grug_value* values)
+typedef grug_runtime_error_type (*call_on_function_t)(void* data, grug_state* grug_state, grug_entity* entity, grug_on_fn_id on_fn_id, grug_value* values, size_t values_count)
+typedef void (*backend_drop_t) (void* data);
+
+struct backend_vtable {
+	insert_file_t insert_file,
+	clear_entities_t clear_entities,
+	destroy_entity_data_t destroy_entity_data,
+	call_on_function_raw_t call_on_function_raw,
+	call_on_function_t call_on_function,
+	backend_drop_t backend_drop,
+};
+
+struct backend {
+	void* data;
+	struct backend_vtable* vtable;
+};
+
+size_t grug_get_error_string(grug_state* gst, char* buffer, size_t buf_len);

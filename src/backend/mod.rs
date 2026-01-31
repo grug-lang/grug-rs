@@ -723,11 +723,17 @@ pub unsafe trait Backend {
 	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> Result<(), RuntimeError>;
 }
 
+// This check ensures that c code can safely zero the backend field in GrugInitSettings
+const _: () = unsafe{const {std::mem::forget(std::mem::MaybeUninit::<Option<ErasedBackend>>::zeroed().assume_init())}};
+const _: () = const {assert!(std::mem::size_of::<Option<ErasedBackend>>() == std::mem::size_of::<ErasedBackend>())};
+
+#[repr(C)]
 pub struct ErasedBackend {
 	pub data: NonNull<()>,
 	pub vtable: &'static BackendVTable,
 }
 
+#[repr(C)]
 pub struct BackendVTable {
 	/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
 	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, path: *const u8, path_len: usize, file: GrugFile) -> GrugScriptId,
@@ -834,3 +840,4 @@ impl<T: Backend> From<T> for ErasedBackend {
 		}
 	}
 }
+
