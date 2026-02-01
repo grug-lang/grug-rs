@@ -722,18 +722,20 @@ pub mod bytecode {
 		Or,
 		// 0x0D
 		Not,
-		// // 0x0E
-		// CmpEq,
-		// // 0x0F
-		// StrEq,
-		// // 0x10
-		// CmpG
-		// // 0x11
-		// CmpGe
-		// // 0x12
-		// CmpL
-		// // 0x13
-		// CmpLe
+		// 0x0E
+		CmpEq,
+		// 0x0F
+		CmpNeq,
+		// 0x10
+		StrEq,
+		// 0x11
+		CmpG,
+		// 0x12
+		CmpGe,
+		// 0x13
+		CmpL,
+		// 0x14
+		CmpLe,
 	}
 
 	impl PartialEq for Op {
@@ -759,16 +761,23 @@ pub mod bytecode {
 					};
 					self_bytes == other_bytes
 				}
-				(Self::LoadFalse, Self::LoadFalse)         => true,
-				(Self::LoadTrue, Self::LoadTrue)           => true,
-				(Self::Add, Self::Add)                     => true,
-				(Self::Sub, Self::Sub)                     => true,
-				(Self::Mul, Self::Mul)                     => true,
-				(Self::Div, Self::Div)                     => true,
-				(Self::Rem, Self::Rem)                     => true,
-				(Self::And, Self::And)                     => true,
-				(Self::Or , Self::Or )                     => true,
-				(Self::Not, Self::Not)                     => true,
+				(Self::LoadFalse, Self::LoadFalse)           => true,
+				(Self::LoadTrue, Self::LoadTrue)             => true,
+				(Self::Add   , Self::Add   )                 => true,
+				(Self::Sub   , Self::Sub   )                 => true,
+				(Self::Mul   , Self::Mul   )                 => true,
+				(Self::Div   , Self::Div   )                 => true,
+				(Self::Rem   , Self::Rem   )                 => true,
+				(Self::And   , Self::And   )                 => true,
+				(Self::Or    , Self::Or    )                 => true,
+				(Self::Not   , Self::Not   )                 => true,
+				(Self::CmpEq , Self::CmpEq )                 => true,
+				(Self::CmpNeq, Self::CmpNeq)                 => true,
+				(Self::StrEq , Self::StrEq )                 => true,
+				(Self::CmpG  , Self::CmpG  )                 => true,
+				(Self::CmpGe , Self::CmpGe )                 => true,
+				(Self::CmpL  , Self::CmpL  )                 => true,
+				(Self::CmpLe , Self::CmpLe )                 => true,
 				_ => false,
 			}
 		}
@@ -799,14 +808,21 @@ pub mod bytecode {
 				0x04 => (Op::LoadFalse, 1),
 				// LoadFalse
 				0x05 => (Op::LoadTrue, 1),
-				0x06 => (Op::Add, 1),
-				0x07 => (Op::Sub, 1),
-				0x08 => (Op::Mul, 1),
-				0x09 => (Op::Div, 1),
-				0x0a => (Op::Rem, 1),
-				0x0b => (Op::And, 1),
-				0x0c => (Op::Or , 1),
-				0x0d => (Op::Not, 1),
+				0x06 => (Op::Add  , 1),
+				0x07 => (Op::Sub  , 1),
+				0x08 => (Op::Mul  , 1),
+				0x09 => (Op::Div  , 1),
+				0x0a => (Op::Rem  , 1),
+				0x0b => (Op::And  , 1),
+				0x0c => (Op::Or   , 1),
+				0x0d => (Op::Not  , 1),
+				0x0E => (Op::CmpEq, 1),
+				0x0F => (Op::CmpNeq, 1),
+				0x10 => (Op::StrEq, 1),
+				0x11 => (Op::CmpG , 1),
+				0x12 => (Op::CmpGe, 1),
+				0x13 => (Op::CmpL , 1),
+				0x14 => (Op::CmpLe, 1),
 				_ => return None,
 			};
 			*bytes = &bytes[len..];
@@ -816,13 +832,34 @@ pub mod bytecode {
 
 	#[repr(transparent)]
 	pub struct Instructions(Vec<u8>);
+	
+	impl std::fmt::Debug for Instructions {
+		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+			let mut buf = &*self.0;
+			f.debug_list()
+				.entries(
+					std::iter::from_fn(|| {
+						if buf.len() == 0 {
+							None
+						} else {
+							Some(Op::decode(&mut buf)
+								.expect("Invalid instruction"))
+						}
+					})
+				)
+				.finish()
+		}
+	}
+
 	pub struct Stack {
 		stack: Vec<GrugValue>,
+		// rbp: usize,
 	}
 	impl Stack {
 		pub fn new() -> Self {
 			Self {
 				stack: Vec::new(),
+				// rbp: 0,
 			}
 		}
 
@@ -830,19 +867,19 @@ pub mod bytecode {
 			let mut stream = &*instructions.0;
 			while let Some(ins) = Op::decode(&mut stream) {
 				match ins {
-					Op::ReturnVoid     => return Some(GrugValue{void: ()}),
-					Op::ReturnValue    => return self.stack.pop(),
-					Op::LoadQW{bytes}  => self.stack.push(GrugValue::from_bytes(bytes)),
-					Op::LoadNumber{..} | 
-					Op::LoadStr{..}    | 
-					Op::LoadId{..}     => unreachable!(),
-					Op::LoadFalse      => self.stack.push(GrugValue{bool: 0}),
-					Op::LoadTrue       => self.stack.push(GrugValue{bool: 1}),
-					Op::Add            |
-					Op::Sub            |
-					Op::Mul            |
-					Op::Div            |
-					Op::Rem            => {
+					Op::ReturnVoid         => return Some(GrugValue{void: ()}),
+					Op::ReturnValue        => return self.stack.pop(),
+					Op::LoadQW{bytes}      => self.stack.push(GrugValue::from_bytes(bytes)),
+					Op::LoadNumber{..}     | 
+					Op::LoadStr{..}        | 
+					Op::LoadId{..}         => unreachable!(),
+					Op::LoadFalse          => self.stack.push(GrugValue{bool: 0}),
+					Op::LoadTrue           => self.stack.push(GrugValue{bool: 1}),
+					Op::Add                |
+					Op::Sub                |
+					Op::Mul                |
+					Op::Div                |
+					Op::Rem                => {
 						let second = unsafe{self.stack.pop()?.number};
 						let first = unsafe{self.stack.pop()?.number};
 						let value = match ins {
@@ -855,8 +892,8 @@ pub mod bytecode {
 						};
 						self.stack.push(GrugValue{number: value});
 					}
-					Op::And            |
-					Op::Or             => {
+					Op::And                |
+					Op::Or                 => {
 						let second = unsafe{self.stack.pop()?.bool};
 						let first = unsafe{self.stack.pop()?.bool};
 						let value = match ins {
@@ -866,9 +903,37 @@ pub mod bytecode {
 						} as u8;
 						self.stack.push(GrugValue{bool: value});
 					}
-					Op::Not            => {
+					Op::Not                => {
 						let value = unsafe{self.stack.pop()?.bool};
 						self.stack.push(GrugValue{bool: (value == 0) as u8});
+					}
+					Op::CmpEq | Op::CmpNeq => {
+						let second = unsafe{self.stack.pop()?.as_bytes()};
+						let first = unsafe{self.stack.pop()?.as_bytes()};
+						let value = match ins {
+							Op::CmpEq  => first == second,
+							Op::CmpNeq => first != second,
+							_ => unreachable!(),
+						};
+						self.stack.push(GrugValue{bool: value as u8});
+					}
+					Op::StrEq              => {
+						let second = unsafe{self.stack.pop()?.string};
+						let first = unsafe{self.stack.pop()?.string};
+						self.stack.push(GrugValue{bool: (first == second) as u8});
+					}
+					Op::CmpG  | Op::CmpGe  |
+					Op::CmpL  | Op::CmpLe  => {
+						let second = unsafe{self.stack.pop()?.number};
+						let first = unsafe{self.stack.pop()?.number};
+						let value = match ins {
+							Op::CmpG  => first >  second,
+							Op::CmpGe => first >= second,
+							Op::CmpL  => first <  second,
+							Op::CmpLe => first <= second,
+							_ => unreachable!(),
+						};
+						self.stack.push(GrugValue{bool: value as u8});
 					}
 				}
 			}
@@ -912,20 +977,28 @@ pub mod bytecode {
 				}
 				Op::LoadFalse =>  self.0.push(0x04),
 				Op::LoadTrue  =>  self.0.push(0x05),
-				Op::Add  =>  self.0.push(0x06),
-				Op::Sub  =>  self.0.push(0x07),
-				Op::Mul  =>  self.0.push(0x08),
-				Op::Div  =>  self.0.push(0x09),
-				Op::Rem  =>  self.0.push(0x0a),
-				Op::And  =>  self.0.push(0x0b),
-				Op::Or   =>  self.0.push(0x0c),
-				Op::Not  =>  self.0.push(0x0d),
+				Op::Add       =>  self.0.push(0x06),
+				Op::Sub       =>  self.0.push(0x07),
+				Op::Mul       =>  self.0.push(0x08),
+				Op::Div       =>  self.0.push(0x09),
+				Op::Rem       =>  self.0.push(0x0a),
+				Op::And       =>  self.0.push(0x0b),
+				Op::Or        =>  self.0.push(0x0c),
+				Op::Not       =>  self.0.push(0x0d),
+				Op::CmpEq     =>  self.0.push(0x0e),
+				Op::CmpNeq    =>  self.0.push(0x0f),
+				Op::StrEq     =>  self.0.push(0x10),
+				Op::CmpG      =>  self.0.push(0x11),
+				Op::CmpGe     =>  self.0.push(0x12),
+				Op::CmpL      =>  self.0.push(0x13),
+				Op::CmpLe     =>  self.0.push(0x14),
 			}
 		}
 	}
 	#[cfg(test)]
 	mod test {
 		use super::*;
+		use crate::nt;
 		#[test]
 		fn vm_test_decoding() {
 			let mut stream = Instructions(Vec::new());
@@ -955,6 +1028,13 @@ pub mod bytecode {
 			test_op!(Op::And);
 			test_op!(Op::Or);
 			test_op!(Op::Not);
+			test_op!(Op::CmpEq);
+			test_op!(Op::CmpNeq);
+			test_op!(Op::StrEq);
+			test_op!(Op::CmpG);
+			test_op!(Op::CmpGe);
+			test_op!(Op::CmpL);
+			test_op!(Op::CmpLe);
 		}
 		#[test]
 		fn vm_test_0() {
@@ -1049,9 +1129,105 @@ pub mod bytecode {
 					stream.push_op(Op::ReturnValue);
 					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.bool == (i || j) as u8)});
 					stream.clear();
+
+					if i {stream.push_op(Op::LoadTrue)} else {stream.push_op(Op::LoadFalse)};
+					if j {stream.push_op(Op::LoadTrue)} else {stream.push_op(Op::LoadFalse)};
+					stream.push_op(Op::Or);
+					stream.push_op(Op::ReturnValue);
 				}
 			}
 		}
+
+		#[test]
+		fn vm_test_5() {
+			let mut stream = Instructions(Vec::new());
+			let mut vm = Stack::new();
+
+			for i in 0..10 {
+				for j in 0..10 {
+					let i = i as f64;
+					let j = j as f64;
+					stream.push_op(Op::LoadNumber{number:i});
+					stream.push_op(Op::LoadNumber{number:j});
+					stream.push_op(Op::CmpEq);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.bool == (i == j) as u8)});
+					stream.clear();
+
+					stream.push_op(Op::LoadNumber{number:i});
+					stream.push_op(Op::LoadNumber{number:j});
+					stream.push_op(Op::CmpNeq);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.bool == (i != j) as u8)});
+					stream.clear();
+
+					stream.push_op(Op::LoadNumber{number:i});
+					stream.push_op(Op::LoadNumber{number:j});
+					stream.push_op(Op::CmpG);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.bool == (i > j) as u8)});
+					stream.clear();
+
+					stream.push_op(Op::LoadNumber{number:i});
+					stream.push_op(Op::LoadNumber{number:j});
+					stream.push_op(Op::CmpGe);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.bool == (i >= j) as u8)});
+					stream.clear();
+
+					stream.push_op(Op::LoadNumber{number:i});
+					stream.push_op(Op::LoadNumber{number:j});
+					stream.push_op(Op::CmpL);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.bool == (i < j) as u8)});
+					stream.clear();
+
+					stream.push_op(Op::LoadNumber{number:i});
+					stream.push_op(Op::LoadNumber{number:j});
+					stream.push_op(Op::CmpLe);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.bool == (i <= j) as u8)});
+					stream.clear();
+				}
+			}
+		}
+
+		#[test]
+		fn vm_test_6() {
+			let mut stream = Instructions(Vec::new());
+			let mut vm = Stack::new();
+
+			let strings = [
+				nt!("a"),
+				nt!("b"),
+				nt!("c"),
+				nt!("d"),
+				nt!("e"),
+				nt!("f"),
+				nt!("g"),
+				nt!("aa"),
+				nt!("ba"),
+				nt!("ca"),
+				nt!("da"),
+				nt!("ea"),
+				nt!("fa"),
+				nt!("ga"),
+			];
+
+			for i in &strings {
+				for j in &strings {
+					let i = i.as_ntstrptr();
+					let j = j.as_ntstrptr();
+					stream.push_op(Op::LoadStr{string:i});
+					stream.push_op(Op::LoadStr{string:j});
+					stream.push_op(Op::StrEq);
+					stream.push_op(Op::ReturnValue);
+					assert!(unsafe{vm.run(&stream, 0).is_some_and(|x| x.bool == (i == j) as u8)});
+					stream.clear();
+				}
+			}
+		}
+
 	}
 }
 

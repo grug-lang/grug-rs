@@ -92,6 +92,10 @@ impl GrugValue {
 		const _: () = const {assert!(std::mem::size_of::<GrugValue>() == std::mem::size_of::<[u8;8]>())};
 		unsafe{std::mem::transmute::<[u8;8], Self>(bytes)}
 	}
+	pub unsafe fn as_bytes(self) -> [u8;8] {
+		const _: () = const {assert!(std::mem::size_of::<GrugValue>() == std::mem::size_of::<[u8;8]>())};
+		unsafe{std::mem::transmute::<Self, [u8;8]>(self)}
+	}
 }
 
 /// SAFETY: GrugValue is !Send and !Sync because of the *mut c_char within it

@@ -165,6 +165,25 @@ impl<'a> NTStrPtr<'a> {
 	}
 }
 
+impl<'a> PartialEq for NTStrPtr<'a> {
+	fn eq(&self, other: &Self) -> bool {
+		if self.0 == other.0 {
+			true
+		} else {
+			let mut i = 0;
+			loop {
+				if unsafe{self.0.cast::<u8>().add(i).read()} == b'\0' && unsafe{other.0.cast::<u8>().add(i).read()} == b'\0' {break true}
+				if unsafe{self.0.cast::<u8>().add(i).read()} == b'\0' {break false}
+				if unsafe{other.0.cast::<u8>().add(i).read()} == b'\0' {break false}
+				if unsafe{self.0.cast::<u8>().add(i).read()} != unsafe{other.0.cast::<u8>().add(i).read()} {
+					break false;
+				}
+				i += 1;
+			}
+		}
+	}
+}
+
 impl<'a> From<&'a NTStr> for NTStrPtr<'a> {
 	fn from (other: &'a NTStr) -> Self {
 		other.as_ntstrptr()
@@ -189,7 +208,7 @@ macro_rules! nt {
 					i += 1;
 				}
 			};
-			unsafe{::gruggers::ntstring::NTStr::from_str_unchecked(concat!($lit, "\0"))}
+			unsafe{$crate::ntstring::NTStr::from_str_unchecked(concat!($lit, "\0"))}
 		}
 	}
 }
