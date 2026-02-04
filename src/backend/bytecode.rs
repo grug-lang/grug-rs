@@ -33,6 +33,8 @@ pub enum Op {
 	LoadFalse,
 	// 0x05
 	LoadTrue,
+	// TODO: The next 16 single byte instructions should be 0x10 - 0x1f
+	// 0b00000110
 	// 0x06
 	Add,
 	// 0x07
@@ -89,6 +91,24 @@ pub enum Op {
 	JmpIf {
 		offset: isize,
 	},
+	// 0x1e          
+	// 0b00011110    
+	// LoadLocal {
+	// 	index: usize,
+	// },
+	// 0x1f
+	// 0b00011111
+	// StoreLocal {
+	// 	index: usize,
+	// },
+	// CallHelper {
+	// 	args: usize,
+	// 	helper_index: usize
+	// },
+	// CallGameFunction {
+	// 	args: usize,
+	// 	helper_index: usize
+	// },
 }
 
 impl PartialEq for Op {

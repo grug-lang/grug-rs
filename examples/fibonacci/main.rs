@@ -7,28 +7,29 @@ use std::ffi::CStr;
 
 mod game_fns {
 	use super::*;
-	pub extern "C" fn print_number(arguments: *const GrugValue) {
+	use super::GrugState;
+	pub extern "C" fn print_number<'a>(_state: &'a GrugState, arguments: *const GrugValue) {
 		unsafe {
 			let number = (*arguments).number;
 			println!("{}", number);
 		}
 	}
-	pub extern "C" fn print_string(arguments: *const GrugValue) {
+	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) {
 		unsafe {
 			let string = CStr::from_ptr((*arguments).string).to_str().unwrap();
 			println!("{}", string);
 		}
 	}
-	pub extern "C" fn list_number() -> GrugValue {
+	pub extern "C" fn list_number<'a>(_state: &'a GrugState, ) -> GrugValue {
 		println!("creating list");
 		unsafe {
-			let id = STATE.get_id();
+			let id = _state.get_id();
 			let x = Vec::<f64>::new();
 			OBJECTS.insert(id, Box::new(x));
 			GrugValue{id}
 		}
 	}
-	pub extern "C" fn list_number_insert(arguments: *const GrugValue) {
+	pub extern "C" fn list_number_insert<'a>(_state: &'a GrugState, arguments: *const GrugValue) {
 		unsafe {
 			let list = (*arguments).id;
 			let value = (*arguments.add(1)).number;
@@ -36,7 +37,7 @@ mod game_fns {
 			OBJECTS.get_mut(&list).unwrap().downcast_mut::<Vec<f64>>().unwrap().insert(location as usize, value);
 		}
 	}
-	pub extern "C" fn list_number_remove(arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number_remove<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
 		unsafe {
 			let list = (*arguments).id;
 			let location = (*arguments.add(2)).number;
@@ -44,28 +45,28 @@ mod game_fns {
 			GrugValue{number: ret_val}
 		}
 	}
-	pub extern "C" fn list_number_push(arguments: *const GrugValue) {
+	pub extern "C" fn list_number_push<'a>(_state: &'a GrugState, arguments: *const GrugValue) {
 		unsafe {
 			let list = (*arguments).id;
 			let value = (*arguments.add(1)).number;
 			OBJECTS.get_mut(&list).unwrap().downcast_mut::<Vec<f64>>().unwrap().push(value);
 		}
 	}
-	pub extern "C" fn list_number_pop(arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number_pop<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
 		unsafe {
 			let list = (*arguments).id;
 			let ret_val = OBJECTS.get_mut(&list).unwrap().downcast_mut::<Vec<f64>>().unwrap().pop().unwrap();
 			GrugValue{number: ret_val}
 		}
 	}
-	pub extern "C" fn list_number_len(arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number_len<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
 		unsafe {
 			let list = (*arguments).id;
 			let ret_val = OBJECTS.get(&list).unwrap().downcast_ref::<Vec<f64>>().unwrap().len();
 			GrugValue{number: ret_val as f64}
 		}
 	}
-	pub extern "C" fn list_number_get(arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number_get<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
 		unsafe {
 			let list = (*arguments).id;
 			let location = (*arguments.add(1)).number;
@@ -73,7 +74,7 @@ mod game_fns {
 			GrugValue{number: ret_val}
 		}
 	}
-	pub extern "C" fn list_number_set(arguments: *const GrugValue) {
+	pub extern "C" fn list_number_set<'a>(_state: &'a GrugState, arguments: *const GrugValue) {
 		unsafe {
 			let list = (*arguments).id;
 			let value = (*arguments.add(1)).number;
@@ -81,7 +82,7 @@ mod game_fns {
 			*OBJECTS.get_mut(&list).unwrap().downcast_mut::<Vec<f64>>().unwrap().get_mut(location as usize).unwrap() = value;
 		}
 	}
-	pub extern "C" fn print_list_number(arguments: *const GrugValue) {
+	pub extern "C" fn print_list_number<'a>(_state: &'a GrugState, arguments: *const GrugValue) {
 		unsafe {
 			let id = (*arguments).id;
 			let vec = OBJECTS.get(&id).unwrap().downcast_ref::<Vec<f64>>().unwrap();
@@ -136,20 +137,20 @@ fn main () {
 			.set_mod_api_path("examples/fibonacci/mod_api.json")
 			.set_mods_dir("examples/fibonacci/mods")
 			.build_state().unwrap();
-		state.register_game_fn("print_string", print_string as extern "C" fn(_)).unwrap();
-		state.register_game_fn("print_number", print_number as extern "C" fn(_)).unwrap();
-		state.register_game_fn("list_number", list_number as extern "C" fn() -> _).unwrap();
-		state.register_game_fn("print_list_number", print_list_number as extern "C" fn(_)).unwrap();
-		state.register_game_fn("list_number_insert", list_number_insert as extern "C" fn(_)).unwrap();
-		state.register_game_fn("list_number_remove", list_number_remove as extern "C" fn(_) -> _).unwrap();
-		state.register_game_fn("list_number_push", list_number_push as extern "C" fn(_)).unwrap();
-		state.register_game_fn("list_number_pop", list_number_pop as extern "C" fn(_) -> _).unwrap();
-		state.register_game_fn("list_number_len", list_number_len as extern "C" fn(_) -> _).unwrap();
-		state.register_game_fn("list_number_get", list_number_get as extern "C" fn(_) -> _).unwrap();
-		state.register_game_fn("list_number_set", list_number_set as extern "C" fn(_)).unwrap();
+		state.register_game_fn("print_string",       print_string       as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
+		state.register_game_fn("print_number",       print_number       as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
+		state.register_game_fn("list_number",        list_number        as for<'a>extern "C" fn(&'a GrugState, ) -> _).unwrap();
+		state.register_game_fn("print_list_number",  print_list_number  as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
+		state.register_game_fn("list_number_insert", list_number_insert as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
+		state.register_game_fn("list_number_remove", list_number_remove as for<'a>extern "C" fn(&'a GrugState, _) -> _).unwrap();
+		state.register_game_fn("list_number_push",   list_number_push   as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
+		state.register_game_fn("list_number_pop",    list_number_pop    as for<'a>extern "C" fn(&'a GrugState, _) -> _).unwrap();
+		state.register_game_fn("list_number_len",    list_number_len    as for<'a>extern "C" fn(&'a GrugState, _) -> _).unwrap();
+		state.register_game_fn("list_number_get",    list_number_get    as for<'a>extern "C" fn(&'a GrugState, _) -> _).unwrap();
+		state.register_game_fn("list_number_set",    list_number_set    as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
 		assert!(state.all_game_fns_registered());
-		 STATE.write(state);
-		 OBJECTS.write(HashMap::new());
+		STATE.write(state);
+		OBJECTS.write(HashMap::new());
 
 		let script_id = STATE.compile_grug_file("fib_script/entity-Fib.grug").unwrap();
 		let script = STATE.create_entity(script_id).unwrap();

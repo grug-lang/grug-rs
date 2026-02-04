@@ -402,10 +402,10 @@ pub mod interpreter {
 					let game_fn = state.game_functions.get(&**function_name).expect("can't find game function");
 					let return_ty = &state.mod_api.game_functions().get(function_name).unwrap().return_ty;
 					let ret_val = match (values.len(), return_ty) {
-						(0, GrugType::Void) => unsafe{(game_fn.void_argless)(); GrugValue{void: ()}},
-						(0, _             ) => unsafe{(game_fn.value_argless)()},
-						(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
-						(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
+						(0, GrugType::Void) => unsafe{(game_fn.void_argless)(state, ); GrugValue{void: ()}},
+						(0, _             ) => unsafe{(game_fn.value_argless)(state, )},
+						(_, GrugType::Void) => unsafe{(game_fn.void)(state, values.as_ptr()); GrugValue{void: ()}},
+						(_, _             ) => unsafe{(game_fn.value)(state, values.as_ptr())},
 					};
 					if state.is_errorring.get() {
 						return None;
@@ -528,10 +528,10 @@ pub mod interpreter {
 					let game_fn = state.game_functions.get(&**function_name).expect("can't find game function");
 					let return_ty = &state.mod_api.game_functions().get(function_name).unwrap().return_ty;
 					let ret_val = match (values.len(), return_ty) {
-						(0, GrugType::Void) => unsafe{(game_fn.void_argless)(); GrugValue{void: ()}},
-						(0, _             ) => unsafe{(game_fn.value_argless)()},
-						(_, GrugType::Void) => unsafe{(game_fn.void)(values.as_ptr()); GrugValue{void: ()}},
-						(_, _             ) => unsafe{(game_fn.value)(values.as_ptr())},
+						(0, GrugType::Void) => unsafe{(game_fn.void_argless)(state, ); GrugValue{void: ()}},
+						(0, _             ) => unsafe{(game_fn.value_argless)(state, )},
+						(_, GrugType::Void) => unsafe{(game_fn.void)(state, values.as_ptr()); GrugValue{void: ()}},
+						(_, _             ) => unsafe{(game_fn.value)(state, values.as_ptr())},
 					};
 					if let true = state.is_errorring.get() {
 						return None;

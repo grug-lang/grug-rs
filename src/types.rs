@@ -4,6 +4,7 @@ use std::cell::Cell;
 use std::ptr::NonNull;
 use crate::xar::XarHandle;
 use crate::ntstring::NTStr;
+use crate::state::GrugState;
 // TODO Unnest some of these enums
 
 #[repr(C)]
@@ -49,10 +50,10 @@ mod from_impls {
 	}
 }
 
-pub type GameFnPtrVoid = extern "C" fn (args: *const GrugValue);
-pub type GameFnPtrVoidArgless = extern "C" fn ();
-pub type GameFnPtrValue = extern "C" fn (args: *const GrugValue) -> GrugValue;
-pub type GameFnPtrValueArgless = extern "C" fn () -> GrugValue;
+pub type GameFnPtrVoid = extern "C" fn (state: &GrugState, args: *const GrugValue);
+pub type GameFnPtrVoidArgless = extern "C" fn (state: &GrugState);
+pub type GameFnPtrValue = extern "C" fn (state: &GrugState, args: *const GrugValue) -> GrugValue;
+pub type GameFnPtrValueArgless = extern "C" fn (state: &GrugState) -> GrugValue;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]

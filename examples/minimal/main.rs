@@ -1,5 +1,5 @@
 #![deny(warnings)]
-use gruggers::state::GrugInitSettings;
+use gruggers::state::{GrugInitSettings, GrugState};
 use gruggers::types::GrugValue;
 
 use std::ffi::CStr;
@@ -7,7 +7,7 @@ use std::time::Duration;
 
 mod game_fns {
 	use super::*;
-	pub extern "C" fn print_string(arguments: *const GrugValue) {
+	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) {
 		unsafe {
 			let string = CStr::from_ptr((*arguments).string).to_str().unwrap();
 			println!("{}", string);
@@ -21,7 +21,7 @@ fn main () {
 		.set_mods_dir("examples/minimal/mods")
 		.set_mod_api_path("examples/minimal/mod_api.json")
 		.build_state().unwrap();
-	state.register_game_fn("print_string", print_string as extern "C" fn(_)).unwrap();
+	state.register_game_fn("print_string", print_string as for<'a> extern "C" fn(&'a GrugState, _)).unwrap();
 	assert!(state.all_game_fns_registered());
 
 	let id = state.compile_grug_file("goldie/first-Dog.grug").unwrap();
