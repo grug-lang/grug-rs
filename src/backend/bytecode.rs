@@ -33,7 +33,14 @@ pub enum Op {
 	LoadFalse,
 	// 0x05
 	LoadTrue,
-	// TODO: The next 16 single byte instructions should be 0x10 - 0x1f
+	// 0x06        | 0x07
+	// 0b00000110  | 0b00000111
+	// index as u8 | index as u16
+	Dup{
+		index: usize,
+	},
+	// 0x08
+	Pop,
 	// 0b00010000
 	// 0x10
 	Add,
@@ -139,7 +146,9 @@ impl PartialEq for Op {
 				self_bytes == other_bytes
 			}
 			(Self::LoadFalse, Self::LoadFalse)  => true,
-			(Self::LoadTrue, Self::LoadTrue)    => true,
+			(Self::LoadTrue , Self::LoadTrue )  => true,
+			(Self::Dup{index: i0}  , Self::Dup{index: i1})  => i0 == i1,
+			(Self::Pop      , Self::Pop      )  => true,
 			(Self::Add      , Self::Add      )  => true,
 			(Self::Sub      , Self::Sub      )  => true,
 			(Self::Mul      , Self::Mul      )  => true,
@@ -187,6 +196,20 @@ impl Op {
 			0x04 => (Op::LoadFalse, 1),
 			// LoadFalse
 			0x05 => (Op::LoadTrue, 1),
+			0x06 => {
+				let index = *bytes.get(1)? as usize;
+				(Op::Dup{
+					index
+				}, 2)
+			}
+			0x07 => {
+				let bytes = &mut bytes.get(1..)?;
+				let index = u16::from_ne_bytes(get_u16_bytes(bytes)?) as usize;
+				(Op::Dup{
+					index
+				}, 2)
+			}
+			0x08 => (Op::Pop   ,   1),
 			0x10 => (Op::Add   ,   1),
 			0x11 => (Op::Sub   ,   1),
 			0x12 => (Op::Mul   ,   1),
@@ -360,6 +383,10 @@ impl Stack {
 				Op::LoadId{..}         => unreachable!(),
 				Op::LoadFalse          => self.stack.push(GrugValue{bool: 0}),
 				Op::LoadTrue           => self.stack.push(GrugValue{bool: 1}),
+				Op::Dup{index}         => {
+					self.stack.push(*self.stack.get(self.stack.len() - index)?)
+				}
+				Op::Pop                => {self.stack.pop()?;}
 				Op::Add                |
 				Op::Sub                |
 				Op::Mul                |
@@ -441,7 +468,7 @@ impl Stack {
 				Op::StoreGlobal{index} => {
 					globals.get(index)?.set(self.stack.pop()?);
 				}
-				Op::Jmp{offset} => {
+				Op::Jmp{offset}        => {
 					stream = unsafe{
 						std::slice::from_raw_parts(
 							stream.as_ptr().offset(offset), 
@@ -449,7 +476,7 @@ impl Stack {
 						)
 					}
 				}
-				Op::JmpIf{offset} => {
+				Op::JmpIf{offset}      => {
 					if unsafe{self.stack.pop()?.bool} != 0 {
 						stream = unsafe{
 							std::slice::from_raw_parts(
@@ -459,11 +486,11 @@ impl Stack {
 						}
 					}
 				}
-				Op::LoadLocal{index}  => {
+				Op::LoadLocal{index}   => {
 					 let value = *self.stack.get(self.rbp + index)?;
 					 self.stack.push(value);
 				}
-				Op::StoreLocal{index} => {
+				Op::StoreLocal{index}  => {
 					let value = self.stack.pop()?;
 					*self.stack.get_mut(self.rbp + index)? = value;
 				}
@@ -507,24 +534,32 @@ impl Instructions {
 				);
 				self.0.extend_from_slice(&string.as_ptr().expose_provenance().to_ne_bytes());
 			}
-			Op::LoadFalse =>  self.0.push(0x04),
-			Op::LoadTrue  =>  self.0.push(0x05),
-			Op::Add       =>  self.0.push(0x10),
-			Op::Sub       =>  self.0.push(0x11),
-			Op::Mul       =>  self.0.push(0x12),
-			Op::Div       =>  self.0.push(0x13),
-			Op::Rem       =>  self.0.push(0x14),
-			Op::And       =>  self.0.push(0x15),
-			Op::Or        =>  self.0.push(0x16),
-			Op::Not       =>  self.0.push(0x17),
-			Op::CmpEq     =>  self.0.push(0x18),
-			Op::CmpNeq    =>  self.0.push(0x19),
-			Op::StrEq     =>  self.0.push(0x1a),
-			Op::CmpG      =>  self.0.push(0x1b),
-			Op::CmpGe     =>  self.0.push(0x1c),
-			Op::CmpL      =>  self.0.push(0x1d),
-			Op::CmpLe     =>  self.0.push(0x1e),
-			Op::PrintStr  =>  self.0.push(0x1f),
+			Op::LoadFalse => self.0.push(0x04),
+			Op::LoadTrue  => self.0.push(0x05),
+			Op::Dup{index} => {
+				if index > u8::MAX as usize {
+					unimplemented!();
+				}
+				self.0.push(0x06);
+				self.0.push(index as u8);
+			}
+			Op::Pop       => self.0.push(0x08),
+			Op::Add       => self.0.push(0x10),
+			Op::Sub       => self.0.push(0x11),
+			Op::Mul       => self.0.push(0x12),
+			Op::Div       => self.0.push(0x13),
+			Op::Rem       => self.0.push(0x14),
+			Op::And       => self.0.push(0x15),
+			Op::Or        => self.0.push(0x16),
+			Op::Not       => self.0.push(0x17),
+			Op::CmpEq     => self.0.push(0x18),
+			Op::CmpNeq    => self.0.push(0x19),
+			Op::StrEq     => self.0.push(0x1a),
+			Op::CmpG      => self.0.push(0x1b),
+			Op::CmpGe     => self.0.push(0x1c),
+			Op::CmpL      => self.0.push(0x1d),
+			Op::CmpLe     => self.0.push(0x1e),
+			Op::PrintStr  => self.0.push(0x1f),
 			Op::LoadGlobal{index} => {
 				if index > u8::MAX as usize {
 					unimplemented!();
@@ -642,9 +677,12 @@ mod test {
 			test_op!(Op::Jmp{offset: -(i as isize)});
 			test_op!(Op::StoreLocal{index: i});
 			test_op!(Op::LoadLocal{index: i});
+			test_op!(Op::Dup{index: i});
+			test_op!(Op::Dup{index: 10 * i});
 		}
 		test_op!(Op::LoadFalse);
 		test_op!(Op::LoadTrue);
+		test_op!(Op::Pop);
 		test_op!(Op::Add);
 		test_op!(Op::Sub);
 		test_op!(Op::Mul);
