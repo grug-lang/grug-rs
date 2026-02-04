@@ -1,15 +1,15 @@
 #![deny(warnings)]
 use gruggers::state::{GrugInitSettings, GrugState};
 use gruggers::types::GrugValue;
+use gruggers::nt;
 
-use std::ffi::CStr;
 use std::time::Duration;
 
 mod game_fns {
 	use super::*;
 	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) {
 		unsafe {
-			let string = CStr::from_ptr((*arguments).string).to_str().unwrap();
+			let string = (*arguments).string.to_str();
 			println!("{}", string);
 		}
 	}
@@ -29,8 +29,8 @@ fn main () {
 	let on_bark_id = state.get_on_fn_id("Dog", "on_bark").unwrap();
 
 	loop {
-		if state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: c"woof".as_ptr().cast()}]) {panic!()};
-		if state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: c"arf".as_ptr().cast()}]) {panic!()};
+		if state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: nt!("woof").as_ntstrptr()}]) {panic!()};
+		if state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: nt!("arg").as_ntstrptr()}]) {panic!()};
 		std::thread::sleep(Duration::from_secs(1));
 	}
 }

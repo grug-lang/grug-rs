@@ -3,8 +3,6 @@
 use gruggers::state::{GrugInitSettings, GrugState};
 use gruggers::types::GrugValue;
 
-use std::ffi::CStr;
-
 mod game_fns {
 	use super::*;
 	use super::GrugState;
@@ -16,7 +14,7 @@ mod game_fns {
 	}
 	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) {
 		unsafe {
-			let string = CStr::from_ptr((*arguments).string).to_str().unwrap();
+			let string = (*arguments).string.to_str();
 			println!("{}", string);
 		}
 	}

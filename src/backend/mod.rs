@@ -23,7 +23,6 @@ pub mod interpreter {
 	use std::sync::Arc;
 	use std::cell::{Cell, RefCell};
 	use std::collections::HashMap;
-	use std::ffi::CStr;
 	use std::time::{Duration, Instant};
 	use std::alloc::Layout;
 
@@ -294,13 +293,13 @@ pub mod interpreter {
 						LiteralExpr::FalseExpr => GrugValue{bool: 0},
 						LiteralExpr::StringExpr{
 							value
-						} => GrugValue{string: value.as_ptr().cast()},
+						} => unsafe{GrugValue{string: value.as_ntstrptr().detach_lifetime()}},
 						LiteralExpr::ResourceExpr{
 							value
-						} => GrugValue{string: value.as_ptr().cast()},
+						} => unsafe{GrugValue{string: value.as_ntstrptr().detach_lifetime()}},
 						LiteralExpr::EntityExpr{
 							value
-						} => GrugValue{string: value.as_ptr().cast()},
+						} => unsafe{GrugValue{string: value.as_ntstrptr().detach_lifetime()}},
 						LiteralExpr::NumberExpr {
 							value,
 							string: _,
@@ -347,7 +346,7 @@ pub mod interpreter {
 								GrugType::Number => unsafe{first_value.number == second_value()?.number},
 								GrugType::Id{..} => unsafe{first_value.id == second_value()?.id},
 								GrugType::String => {
-									unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
+									unsafe{first_value.string.to_str() == second_value()?.string.to_str()}
 								},
 								_ => unreachable!(),
 							};
@@ -359,7 +358,7 @@ pub mod interpreter {
 								GrugType::Number => unsafe{first_value.number != second_value()?.number}
 								GrugType::Id{..} => unsafe{first_value.id != second_value()?.id}
 								GrugType::String => {
-									!unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
+									unsafe{first_value.string.to_str() != second_value()?.string.to_str()}
 								}
 								_ => unreachable!(),
 							};
@@ -438,13 +437,13 @@ pub mod interpreter {
 						LiteralExpr::FalseExpr => GrugValue{bool: 0},
 						LiteralExpr::StringExpr{
 							value
-						} => GrugValue{string: value.as_ptr().cast()},
+						} => unsafe{GrugValue{string: value.as_ntstrptr().detach_lifetime()}},
 						LiteralExpr::ResourceExpr{
 							value
-						} => GrugValue{string: value.as_ptr().cast()},
+						} => unsafe{GrugValue{string: value.as_ntstrptr().detach_lifetime()}},
 						LiteralExpr::EntityExpr{
 							value
-						} => GrugValue{string: value.as_ptr().cast()},
+						} => unsafe{GrugValue{string: value.as_ntstrptr().detach_lifetime()}},
 						LiteralExpr::NumberExpr {
 							value,
 							string: _,
@@ -487,7 +486,7 @@ pub mod interpreter {
 								GrugType::Number => unsafe{first_value.number == second_value()?.number},
 								GrugType::Id{..} => unsafe{first_value.id == second_value()?.id},
 								GrugType::String => {
-									unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
+									unsafe{first_value.string.to_str() == second_value()?.string.to_str()}
 								},
 								_ => unreachable!(),
 							};
@@ -499,7 +498,7 @@ pub mod interpreter {
 								GrugType::Number => unsafe{first_value.number != second_value()?.number}
 								GrugType::Id{..} => unsafe{first_value.id != second_value()?.id}
 								GrugType::String => {
-									!unsafe {CStr::from_ptr(first_value.string)}.eq(unsafe{CStr::from_ptr(second_value()?.string)})
+									unsafe{first_value.string.to_str() != second_value()?.string.to_str()}
 								}
 								_ => unreachable!(),
 							};

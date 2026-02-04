@@ -1,9 +1,9 @@
 use std::sync::Arc;
-use std::ffi::{c_char, c_double};
+use std::ffi::c_double;
 use std::cell::Cell;
 use std::ptr::NonNull;
 use crate::xar::XarHandle;
-use crate::ntstring::NTStr;
+use crate::ntstring::{NTStr, NTStrPtr};
 use crate::state::GrugState;
 // TODO Unnest some of these enums
 
@@ -84,7 +84,7 @@ pub union GrugValue {
 	pub number: c_double,
 	pub bool: u8,
 	pub id: GrugId,
-	pub string: *const c_char,
+	pub string: NTStrPtr<'static>,
 	pub void: (),
 }
 

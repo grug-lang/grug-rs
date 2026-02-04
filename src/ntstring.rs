@@ -125,6 +125,7 @@ impl<'a> NTStrPtr<'a> {
 	pub fn as_ptr(self) -> *const u8 {
 		self.0.cast::<u8>().as_ptr().cast_const()
 	}
+
 	pub unsafe fn from_ptr (ptr: NonNull<c_char>) -> Self {
 		Self(ptr, PhantomData)
 	}
@@ -162,6 +163,12 @@ impl<'a> NTStrPtr<'a> {
 	/// in the rest of the string
 	pub fn from_str(value: &'a str) -> Option<Self> {
 		Some(NTStr::from_str(value)?.as_ntstrptr())
+	}
+	
+	/// returns a pointer with a static lifetime. 
+	/// it is UB to use the returned pointer after the 'a would have ended
+	pub unsafe fn detach_lifetime(self) -> NTStrPtr<'static> {
+		unsafe{std::mem::transmute::<Self, NTStrPtr<'static>>(self)}
 	}
 }
 

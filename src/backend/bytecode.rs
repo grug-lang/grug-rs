@@ -25,21 +25,21 @@ pub enum Op {
 	LoadId {
 		id: GrugId,
 	},
-	// 0x03
+	// 0x04
 	LoadStr {
 		string: NTStrPtr<'static>,
 	},
-	// 0x04
-	LoadFalse,
 	// 0x05
+	LoadFalse,
+	// 0x06
 	LoadTrue,
-	// 0x06        | 0x07
-	// 0b00000110  | 0b00000111
+	// 0x07        | 0x08
+	// 0b00000111  | 0b00001000
 	// index as u8 | index as u16
 	Dup{
 		index: usize,
 	},
-	// 0x08
+	// 0x09
 	Pop,
 	// 0b00010000
 	// 0x10
@@ -184,7 +184,6 @@ impl Op {
 			// LoadQW
 			// LoadNumber
 			// LoadId
-			// LoadStr
 			0x03 => {
 				let bytes = &mut bytes.get(1..)?;
 				let value = get_u64_bytes(bytes)?;
@@ -192,24 +191,35 @@ impl Op {
 					bytes: value,
 				}, 1 + size_of::<u64>())
 			}
+			// LoadStr
+			0x04 => {
+				let bytes = &mut bytes.get(1..)?;
+				use std::ptr::NonNull;
+				let value = unsafe{NTStrPtr::from_ptr(NonNull::new_unchecked(std::ptr::with_exposed_provenance_mut(usize::from_ne_bytes(get_u64_bytes(bytes)?))))};
+				(Op::LoadStr{
+					string: value,
+				}, 1 + size_of::<u64>())
+			}
 			// LoadTrue
-			0x04 => (Op::LoadFalse, 1),
+			0x05 => (Op::LoadFalse, 1),
 			// LoadFalse
-			0x05 => (Op::LoadTrue, 1),
-			0x06 => {
+			0x06 => (Op::LoadTrue, 1),
+			// Dup
+			0x07 => {
 				let index = *bytes.get(1)? as usize;
 				(Op::Dup{
 					index
 				}, 2)
 			}
-			0x07 => {
-				let bytes = &mut bytes.get(1..)?;
-				let index = u16::from_ne_bytes(get_u16_bytes(bytes)?) as usize;
-				(Op::Dup{
-					index
-				}, 2)
+			0x08 => {
+				unimplemented!();
+				// let bytes = &mut bytes.get(1..)?;
+				// let index = u16::from_ne_bytes(get_u16_bytes(bytes)?) as usize;
+				// (Op::Dup{
+				// 	index
+				// }, 2)
 			}
-			0x08 => (Op::Pop   ,   1),
+			0x09 => (Op::Pop   ,   1),
 			0x10 => (Op::Add   ,   1),
 			0x11 => (Op::Sub   ,   1),
 			0x12 => (Op::Mul   ,   1),
@@ -330,6 +340,74 @@ impl std::fmt::Debug for Instructions {
 	}
 }
 
+impl std::fmt::Display for Instructions {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		let stream = &mut &*self.0;
+		while let Some(ins) = Op::decode(stream) {
+			let addr = unsafe{stream.as_ptr().byte_offset_from(self.0.as_ptr())};
+			write!(f, " 0x{:08x} ", addr)?;
+			match ins {
+				Op::ReturnVoid => write!(f, "ReturnVoid"),
+				Op::ReturnValue => write!(f, "ReturnValue"),
+				Op::LoadQW {
+					bytes,
+				} => write!(f, "Load (id: {}, float: {:?})", u64::from_ne_bytes(bytes), f64::from_ne_bytes(bytes)),
+				Op::LoadStr {
+					string,
+				} => write!(f, "LoadStr {:?}", string.to_str()),
+				Op::LoadNumber {
+					number: _,
+				} |
+				Op::LoadId {
+					id: _,
+				} => unreachable!(),
+				Op::LoadFalse => write!(f, "LoadFalse"),
+				Op::LoadTrue => write!(f, "LoadTrue"),
+				Op::Dup{
+					index,
+				} => write!(f, "Dup {}", index),
+				Op::Pop => write!(f, "Pop"),
+				Op::Add => write!(f, "Add"),
+				Op::Sub => write!(f, "Sub"),
+				Op::Mul => write!(f, "Mul"),
+				Op::Div => write!(f, "Div"),
+				Op::Rem => write!(f, "Rem"),
+				Op::And => write!(f, "And"),
+				Op::Or => write!(f, "Or"),
+				Op::Not => write!(f, "Not"),
+				Op::CmpEq => write!(f, "CmpEq"),
+				Op::CmpNeq => write!(f, "CmpNeq"),
+				Op::StrEq => write!(f, "StrEq"),
+				Op::CmpG => write!(f, "CmpG"),
+				Op::CmpGe => write!(f, "CmpGe"),
+				Op::CmpL => write!(f, "CmpL"),
+				Op::CmpLe => write!(f, "CmpLe"),
+				Op::PrintStr => write!(f, "PrintStr"),
+				Op::LoadGlobal {
+					index,
+				} => write!(f, "LoadGlobal {}", index),
+				Op::StoreGlobal {
+					index,
+				} => write!(f, "StoreGlobal {}", index),
+				Op::Jmp {
+					offset,
+				} => write!(f, "Jmp {}", addr + offset),
+				Op::JmpIf {
+					offset,
+				} => write!(f, "JmpIf {}", addr + offset),
+				Op::LoadLocal {
+					index,
+				} => write!(f, "LoadLocal {}", index),
+				Op::StoreLocal {
+					index,
+				} => write!(f, "StoreLocal {}", index),
+			}?;
+			write!(f, "\n")?;
+		}
+		Ok(())
+	}
+}
+
 pub struct Stack {
 	stack: Vec<GrugValue>,
 	rbp: usize,
@@ -378,8 +456,8 @@ impl Stack {
 					}
 				}
 				Op::LoadQW{bytes}      => self.stack.push(GrugValue::from_bytes(bytes)),
+				Op::LoadStr{string}    => self.stack.push(GrugValue{string}),
 				Op::LoadNumber{..}     | 
-				Op::LoadStr{..}        | 
 				Op::LoadId{..}         => unreachable!(),
 				Op::LoadFalse          => self.stack.push(GrugValue{bool: 0}),
 				Op::LoadTrue           => self.stack.push(GrugValue{bool: 1}),
@@ -530,20 +608,20 @@ impl Instructions {
 			}
 			Op::LoadStr{string}  => {
 				self.0.push(
-					0x03
+					0x04
 				);
 				self.0.extend_from_slice(&string.as_ptr().expose_provenance().to_ne_bytes());
 			}
-			Op::LoadFalse => self.0.push(0x04),
-			Op::LoadTrue  => self.0.push(0x05),
+			Op::LoadFalse => self.0.push(0x05),
+			Op::LoadTrue  => self.0.push(0x06),
 			Op::Dup{index} => {
 				if index > u8::MAX as usize {
 					unimplemented!();
 				}
-				self.0.push(0x06);
+				self.0.push(0x07);
 				self.0.push(index as u8);
 			}
-			Op::Pop       => self.0.push(0x08),
+			Op::Pop       => self.0.push(0x09),
 			Op::Add       => self.0.push(0x10),
 			Op::Sub       => self.0.push(0x11),
 			Op::Mul       => self.0.push(0x12),
@@ -698,6 +776,7 @@ mod test {
 		test_op!(Op::CmpGe);
 		test_op!(Op::CmpL);
 		test_op!(Op::CmpLe);
+
 	}
 
 	#[test]
@@ -926,6 +1005,7 @@ mod test {
 				stream.push_op(Op::PrintStr);
 				stream.push_op(Op::ReturnVoid);
 				assert!(unsafe{vm.run(&[], &stream, 0).is_some()});
+				// panic!("{}", stream);
 				stream.clear();
 			}
 		}
@@ -1081,7 +1161,7 @@ mod test {
 				a
 			};
 			assert!(unsafe{vm.run(&globals, &stream, 0).is_some_and(|x| {assert_eq!(x.number, fib); true})});
-			// panic!("{:#?}", stream);
+			// panic!("{}", stream);
 			stream.clear();
 		}
 	}
