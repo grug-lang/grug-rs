@@ -384,7 +384,7 @@ impl Stack {
 				Op::LoadFalse          => self.stack.push(GrugValue{bool: 0}),
 				Op::LoadTrue           => self.stack.push(GrugValue{bool: 1}),
 				Op::Dup{index}         => {
-					self.stack.push(*self.stack.get(self.stack.len() - index)?)
+					self.stack.push(*self.stack.get(self.stack.len() - 1 - index)?)
 				}
 				Op::Pop                => {self.stack.pop()?;}
 				Op::Add                |
@@ -1082,6 +1082,36 @@ mod test {
 			};
 			assert!(unsafe{vm.run(&globals, &stream, 0).is_some_and(|x| {assert_eq!(x.number, fib); true})});
 			// panic!("{:#?}", stream);
+			stream.clear();
+		}
+	}
+
+	#[test]
+	fn vm_test_10() {
+		let mut stream = Instructions(Vec::new());
+		let globals = [const {Cell::new(GrugValue{void: ()})}; 10];
+		let mut vm = Stack::new();
+
+		for i in 0..10 {
+			stream.push_op(Op::LoadNumber{number: 0.});
+			for j in 0..i {
+				stream.push_op(Op::LoadNumber{number: (i - j) as f64});
+			}
+			for _ in 0..(i-1) {
+				stream.push_op(Op::Pop);
+			}
+			stream.push_op(Op::ReturnValue);
+			
+			assert!(unsafe{vm.run(&globals, &stream, 0).is_some_and(|x| {assert_eq!(x.number, i as f64); true})});
+			stream.clear();
+
+			stream.push_op(Op::LoadNumber{number: i as f64});
+			stream.push_op(Op::LoadNumber{number: i as f64 - 1.});
+			stream.push_op(Op::Dup{index: 1});
+			stream.push_op(Op::Add);
+			stream.push_op(Op::Add);
+			stream.push_op(Op::ReturnValue);
+			assert!(unsafe{vm.run(&globals, &stream, 0).is_some_and(|x| {assert_eq!(x.number, 3. * i as f64 - 1.); true})});
 			stream.clear();
 		}
 	}
