@@ -130,7 +130,11 @@ impl From<std::io::Error> for ModApiError {
 
 pub fn get_mod_api<P: AsRef<Path>>(mod_api_path: P) -> Result<ModApi, ModApiError> {
 	let mod_api_text = std::fs::read_to_string(mod_api_path)?;
-	let mod_api_json = json::parse(&mod_api_text)?;
+	get_mod_api_from_text(&mod_api_text)
+}
+
+pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> {
+	let mod_api_json = json::parse(mod_api_text)?;
 	// "entities" object
 	let entities = &mod_api_json["entities"];
 	if !entities.is_object() {

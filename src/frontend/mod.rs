@@ -18,14 +18,18 @@ pub mod parser;
 
 impl GrugState {
 	pub fn compile_grug_file(&self, path: &str) -> Result<GrugScriptId, GrugError> {
-		let mod_name = get_mod_name(path)?;
-		let entity_type = get_entity_type(path)?;
-
 		let mut path_buf = self.mods_dir_path.clone();
 		path_buf.push(path);
 		let file_text = std::fs::read_to_string(path_buf).unwrap();
 
-		let tokens = tokenizer::tokenize(&file_text)?;
+		self.compile_grug_file_from_str(path, &file_text)
+	}
+
+	pub fn compile_grug_file_from_str(&self, path: &str, file_text: &str) -> Result<GrugScriptId, GrugError> {
+		let mod_name = get_mod_name(path)?;
+		let entity_type = get_entity_type(path)?;
+
+		let tokens = tokenizer::tokenize(file_text)?;
 
 		let mut ast = parser::parse(&tokens)?;
 

@@ -1,4 +1,4 @@
-use crate::mod_api::{ModApi, get_mod_api};
+use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{GrugError, RuntimeError};
 use crate::backend::{Backend, Interpreter, ErasedBackend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
@@ -29,13 +29,14 @@ pub struct RuntimeErrorHandler {
 }
 
 impl RuntimeErrorHandler {
-	pub const fn new () -> Self {
+	pub const fn new_default () -> Self {
 		Self {
 			data: NonNull::dangling(),
 			drop: None, 
 			func: None
 		}
 	}
+
 	fn handle_error(&self, kind: RuntimeError, message: &str, on_fn_name: &str, script_path: &str) {
 		if let Some(func) = self.func {
 			func(
@@ -51,9 +52,10 @@ impl RuntimeErrorHandler {
 		} 
 	}
 }
+
 impl Default for RuntimeErrorHandler {
 	fn default() -> Self {
-		Self::new()
+		Self::new_default()
 	}
 }
 
@@ -119,7 +121,7 @@ impl<'a> GrugInitSettings<'a> {
 			mod_api_path_len: 0,
 			mods_dir_path: None,
 			mods_dir_path_len: 0,
-			runtime_error_handler: RuntimeErrorHandler::new(),
+			runtime_error_handler: RuntimeErrorHandler::new_default(),
 			backend: None,
 		}
 	}
@@ -217,6 +219,24 @@ impl GrugState {
 			runtime_error_handler: handler,
 			entities: Xar::new(),
 			backend: Interpreter::new().into(),
+			current_script: Cell::new(None),
+			current_on_fn_id: Cell::new(None),
+			call_start_time: Cell::new(Instant::now()),
+			is_errorring: Cell::new(false),
+		})
+	}
+
+	pub fn new_from_text<D: AsRef<Path>> (mod_api_text: &str, mods_dir_path: D, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend>) -> Result<Self, GrugError> {
+		let mod_api = get_mod_api_from_text(mod_api_text)?;
+
+		Ok(Self {
+			mod_api,
+			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
+			next_id: AtomicU64::new(0),
+			game_functions: HashMap::new(),
+			runtime_error_handler: handler,
+			entities: Xar::new(),
+			backend: backend.into(),
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
 			call_start_time: Cell::new(Instant::now()),

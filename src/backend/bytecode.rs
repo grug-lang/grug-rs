@@ -1,8 +1,100 @@
-use crate::types::{GrugValue, GrugId};
-use crate::ntstring::NTStrPtr;
+#![warn(warnings)]
+use crate::types::{GrugValue, GrugId, GrugScriptId, GrugOnFnId, GrugEntity};
+use crate::ntstring::{NTStrPtr, NTStr};
+use crate::cachemap::CacheMap;
+use crate::state::GrugState;
+use crate::xar::ErasedXar;
+use super::{Backend, GrugFile};
 
-use std::cell::Cell;
+use std::ptr::NonNull;
+use std::cell::{Cell, RefCell};
 use std::mem::size_of;
+use std::sync::Arc;
+
+#[derive(Debug)]
+struct CompiledFile {
+	on_functions: Vec<(Arc<str>, usize)>,
+	helper_functions: Vec<usize>,
+	strings: Vec<Arc<NTStr>>,
+	instructions: Instructions,
+	entities: RefCell<Vec<NonNull<GrugEntity>>>,
+	data: ErasedXar,
+}
+
+struct BytecodeBackend {
+	files: CacheMap<GrugScriptId, CompiledFile>,
+	file_id_map: CacheMap<String, GrugScriptId>,
+	next_id: Cell<u64>,
+	stacks: RefCell<Vec<Stack>>,
+}
+
+impl BytecodeBackend {
+	pub fn new() -> Self {
+		Self {
+			files: CacheMap::new(),
+			file_id_map: CacheMap::new(),
+			next_id: Cell::new(0),
+			stacks: RefCell::new(Vec::new()),
+		}
+	}
+
+	fn get_next_script_id(&self) -> GrugScriptId {
+		let id = self.next_id.get();
+		self.next_id.set(id + 1);
+		GrugScriptId::new(id)
+	}
+
+	fn compile_file(&self, file: GrugFile) -> CompiledFile {
+		todo!();
+	}
+}
+
+unsafe impl Backend for BytecodeBackend {
+	fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str> {
+		// a path is never replaced once it is inserted into the map;
+		let string: &str = unsafe{&*(&**self.file_id_map.find_key(&script_id)? as *const _)};
+		Some(string)
+	}
+	
+	// This should only happen during an error so its okay if its slow
+	fn get_on_function_name(&self, script_id: GrugScriptId, on_fn_id: GrugOnFnId) -> Option<&str> {
+		Some(&self.files.get(&script_id)?.on_functions.get(on_fn_id as usize - 1)?.0)
+	}
+
+	fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId {
+		match self.file_id_map.get(path) {
+			Some(id) => {	
+				let _compiled_file = self.files.get(id)
+					.expect("id exists in file_id_map so it must exist in files");
+				
+				todo!();
+			},
+			None => {
+				let next_id = self.get_next_script_id();
+				self.file_id_map.try_insert(String::from(path), next_id).unwrap();
+				let compiled_file = self.compile_file(file);
+				self.files.try_insert(next_id, compiled_file).unwrap();
+				next_id
+			}
+		}
+	}
+
+	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
+		todo!()
+	}
+	fn clear_entities(&mut self) {
+		todo!()
+	}
+	fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
+		todo!()
+	}
+	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
+		todo!()
+	}
+	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
+		todo!()
+	}
+}
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
@@ -727,10 +819,95 @@ impl Instructions {
 		}
 	}
 }
+
 #[cfg(test)]
 mod test {
 	use super::*;
 	use crate::nt;
+	use crate::state::GrugState;
+	use crate::types::GameFnPtrValue;
+	use super::super::interpreter::Interpreter;
+
+	const MOD_API: &'static str = r#"
+	{
+		"entities" : {
+			"A" : {
+				"description": "A",
+				"on_functions": {
+					"on_fib" : {
+						"description": "calculate the fibonacci number at index i",
+						"arguments": [
+							{
+								"name": "i",
+								"type": "number"
+							}
+						]
+					},
+					"on_double" : {
+						"description": "doubles the input number",
+						"arguments": [
+							{
+								"name": "input",
+								"type": "number"
+							}
+						]
+					}
+				}
+			}
+		},
+		"game_functions": {
+			"identity": {
+				"description": "returns the same number as the input",
+				"return_type": "number",
+				"arguments": [
+					{
+						"name": "input",
+						"type": "number"
+					}
+				]
+			}
+		}
+	}
+	"#;
+	const GRUG_FILE_TEXT: &'static str = 
+r#"global: number = 2
+
+on_fib(i: number) {
+    identity(i)
+}
+
+on_double(input: number) {
+    identity(2 * input)
+}
+"#; // '
+	static mut IDENTITY_ARG: f64 = 0.;
+	extern "C" fn identity(_: &GrugState, arguments: *const GrugValue) -> GrugValue {
+		unsafe{IDENTITY_ARG = (*arguments).number;}
+		unsafe{*arguments}
+	}
+
+	#[test]
+	fn vm_test_state() {
+		let mut state = GrugState::new_from_text(
+			MOD_API,
+			"doesn't matter",
+			Default::default(),
+			Interpreter::new(),
+		).unwrap();
+		state.register_game_fn("identity", identity as GameFnPtrValue).unwrap();
+		assert!(state.all_game_fns_registered());
+
+		let on_fib_id    = state.get_on_fn_id("A", "on_fib").unwrap();
+		let on_double_id = state.get_on_fn_id("A", "on_double").unwrap();
+		let _file = state.compile_grug_file_from_str("path/test-A.gru ", GRUG_FILE_TEXT).unwrap();
+		let entity = state.create_entity(_file).unwrap();
+		_ = state.call_on_function(&entity, on_fib_id, &[GrugValue{number: 25.}]);
+		unsafe{assert!(IDENTITY_ARG == 25.);}
+		
+		_ = state.call_on_function(&entity, on_double_id, &[GrugValue{number: 25.}]);
+		unsafe{assert!(IDENTITY_ARG == 50.);}
+	}
+		
 	#[test]
 	fn vm_test_decoding() {
 		let mut stream = Instructions(Vec::new());
@@ -776,7 +953,6 @@ mod test {
 		test_op!(Op::CmpGe);
 		test_op!(Op::CmpL);
 		test_op!(Op::CmpLe);
-
 	}
 
 	#[test]
