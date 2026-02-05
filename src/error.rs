@@ -1,4 +1,4 @@
-use crate::frontend::FileNameError;
+use crate::frontend::FileError;
 use crate::frontend::tokenizer::TokenizerError;
 use crate::frontend::parser::ParserError;
 use crate::frontend::type_propagation::TypePropogatorError;
@@ -6,19 +6,19 @@ use crate::mod_api::ModApiError;
 
 #[derive(Debug)]
 pub enum GrugError {
-	FileNameError(FileNameError),
+	FileError(FileError),
 	TokenizerError(TokenizerError),
 	ParserError(ParserError),
 	ModApiError(ModApiError),
 	TypePropogatorError(TypePropogatorError),
 }
 
-impl From<FileNameError> for GrugError {
-	fn from (from: FileNameError) -> Self {
+impl From<FileError> for GrugError {
+	fn from (from: FileError) -> Self {
 		// this extra single quote is needed to prevent a vim plugin from
 		// mishandling quotes in the rest of the file
 		// '
-		Self::FileNameError(from)
+		Self::FileError(from)
 	}
 }
 
@@ -50,7 +50,7 @@ impl std::fmt::Display for GrugError {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
 			Self::TokenizerError(error) => write!(f, "{}", error),
-			Self::FileNameError(error) => write!(f, "{}", error),
+			Self::FileError(error) => write!(f, "{}", error),
 			Self::ParserError(error) => write!(f, "{}", error),
 			Self::TypePropogatorError(error) => write!(f, "{}", error),
 			err => write!(f, "{:?}", err),

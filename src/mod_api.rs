@@ -21,8 +21,8 @@ impl ModApi {
 #[derive(Debug)]
 pub struct ModApiEntity {
 	#[allow(dead_code)]
-	pub(super) description: Option<String>,
-	pub(super) on_fns: Vec<(Arc<str>, ModApiOnFn)>,
+	pub(crate) description: Option<String>,
+	pub(crate) on_fns: Vec<(Arc<str>, ModApiOnFn)>,
 }
 
 impl ModApiEntity {

@@ -9,7 +9,7 @@ use std::ptr::NonNull;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, hash_map::Entry};
-use std::sync::{atomic::{AtomicU64, Ordering}};
+use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use std::time::Instant;
 
 #[repr(C)]
@@ -149,15 +149,15 @@ impl<'a> GrugInitSettings<'a> {
 	}
 
 	pub fn build_state(&mut self) -> Result<GrugState, GrugError> {
-		let mod_api_path = Self::maybe_nt_or_length(self.mod_api_path, self.mod_api_path_len)
+		let mod_api_path = unsafe{Self::maybe_nt_or_length(self.mod_api_path, self.mod_api_path_len)}
 			.unwrap_or("./mod_api.json");
-		let mods_dir_path = Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)
+		let mods_dir_path = unsafe{Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)}
 			.unwrap_or("./mods");
 
 		GrugState::new(mod_api_path, mods_dir_path, std::mem::take(&mut self.runtime_error_handler))
 	}
 
-	fn maybe_nt_or_length(ptr: Option<NonNull<u8>>, len: usize) -> Option<&'a str> {
+	unsafe fn maybe_nt_or_length(ptr: Option<NonNull<u8>>, len: usize) -> Option<&'a str> {
 		// null terminated
 		if let Some(ptr) = ptr {
 			if len == 0 {
@@ -199,6 +199,9 @@ pub struct GrugState {
 
 	pub(crate) entities: Xar<GrugEntity>,
 	
+	pub(crate) on_functions: Vec<OnFnEntry>,
+	// pub(crate) files: CacheMap<String, GrugScriptId>,
+
 	pub(crate) backend: ErasedBackend,
 	// pub(crate) backend: Interpreter,
 	pub(crate) current_script: Cell<Option<GrugScriptId>>,
@@ -211,6 +214,19 @@ impl GrugState {
 	fn new<J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, handler: RuntimeErrorHandler) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api(&mod_api_path)?;
 
+		let mut on_fn_id = 0;
+		let mut on_fns = Vec::new();
+		for (entity_type, entity) in mod_api.entities() {
+			for (on_fn_name, _) in &entity.on_fns {
+				on_fns.push(OnFnEntry{
+					entity_type: Arc::clone(entity_type),
+					on_fn_name:  Arc::clone(on_fn_name),
+					id: on_fn_id,
+				});
+				on_fn_id += 1;
+			}
+		}
+
 		Ok(Self {
 			mod_api,
 			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
@@ -218,6 +234,7 @@ impl GrugState {
 			game_functions: HashMap::new(),
 			runtime_error_handler: handler,
 			entities: Xar::new(),
+			on_functions: on_fns,
 			backend: Interpreter::new().into(),
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
@@ -229,6 +246,26 @@ impl GrugState {
 	pub fn new_from_text<D: AsRef<Path>> (mod_api_text: &str, mods_dir_path: D, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend>) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api_from_text(mod_api_text)?;
 
+		let mut on_fn_id = 0;
+		let mut on_fns = Vec::new();
+		let init_globals = Arc::from("init_globals");
+		for (entity_type, entity) in mod_api.entities() {
+			on_fns.push(OnFnEntry {
+				entity_type: Arc::clone(entity_type),
+				on_fn_name : Arc::clone(&init_globals),
+				id         : on_fn_id,
+			});
+			on_fn_id += 1;
+			for (on_fn_name, _) in &entity.on_fns {
+				on_fns.push(OnFnEntry{
+					entity_type: Arc::clone(entity_type),
+					on_fn_name : Arc::clone(on_fn_name),
+					id         : on_fn_id,
+				});
+				on_fn_id += 1;
+			}
+		}
+
 		Ok(Self {
 			mod_api,
 			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
@@ -236,6 +273,7 @@ impl GrugState {
 			game_functions: HashMap::new(),
 			runtime_error_handler: handler,
 			entities: Xar::new(),
+			on_functions: on_fns,
 			backend: backend.into(),
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
@@ -245,16 +283,46 @@ impl GrugState {
 	}
 
 	pub fn get_on_fn_id(&self, entity_type: &str, on_fn_name: &str) -> Result<GrugOnFnId, StateError> {
-		Ok(self.mod_api.entities().get(entity_type)
-			.ok_or(StateError::UnknownEntityType{
-				entity_type: String::from(entity_type)
-			})?
-			.get_on_fn(on_fn_name)
-			.ok_or(StateError::UnknownOnFunction{
-				entity_type: String::from(entity_type), 
-				on_function_name: String::from(on_fn_name)}
-			)?
-			.0 as u64 + 1)
+		if !self.mod_api.entities().contains_key(entity_type) {
+			return Err(StateError::UnknownEntityType{
+				entity_type: String::from(entity_type),
+			});
+		}
+		for on_fn_entry in &self.on_functions {
+			if &*on_fn_entry.entity_type == entity_type && &*on_fn_entry.on_fn_name == on_fn_name {
+				return Ok(on_fn_entry.id)
+			}
+		}
+		Err(StateError::UnknownOnFunction {
+			entity_type: String::from(entity_type),
+			on_function_name : String::from(on_fn_name ),
+		})
+	}
+	
+	pub fn get_on_fn_name(&self, on_fn_id: GrugOnFnId) -> Option<&str> {
+		for on_fn_entry in &self.on_functions {
+			if on_fn_entry.id == on_fn_id {
+				return Some(&*on_fn_entry.on_fn_name);
+			}
+		}
+		None
+	}
+
+	pub fn get_entity_on_functions(&self, entity_type: &str) -> Result<&[OnFnEntry], StateError> {
+		if !self.mod_api.entities().contains_key(entity_type) {
+			return Err(StateError::UnknownEntityType{
+				entity_type: String::from(entity_type),
+			});
+		}
+		let mut start = 0;
+		while start != self.on_functions.len() && &*self.on_functions[start].entity_type != entity_type {
+			start += 1;
+		}
+		let mut end = start;
+		while end != self.on_functions.len() && &*self.on_functions[end].entity_type == entity_type {
+			end += 1;
+		}
+		Ok(&self.on_functions[start..end])
 	}
 
 	pub fn register_game_fn<F: Into<GameFnPtr>>(&mut self, name: &'static str, ptr: F) -> Result<(), StateError> {
@@ -337,11 +405,7 @@ impl GrugState {
 		let Some(current_on_fn_id) = self.current_on_fn_id.get() else {
 			return
 		};
-		let current_on_fn_name = if current_on_fn_id == 0 {
-			"init_globals"
-		} else {
-			self.backend.get_on_function_name(current_script, current_on_fn_id).unwrap()
-		};
+		let current_on_fn_name = self.get_on_fn_name(current_on_fn_id).unwrap();
 		let message = format!("{}", error);
 		self.runtime_error_handler.handle_error(
 			error, 
@@ -359,6 +423,10 @@ impl GrugState {
 	pub fn clear_error(&self) {
 		self.is_errorring.set(false);
 	}
+
+	// pub fn reload_load_mods(&self) -> GrugModsDir {
+		
+	// }
 }
 
 // should be moved into backend later
@@ -435,4 +503,10 @@ impl std::fmt::Display for StateError {
 			} => write!(f, "Game function named '{}' has already been registered", game_function_name),
 		}
 	}
+}
+
+pub struct OnFnEntry {
+	pub entity_type: Arc<str>,
+	pub on_fn_name : Arc<str>,
+	pub id         : GrugOnFnId,
 }

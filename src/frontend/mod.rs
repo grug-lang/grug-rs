@@ -5,7 +5,7 @@
 // #![deny(warnings)]
 use crate::error::GrugError;
 use crate::state::GrugState;
-use crate::backend::GrugFile;
+use crate::backend::GrugAst;
 use crate::types::{GlobalStatement, GlobalVariable, OnFunction, HelperFunction, GrugScriptId};
 
 use std::sync::Arc;
@@ -42,65 +42,63 @@ impl GrugState {
 
 		// let mod_api_entity = self.mod_api.entities.get(entity_type);
 		let mut global_variables = Vec::new();
-		let mut on_functions = (0..entity.on_fns.len()).map(|_| None).collect::<Vec<_>>();
+		let mut on_functions = Vec::new();
 		let mut helper_functions = Vec::new();
 
 		ast.global_statements.into_iter().for_each(|statement| {
 			match statement {
 				GlobalStatement::Variable(st@GlobalVariable      {..}) => global_variables.push(st),
-				GlobalStatement::OnFunction(st@OnFunction        {..}) => {
-					let (i, _) = entity.get_on_fn(&st.name).unwrap();
-					on_functions[i] = Some(st);
-				}
+				GlobalStatement::OnFunction(st@OnFunction        {..}) => on_functions.push(st),
 				GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),
 				_ => (),
 			}
 		});
 
-		let file = GrugFile{
+		let file = GrugAst{
 			global_variables,
 			on_functions,
 			helper_functions,
 		};
-		Ok(self.backend.insert_file(path, file))
+		let on_functions = self.get_entity_on_functions(entity_type).unwrap();
+		Ok(self.backend.insert_file(path, on_functions, file))
 	}
 }
 
 fn get_mod_name (path: &str) -> Result<&str, GrugError> {
-	path.split_once('/').map(|x| x.0).ok_or(GrugError::FileNameError(FileNameError::FilePathDoesNotContainForwardSlash{path: String::from(path)}))
+	path.split_once('/').map(|x| x.0).ok_or(GrugError::FileError(FileError::FilePathDoesNotContainForwardSlash{path: String::from(path)}))
 }
 
-fn get_entity_type(path: &str) -> Result<&str, FileNameError> {
+fn get_entity_type(path: &str) -> Result<&str, FileError> {
 	let (_, entity_type) = path.rsplit_once("-").ok_or(
-			FileNameError::EntityMissing{path: String::from(path)}
+			FileError::EntityMissing{path: String::from(path)}
 		)?;
 	let (entity_type, _) = entity_type.rsplit_once(".").ok_or(
-			FileNameError::MissingPeriodInFileName{path: String::from(path)}
+			FileError::MissingPeriodInFileName{path: String::from(path)}
 		)?;
 	if entity_type.len() > MAX_FILE_ENTITY_TYPE_LENGTH {
-		return Err(FileNameError::EntityLenExceedsMaxLen{path: String::from(path), entity_len: entity_type.len()});
+		return Err(FileError::EntityLenExceedsMaxLen{path: String::from(path), entity_len: entity_type.len()});
 	}
 	if entity_type.is_empty() {
-		return Err(FileNameError::EntityMissing{path: String::from(path)});
+		return Err(FileError::EntityMissing{path: String::from(path)});
 	}
 	check_custom_id_is_pascal(entity_type)
 }
 
-fn check_custom_id_is_pascal(entity_type: &str) -> Result<&str, FileNameError> {
+fn check_custom_id_is_pascal(entity_type: &str) -> Result<&str, FileError> {
 	let mut chars = entity_type.chars();
 	let Some(_) = chars.next() else {
-		return Err(FileNameError::EntityNotPascalCase1{entity_type: String::from(entity_type)});
+		return Err(FileError::EntityNotPascalCase1{entity_type: String::from(entity_type)});
 	};
 	for ch in chars {
 		if !(ch.is_uppercase() || ch.is_lowercase() || ch.is_ascii_digit()) {
-			return Err(FileNameError::EntityNotPascalCase2{entity_type: String::from(entity_type), wrong_char: ch});
+			return Err(FileError::EntityNotPascalCase2{entity_type: String::from(entity_type), wrong_char: ch});
 		}
 	}
 	Ok(entity_type)
 }
 
 #[derive(Debug)]
-pub enum FileNameError {
+pub enum FileError {
 	FilePathDoesNotContainForwardSlash{
 		path: String
 	},
@@ -123,7 +121,7 @@ pub enum FileNameError {
 	}
 }
 
-impl std::fmt::Display for FileNameError {
+impl std::fmt::Display for FileError {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
 			Self::FilePathDoesNotContainForwardSlash{

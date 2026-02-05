@@ -1,21 +1,21 @@
 use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugScriptId, GrugEntity, GrugOnFnId, GrugValue};
-use crate::state::GrugState;
+use crate::state::{GrugState, OnFnEntry};
 use crate::ntstring::NTStrPtr;
 
 use std::ptr::NonNull;
 
 #[derive(Debug)]
-pub struct GrugFile {
+pub struct GrugAst {
 	pub(crate) global_variables: Vec<GlobalVariable>,
-	pub(crate) on_functions: Vec<Option<OnFunction>>,
+	pub(crate) on_functions: Vec<OnFunction>,
 	pub(crate) helper_functions: Vec<HelperFunction>,
 }
 
 pub mod interpreter {
 	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId, GrugScriptId, GrugEntity};
-	use super::{GrugFile, Backend};
+	use super::{GrugAst, Backend};
 	use crate::error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
-	use crate::state::GrugState;
+	use crate::state::{GrugState, OnFnEntry};
 	use crate::cachemap::CacheMap;
 	use crate::xar::ErasedXar;
 
@@ -38,16 +38,18 @@ pub mod interpreter {
 
 	#[derive(Debug)]
 	struct CompiledFile {
-		file: GrugFile,
+		file: GrugAst,
+		fn_ids: HashMap<GrugOnFnId, usize>,
 		entities: RefCell<Vec<NonNull<GrugEntity>>>,
 		data: ErasedXar,
 	}
 
 	impl CompiledFile {
-		fn new(file: GrugFile) -> Self {
+		fn new(file: GrugAst, on_fn_ids: HashMap<GrugOnFnId, usize>) -> Self {
 			Self {
 				file,
 				entities: RefCell::new(Vec::new()),
+				fn_ids: on_fn_ids,
 				data: ErasedXar::new(Layout::new::<GrugEntityData>()),
 			}
 		}
@@ -114,7 +116,6 @@ pub mod interpreter {
 		None,
 	}
 
-	// should be moved into backend later
 	impl Interpreter {
 		pub fn new() -> Self {
 			Self {
@@ -566,12 +567,7 @@ pub mod interpreter {
 			Some(string)
 		}
 		
-		// This should only happen during an error so its okay if its slow
-		fn get_on_function_name(&self, script_id: GrugScriptId, on_fn_id: GrugOnFnId) -> Option<&str> {
-			Some(&self.files.get(&script_id)?.file.on_functions.get(on_fn_id as usize - 1)?.as_ref()?.name)
-		}
-
-		fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId {
+		fn insert_file(&self, path: &str, on_functions: &[OnFnEntry], file: GrugAst) -> GrugScriptId {
 			match self.file_id_map.get(path) {
 				Some(id) => {	
 					let _compiled_file = self.files.get(id)
@@ -582,7 +578,11 @@ pub mod interpreter {
 				None => {
 					let next_id = self.get_next_script_id();
 					self.file_id_map.try_insert(String::from(path), next_id).unwrap();
-					self.files.try_insert(next_id, CompiledFile::new(file)).unwrap();
+					let mut on_fn_ids = HashMap::new();
+					for (i, on_function) in file.on_functions.iter().enumerate() {
+						on_fn_ids.insert(on_functions.iter().find(|entry| entry.on_fn_name == on_function.name).map(|entry| entry.id).unwrap(), i);
+					}
+					self.files.try_insert(next_id, CompiledFile::new(file, on_fn_ids)).unwrap();
 					next_id
 				}
 			}
@@ -627,9 +627,10 @@ pub mod interpreter {
 			let file = &self.files.get(&entity.file_id)
 				.expect("file already created");
 
-			let Some(on_function) = &file.file.on_functions[on_fn_id as usize - 1] else {
+			let Some(on_fn_index) = file.fn_ids.get(&on_fn_id) else {
 				panic!("function not available");
 			};
+			let on_function = &file.file.on_functions[*on_fn_index];
 
 			let values = if on_function.arguments.len() == 0 {
 				&[]
@@ -653,9 +654,10 @@ pub mod interpreter {
 			let file = &self.files.get(&entity.file_id)
 				.expect("file already created");
 
-			let Some(on_function) = &file.file.on_functions[on_fn_id as usize - 1] else {
+			let Some(on_fn_index) = file.fn_ids.get(&on_fn_id) else {
 				panic!("function not available");
 			};
+			let on_function = &file.file.on_functions[*on_fn_index];
 
 			state.call_start_time.set(Instant::now());
 			self.run_function(
@@ -680,10 +682,6 @@ pub unsafe trait Backend {
 	/// to `insert_file`, and the path returned must be the path that was
 	/// passed to that call
 	fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str>;
-	/// Get the name of the function at index `on_fn_id` for the file with id
-	/// `script_id`.
-	///
-	fn get_on_function_name(&self, script_id: GrugScriptId, on_fn_id: GrugOnFnId) -> Option<&str>;
 	/// The AST of a typechecked grug file is provided to let the backend do
 	/// further transforms and lower to bytecode or even machine code
 	/// 
@@ -695,7 +693,7 @@ pub unsafe trait Backend {
 	/// 
 	/// A subsequent call to `get_script_path` with the returned GrugScriptId
 	/// must return the same path that was passed in
-	fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId;
+	fn insert_file(&self, path: &str, on_functions: &[OnFnEntry], file: GrugAst) -> GrugScriptId;
 	/// Initialize the member data of the newly created entity. When this
 	/// function is called, the member field of `entity` points to garbage and
 	/// must not be deinitialized. The GrugScriptId to be used is obtained from
@@ -731,7 +729,7 @@ pub unsafe trait Backend {
 	/// Run the on function with id `on_fn_id` of the script associated with `entity`.
 	/// The id of an on_ function is based on its order within mod_Api.json. 
 	///
-	/// GrugFile.on_function stores the on_ function data based on the order
+	/// GrugAst.on_function stores the on_ function data based on the order
 	/// within mod_api.json. The function id MUST be 1 indexed based on the
 	/// mod_api. This is because id '0' indicates the implicit `init_globals`
 	/// function that initializes the entity's members. The backend is
@@ -747,7 +745,7 @@ pub unsafe trait Backend {
 	/// Run the on function with id `on_fn_id` of the script associated with `entity`.
 	/// The id of an on_ function is based on its order within mod_Api.json. 
 	///
-	/// GrugFile.on_function stores the on_ function data based on the order
+	/// GrugAst.on_function stores the on_ function data based on the order
 	/// within mod_api.json. The function id MUST be 1 indexed based on the
 	/// mod_api. This is because id '0' indicates the implicit `init_globals`
 	/// function that initializes the entity's members. The backend is
@@ -773,9 +771,8 @@ pub struct ErasedBackend {
 #[repr(C)]
 pub struct BackendVTable {
 	pub(crate) get_script_path     : extern "C" fn(data: NonNull<()>, script_id: GrugScriptId, out_len: &mut usize) -> Option<NonNull<()>>,
-	pub(crate) get_on_function_name: extern "C" fn(data: NonNull<()>, script_id: GrugScriptId, on_fn_id: GrugOnFnId, out_len: &mut usize) -> Option<NonNull<()>>,
 	/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
-	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, path: *const u8, path_len: usize, file: GrugFile) -> GrugScriptId,
+	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, path: *const u8, path_len: usize, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst) -> GrugScriptId,
 	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
 	pub(crate) clear_entities      : extern "C" fn(data: NonNull<()>),
 	pub(crate) destroy_entity_data : extern "C" fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
@@ -796,17 +793,8 @@ impl ErasedBackend {
 			unsafe{Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr.cast::<u8>().as_ptr(), len)))}
 		}
 	}
-	pub fn get_on_function_name(&self, script_id: GrugScriptId, on_fn_id: GrugOnFnId) -> Option<&str> {
-		let mut len = 0;
-		let ptr = (self.vtable.get_on_function_name)(self.data, script_id, on_fn_id, &mut len)?;
-		if len == 0 {
-			unsafe{Some(NTStrPtr::from_ptr(ptr.cast::<i8>()).to_str())}
-		} else {
-			unsafe{Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr.cast::<u8>().as_ptr(), len)))}
-		}
-	}
-	pub fn insert_file(&self, path: &str, file: GrugFile) -> GrugScriptId {
-		unsafe{(self.vtable.insert_file)(self.data, path.as_ptr(), path.len(), file)}
+	pub fn insert_file(&self, path: &str, on_functions: &[OnFnEntry], file: GrugAst) -> GrugScriptId {
+		unsafe{(self.vtable.insert_file)(self.data, path.as_ptr(), path.len(), on_functions.as_ptr(), on_functions.len(), file)}
 	}
 	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
 		(self.vtable.init_entity)(self.data, state, entity)
@@ -842,20 +830,11 @@ impl<T: Backend> From<T> for ErasedBackend {
 			Some(NonNull::from_ref(str).cast::<()>())
 		}
 
-		extern "C" fn get_on_function_name<T: Backend>(data: NonNull<()>, script_id: GrugScriptId, on_fn_id: GrugOnFnId, out_len: &mut usize) -> Option<NonNull<()>> {
-			let str = T::get_on_function_name(
-				unsafe{data.cast::<T>().as_ref()},
-				script_id,
-				on_fn_id,
-			)?;
-			*out_len = str.len();
-			Some(NonNull::from_ref(str).cast::<()>())
-		}
-
-		unsafe fn insert_file<T: Backend>(data: NonNull<()>, path: *const u8, path_len: usize, file: GrugFile) -> GrugScriptId {
+		unsafe fn insert_file<T: Backend>(data: NonNull<()>, path: *const u8, path_len: usize, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst) -> GrugScriptId {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
 				unsafe{std::str::from_utf8_unchecked(std::slice::from_raw_parts(path, path_len))},
+				unsafe{std::slice::from_raw_parts(on_functions, on_functions_len)},
 				file
 			)
 		}
@@ -908,7 +887,6 @@ impl<T: Backend> From<T> for ErasedBackend {
 			data: unsafe{NonNull::new_unchecked(Box::into_raw(Box::new(other))).cast::<()>()},
 			vtable: &BackendVTable {
 				get_script_path     : get_script_path::<T>,
-				get_on_function_name: get_on_function_name::<T>,
 				insert_file         : insert_file::<T>,
 				init_entity         : init_entity::<T>,
 				clear_entities      : clear_entities::<T>,
