@@ -59,7 +59,7 @@ impl std::fmt::Display for GrugError {
 }
 
 pub const ON_FN_TIME_LIMIT: u64 = 100; // ms
-// const ON_FN_TIME_LIMIT: u64 = 2000000; // ms
+// pub const ON_FN_TIME_LIMIT: u64 = 2000000; // ms
 
 pub const MAX_RECURSION_LIMIT: usize = 100;
 

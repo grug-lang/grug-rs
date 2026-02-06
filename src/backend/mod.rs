@@ -6,12 +6,12 @@ use std::ptr::NonNull;
 #[derive(Debug)]
 pub struct GrugAst {
 	pub(crate) global_variables: Vec<GlobalVariable>,
-	pub(crate) on_functions: Vec<OnFunction>,
+	pub(crate) on_functions: Vec<Option<OnFunction>>,
 	pub(crate) helper_functions: Vec<HelperFunction>,
 }
 
 pub mod interpreter {
-	use crate::types::{GrugValue, GlobalVariable, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId, GrugScriptId, GrugEntity};
+	use crate::types::{GrugValue, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId, GrugScriptId, GrugEntity};
 	use super::{GrugAst, Backend};
 	use crate::error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
 	use crate::state::{GrugState, OnFnEntry};
@@ -38,17 +38,17 @@ pub mod interpreter {
 	#[derive(Debug)]
 	struct CompiledFile {
 		file: GrugAst,
-		fn_ids: HashMap<GrugOnFnId, usize>,
+		init_on_fn_id: GrugOnFnId,
 		entities: RefCell<Vec<NonNull<GrugEntity>>>,
 		data: ErasedXar,
 	}
 
 	impl CompiledFile {
-		fn new(file: GrugAst, on_fn_ids: HashMap<GrugOnFnId, usize>) -> Self {
+		fn new(file: GrugAst, init_on_fn_id: GrugOnFnId) -> Self {
 			Self {
 				file,
 				entities: RefCell::new(Vec::new()),
-				fn_ids: on_fn_ids,
+				init_on_fn_id,
 				data: ErasedXar::new(Layout::new::<GrugEntityData>()),
 			}
 		}
@@ -411,136 +411,16 @@ pub mod interpreter {
 			})
 		}
 
-		pub(crate) fn init_global_exprs(&self, state: &GrugState, entity: &mut GrugEntityData, expr: &Expr) -> Option<GrugValue> {
-			if Instant::elapsed(&state.call_start_time.get()) > Duration::from_millis(ON_FN_TIME_LIMIT) {
-				state.set_runtime_error(RuntimeError::ExceededTimeLimit);
-				return None;
-			}
-			Some(match &expr.ty {
-				ExprType::LiteralExpr{
-					expr,
-					line: _,
-					col: _,
-				} => {
-					match expr {
-						LiteralExpr::TrueExpr => GrugValue{bool: 1},
-						LiteralExpr::FalseExpr => GrugValue{bool: 0},
-						LiteralExpr::StringExpr{
-							value
-						} => unsafe{GrugValue{string: value.as_ntstrptr().detach_lifetime()}},
-						LiteralExpr::ResourceExpr{
-							value
-						} => unsafe{GrugValue{string: value.as_ntstrptr().detach_lifetime()}},
-						LiteralExpr::EntityExpr{
-							value
-						} => unsafe{GrugValue{string: value.as_ntstrptr().detach_lifetime()}},
-						LiteralExpr::NumberExpr {
-							value,
-							string: _,
-						} => GrugValue{number: *value},
-						LiteralExpr::IdentifierExpr {
-							name,
-						} => {
-							entity.global_variables.get(name)
-								.expect("variable not found")
-								.get()
-						}
-					}
-				},
-				ExprType::UnaryExpr{
-					operator,
-					expr,
-				} => {
-					let mut value = self.init_global_exprs(state, entity, &expr)?;
-					match (operator, &expr.result_ty) {
-						(UnaryOperator::Not, Some(GrugType::Bool)) => unsafe{value.bool = (value.bool == 0) as u8},
-						(UnaryOperator::Minus, Some(GrugType::Number)) => unsafe{value.number = -value.number},
-						_ => unreachable!(),
-					}
-					value
-				}
-				ExprType::BinaryExpr{
-					operands,
-					operator,
-				} => {
-					let first_value = self.init_global_exprs(state, entity, &operands.0)?; 
-					let mut second_value = || self.init_global_exprs(state, entity, &operands.1);
-					debug_assert!(GrugType::match_non_exact(operands.0.result_ty.as_ref().unwrap(), operands.1.result_ty.as_ref().unwrap()));
-					// debug_assert!(operands.0.result_ty == operands.1.result_ty || matches!((&operands.0.result_ty, &operands.1.result_ty), (Some(GrugType::Id{custom_name: None}), Some(GrugType::Id{..})) | (Some(GrugType::Id{..}), Some(GrugType::Id{custom_name: None}))));
-					match (operator, &operands.0.result_ty) {
-						(BinaryOperator::Or,             Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{first_value.bool | second_value()?.bool}},
-						(BinaryOperator::And,            Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{(first_value.bool != 0 && second_value()?.bool != 0) as u8}},
-						(BinaryOperator::DoubleEquals,   Some(ty)              )  => {
-							let value = match ty {
-								GrugType::Bool => !unsafe{(first_value.bool == 0) ^ (second_value()?.bool == 0)},
-								GrugType::Number => unsafe{first_value.number == second_value()?.number},
-								GrugType::Id{..} => unsafe{first_value.id == second_value()?.id},
-								GrugType::String => {
-									unsafe{first_value.string.to_str() == second_value()?.string.to_str()}
-								},
-								_ => unreachable!(),
-							};
-							GrugValue{bool: value as u8}
-						},
-						(BinaryOperator::NotEquals,      Some(ty)              )  => {
-							let value = match ty {
-								GrugType::Bool => unsafe{(first_value.bool == 0) ^ (second_value()?.bool == 0)}
-								GrugType::Number => unsafe{first_value.number != second_value()?.number}
-								GrugType::Id{..} => unsafe{first_value.id != second_value()?.id}
-								GrugType::String => {
-									unsafe{first_value.string.to_str() != second_value()?.string.to_str()}
-								}
-								_ => unreachable!(),
-							};
-							GrugValue{bool: value as u8}
-						},
-						(BinaryOperator::Greater,        Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number > second_value()?.number} as u8},
-						(BinaryOperator::GreaterEquals,  Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number >= second_value()?.number} as u8},
-						(BinaryOperator::Less,           Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number < second_value()?.number} as u8},
-						(BinaryOperator::LessEquals,     Some(GrugType::Number))  => GrugValue{bool: unsafe{first_value.number <= second_value()?.number} as u8},
-						(BinaryOperator::Plus,           Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number + second_value()?.number}},
-						(BinaryOperator::Minus,          Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number - second_value()?.number}},
-						(BinaryOperator::Multiply,       Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number * second_value()?.number}},
-						(BinaryOperator::Division,       Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number / second_value()?.number}},
-						(BinaryOperator::Remainder,      Some(GrugType::Number))  => GrugValue{number: unsafe{first_value.number % second_value()?.number}},
-						_ => unreachable!(),
-					}
-				}
-				ExprType::CallExpr{
-					function_name,
-					arguments,
-					line: _,
-					col: _,
-				} => {
-					debug_assert!(!function_name.starts_with("on_") && !function_name.starts_with("helper_"));
-					let values = arguments.iter().map(|argument| self.init_global_exprs(state, entity, argument)).collect::<Option<Vec<_>>>()?;
-					let game_fn = state.game_functions.get(&**function_name).expect("can't find game function");
-					let return_ty = &state.mod_api.game_functions().get(function_name).unwrap().return_ty;
-					let ret_val = match (values.len(), return_ty) {
-						(0, GrugType::Void) => unsafe{(game_fn.void_argless)(state, ); GrugValue{void: ()}},
-						(0, _             ) => unsafe{(game_fn.value_argless)(state, )},
-						(_, GrugType::Void) => unsafe{(game_fn.void)(state, values.as_ptr()); GrugValue{void: ()}},
-						(_, _             ) => unsafe{(game_fn.value)(state, values.as_ptr())},
-					};
-					if let true = state.is_errorring.get() {
-						return None;
-					}
-					ret_val
-				}
-				ExprType::ParenthesizedExpr{
-					expr,
-					line: _,
-					col: _,
-				} => {
-					self.init_global_exprs(state, entity, expr)?
-				}
-			})
-		}
-
-		fn init_global_variables(&self, state: &GrugState, entity: &mut GrugEntityData, globals: &[GlobalVariable]) -> Option<()> {
+		fn init_global_variables(&self, state: &GrugState, file: &CompiledFile, entity: &mut GrugEntityData) -> Option<()> {
 			state.call_start_time.set(Instant::now());
-			globals.iter().map(|variable| {
-				let value = self.init_global_exprs(state, entity, &variable.assignment_expr)?;
+			file.file.global_variables.iter().map(|variable| {
+				let value = self.run_expr(
+					&mut CallStack::new(), 
+					state, 
+					file,
+					entity, 
+					&variable.assignment_expr
+				)?;
 				entity.global_variables.insert(Arc::clone(&variable.name), Cell::new(value));
 				Some(())
 			}).collect::<Option<Vec<_>>>()?;
@@ -555,11 +435,10 @@ pub mod interpreter {
 					todo!();
 				}
 				None => {
-					let mut on_fn_ids = HashMap::new();
-					for (i, on_function) in file.on_functions.iter().enumerate() {
-						on_fn_ids.insert(on_functions.iter().find(|entry| entry.on_fn_name == on_function.name).map(|entry| entry.id).unwrap(), i);
+					for i in 0..on_functions.len() - 1 {
+						assert_eq!(on_functions[i].id, on_functions[i+1].id - 1);
 					}
-					self.files.try_insert(id, CompiledFile::new(file, on_fn_ids)).unwrap();
+					self.files.try_insert(id, CompiledFile::new(file, on_functions[0].id)).unwrap();
 				}
 			}
 		}
@@ -571,7 +450,7 @@ pub mod interpreter {
 			let mut data = GrugEntityData {
 				global_variables: HashMap::from([(Arc::from("me"), Cell::new(GrugValue{id:entity.id}))]),
 			};
-			if self.init_global_variables(state, &mut data, &file.file.global_variables).is_none() {
+			if self.init_global_variables(state, file, &mut data).is_none() {
 				return false;
 			}
 
@@ -603,10 +482,10 @@ pub mod interpreter {
 			let file = &self.files.get(&entity.file_id)
 				.expect("file already created");
 
-			let Some(on_fn_index) = file.fn_ids.get(&on_fn_id) else {
-				panic!("function not available");
+			let on_fn_index = on_fn_id - file.init_on_fn_id;
+			let Some(on_function) = &file.file.on_functions[on_fn_index as usize - 1] else {
+				return false;
 			};
-			let on_function = &file.file.on_functions[*on_fn_index];
 
 			let values = if on_function.arguments.len() == 0 {
 				&[]
@@ -630,10 +509,10 @@ pub mod interpreter {
 			let file = &self.files.get(&entity.file_id)
 				.expect("file already created");
 
-			let Some(on_fn_index) = file.fn_ids.get(&on_fn_id) else {
-				panic!("function not available");
+			let on_fn_index = on_fn_id - file.init_on_fn_id;
+			let Some(on_function) = &file.file.on_functions[on_fn_index as usize - 1] else {
+				return false;
 			};
-			let on_function = &file.file.on_functions[*on_fn_index];
 
 			state.call_start_time.set(Instant::now());
 			self.run_function(

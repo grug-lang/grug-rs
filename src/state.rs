@@ -217,7 +217,14 @@ impl GrugState {
 
 		let mut on_fn_id = 0;
 		let mut on_fns = Vec::new();
+		let init_globals = Arc::from("init_globals");
 		for (entity_type, entity) in mod_api.entities() {
+			on_fns.push(OnFnEntry {
+				entity_type: Arc::clone(entity_type),
+				on_fn_name : Arc::clone(&init_globals),
+				id         : on_fn_id,
+			});
+			on_fn_id += 1;
 			for (on_fn_name, _) in &entity.on_fns {
 				on_fns.push(OnFnEntry{
 					entity_type: Arc::clone(entity_type),
