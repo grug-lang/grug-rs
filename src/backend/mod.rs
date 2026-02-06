@@ -1,6 +1,5 @@
 use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugScriptId, GrugEntity, GrugOnFnId, GrugValue};
 use crate::state::{GrugState, OnFnEntry};
-use crate::ntstring::NTStrPtr;
 
 use std::ptr::NonNull;
 
@@ -12,7 +11,7 @@ pub struct GrugAst {
 }
 
 pub mod interpreter {
-	use crate::types::{GrugValue, GlobalVariable, GrugId, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId, GrugScriptId, GrugEntity};
+	use crate::types::{GrugValue, GlobalVariable, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId, GrugScriptId, GrugEntity};
 	use super::{GrugAst, Backend};
 	use crate::error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
 	use crate::state::{GrugState, OnFnEntry};
@@ -57,8 +56,6 @@ pub mod interpreter {
 	
 	pub struct Interpreter {
 		files: CacheMap<GrugScriptId, CompiledFile>,
-		file_id_map: CacheMap<String, GrugScriptId>,
-		next_id: Cell<u64>,
 	}
 	
 	struct CallStack {
@@ -120,15 +117,7 @@ pub mod interpreter {
 		pub fn new() -> Self {
 			Self {
 				files: CacheMap::new(),
-				file_id_map: CacheMap::new(),
-				next_id: Cell::new(0),
 			}
-		}
-
-		fn get_next_script_id(&self) -> GrugScriptId {
-			let id = self.next_id.get();
-			self.next_id.set(id + 1);
-			GrugId::new(id)
 		}
 
 		fn run_function(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &[Argument], values: &[GrugValue], statements: &[Statement]) -> Option<GrugValue> {
@@ -560,30 +549,17 @@ pub mod interpreter {
 	}
 
 	unsafe impl Backend for Interpreter {
-		// This should only happen during an error so its okay if its slow
-		fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str> {
-			// a path is never replaced once it is inserted into the map;
-			let string: &str = unsafe{&*(&**self.file_id_map.find_key(&script_id)? as *const _)};
-			Some(string)
-		}
-		
-		fn insert_file(&self, path: &str, on_functions: &[OnFnEntry], file: GrugAst) -> GrugScriptId {
-			match self.file_id_map.get(path) {
-				Some(id) => {	
-					let _compiled_file = self.files.get(id)
-						.expect("id exists in file_id_map so it must exist in files");
-					
+		fn insert_file(&self, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst) {
+			match self.files.get(&id) {
+				Some(_file) => {
 					todo!();
-				},
+				}
 				None => {
-					let next_id = self.get_next_script_id();
-					self.file_id_map.try_insert(String::from(path), next_id).unwrap();
 					let mut on_fn_ids = HashMap::new();
 					for (i, on_function) in file.on_functions.iter().enumerate() {
 						on_fn_ids.insert(on_functions.iter().find(|entry| entry.on_fn_name == on_function.name).map(|entry| entry.id).unwrap(), i);
 					}
-					self.files.try_insert(next_id, CompiledFile::new(file, on_fn_ids)).unwrap();
-					next_id
+					self.files.try_insert(id, CompiledFile::new(file, on_fn_ids)).unwrap();
 				}
 			}
 		}
@@ -677,23 +653,17 @@ pub use interpreter::Interpreter;
 pub mod bytecode;
 
 pub unsafe trait Backend {
-	/// Get the name of the path for the script associated with `script_id`
-	/// `script_id` must be a script id that was returned from a previous call
-	/// to `insert_file`, and the path returned must be the path that was
-	/// passed to that call
-	fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str>;
 	/// The AST of a typechecked grug file is provided to let the backend do
 	/// further transforms and lower to bytecode or even machine code
 	/// 
-	/// Each path must be associated with a single GrugScriptId. If the same
-	/// path is provided again, the old file must be replaced and the member
-	/// data of any entities created from the old file must be regenerated.
-	/// Importantly, the GrugScriptId associated with the new file must be the
-	/// same as the only associated with the old file.
-	/// 
-	/// A subsequent call to `get_script_path` with the returned GrugScriptId
-	/// must return the same path that was passed in
-	fn insert_file(&self, path: &str, on_functions: &[OnFnEntry], file: GrugAst) -> GrugScriptId;
+	/// The script ids are guaranteed to be in contiguous ascending order.
+	///
+	/// If the same script id is returned again, then it means the old script
+	/// associated with the id should be destroyed and replaced with this one. 
+	///
+	/// The entity data of all entities created from the old script should be
+	/// regenerated
+	fn insert_file(&self, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst);
 	/// Initialize the member data of the newly created entity. When this
 	/// function is called, the member field of `entity` points to garbage and
 	/// must not be deinitialized. The GrugScriptId to be used is obtained from
@@ -770,9 +740,8 @@ pub struct ErasedBackend {
 
 #[repr(C)]
 pub struct BackendVTable {
-	pub(crate) get_script_path     : extern "C" fn(data: NonNull<()>, script_id: GrugScriptId, out_len: &mut usize) -> Option<NonNull<()>>,
 	/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
-	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, path: *const u8, path_len: usize, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst) -> GrugScriptId,
+	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, id: GrugScriptId, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst),
 	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
 	pub(crate) clear_entities      : extern "C" fn(data: NonNull<()>),
 	pub(crate) destroy_entity_data : extern "C" fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
@@ -784,17 +753,8 @@ pub struct BackendVTable {
 }
 
 impl ErasedBackend {
-	pub fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str> {
-		let mut len = 0;
-		let ptr = (self.vtable.get_script_path)(self.data, script_id, &mut len)?;
-		if len == 0 {
-			unsafe{Some(NTStrPtr::from_ptr(ptr.cast::<i8>()).to_str())}
-		} else {
-			unsafe{Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr.cast::<u8>().as_ptr(), len)))}
-		}
-	}
-	pub fn insert_file(&self, path: &str, on_functions: &[OnFnEntry], file: GrugAst) -> GrugScriptId {
-		unsafe{(self.vtable.insert_file)(self.data, path.as_ptr(), path.len(), on_functions.as_ptr(), on_functions.len(), file)}
+	pub fn insert_file(&self, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst) {
+		unsafe{(self.vtable.insert_file)(self.data, id, on_functions.as_ptr(), on_functions.len(), file)}
 	}
 	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
 		(self.vtable.init_entity)(self.data, state, entity)
@@ -821,19 +781,10 @@ impl Drop for ErasedBackend {
 
 impl<T: Backend> From<T> for ErasedBackend {
 	fn from(other: T) -> Self {
-		extern "C" fn get_script_path<T: Backend>(data: NonNull<()>, script_id: GrugScriptId, out_len: &mut usize) -> Option<NonNull<()>> {
-			let str = T::get_script_path(
-				unsafe{data.cast::<T>().as_ref()},
-				script_id,
-			)?;
-			*out_len = str.len();
-			Some(NonNull::from_ref(str).cast::<()>())
-		}
-
-		unsafe fn insert_file<T: Backend>(data: NonNull<()>, path: *const u8, path_len: usize, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst) -> GrugScriptId {
+		unsafe fn insert_file<T: Backend>(data: NonNull<()>, id: GrugScriptId, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst) {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
-				unsafe{std::str::from_utf8_unchecked(std::slice::from_raw_parts(path, path_len))},
+				id,
 				unsafe{std::slice::from_raw_parts(on_functions, on_functions_len)},
 				file
 			)
@@ -886,7 +837,6 @@ impl<T: Backend> From<T> for ErasedBackend {
 		Self {
 			data: unsafe{NonNull::new_unchecked(Box::into_raw(Box::new(other))).cast::<()>()},
 			vtable: &BackendVTable {
-				get_script_path     : get_script_path::<T>,
 				insert_file         : insert_file::<T>,
 				init_entity         : init_entity::<T>,
 				clear_entities      : clear_entities::<T>,

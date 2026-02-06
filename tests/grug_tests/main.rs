@@ -71,7 +71,7 @@ mod test_bindings {
 	pub extern "C" fn init_globals_fn_dispatcher (state: &'static GrugState, ) {
 		unsafe {
 			state.clear_error();
-			state.set_next_id(42);
+			state.set_next_entity_id(42);
 			CURRENT_GRUG_ENTITY = Some(
 				state
 					.create_entity(CURRENT_SCRIPT_ID.unwrap())

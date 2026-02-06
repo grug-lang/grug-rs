@@ -6,7 +6,7 @@ use crate::xar::Xar;
 
 use std::marker::PhantomData;
 use std::ptr::NonNull;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell, Ref};
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
@@ -193,14 +193,15 @@ pub fn default_runtime_error_handler(_err_kind: u32, reason: &str, on_fn_name: &
 pub struct GrugState {
 	pub(crate) mod_api: ModApi,
 	pub(crate) mods_dir_path: PathBuf,
-	pub(crate) next_id: AtomicU64,
+	next_entity_id: AtomicU64,
 	pub(crate) game_functions: HashMap<&'static str, GameFnPtr>,
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
 	pub(crate) entities: Xar<GrugEntity>,
 	
 	pub(crate) on_functions: Vec<OnFnEntry>,
-	// pub(crate) files: CacheMap<String, GrugScriptId>,
+	pub(crate) path_to_script_ids: RefCell<HashMap<String, GrugScriptId>>,
+	next_script_id: AtomicU64,
 
 	pub(crate) backend: ErasedBackend,
 	// pub(crate) backend: Interpreter,
@@ -230,11 +231,13 @@ impl GrugState {
 		Ok(Self {
 			mod_api,
 			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
-			next_id: AtomicU64::new(0),
+			next_entity_id: AtomicU64::new(0),
 			game_functions: HashMap::new(),
 			runtime_error_handler: handler,
 			entities: Xar::new(),
 			on_functions: on_fns,
+			path_to_script_ids: RefCell::new(HashMap::new()),
+			next_script_id: AtomicU64::new(0),
 			backend: Interpreter::new().into(),
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
@@ -269,11 +272,13 @@ impl GrugState {
 		Ok(Self {
 			mod_api,
 			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
-			next_id: AtomicU64::new(0),
+			next_entity_id: AtomicU64::new(0),
 			game_functions: HashMap::new(),
 			runtime_error_handler: handler,
 			entities: Xar::new(),
 			on_functions: on_fns,
+			path_to_script_ids: RefCell::new(HashMap::new()),
+			next_script_id: AtomicU64::new(0),
 			backend: backend.into(),
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
@@ -342,6 +347,16 @@ impl GrugState {
 			}
 		}
 	}
+	
+	// This should only happen during an error so its okay if its slow
+	pub fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str> {
+		let string = Ref::filter_map(self.path_to_script_ids.borrow(), |inner|
+			inner.iter().find(|(_, v)| **v == script_id).map(|x| x.0)
+		).ok()?;
+		// SAFETY: a path is never replaced once it is inserted into the map;
+		let string: &str = unsafe{&*(&**string as *const str)};
+		Some(string)
+	}
 
 	pub fn all_game_fns_registered(&self) -> bool {
 		for game_fn_name in self.mod_api.game_functions().keys() {
@@ -355,16 +370,20 @@ impl GrugState {
 		return true;
 	}
 
-	pub fn get_id(&self) -> GrugId {
-		GrugId::new(self.next_id.fetch_add(1, Ordering::Relaxed))
+	pub(crate) fn get_next_script_id(&self) -> GrugScriptId {
+		GrugId::new(self.next_script_id.fetch_add(1, Ordering::Relaxed))
+	}
+
+	pub fn get_next_entity_id(&self) -> GrugId {
+		GrugId::new(self.next_entity_id.fetch_add(1, Ordering::Relaxed))
 	}
 
 	/// # Safety
 	/// There is no memory safety issue here. 
 	/// But this may cause older entities to be replaced 
 	/// by newer ones with no warning if the ids start overlapping
-	pub unsafe fn set_next_id(&self, next_id: u64) {
-		self.next_id.store(next_id, Ordering::Relaxed);
+	pub unsafe fn set_next_entity_id(&self, next_id: u64) {
+		self.next_entity_id.store(next_id, Ordering::Relaxed);
 	}
 
 	pub fn create_entity(&self, file_id: GrugScriptId) -> Option<GrugEntityHandle<'_>> {
@@ -373,7 +392,7 @@ impl GrugState {
 		self.current_script  .set(Some(file_id));
 		self.current_on_fn_id.set(Some(0));
 
-		let entity = self.entities.insert(unsafe{GrugEntity::new_uninit(self.get_id(), file_id)});
+		let entity = self.entities.insert(unsafe{GrugEntity::new_uninit(self.get_next_entity_id(), file_id)});
 		let entity = unsafe{GrugEntityHandle::new(entity)};
 		let success = self.backend.init_entity(self, &entity);
 
@@ -411,7 +430,7 @@ impl GrugState {
 			error, 
 			&message,
 			current_on_fn_name,
-			self.backend.get_script_path(current_script).unwrap(),
+			self.get_script_path(current_script).unwrap(),
 		);
 	}
 

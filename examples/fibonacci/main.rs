@@ -21,7 +21,7 @@ mod game_fns {
 	pub extern "C" fn list_number<'a>(_state: &'a GrugState, ) -> GrugValue {
 		println!("creating list");
 		unsafe {
-			let id = _state.get_id();
+			let id = _state.get_next_entity_id();
 			let x = Vec::<f64>::new();
 			OBJECTS.insert(id, Box::new(x));
 			GrugValue{id}

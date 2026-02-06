@@ -49,53 +49,47 @@ impl BytecodeBackend {
 	}
 }
 
-unsafe impl Backend for BytecodeBackend {
-	fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str> {
-		// a path is never replaced once it is inserted into the map;
-		let string: &str = unsafe{&*(&**self.file_id_map.find_key(&script_id)? as *const _)};
-		Some(string)
-	}
-	
-	// // This should only happen during an error so its okay if its slow
-	// fn get_on_function_name(&self, script_id: GrugScriptId, on_fn_id: GrugOnFnId) -> Option<&str> {
-	// 	Some(&self.files.get(&script_id)?.on_functions.get(on_fn_id as usize - 1)?.0)
-	// }
+// unsafe impl Backend for BytecodeBackend {
+// 	// // This should only happen during an error so its okay if its slow
+// 	// fn get_on_function_name(&self, script_id: GrugScriptId, on_fn_id: GrugOnFnId) -> Option<&str> {
+// 	// 	Some(&self.files.get(&script_id)?.on_functions.get(on_fn_id as usize - 1)?.0)
+// 	// }
 
-	fn insert_file(&self, path: &str, on_functions: &[OnFnEntry], file: GrugAst) -> GrugScriptId {
-		todo!();
-		// match self.file_id_map.get(path) {
-		// 	Some(id) => {	
-		// 		let _compiled_file = self.files.get(id)
-		// 			.expect("id exists in file_id_map so it must exist in files");
+// 	fn insert_file(&self, path: &str, on_functions: &[OnFnEntry], file: GrugAst) -> GrugScriptId {
+// 		todo!();
+// 		// match self.file_id_map.get(path) {
+// 		// 	Some(id) => {	
+// 		// 		let _compiled_file = self.files.get(id)
+// 		// 			.expect("id exists in file_id_map so it must exist in files");
 				
-		// 		todo!();
-		// 	},
-		// 	None => {
-		// 		let next_id = self.get_next_script_id();
-		// 		self.file_id_map.try_insert(String::from(path), next_id).unwrap();
-		// 		let compiled_file = self.compile_file(file);
-		// 		self.files.try_insert(next_id, compiled_file).unwrap();
-		// 		next_id
-		// 	}
-		// }
-	}
+// 		// 		todo!();
+// 		// 	},
+// 		// 	None => {
+// 		// 		let next_id = self.get_next_script_id();
+// 		// 		self.file_id_map.try_insert(String::from(path), next_id).unwrap();
+// 		// 		let compiled_file = self.compile_file(file);
+// 		// 		self.files.try_insert(next_id, compiled_file).unwrap();
+// 		// 		next_id
+// 		// 	}
+// 		// }
+// 	}
 
-	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
-		todo!()
-	}
-	fn clear_entities(&mut self) {
-		todo!()
-	}
-	fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
-		todo!()
-	}
-	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
-		todo!()
-	}
-	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
-		todo!()
-	}
-}
+// 	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
+// 		todo!()
+// 	}
+// 	fn clear_entities(&mut self) {
+// 		todo!()
+// 	}
+// 	fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
+// 		todo!()
+// 	}
+// 	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
+// 		todo!()
+// 	}
+// 	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
+// 		todo!()
+// 	}
+// }
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]

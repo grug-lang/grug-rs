@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::collections::hash_map::{self, Entry};
-use std::cell::{Ref, RefCell};
+use std::cell::RefCell;
 use std::borrow::Borrow;
 use std::hash::Hash;
 
@@ -38,13 +38,13 @@ impl<K, V> CacheMap<K, V> {
 		IterMut::new(self.map.get_mut().iter_mut())
 	}
 
-	pub fn find_key(&self, to_find: &V) -> Option<Ref<'_, K>> where
-		V: PartialEq<V>
-	{
-		Ref::filter_map(self.map.borrow(), |inner|
-			inner.iter().find(|(_, v)| unsafe {v.get_ref()} == to_find).map(|x| x.0)
-		).ok()
-	}
+	// pub fn find_key(&self, to_find: &V) -> Option<Ref<'_, K>> where
+	// 	V: PartialEq<V>
+	// {
+	// 	Ref::filter_map(self.map.borrow(), |inner|
+	// 		inner.iter().find(|(_, v)| unsafe {v.get_ref()} == to_find).map(|x| x.0)
+	// 	).ok()
+	// }
 }
 
 impl<K: Hash + Eq, V> CacheMap<K, V> {

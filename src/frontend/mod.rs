@@ -60,7 +60,17 @@ impl GrugState {
 			helper_functions,
 		};
 		let on_functions = self.get_entity_on_functions(entity_type).unwrap();
-		Ok(self.backend.insert_file(path, on_functions, file))
+		let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
+		let id = match path_to_script_ids.get(path) {
+			Some(id) => *id,
+			None => {
+				let id = self.get_next_script_id();
+				assert!(path_to_script_ids.insert(String::from(path), id).is_none());
+				id
+			}
+		};
+		self.backend.insert_file(id, on_functions, file);
+		Ok(id)
 	}
 }
 
