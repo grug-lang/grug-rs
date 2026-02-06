@@ -94,6 +94,19 @@ impl AsRef<CStr> for NTStr {
 	}
 }
 
+impl std::hash::Hash for NTStr {
+	fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+		self.as_str().hash(hasher)
+	}
+}
+
+impl PartialEq for NTStr {
+	fn eq(&self, other: &Self) -> bool {
+		self.as_str() == other.as_str()
+	}
+}
+impl Eq for NTStr {}
+
 impl<'a> From<&'a NTStr> for String {
 	fn from(other: &'a NTStr) -> String {
 		String::from(other.as_str_with_null())

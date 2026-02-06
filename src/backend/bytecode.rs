@@ -1,23 +1,293 @@
 #![allow(warnings)]
-use crate::types::{GrugValue, GrugId, GrugScriptId, GrugOnFnId, GrugEntity};
+use crate::types::{GrugValue, GrugId, GrugScriptId, GrugOnFnId, GrugEntity, Expr, ExprType, LiteralExpr, OnFunction, Statement, Variable, BinaryOperator, GrugType};
 use crate::ntstring::{NTStrPtr, NTStr};
 use crate::cachemap::CacheMap;
 use crate::state::{GrugState, OnFnEntry};
 use crate::xar::ErasedXar;
 use super::{Backend, GrugAst};
 
+use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 use std::cell::{Cell, RefCell};
 use std::mem::size_of;
 use std::sync::Arc;
 
+struct Compiler {
+	globals: HashMap<Arc<str>, usize>,
+	locals: Vec<HashMap<Arc<str>, usize>>,
+	locals_sizes: Vec<usize>,
+	current_scope_size: usize,
+	strings: HashSet<Arc<NTStr>>,
+}
+
+impl Compiler {
+	fn new() -> Self {
+		Self {
+			globals: HashMap::new(),
+			locals: Vec::new(),
+			locals_sizes: Vec::new(),
+			current_scope_size: 0,
+			strings: HashSet::new(),
+		}
+	}
+
+	fn compile(ast: GrugAst) -> CompiledFile {
+		let mut compiler = Compiler::new();
+		let mut instructions = Instructions::new();
+		let globals_size = ast.global_variables.len();
+		for (i, global) in ast.global_variables.into_iter().enumerate() {
+			compiler.compile_expr(&mut instructions, global.assignment_expr);
+			instructions.push_op(Op::StoreGlobal{index: i});
+		}
+		instructions.push_op(Op::ReturnVoid);
+
+		for on_function in ast.on_functions {
+			let Some(on_function) = on_function else {todo!()};
+			let loc = instructions.get_loc();
+			compiler.compile_on_fn(&mut instructions, on_function);
+		}
+		todo!();
+	}
+
+	fn compile_on_fn(&mut self, instructions: &mut Instructions, on_function: OnFunction) {
+		debug_assert_eq!(self.locals.len(), 0);
+		debug_assert_eq!(self.current_scope_size, 0);
+		self.push_scope();
+		for arg in on_function.arguments {
+			self.insert_local_variable(Arc::clone(&arg.name));
+		}
+		for statement in on_function.body_statements {
+			self.compile_statement(instructions, statement);
+		}
+		self.pop_scope();
+		todo!();
+	}
+
+	fn compile_statement(&mut self, instructions: &mut Instructions, statement: Statement) {
+		match statement {
+			Statement::Variable(Variable{
+				name,
+				ty,
+				assignment_expr,
+			}) => {
+				self.compile_expr(instructions, assignment_expr);
+				if let Some(ty) = ty {
+					let loc = self.insert_local_variable(name);
+					instructions.push_op(Op::StoreLocal{index: loc});
+				} else {
+					if let Some(loc) = self.get_local_location(&name) {
+						instructions.push_op(Op::StoreLocal{index: loc});
+					} else if let Some(loc) = self.get_global_location(&name) {
+						instructions.push_op(Op::StoreGlobal{index: loc});
+					} else {
+						unreachable!();
+					}
+				}
+			}
+			Statement::IfStatement {
+				condition,
+				if_statements,
+				else_if_statements,
+				else_statements,
+			} => {
+				let mut end_patches = Vec::new();
+
+				self.compile_expr(instructions, condition);
+
+				instructions.push_op(Op::Not);
+				let mut cur_patch_loc = instructions.get_loc() as isize;
+				instructions.push_op(Op::JmpIf{offset: 0});
+
+				self.push_scope();
+				for statement in if_statements {
+					self.compile_statement(instructions, statement);
+				}
+				self.pop_scope();
+				end_patches.push(instructions.get_loc() as isize);
+
+				instructions.push_op(Op::Jmp{offset: 0});
+
+				let cur_loc = instructions.get_loc() as isize;
+				unsafe{instructions.try_patch_jump(Op::JmpIf{offset: cur_loc - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
+					.expect("Could not patch jump because offset is too large");
+
+				for (cond, elif_statements) in else_if_statements {
+					self.compile_expr(instructions, cond);
+
+					instructions.push_op(Op::Not);
+					cur_patch_loc = instructions.get_loc() as isize;
+					instructions.push_op(Op::JmpIf{offset: 0});
+
+					self.push_scope();
+					for statement in elif_statements {
+						self.compile_statement(instructions, statement);
+					}
+					self.pop_scope();
+					end_patches.push(instructions.get_loc() as isize);
+
+					instructions.push_op(Op::Jmp{offset: 0});
+
+					let cur_loc = instructions.get_loc() as isize;
+					unsafe{instructions.try_patch_jump(Op::JmpIf{offset: cur_loc - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
+						.expect("Could not patch jump because offset is too large");
+				}
+				
+				if let Some(else_statements) = else_statements {
+					self.push_scope();
+					for statement in else_statements {
+						self.compile_statement(instructions, statement);
+					}
+					self.pop_scope();
+				} else {
+					let new_end = end_patches.pop().unwrap();
+					unsafe{instructions.try_patch_jump(Op::JmpIf{offset: new_end - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
+						.expect("Could not patch jump because offset is too large");
+					unsafe{instructions.rewind_to(new_end as usize)};
+				}
+
+				let end_loc = instructions.get_loc();
+				for end_patch in end_patches {
+					unsafe{instructions.try_patch_jump(Op::Jmp{offset: end_loc as isize - (end_patch + 3)}, end_patch as usize)}
+						.expect("Could not patch jump because offset is too large");
+				}
+			}
+			_ => panic!("{}", instructions),
+		}
+	}
+
+	fn compile_expr(&mut self, instructions: &mut Instructions, expr: Expr) {
+		match expr.ty {
+			ExprType::LiteralExpr {
+				expr,
+				line: _,
+				col: _,
+			} => {
+				match expr {
+					LiteralExpr::TrueExpr  => instructions.push_op(Op::LoadTrue ),
+					LiteralExpr::FalseExpr => instructions.push_op(Op::LoadFalse),
+					LiteralExpr::StringExpr{
+						value,
+					}                      |
+					LiteralExpr::ResourceExpr{
+						value,
+					}                      |
+					LiteralExpr::EntityExpr{
+						value,
+					} => {
+						match self.strings.get(&*value) {
+							None => {
+								self.strings.insert(Arc::clone(&value));
+								// SAFETY: This returned instruction stream is only valid as long as this list of strings is available
+								let string = unsafe{value.as_ntstrptr().detach_lifetime()};
+								instructions.push_op(Op::LoadStr{string})
+							}
+							Some(value) => {
+								let string = unsafe{value.as_ntstrptr().detach_lifetime()};
+								instructions.push_op(Op::LoadStr{string})
+							}
+						}
+					}
+					LiteralExpr::NumberExpr {
+						value,
+						string: _,
+					} => instructions.push_op(Op::LoadNumber{number: value}),
+					LiteralExpr::IdentifierExpr{
+						name
+					} => {
+						if let Some(loc) = self.get_local_location(&name) {
+							instructions.push_op(Op::LoadLocal{index: loc});
+						} else if let Some(loc) = self.get_global_location(&name) {
+							instructions.push_op(Op::LoadGlobal{index: loc});
+						} else {
+							unreachable!();
+						}
+					}
+					_ => todo!(),
+				}
+			}
+			ExprType::BinaryExpr {
+				operands,
+				operator,
+			} => {
+				self.compile_expr(instructions, operands.0);
+				match operator {
+					BinaryOperator::Greater       => {self.compile_expr(instructions, operands.1); instructions.push_op(Op::CmpG);}
+					BinaryOperator::GreaterEquals => {self.compile_expr(instructions, operands.1); instructions.push_op(Op::CmpGe);}
+					BinaryOperator::Less          => {self.compile_expr(instructions, operands.1); instructions.push_op(Op::CmpL);}
+					BinaryOperator::LessEquals    => {self.compile_expr(instructions, operands.1); instructions.push_op(Op::CmpLe);}
+					BinaryOperator::Plus          => {self.compile_expr(instructions, operands.1); instructions.push_op(Op::Add);}
+					BinaryOperator::Minus         => {self.compile_expr(instructions, operands.1); instructions.push_op(Op::Sub);}
+					BinaryOperator::Multiply      => {self.compile_expr(instructions, operands.1); instructions.push_op(Op::Mul);}
+					BinaryOperator::Division      => {self.compile_expr(instructions, operands.1); instructions.push_op(Op::Div);}
+					BinaryOperator::Remainder     => {self.compile_expr(instructions, operands.1); instructions.push_op(Op::Rem);}
+					BinaryOperator::DoubleEquals  => {
+						match &operands.1.result_ty.as_ref().unwrap() {
+							GrugType::String => {
+								self.compile_expr(instructions, operands.1);
+								instructions.push_op(Op::StrEq);
+							}
+							GrugType::Void   => unreachable!(),
+							_ => {
+								self.compile_expr(instructions, operands.1);
+								instructions.push_op(Op::CmpEq);
+							}
+						}
+					}
+					BinaryOperator::NotEquals     => {
+						match operands.1.result_ty.as_ref().unwrap() {
+							GrugType::String => {
+								self.compile_expr(instructions, operands.1);
+								instructions.push_op(Op::StrEq);
+								instructions.push_op(Op::Not);
+							}
+							GrugType::Void   => unreachable!(),
+							_ => {
+								self.compile_expr(instructions, operands.1);
+								instructions.push_op(Op::CmpNeq);
+							}
+						}
+					}
+					_ => panic!("{}", instructions),
+				}
+			}
+			_ => panic!("{}", instructions),
+		}
+	}
+
+	fn insert_local_variable(&mut self, name: Arc<str>) -> usize {
+		debug_assert!(self.locals.last_mut().unwrap().insert(name, self.current_scope_size).is_none());
+		self.current_scope_size += 1;
+		self.current_scope_size - 1
+	}
+
+	fn pop_scope(&mut self) {
+		self.locals.pop().unwrap();
+		self.current_scope_size = self.locals_sizes.pop().unwrap();
+	}
+
+	fn push_scope(&mut self) {
+		self.locals.push(HashMap::new());
+		self.locals_sizes.push(self.current_scope_size);
+	}
+
+	fn get_local_location(&self, name: &str) -> Option<usize> {
+		self.locals.iter().rev().find_map(|x| x.get(name)).copied()
+	}
+
+	fn get_global_location(&self, name: &str) -> Option<usize> {
+		self.globals.get(name).copied()
+	}
+}
+
 #[derive(Debug)]
 struct CompiledFile {
-	on_functions: Vec<(Arc<str>, usize)>,
+	on_functions: Vec<Option<usize>>,
+	init_fn_id: GrugOnFnId,
 	helper_functions: Vec<usize>,
 	strings: Vec<Arc<NTStr>>,
 	instructions: Instructions,
 	entities: RefCell<Vec<NonNull<GrugEntity>>>,
+	globals_size: usize,
 	data: ErasedXar,
 }
 
@@ -33,30 +303,12 @@ impl BytecodeBackend {
 			stacks: RefCell::new(Vec::new()),
 		}
 	}
-
-	fn compile_file(&self, file: GrugAst) -> CompiledFile {
-		todo!();
-	}
 }
 
 unsafe impl Backend for BytecodeBackend {
 	fn insert_file(&self, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst) {
+		let compiled_file = Compiler::compile(file);
 		todo!();
-		// match self.file_id_map.get(path) {
-		// 	Some(id) => {	
-		// 		let _compiled_file = self.files.get(id)
-		// 			.expect("id exists in file_id_map so it must exist in files");
-				
-		// 		todo!();
-		// 	},
-		// 	None => {
-		// 		let next_id = self.get_next_script_id();
-		// 		self.file_id_map.try_insert(String::from(path), next_id).unwrap();
-		// 		let compiled_file = self.compile_file(file);
-		// 		self.files.try_insert(next_id, compiled_file).unwrap();
-		// 		next_id
-		// 	}
-		// }
 	}
 
 	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
@@ -415,15 +667,16 @@ impl std::fmt::Debug for Instructions {
 impl std::fmt::Display for Instructions {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		let stream = &mut &*self.0;
+		let mut addr = unsafe{stream.as_ptr().byte_offset_from(self.0.as_ptr())};
 		while let Some(ins) = Op::decode(stream) {
-			let addr = unsafe{stream.as_ptr().byte_offset_from(self.0.as_ptr())};
+			let end_addr = unsafe{stream.as_ptr().byte_offset_from(self.0.as_ptr())};
 			write!(f, " 0x{:08x} ", addr)?;
 			match ins {
 				Op::ReturnVoid => write!(f, "ReturnVoid"),
 				Op::ReturnValue => write!(f, "ReturnValue"),
 				Op::LoadQW {
 					bytes,
-				} => write!(f, "Load (id: {}, float: {:?})", u64::from_ne_bytes(bytes), f64::from_ne_bytes(bytes)),
+				} => write!(f, "Load {:?}", f64::from_ne_bytes(bytes)),
 				Op::LoadStr {
 					string,
 				} => write!(f, "LoadStr {:?}", string.to_str()),
@@ -463,10 +716,10 @@ impl std::fmt::Display for Instructions {
 				} => write!(f, "StoreGlobal {}", index),
 				Op::Jmp {
 					offset,
-				} => write!(f, "Jmp {}", addr + offset),
+				} => write!(f, "Jmp 0x{:08x}", end_addr + offset),
 				Op::JmpIf {
 					offset,
-				} => write!(f, "JmpIf {}", addr + offset),
+				} => write!(f, "JmpIf 0x{:08x}", end_addr + offset),
 				Op::LoadLocal {
 					index,
 				} => write!(f, "LoadLocal {}", index),
@@ -474,6 +727,7 @@ impl std::fmt::Display for Instructions {
 					index,
 				} => write!(f, "StoreLocal {}", index),
 			}?;
+			addr = end_addr;
 			write!(f, "\n")?;
 		}
 		Ok(())
@@ -759,6 +1013,15 @@ impl Instructions {
 		}
 	}
 
+	/// SAFETY:
+	/// `location` must be at the end of an instruction and the beginning of
+	/// the next one
+	/// Invalidates all instructions upto `locations`.
+	///
+	pub unsafe fn rewind_to(&mut self, location: usize) {
+		self.0.truncate(location);
+	}
+
 	pub fn get_loc(&self) -> usize {
 		self.0.len()
 	}
@@ -808,7 +1071,7 @@ mod test {
 	use crate::types::GameFnPtrValue;
 	use super::super::interpreter::Interpreter;
 
-	const MOD_API: &'static str = r#"
+	const MOD_API: &'static str /* ' */= r#"
 	{
 		"entities" : {
 			"A" : {
@@ -818,7 +1081,7 @@ mod test {
 						"description": "calculate the fibonacci number at index i",
 						"arguments": [
 							{
-								"name": "i",
+								"name": "number",
 								"type": "number"
 							}
 						]
@@ -852,8 +1115,26 @@ mod test {
 	const GRUG_FILE_TEXT: &'static str = 
 r#"global: number = 2
 
-on_fib(i: number) {
-    identity(i)
+on_fib(number: number) {
+    result: number = 0
+    if number < 0 {
+        result = 0
+    }
+    if number == 1 {
+        result = 1
+    } else {
+        a: number = 1
+        b: number = 1
+        i: number = 2
+        while i < number {
+            temp: number = a + b
+            a = b
+            b = temp
+            i = i + 1
+        }
+        result = b
+    }
+    identity(result)
 }
 
 on_double(input: number) {
@@ -872,7 +1153,7 @@ on_double(input: number) {
 			MOD_API,
 			"doesn't matter",
 			Default::default(),
-			Interpreter::new(),
+			BytecodeBackend::new(),
 		).unwrap();
 		state.register_game_fn("identity", identity as GameFnPtrValue).unwrap();
 		assert!(state.all_game_fns_registered());
