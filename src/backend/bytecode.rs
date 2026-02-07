@@ -151,7 +151,29 @@ impl Compiler {
 						.expect("Could not patch jump because offset is too large");
 				}
 			}
-			_ => panic!("{}", instructions),
+			Statement::WhileStatement {
+				condition,
+				statements,
+			} => {
+				// TODO: add handling for breaks and continues
+				let continue_loc = instructions.get_loc() as isize;
+				self.compile_expr(instructions, condition);
+				instructions.push_op(Op::Not);
+				let break_patch_loc = instructions.get_loc() as isize;
+				instructions.push_op(Op::JmpIf{offset: 0});
+				
+				for statement in statements {
+					self.compile_statement(instructions, statement);
+				}
+				let end_loc = instructions.get_loc() as isize;
+				instructions.push_op(Op::Jmp{offset: Op::calc_offset(end_loc, continue_loc)});
+				let break_loc = instructions.get_loc() as isize;
+				unsafe{instructions.try_patch_jump(Op::JmpIf{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc as usize)}.unwrap();
+			}
+			_ => {
+				println!("{}", instructions);
+				panic!();
+			}
 		}
 	}
 
@@ -247,10 +269,16 @@ impl Compiler {
 							}
 						}
 					}
-					_ => panic!("{}", instructions),
+					_ => {
+						println!("{}", instructions);
+						panic!();
+					}
 				}
 			}
-			_ => panic!("{}", instructions),
+			_ => {
+				println!("{}", instructions);
+				panic!();
+			}
 		}
 	}
 
@@ -291,7 +319,7 @@ struct CompiledFile {
 	data: ErasedXar,
 }
 
-struct BytecodeBackend {
+pub struct BytecodeBackend {
 	files: CacheMap<GrugScriptId, CompiledFile>,
 	stacks: RefCell<Vec<Stack>>,
 }
@@ -344,10 +372,6 @@ pub enum Op {
 	// 0x03
 	LoadNumber {
 		number: f64,
-	},
-	// 0x03
-	LoadId {
-		id: GrugId,
 	},
 	// 0x04
 	LoadStr {
@@ -441,29 +465,35 @@ pub enum Op {
 	// 0x2e          | 0x2f
 	// 0b00101110    | 0b00101111
 	// CallGameFunction {
+	// 	kind: GameFnKind,
 	// 	args: usize,
-	// 	helper_index: usize
+	// 	ptr: GameFnPtr,
 	// },
 }
+
+// enum GameFnKind {
+// 	ValueArg     = 0,
+// 	ValueArgless = 1,
+// 	VoidArg      = 2,
+// 	VoidArgless  = 3,
+// }
 
 impl PartialEq for Op {
 	fn eq(&self, other: &Self) -> bool {
 		match (self, other) {
 			(Self::ReturnVoid, Self::ReturnVoid)       => true,
 			(Self::ReturnValue, Self::ReturnValue)     => true,
-			(Self::LoadQW{..} | Self::LoadNumber{..} | Self::LoadId{..} | Self::LoadStr{..}, 
-			Self::LoadQW{..} | Self::LoadNumber{..} | Self::LoadId{..} | Self::LoadStr{..}) => {
+			(Self::LoadQW{..} | Self::LoadNumber{..} | Self::LoadStr{..}, 
+			Self::LoadQW{..} | Self::LoadNumber{..} | Self::LoadStr{..}) => {
 				let self_bytes = match self {
 					Self::LoadQW{bytes} => bytes,
 					Self::LoadNumber{number} => &number.to_ne_bytes(),
-					Self::LoadId{id} => &id.to_inner().to_ne_bytes(),
 					Self::LoadStr{string} => &(string.as_ptr() as usize).to_ne_bytes(),
 					_ => unreachable!(),
 				};
 				let other_bytes = match other {
 					Self::LoadQW{bytes} => bytes,
 					Self::LoadNumber{number} => &number.to_ne_bytes(),
-					Self::LoadId{id} => &id.to_inner().to_ne_bytes(),
 					Self::LoadStr{string} => &(string.as_ptr() as usize).to_ne_bytes(),
 					_ => unreachable!(),
 				};
@@ -495,6 +525,8 @@ impl PartialEq for Op {
 			(Self::JmpIf{offset: o1} , Self::JmpIf{offset: o2}) => o1 == o2,
 			(Self::LoadLocal  {index: o1} , Self::LoadLocal  {index: o2}) => o1 == o2,
 			(Self::StoreLocal {index: o1} , Self::StoreLocal {index: o2}) => o1 == o2,
+			// (Self::CallGameFunction {kind: kind0, args: args0, ptr: ptr0}, 
+			//  Self::CallGameFunction {kind: kind1, args: args1, ptr: ptr1}) => kind == o2,
 			_ => false,
 		}
 	}
@@ -641,14 +673,225 @@ impl Op {
 			Some(unsafe{*bytes.as_ptr().cast::<[u8; _]>()})
 		}
 	}
+
+	fn calc_offset(from: isize, to: isize) -> isize {
+		let offset_from_start = to - from;
+		if offset_from_start < i16::MIN as isize || offset_from_start > i16::MAX as isize {
+			todo!();
+		}
+		// opcode is 1 byte, offset fits in two bytes
+		offset_from_start - 3
+	}
 }
 
-#[repr(transparent)]
-pub struct Instructions(Vec<u8>);
+pub struct Instructions{
+	stream: Vec<u8>,
+	on_fn_locations: Vec<Option<usize>>,
+	helper_fn_locations: Vec<usize>,
+	strings: HashSet<Arc<NTStr>>,
+	jumps_count: usize,
+	jumps_end: HashMap</* to */ usize, (/* from */ Vec<usize>, /* label */ usize)>,
+	jumps_start: HashMap</* from */ usize, /* to */ usize>,
+	// game_functions: HashSet<GameFunctionInfo>,
+}
+
+impl Instructions {
+	pub fn new() -> Self {
+		Self {
+			stream: Vec::new(),
+			on_fn_locations: Vec::new(),
+			helper_fn_locations: Vec::new(),
+			strings: HashSet::new(),
+			jumps_count: 0,
+			jumps_start: HashMap::new(),
+			jumps_end: HashMap::new(),
+		}
+	}
+
+	pub fn clear(&mut self) { 
+		self.stream.clear();
+		self.on_fn_locations.clear();
+		self.helper_fn_locations.clear();
+		self.strings.clear();
+		self.jumps_end.clear();
+		self.jumps_start.clear();
+	}
+
+	pub fn push_op(&mut self, op: Op) {
+		match op {
+			Op::ReturnVoid  =>  self.stream.push(0x00),
+			Op::ReturnValue => self.stream.push(0x01),
+			Op::LoadQW{bytes}  => {
+				self.stream.push(
+					0x03
+				);
+				self.stream.extend_from_slice(&bytes);
+			}
+			Op::LoadNumber{number}  => {
+				self.stream.push(
+					0x03
+				);
+				self.stream.extend_from_slice(&number.to_ne_bytes());
+			}
+			Op::LoadStr{string}  => {
+				self.stream.push(
+					0x04
+				);
+				self.stream.extend_from_slice(&string.as_ptr().expose_provenance().to_ne_bytes());
+			}
+			Op::LoadFalse => self.stream.push(0x05),
+			Op::LoadTrue  => self.stream.push(0x06),
+			Op::Dup{index} => {
+				if index > u8::MAX as usize {
+					unimplemented!();
+				}
+				self.stream.push(0x07);
+				self.stream.push(index as u8);
+			}
+			Op::Pop       => self.stream.push(0x09),
+			Op::Add       => self.stream.push(0x10),
+			Op::Sub       => self.stream.push(0x11),
+			Op::Mul       => self.stream.push(0x12),
+			Op::Div       => self.stream.push(0x13),
+			Op::Rem       => self.stream.push(0x14),
+			Op::And       => self.stream.push(0x15),
+			Op::Or        => self.stream.push(0x16),
+			Op::Not       => self.stream.push(0x17),
+			Op::CmpEq     => self.stream.push(0x18),
+			Op::CmpNeq    => self.stream.push(0x19),
+			Op::StrEq     => self.stream.push(0x1a),
+			Op::CmpG      => self.stream.push(0x1b),
+			Op::CmpGe     => self.stream.push(0x1c),
+			Op::CmpL      => self.stream.push(0x1d),
+			Op::CmpLe     => self.stream.push(0x1e),
+			Op::PrintStr  => self.stream.push(0x1f),
+			Op::LoadGlobal{index} => {
+				if index > u8::MAX as usize {
+					unimplemented!();
+				}
+				self.stream.push(0x20);
+				self.stream.push(index as u8);
+			}
+			Op::StoreGlobal{index} => {
+				if index > u8::MAX as usize {
+					unimplemented!();
+				}
+				self.stream.push(0x22);
+				self.stream.push(index as u8);
+			}
+			Op::Jmp{offset} => {
+				if offset > i16::MAX as isize || offset < i16::MIN as isize {
+					unimplemented!();
+				}
+				self.stream.push(0x24);
+				let bytes = offset.to_ne_bytes();
+				self.stream.push(bytes[0]);
+				self.stream.push(bytes[1]);
+				self.insert_jmp(self.stream.len(), offset);
+			}
+			Op::JmpIf{offset} => {
+				if offset > i16::MAX as isize || offset < i16::MIN as isize {
+					unimplemented!();
+				}
+				self.stream.push(0x26);
+				let bytes = offset.to_ne_bytes();
+				self.stream.push(bytes[0]);
+				self.stream.push(bytes[1]);
+				self.insert_jmp(self.stream.len(), offset);
+			}
+			Op::LoadLocal{index} => {
+				if index > u8::MAX as usize {
+					unimplemented!();
+				}
+				self.stream.push(0x28);
+				self.stream.push(index as u8);
+			}
+			Op::StoreLocal{index} => {
+				if index > u8::MAX as usize {
+					unimplemented!();
+				}
+				self.stream.push(0x2a);
+				self.stream.push(index as u8);
+			}
+		}
+	}
+
+	pub fn insert_jmp(&mut self, from: usize, offset: isize) {
+		let end = (from as isize + offset) as usize;
+		self.jumps_start.insert(from, end);
+		self.jumps_end.entry(end).or_insert_with(|| {
+			self.jumps_count += 1;
+			(Vec::new(), self.jumps_count - 1)
+		}).0.push(from);
+		self.assert_jumps_consistency();
+	}
+
+	pub fn assert_jumps_consistency(&self) {
+		for (end, starts) in &self.jumps_end {
+			for start in &starts.0 {
+				assert_eq!(self.jumps_start.get(start).unwrap(), end);
+			}
+		}
+	}
+
+	/// SAFETY:
+	/// `location` must be at the end of an instruction and the beginning of
+	/// the next one
+	/// Invalidates all instructions upto `locations`.
+	///
+	pub unsafe fn rewind_to(&mut self, location: usize) {
+		self.stream.truncate(location);
+	}
+
+	pub fn get_loc(&self) -> usize {
+		self.stream.len()
+	}
+
+	/// SAFETY: 
+	/// location passed in must be the position returned by a previous call to push_op.
+	///
+	/// It will succeed if opcode matches and there is enough space to store a jump of that type
+	pub unsafe fn try_patch_jump(&mut self, op: Op, location: usize) -> Option<()> {
+		macro_rules! patch {
+			($offset_type: ty, $new_offset: expr) => {{
+				unsafe {
+					*(self.stream.get_mut((location + 1)..)? as *mut [u8] as *mut [u8; size_of::<$offset_type>()]) = ($new_offset as $offset_type).to_ne_bytes();
+				} 
+				(location + 1 + size_of::<$offset_type>(), $new_offset as isize)
+			}}
+		}
+		let (old_start, new_offset)  = match (self.stream.get(location)?, op) {
+			// Jmp
+			(0x24, Op::Jmp{offset}) if offset >= i16::MIN as isize && offset <= i16::MAX as isize => {
+				patch!(i16, offset)
+			}
+			(0x25, Op::Jmp{offset}) => {
+				patch!(isize, offset)
+			}
+			// JmpIf
+			(0x26, Op::JmpIf{offset}) if offset >= i16::MIN as isize && offset <= i16::MAX as isize => {
+				patch!(i16, offset)
+			}
+			(0x27, Op::JmpIf{offset}) => {
+				patch!(isize, offset)
+			}
+			_ => return None,
+		};
+		
+		let old_end = self.jumps_start.remove(&old_start).unwrap();
+		self.jumps_end.get_mut(&old_end).unwrap().0.extract_if(.., |start| *start == old_start).count();
+
+		self.insert_jmp(old_start, new_offset);
+		self.assert_jumps_consistency();
+		Some(())
+	}
+}
+
+// pub st
 
 impl std::fmt::Debug for Instructions {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		let mut buf = &*self.0;
+		let mut buf = &*self.stream;
 		f.debug_list()
 			.entries(
 				std::iter::from_fn(|| {
@@ -666,10 +909,13 @@ impl std::fmt::Debug for Instructions {
 
 impl std::fmt::Display for Instructions {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		let stream = &mut &*self.0;
-		let mut addr = unsafe{stream.as_ptr().byte_offset_from(self.0.as_ptr())};
+		let stream = &mut &*self.stream;
+		let mut addr = unsafe{stream.as_ptr().byte_offset_from(self.stream.as_ptr())};
+		if let Some((froms, label)) = self.jumps_end.get(&(addr as usize)) && !froms.is_empty() {
+			writeln!(f, "L_{}: ", label);
+		}
 		while let Some(ins) = Op::decode(stream) {
-			let end_addr = unsafe{stream.as_ptr().byte_offset_from(self.0.as_ptr())};
+			let end_addr = unsafe{stream.as_ptr().byte_offset_from(self.stream.as_ptr())};
 			write!(f, " 0x{:08x} ", addr)?;
 			match ins {
 				Op::ReturnVoid => write!(f, "ReturnVoid"),
@@ -682,9 +928,6 @@ impl std::fmt::Display for Instructions {
 				} => write!(f, "LoadStr {:?}", string.to_str()),
 				Op::LoadNumber {
 					number: _,
-				} |
-				Op::LoadId {
-					id: _,
 				} => unreachable!(),
 				Op::LoadFalse => write!(f, "LoadFalse"),
 				Op::LoadTrue => write!(f, "LoadTrue"),
@@ -716,10 +959,10 @@ impl std::fmt::Display for Instructions {
 				} => write!(f, "StoreGlobal {}", index),
 				Op::Jmp {
 					offset,
-				} => write!(f, "Jmp 0x{:08x}", end_addr + offset),
+				} => write!(f, "Jmp L_{}", self.jumps_end.get(self.jumps_start.get(&(end_addr as usize)).unwrap()).unwrap().1),
 				Op::JmpIf {
 					offset,
-				} => write!(f, "JmpIf 0x{:08x}", end_addr + offset),
+				} => write!(f, "JmpIf L_{}", self.jumps_end.get(self.jumps_start.get(&(end_addr as usize)).unwrap()).unwrap().1),
 				Op::LoadLocal {
 					index,
 				} => write!(f, "LoadLocal {}", index),
@@ -728,7 +971,11 @@ impl std::fmt::Display for Instructions {
 				} => write!(f, "StoreLocal {}", index),
 			}?;
 			addr = end_addr;
+			// print labels: 
 			write!(f, "\n")?;
+			if let Some((froms, label)) = self.jumps_end.get(&(addr as usize)) && !froms.is_empty() {
+				writeln!(f, "L_{}: ", label);
+			}
 		}
 		Ok(())
 	}
@@ -754,7 +1001,7 @@ impl Stack {
 
 	pub unsafe fn run(&mut self, globals: &[Cell<GrugValue>], instructions: &Instructions, _start_loc: usize) -> Option<GrugValue> {
 		self.stack.resize(self.stack.len() + 64, GrugValue{void: ()});
-		let mut stream = &*instructions.0;
+		let mut stream = &*instructions.stream;
 		while let Some(ins) = Op::decode(&mut stream) {
 			match ins {
 				Op::ReturnVoid         => {
@@ -765,7 +1012,7 @@ impl Stack {
 						let ip = u64::from_ne_bytes(self.stack.pop()?.as_bytes());
 						let rbp = u64::from_ne_bytes(self.stack.pop()?.as_bytes());
 						self.rbp = rbp as usize;
-						stream = &mut &*instructions.0.get(ip as usize ..)?;
+						stream = &mut &*instructions.stream.get(ip as usize ..)?;
 					}
 				}
 				Op::ReturnValue        => {
@@ -778,13 +1025,12 @@ impl Stack {
 						let ip = u64::from_ne_bytes(self.stack.pop()?.as_bytes());
 						let rbp = u64::from_ne_bytes(self.stack.pop()?.as_bytes());
 						self.rbp = rbp as usize;
-						stream = &mut &*instructions.0.get(ip as usize ..)?;
+						stream = &mut &*instructions.stream.get(ip as usize ..)?;
 					}
 				}
 				Op::LoadQW{bytes}      => self.stack.push(GrugValue::from_bytes(bytes)),
 				Op::LoadStr{string}    => self.stack.push(GrugValue{string}),
-				Op::LoadNumber{..}     | 
-				Op::LoadId{..}         => unreachable!(),
+				Op::LoadNumber{..}     => unreachable!(),
 				Op::LoadFalse          => self.stack.push(GrugValue{bool: 0}),
 				Op::LoadTrue           => self.stack.push(GrugValue{bool: 1}),
 				Op::Dup{index}         => {
@@ -903,165 +1149,6 @@ impl Stack {
 		None
 	}
 }
-impl Instructions {
-	pub fn new() -> Self {
-		Self(Vec::new())
-	}
-
-	pub fn clear(&mut self) { self.0.clear() }
-
-	pub fn push_op(&mut self, op: Op) {
-		match op {
-			Op::ReturnVoid  =>  self.0.push(0x00),
-			Op::ReturnValue => self.0.push(0x01),
-			Op::LoadQW{bytes}  => {
-				self.0.push(
-					0x03
-				);
-				self.0.extend_from_slice(&bytes);
-			}
-			Op::LoadNumber{number}  => {
-				self.0.push(
-					0x03
-				);
-				self.0.extend_from_slice(&number.to_ne_bytes());
-			}
-			Op::LoadId{id}  => {
-				self.0.push(
-					0x03
-				);
-				self.0.extend_from_slice(&id.to_inner().to_ne_bytes());
-			}
-			Op::LoadStr{string}  => {
-				self.0.push(
-					0x04
-				);
-				self.0.extend_from_slice(&string.as_ptr().expose_provenance().to_ne_bytes());
-			}
-			Op::LoadFalse => self.0.push(0x05),
-			Op::LoadTrue  => self.0.push(0x06),
-			Op::Dup{index} => {
-				if index > u8::MAX as usize {
-					unimplemented!();
-				}
-				self.0.push(0x07);
-				self.0.push(index as u8);
-			}
-			Op::Pop       => self.0.push(0x09),
-			Op::Add       => self.0.push(0x10),
-			Op::Sub       => self.0.push(0x11),
-			Op::Mul       => self.0.push(0x12),
-			Op::Div       => self.0.push(0x13),
-			Op::Rem       => self.0.push(0x14),
-			Op::And       => self.0.push(0x15),
-			Op::Or        => self.0.push(0x16),
-			Op::Not       => self.0.push(0x17),
-			Op::CmpEq     => self.0.push(0x18),
-			Op::CmpNeq    => self.0.push(0x19),
-			Op::StrEq     => self.0.push(0x1a),
-			Op::CmpG      => self.0.push(0x1b),
-			Op::CmpGe     => self.0.push(0x1c),
-			Op::CmpL      => self.0.push(0x1d),
-			Op::CmpLe     => self.0.push(0x1e),
-			Op::PrintStr  => self.0.push(0x1f),
-			Op::LoadGlobal{index} => {
-				if index > u8::MAX as usize {
-					unimplemented!();
-				}
-				self.0.push(0x20);
-				self.0.push(index as u8);
-			}
-			Op::StoreGlobal{index} => {
-				if index > u8::MAX as usize {
-					unimplemented!();
-				}
-				self.0.push(0x22);
-				self.0.push(index as u8);
-			}
-			Op::Jmp{offset} => {
-				if offset > i16::MAX as isize || offset < i16::MIN as isize {
-					unimplemented!();
-				}
-				self.0.push(0x24);
-				let bytes = offset.to_ne_bytes();
-				self.0.push(bytes[0]);
-				self.0.push(bytes[1]);
-			}
-			Op::JmpIf{offset} => {
-				if offset > i16::MAX as isize || offset < i16::MIN as isize {
-					unimplemented!();
-				}
-				self.0.push(0x26);
-				let bytes = offset.to_ne_bytes();
-				self.0.push(bytes[0]);
-				self.0.push(bytes[1]);
-			}
-			Op::LoadLocal{index} => {
-				if index > u8::MAX as usize {
-					unimplemented!();
-				}
-				self.0.push(0x28);
-				self.0.push(index as u8);
-			}
-			Op::StoreLocal{index} => {
-				if index > u8::MAX as usize {
-					unimplemented!();
-				}
-				self.0.push(0x2a);
-				self.0.push(index as u8);
-			}
-		}
-	}
-
-	/// SAFETY:
-	/// `location` must be at the end of an instruction and the beginning of
-	/// the next one
-	/// Invalidates all instructions upto `locations`.
-	///
-	pub unsafe fn rewind_to(&mut self, location: usize) {
-		self.0.truncate(location);
-	}
-
-	pub fn get_loc(&self) -> usize {
-		self.0.len()
-	}
-
-	/// SAFETY: 
-	/// location passed in must be the position returned by a previous call to push_op.
-	///
-	/// It will succeed if opcode matches and there is enough space to store a jump of that type
-	pub unsafe fn try_patch_jump(&mut self, op: Op, location: usize) -> Option<()> {
-		match (self.0.get(location)?, op) {
-			// Jmp
-			(0x24, Op::Jmp{offset}) if offset >= i16::MIN as isize && offset <= i16::MAX as isize => {
-				unsafe {
-					*(self.0.get_mut((location + 1)..)? as *mut [u8] as *mut [u8; size_of::<i16>()]) = (offset as i16).to_ne_bytes();
-				} 
-				Some(())
-			}
-			(0x25, Op::Jmp{offset}) => {
-				unsafe {
-					*(self.0.get_mut((location + 1)..)? as *mut [u8] as *mut [u8; size_of::<isize>()]) = offset.to_ne_bytes();
-				} 
-				Some(())
-			}
-			// JmpIf
-			(0x26, Op::JmpIf{offset}) if offset >= i16::MIN as isize && offset <= i16::MAX as isize => {
-				unsafe {
-					*(self.0.get_mut((location + 1)..)? as *mut [u8] as *mut [u8; size_of::<i16>()]) = (offset as i16).to_ne_bytes();
-				} 
-				Some(())
-			}
-			(0x27, Op::JmpIf{offset}) => {
-				unsafe {
-					*(self.0.get_mut((location + 1)..)? as *mut [u8] as *mut [u8; size_of::<isize>()]) = offset.to_ne_bytes();
-				} 
-				Some(())
-			}
-			_ => None,
-		}
-	}
-}
 
 #[cfg(test)]
 mod test {
@@ -1119,8 +1206,7 @@ on_fib(number: number) {
     result: number = 0
     if number < 0 {
         result = 0
-    }
-    if number == 1 {
+    } else if number == 1 {
         result = 1
     } else {
         a: number = 1
@@ -1171,13 +1257,13 @@ on_double(input: number) {
 		
 	#[test]
 	fn vm_test_decoding() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		macro_rules! test_op {
 			($op: expr) => {{
 				stream.clear();
 				let op = $op;
 				stream.push_op(op);
-				assert_eq!(Op::decode(&mut &*stream.0), Some(op));
+				assert_eq!(Op::decode(&mut &*stream.stream), Some(op));
 			}}
 		}
 		test_op!(Op::ReturnVoid);
@@ -1218,45 +1304,45 @@ on_double(input: number) {
 
 	#[test]
 	fn vm_test_patching() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		for i in 0..20 {
 			stream.push_op(Op::Jmp{offset: 0});
 			unsafe{stream.try_patch_jump(Op::Jmp{offset: i as isize * 10}, 0).unwrap()};
-			assert_eq!(Op::decode(&mut &*stream.0).unwrap(), Op::Jmp{offset: i as isize * 10});
+			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::Jmp{offset: i as isize * 10});
 			stream.clear();
 
 			stream.push_op(Op::Jmp{offset: 0});
 			unsafe{stream.try_patch_jump(Op::Jmp{offset: i as isize * -10}, 0).unwrap()};
-			assert_eq!(Op::decode(&mut &*stream.0).unwrap(), Op::Jmp{offset: i as isize * -10});
+			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::Jmp{offset: i as isize * -10});
 			stream.clear();
 
 			stream.push_op(Op::JmpIf{offset: 0});
 			unsafe{stream.try_patch_jump(Op::JmpIf{offset: i as isize * 10}, 0).unwrap()};
-			assert_eq!(Op::decode(&mut &*stream.0).unwrap(), Op::JmpIf{offset: i as isize * 10});
+			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::JmpIf{offset: i as isize * 10});
 			stream.clear();
 
 			stream.push_op(Op::JmpIf{offset: 0});
 			unsafe{stream.try_patch_jump(Op::JmpIf{offset: i as isize * -10}, 0).unwrap()};
-			assert_eq!(Op::decode(&mut &*stream.0).unwrap(), Op::JmpIf{offset: i as isize * -10});
+			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::JmpIf{offset: i as isize * -10});
 			stream.clear();
 
 			stream.push_op(Op::JmpIf{offset: 0});
 			unsafe{stream.try_patch_jump(Op::JmpIf{offset: i as isize * -1000}, 0).unwrap()};
-			assert_eq!(Op::decode(&mut &*stream.0).unwrap(), Op::JmpIf{offset: i as isize * -1000});
+			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::JmpIf{offset: i as isize * -1000});
 			stream.clear();
 		}
 	}
 
 	#[test]
 	fn vm_test_0() {
-		let stream = Instructions(Vec::new());
+		let stream = Instructions::new();
 		let mut vm = Stack::new();
 		assert!(unsafe{vm.run(&[], &stream, 0).is_none()});
 	}
 
 	#[test]
 	fn vm_test_1() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		stream.push_op(Op::ReturnVoid);
 		let mut vm = Stack::new();
 		assert!(unsafe{vm.run(&[], &stream, 0).is_some()});
@@ -1264,7 +1350,7 @@ on_double(input: number) {
 
 	#[test]
 	fn vm_test_2() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		stream.push_op(Op::LoadNumber{number:25.});
 		stream.push_op(Op::ReturnValue);
 		let mut vm = Stack::new();
@@ -1273,7 +1359,7 @@ on_double(input: number) {
 
 	#[test]
 	fn vm_test_3() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		let mut vm = Stack::new();
 
 		for i in 0..5 {
@@ -1320,7 +1406,7 @@ on_double(input: number) {
 
 	#[test]
 	fn vm_test_4() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		let mut vm = Stack::new();
 
 		for i in 0..1 {
@@ -1351,7 +1437,7 @@ on_double(input: number) {
 
 	#[test]
 	fn vm_test_5() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		let mut vm = Stack::new();
 
 		for i in 0..10 {
@@ -1405,7 +1491,7 @@ on_double(input: number) {
 
 	#[test]
 	fn vm_test_6() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		let mut vm = Stack::new();
 
 		let strings = [
@@ -1450,7 +1536,7 @@ on_double(input: number) {
 
 	#[test]
 	fn vm_test_7() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		let globals = [const {Cell::new(GrugValue{void: ()})}; 10];
 		let mut vm = Stack::new();
 
@@ -1485,7 +1571,7 @@ on_double(input: number) {
 
 	#[test]
 	fn vm_test_8() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		let globals = [const {Cell::new(GrugValue{void: ()})}; 10];
 		let mut vm = Stack::new();
 
@@ -1545,7 +1631,7 @@ on_double(input: number) {
 
 	#[test]
 	fn vm_test_9() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		let globals = [const {Cell::new(GrugValue{void: ()})}; 10];
 		let mut vm = Stack::new();
 
@@ -1605,7 +1691,7 @@ on_double(input: number) {
 
 	#[test]
 	fn vm_test_10() {
-		let mut stream = Instructions(Vec::new());
+		let mut stream = Instructions::new();
 		let globals = [const {Cell::new(GrugValue{void: ()})}; 10];
 		let mut vm = Stack::new();
 
