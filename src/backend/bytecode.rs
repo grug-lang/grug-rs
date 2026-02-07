@@ -34,6 +34,7 @@ impl Compiler {
 	fn compile(ast: GrugAst) -> CompiledFile {
 		let mut compiler = Compiler::new();
 		let mut instructions = Instructions::new();
+		instructions.begin_on_fn(Arc::from("init_globals"), 0);
 		let globals_size = ast.global_variables.len();
 		for (i, global) in ast.global_variables.into_iter().enumerate() {
 			compiler.compile_expr(&mut instructions, global.assignment_expr);
@@ -53,6 +54,7 @@ impl Compiler {
 		debug_assert_eq!(self.locals.len(), 0);
 		debug_assert_eq!(self.current_scope_size, 0);
 		self.push_scope();
+		instructions.begin_on_fn(on_function.name, 0);
 		for arg in on_function.arguments {
 			self.insert_local_variable(Arc::clone(&arg.name));
 		}
@@ -309,10 +311,7 @@ impl Compiler {
 
 #[derive(Debug)]
 struct CompiledFile {
-	on_functions: Vec<Option<usize>>,
 	init_fn_id: GrugOnFnId,
-	helper_functions: Vec<usize>,
-	strings: Vec<Arc<NTStr>>,
 	instructions: Instructions,
 	entities: RefCell<Vec<NonNull<GrugEntity>>>,
 	globals_size: usize,
@@ -686,8 +685,9 @@ impl Op {
 
 pub struct Instructions{
 	stream: Vec<u8>,
-	on_fn_locations: Vec<Option<usize>>,
-	helper_fn_locations: Vec<usize>,
+	on_fn_locations: Vec<Option</* start location in instruction stream */ usize>>,
+	helper_fn_locations: Vec</* start location in instruction stream */ usize>,
+	fn_labels: HashMap<usize, Arc<str>>,
 	strings: HashSet<Arc<NTStr>>,
 	jumps_count: usize,
 	jumps_end: HashMap</* to */ usize, (/* from */ Vec<usize>, /* label */ usize)>,
@@ -701,6 +701,7 @@ impl Instructions {
 			stream: Vec::new(),
 			on_fn_locations: Vec::new(),
 			helper_fn_locations: Vec::new(),
+			fn_labels: HashMap::new(),
 			strings: HashSet::new(),
 			jumps_count: 0,
 			jumps_start: HashMap::new(),
@@ -826,6 +827,19 @@ impl Instructions {
 		self.assert_jumps_consistency();
 	}
 
+	pub fn begin_on_fn(&mut self, name: Arc<str>, index: usize) {
+		if self.on_fn_locations.len() <= index {
+			self.on_fn_locations.resize(index + 1, None);
+		}
+		self.on_fn_locations[index] == Some(self.get_loc());
+		self.fn_labels.insert(self.get_loc(), name);
+	}
+
+	pub fn begin_helper_fn(&mut self, name: Arc<str>) {
+		self.helper_fn_locations.push(self.get_loc());
+		self.fn_labels.insert(self.get_loc(), name);
+	}
+
 	pub fn assert_jumps_consistency(&self) {
 		for (end, starts) in &self.jumps_end {
 			for start in &starts.0 {
@@ -911,6 +925,9 @@ impl std::fmt::Display for Instructions {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		let stream = &mut &*self.stream;
 		let mut addr = unsafe{stream.as_ptr().byte_offset_from(self.stream.as_ptr())};
+		if let Some(name) = self.fn_labels.get(&(addr as usize)) {
+			writeln!(f, "{}:", name);
+		}
 		if let Some((froms, label)) = self.jumps_end.get(&(addr as usize)) && !froms.is_empty() {
 			writeln!(f, "L_{}: ", label);
 		}
@@ -973,6 +990,9 @@ impl std::fmt::Display for Instructions {
 			addr = end_addr;
 			// print labels: 
 			write!(f, "\n")?;
+			if let Some(name) = self.fn_labels.get(&(addr as usize)) {
+				writeln!(f, "{}:", name);
+			}
 			if let Some((froms, label)) = self.jumps_end.get(&(addr as usize)) && !froms.is_empty() {
 				writeln!(f, "L_{}: ", label);
 			}
