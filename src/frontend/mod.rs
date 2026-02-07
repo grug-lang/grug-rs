@@ -72,7 +72,7 @@ impl GrugState {
 				id
 			}
 		};
-		self.backend.insert_file(id, on_functions, file);
+		self.backend.insert_file(self, id, on_functions, file);
 		Ok(id)
 	}
 }

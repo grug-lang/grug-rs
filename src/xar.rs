@@ -337,7 +337,21 @@ mod erased_xar {
 		pub unsafe fn write_bytes(self, bytes: &[u8]) {
 			unsafe{self.0.as_ptr().cast::<u8>().copy_from(bytes.as_ptr(), bytes.len())}
 		}
+		
+		/// ErasedPtr must be aligned to T and must have atleast enough space
+		/// for a [T] with `len` elements
+		pub unsafe fn write_slice<T: Clone>(self, len: usize, value: T) -> *mut [T] {
+			for i in 0..(len - 1) {
+				unsafe{self.0.cast::<T>().add(i).write(value.clone())};
+			}
+			if len > 0 {
+				unsafe{self.0.cast::<T>().add(len).write(value)}
+			}
+			std::ptr::slice_from_raw_parts_mut(self.0.as_ptr().cast::<T>(), len)
+		}
 
+		/// ErasedPtr must be aligned to T and must have atleast enough space
+		/// for a T
 		pub unsafe fn write_value<T>(self, value: T) {
 			unsafe{self.0.cast::<T>().write(value)};
 		}

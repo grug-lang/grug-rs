@@ -429,7 +429,7 @@ pub mod interpreter {
 	}
 
 	unsafe impl Backend for Interpreter {
-		fn insert_file(&self, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst) {
+		fn insert_file(&self, _state: &GrugState, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst) {
 			match self.files.get(&id) {
 				Some(_file) => {
 					todo!();
@@ -542,7 +542,7 @@ pub unsafe trait Backend {
 	///
 	/// The entity data of all entities created from the old script should be
 	/// regenerated
-	fn insert_file(&self, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst);
+	fn insert_file(&self, state: &GrugState, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst);
 	/// Initialize the member data of the newly created entity. When this
 	/// function is called, the member field of `entity` points to garbage and
 	/// must not be deinitialized. The GrugScriptId to be used is obtained from
@@ -620,7 +620,7 @@ pub struct ErasedBackend {
 #[repr(C)]
 pub struct BackendVTable {
 	/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
-	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, id: GrugScriptId, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst),
+	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, state: &GrugState, id: GrugScriptId, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst),
 	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
 	pub(crate) clear_entities      : extern "C" fn(data: NonNull<()>),
 	pub(crate) destroy_entity_data : extern "C" fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
@@ -632,8 +632,8 @@ pub struct BackendVTable {
 }
 
 impl ErasedBackend {
-	pub fn insert_file(&self, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst) {
-		unsafe{(self.vtable.insert_file)(self.data, id, on_functions.as_ptr(), on_functions.len(), file)}
+	pub fn insert_file(&self, state: &GrugState, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst) {
+		unsafe{(self.vtable.insert_file)(self.data, state, id, on_functions.as_ptr(), on_functions.len(), file)}
 	}
 	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
 		(self.vtable.init_entity)(self.data, state, entity)
@@ -660,9 +660,10 @@ impl Drop for ErasedBackend {
 
 impl<T: Backend> From<T> for ErasedBackend {
 	fn from(other: T) -> Self {
-		unsafe fn insert_file<T: Backend>(data: NonNull<()>, id: GrugScriptId, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst) {
+		unsafe fn insert_file<T: Backend>(data: NonNull<()>, state: &GrugState, id: GrugScriptId, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst) {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
+				state, 
 				id,
 				unsafe{std::slice::from_raw_parts(on_functions, on_functions_len)},
 				file

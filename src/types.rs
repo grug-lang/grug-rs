@@ -8,11 +8,26 @@ use crate::state::GrugState;
 // TODO Unnest some of these enums
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub union GameFnPtr {
 	pub void: GameFnPtrVoid,
 	pub void_argless: GameFnPtrVoidArgless,
 	pub value: GameFnPtrValue,
 	pub value_argless: GameFnPtrValueArgless,
+}
+
+impl std::fmt::Debug for GameFnPtr {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		unsafe{self.void.fmt(f)}
+	}
+}
+
+impl PartialEq for GameFnPtr {
+	fn eq(&self, other: &Self) -> bool {
+		const _: () = const{assert!(size_of::<GameFnPtr>() == size_of::<usize>())};
+		unsafe{std::ptr::fn_addr_eq(self.void, other.void)}
+		// unsafe{std::mem::transmute::<Self, usize>(*self) == std::mem::transmute::<Self, usize>(*other)}
+	}
 }
 
 mod from_impls {
