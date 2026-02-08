@@ -1,5 +1,9 @@
-#![allow(warnings)]
-use crate::types::{GrugValue, GrugId, GrugScriptId, GrugOnFnId, GrugEntity, Expr, ExprType, LiteralExpr, OnFunction, Statement, Variable, BinaryOperator, GrugType, GameFnPtr, HelperFunction};
+#![warn(warnings)]
+use crate::types::{
+	GrugValue, GrugScriptId, GrugOnFnId, GrugEntity, Expr, ExprType,
+	LiteralExpr, OnFunction, Statement, Variable, BinaryOperator, GrugType,
+	GameFnPtr, HelperFunction, UnaryOperator
+};
 use crate::ntstring::{NTStrPtr, NTStr};
 use crate::cachemap::CacheMap;
 use crate::state::{GrugState, OnFnEntry};
@@ -20,6 +24,7 @@ struct Compiler {
 	current_scope_size: usize,
 	locals_size_max: usize,
 	strings: HashSet<Arc<NTStr>>,
+	helper_fn_patches: Vec<(/* location of call instruction */ usize, /* arg_count */ usize, Arc<str>)>,
 }
 
 impl Compiler {
@@ -31,6 +36,7 @@ impl Compiler {
 			current_scope_size: 0,
 			locals_size_max: 0,
 			strings: HashSet::new(),
+			helper_fn_patches: Vec::new(),
 		}
 	}
 
@@ -49,12 +55,16 @@ impl Compiler {
 
 		for (i, on_function) in ast.on_functions.into_iter().enumerate() {
 			let Some(on_function) = on_function else {continue};
-			let loc = instructions.get_loc();
 			compiler.compile_on_fn(state, &mut instructions, on_function, i + 1);
 		}
 
 		for helper_function in ast.helper_functions {
 			compiler.compile_helper_fn(state, &mut instructions, helper_function);
+		}
+		for (patch_loc, args, name) in compiler.helper_fn_patches {
+			let (location, locals_size) = instructions.get_helper_fn_info(&name)
+				.expect("helper function exists");
+			unsafe{instructions.try_patch(Op::CallHelperFunction{args, locals_size, location}, patch_loc)}.unwrap();
 		}
 		CompiledFile {
 			init_fn_id,
@@ -68,7 +78,20 @@ impl Compiler {
 	}
 	
 	fn compile_helper_fn(&mut self, state: &GrugState, instructions: &mut Instructions, on_function: HelperFunction) {
-		todo!();
+		debug_assert_eq!(self.locals.len(), 0);
+		debug_assert_eq!(self.current_scope_size, 0);
+		self.push_scope();
+		let begin_location = instructions.get_loc();
+		for arg in on_function.arguments {
+			self.insert_local_variable(Arc::clone(&arg.name));
+		}
+		for statement in on_function.body_statements {
+			self.compile_statement(state, instructions, statement);
+		}
+		instructions.push_op(Op::ReturnVoid);
+		instructions.insert_helper_fn(on_function.name, begin_location, self.locals_size_max);
+		self.locals_size_max = 0;
+		self.pop_scope();
 	}
 
 	fn compile_on_fn(&mut self, state: &GrugState, instructions: &mut Instructions, on_function: OnFunction, index: usize) {
@@ -96,7 +119,7 @@ impl Compiler {
 				assignment_expr,
 			}) => {
 				self.compile_expr(state, instructions, assignment_expr);
-				if let Some(ty) = ty {
+				if let Some(_) = ty {
 					let loc = self.insert_local_variable(name);
 					instructions.push_op(Op::StoreLocal{index: loc});
 				} else {
@@ -133,7 +156,7 @@ impl Compiler {
 				instructions.push_op(Op::Jmp{offset: 0});
 
 				let cur_loc = instructions.get_loc() as isize;
-				unsafe{instructions.try_patch_jump(Op::JmpIf{offset: cur_loc - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
+				unsafe{instructions.try_patch(Op::JmpIf{offset: cur_loc - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
 					.expect("Could not patch jump because offset is too large");
 
 				for (cond, elif_statements) in else_if_statements {
@@ -153,7 +176,7 @@ impl Compiler {
 					instructions.push_op(Op::Jmp{offset: 0});
 
 					let cur_loc = instructions.get_loc() as isize;
-					unsafe{instructions.try_patch_jump(Op::JmpIf{offset: cur_loc - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
+					unsafe{instructions.try_patch(Op::JmpIf{offset: cur_loc - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
 						.expect("Could not patch jump because offset is too large");
 				}
 				
@@ -165,14 +188,14 @@ impl Compiler {
 					self.pop_scope();
 				} else {
 					let new_end = end_patches.pop().unwrap();
-					unsafe{instructions.try_patch_jump(Op::JmpIf{offset: new_end - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
+					unsafe{instructions.try_patch(Op::JmpIf{offset: new_end - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
 						.expect("Could not patch jump because offset is too large");
 					unsafe{instructions.rewind_to(new_end as usize)};
 				}
 
 				let end_loc = instructions.get_loc();
 				for end_patch in end_patches {
-					unsafe{instructions.try_patch_jump(Op::Jmp{offset: end_loc as isize - (end_patch + 3)}, end_patch as usize)}
+					unsafe{instructions.try_patch(Op::Jmp{offset: end_loc as isize - (end_patch + 3)}, end_patch as usize)}
 						.expect("Could not patch jump because offset is too large");
 				}
 			}
@@ -193,13 +216,24 @@ impl Compiler {
 				let end_loc = instructions.get_loc() as isize;
 				instructions.push_op(Op::Jmp{offset: Op::calc_offset(end_loc, continue_loc)});
 				let break_loc = instructions.get_loc() as isize;
-				unsafe{instructions.try_patch_jump(Op::JmpIf{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc as usize)}.unwrap();
+				unsafe{instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc as usize)}.unwrap();
 			}
 			Statement::CallStatement {
 				expr
 			} => self.compile_expr(state, instructions, expr),
-			_ => {
-				panic!();
+			Statement::ReturnStatement {
+				expr,
+			} => {
+				if let Some(expr) = expr {
+					self.compile_expr(state, instructions, expr);
+					instructions.push_op(Op::ReturnValue);
+				} else {
+					instructions.push_op(Op::ReturnVoid);
+				}
+			}
+			Statement::EmptyLineStatement => {}
+			x => {
+				panic!("{:?}", x);
 			}
 		}
 	}
@@ -251,7 +285,6 @@ impl Compiler {
 							unreachable!();
 						}
 					}
-					_ => todo!(),
 				}
 			}
 			ExprType::BinaryExpr {
@@ -296,7 +329,38 @@ impl Compiler {
 							}
 						}
 					}
-					_ => {
+					BinaryOperator::Or            => {
+						instructions.push_op(Op::Dup{index: 0});
+						let first_patch_loc = instructions.get_loc();
+						instructions.push_op(Op::JmpIf{offset: 0});
+						self.compile_expr(state, instructions, operands.1);
+						unsafe{
+							instructions.try_patch(
+								Op::JmpIf{
+									offset: Op::calc_offset(first_patch_loc as isize, instructions.get_loc() as isize),
+								},
+								first_patch_loc,
+							).unwrap()
+						};
+						println!("{}", instructions);
+					}
+					BinaryOperator::And           => {
+						instructions.push_op(Op::Dup{index: 0});
+						instructions.push_op(Op::Not);
+						let first_patch_loc = instructions.get_loc();
+						instructions.push_op(Op::JmpIf{offset: 0});
+						self.compile_expr(state, instructions, operands.1);
+						unsafe{
+							instructions.try_patch(
+								Op::JmpIf{
+									offset: Op::calc_offset(first_patch_loc as isize, instructions.get_loc() as isize),
+								},
+								first_patch_loc,
+							).unwrap()
+						};
+						println!("{}", instructions);
+					}
+					x => {
 						println!("{}", instructions);
 						panic!();
 					}
@@ -307,7 +371,20 @@ impl Compiler {
 				arguments,
 				line: _,
 				col: _,
-			} if function_name.starts_with("helper_") => {unimplemented!()},
+			} if function_name.starts_with("helper_") => {
+				let args = arguments.len();
+				for argument in arguments {
+					self.compile_expr(state, instructions, argument);
+				}
+
+				let (location, locals_size) = if let Some(info) = instructions.get_helper_fn_info(&function_name) {
+					info
+				} else {
+					self.helper_fn_patches.push((instructions.get_loc(), args, function_name));
+					(0, 0)
+				};
+				instructions.push_op(Op::CallHelperFunction{args, locals_size, location});
+			},
 			ExprType::CallExpr {
 				function_name,
 				arguments,
@@ -328,9 +405,20 @@ impl Compiler {
 					ptr: *fn_ptr,
 				});
 			}
-			_ => {
-				println!("{}", instructions);
-				panic!();
+			ExprType::ParenthesizedExpr {
+				expr,
+				line: _,
+				col: _,
+			} => self.compile_expr(state, instructions, *expr),
+			ExprType::UnaryExpr {
+				operator,
+				expr,
+			} => {
+				self.compile_expr(state, instructions, *expr);
+				match operator {
+					UnaryOperator::Not   => instructions.push_op(Op::Not),
+					UnaryOperator::Minus => {instructions.push_op(Op::LoadNumber{number: -1.0}); instructions.push_op(Op::Mul);}
+				}
 			}
 		}
 	}
@@ -389,7 +477,7 @@ unsafe impl Backend for BytecodeBackend {
 		let compiled_file = Compiler::compile(state, file, on_functions[0].id);
 		match self.files.try_insert(id, compiled_file) {
 			Ok(()) => (),
-			Err((id, compiled_file)) => {
+			Err((_id, _compiled_file)) => {
 				unimplemented!();
 			}
 		}
@@ -537,12 +625,14 @@ pub enum Op {
 	StoreLocal {
 		index: usize,
 	},
-	// 0x2c          | 0x2d
-	// 0b00101100    | 0b00101101
-	// CallHelper {
-	// 	args: usize,
-	// 	helper_index: usize
-	// },
+	// 0x2c                       | 0x2d
+	// 0b00101100                 | 0b00101101
+	// args and locals_size as u8 | tbd
+	CallHelperFunction {
+		args: usize,
+		locals_size: usize,
+		location: usize,
+	},
 	// 0x2e          | 0x2f
 	// 0b00101110    | 0b00101111
 	// args as u7    | args as u15
@@ -600,6 +690,8 @@ impl PartialEq for Op {
 			(Self::JmpIf{offset: o1} , Self::JmpIf{offset: o2}) => o1 == o2,
 			(Self::LoadLocal  {index: o1} , Self::LoadLocal  {index: o2}) => o1 == o2,
 			(Self::StoreLocal {index: o1} , Self::StoreLocal {index: o2}) => o1 == o2,
+			(Self::CallHelperFunction {args: args0, locals_size: locals_size0, location: idx0}, 
+			 Self::CallHelperFunction {args: args1, locals_size: locals_size1, location: idx1}) => args0 == args1 && idx0 == idx1 && locals_size0 == locals_size1,
 			(Self::CallGameFunction {has_return: kind0, args: args0, ptr: ptr0}, 
 			 Self::CallGameFunction {has_return: kind1, args: args1, ptr: ptr1}) => kind0 == kind1 && args0 == args1 && ptr0 == ptr1,
 			_ => false,
@@ -729,6 +821,15 @@ impl Op {
 			}
 			// u16 index
 			0x2b => {unimplemented!()}
+			// u8 arg count and locals_size
+			0x2c => {
+				let args = *bytes.get(1)? as usize;
+				let locals_size = *bytes.get(2)? as usize;
+				let location = usize::from_ne_bytes(get_usize_bytes(&mut bytes.get(3..)?)?);
+				(Op::CallHelperFunction{args, locals_size, location}, 1 + 1 + 1 + size_of::<usize>())
+			}
+			// tbd
+			0x2d => {unimplemented!()}
 			0x2e => {
 				let next_byte = bytes.get(1)?;
 				let kind = next_byte >> (size_of::<u8>() * 8 - 1) == 1;
@@ -786,14 +887,20 @@ impl Op {
 
 pub struct Instructions{
 	stream: Vec<u8>,
-	on_fn_locations: Vec<Option<(/* start location in instruction stream */ usize, /* number of locals */ usize)>>,
-	helper_fn_locations: Vec</* start location in instruction stream */ usize>,
+	on_fn_locations: Vec<
+		Option<(
+			/* start location in instruction stream */ 
+			usize, 
+			/* number of locals */ 
+			usize,
+		)>
+	>,
+	helper_fn_locations: HashMap<Arc<str>, (/* location */ usize, /* locals_size */ usize)>,
 	fn_labels: HashMap<usize, Arc<str>>,
 	strings: HashSet<Arc<NTStr>>,
 	jumps_count: usize,
 	jumps_end: HashMap</* to */ usize, (/* from */ Vec<usize>, /* label */ usize)>,
 	jumps_start: HashMap</* from */ usize, /* to */ usize>,
-	// game_functions: HashSet<GameFunctionInfo>,
 }
 
 impl Instructions {
@@ -801,7 +908,7 @@ impl Instructions {
 		Self {
 			stream: Vec::new(),
 			on_fn_locations: Vec::new(),
-			helper_fn_locations: Vec::new(),
+			helper_fn_locations: HashMap::new(),
 			fn_labels: HashMap::new(),
 			strings: HashSet::new(),
 			jumps_count: 0,
@@ -814,7 +921,9 @@ impl Instructions {
 		self.stream.clear();
 		self.on_fn_locations.clear();
 		self.helper_fn_locations.clear();
+		self.fn_labels.clear();
 		self.strings.clear();
+		self.jumps_count = 0;
 		self.jumps_end.clear();
 		self.jumps_start.clear();
 	}
@@ -915,6 +1024,19 @@ impl Instructions {
 				self.stream.push(0x2a);
 				self.stream.push(index as u8);
 			}
+			Op::CallHelperFunction {
+				args,
+				locals_size,
+				location,
+			} => {
+				if args >= u8::MAX as usize && locals_size >= u8::MAX as usize {
+					unimplemented!();
+				}
+				self.stream.push(0x2c);
+				self.stream.push(args as u8);
+				self.stream.push(locals_size as u8);
+				self.stream.extend_from_slice(&location.to_ne_bytes());
+			}
 			Op::CallGameFunction {
 				has_return,
 				args,
@@ -949,9 +1071,13 @@ impl Instructions {
 		self.fn_labels.insert(location, name);
 	}
 
-	pub fn begin_helper_fn(&mut self, name: Arc<str>) {
-		self.helper_fn_locations.push(self.get_loc());
-		self.fn_labels.insert(self.get_loc(), name);
+	pub fn get_helper_fn_info(&mut self, name: &str) -> Option<(/* location */ usize, /* locals_size */ usize)>{
+		self.helper_fn_locations.get(name).copied()
+	}
+
+	pub fn insert_helper_fn(&mut self, name: Arc<str>, location: usize, locals_size: usize) {
+		self.helper_fn_locations.insert(Arc::clone(&name), (location, locals_size));
+		self.fn_labels.insert(location, name);
 	}
 
 	pub fn assert_jumps_consistency(&self) {
@@ -979,7 +1105,7 @@ impl Instructions {
 	/// location passed in must be the position returned by a previous call to push_op.
 	///
 	/// It will succeed if opcode matches and there is enough space to store a jump of that type
-	pub unsafe fn try_patch_jump(&mut self, op: Op, location: usize) -> Option<()> {
+	pub unsafe fn try_patch(&mut self, op: Op, location: usize) -> Option<()> {
 		macro_rules! patch {
 			($offset_type: ty, $new_offset: expr) => {{
 				unsafe {
@@ -1002,6 +1128,17 @@ impl Instructions {
 			}
 			(0x27, Op::JmpIf{offset}) => {
 				patch!(isize, offset)
+			}
+			(0x2c, Op::CallHelperFunction{args, locals_size, location: jmp_location}) if args <= u8::MAX as usize && locals_size <= u8::MAX as usize => {
+				if args != *self.stream.get(location as usize + 1)? as usize {
+					return None;
+				}
+				
+				unsafe {
+					*self.stream.get_mut(location as usize + 2)? = locals_size as u8;
+					*(self.stream.get_mut((location as usize + 3)..)? as *mut [u8] as *mut [u8; size_of::<usize>()]) = (jmp_location).to_ne_bytes();
+				}
+				return Some(());
 			}
 			_ => return None,
 		};
@@ -1038,10 +1175,10 @@ impl std::fmt::Display for Instructions {
 		let stream = &mut &*self.stream;
 		let mut addr = unsafe{stream.as_ptr().byte_offset_from(self.stream.as_ptr())};
 		if let Some(name) = self.fn_labels.get(&(addr as usize)) {
-			writeln!(f, "{}:", name);
+			writeln!(f, "{}:", name)?;
 		}
 		if let Some((froms, label)) = self.jumps_end.get(&(addr as usize)) && !froms.is_empty() {
-			writeln!(f, "L_{}: ", label);
+			writeln!(f, "L_{}: ", label)?;
 		}
 		while let Some(ins) = Op::decode(stream) {
 			let end_addr = unsafe{stream.as_ptr().byte_offset_from(self.stream.as_ptr())};
@@ -1098,20 +1235,25 @@ impl std::fmt::Display for Instructions {
 				Op::StoreLocal {
 					index,
 				} => write!(f, "StoreLocal {}", index),
+				Op::CallHelperFunction {
+					args,
+					locals_size,
+					location,
+				} => write!(f, "CallHelperFunction {} {} {}", args, locals_size, self.fn_labels.get(&location).unwrap()),
 				Op::CallGameFunction {
 					has_return,
 					args,
 					ptr,
-				} => write!(f, "CallGameFunction 0x{:016x}", &unsafe{std::mem::transmute::<GameFnPtr, *const ()>(ptr).addr()}),
+				} => write!(f, "CallGameFunction {} 0x{:016x}", args, &unsafe{std::mem::transmute::<GameFnPtr, *const ()>(ptr).addr()}),
 			}?;
 			addr = end_addr;
 			// print labels: 
 			write!(f, "\n")?;
 			if let Some(name) = self.fn_labels.get(&(addr as usize)) {
-				writeln!(f, "{}:", name);
+				writeln!(f, "{}:", name)?;
 			}
 			if let Some((froms, label)) = self.jumps_end.get(&(addr as usize)) && !froms.is_empty() {
-				writeln!(f, "L_{}: ", label);
+				writeln!(f, "L_{}: ", label)?;
 			}
 		}
 		Ok(())
@@ -1120,18 +1262,21 @@ impl std::fmt::Display for Instructions {
 
 pub struct Stack {
 	stack: Vec<GrugValue>,
+	stack_frames: Vec<(/* rbp */ usize, /* ip */ usize)>,
 	rbp: usize,
 }
 impl Stack {
 	pub fn new() -> Self {
 		Self {
 			stack: Vec::new(),
+			stack_frames: Vec::new(),
 			rbp: 0,
 		}
 	}
 
 	pub fn reset(mut self) -> Self {
 		self.stack.clear();
+		self.stack_frames.clear();
 		self.rbp = 0;
 		self
 	}
@@ -1144,26 +1289,22 @@ impl Stack {
 			match ins {
 				Op::ReturnVoid         => {
 					self.stack.truncate(self.rbp);
-					if self.stack.len() == 0 {
-						return Some(GrugValue{void: ()});
+					if let Some((rbp, ip)) = self.stack_frames.pop() {
+						self.rbp = rbp;
+						stream = &mut &*instructions.stream.get(ip..)?;
 					} else {
-						let ip = u64::from_ne_bytes(self.stack.pop()?.as_bytes());
-						let rbp = u64::from_ne_bytes(self.stack.pop()?.as_bytes());
-						self.rbp = rbp as usize;
-						stream = &mut &*instructions.stream.get(ip as usize ..)?;
+						return Some(GrugValue{void: ()});
 					}
 				}
 				Op::ReturnValue        => {
 					let ret_val = self.stack.pop()?;
 					self.stack.truncate(self.rbp);
-					if self.stack.len() == 0 {
-						return Some(ret_val);
-					} else {
+					if let Some((rbp, ip)) = self.stack_frames.pop() {
 						self.stack.push(ret_val);
-						let ip = u64::from_ne_bytes(self.stack.pop()?.as_bytes());
-						let rbp = u64::from_ne_bytes(self.stack.pop()?.as_bytes());
-						self.rbp = rbp as usize;
-						stream = &mut &*instructions.stream.get(ip as usize ..)?;
+						self.rbp = rbp;
+						stream = &mut &*instructions.stream.get(ip..)?;
+					} else {
+						return Some(ret_val);
 					}
 				}
 				Op::LoadQW{bytes}      => self.stack.push(GrugValue::from_bytes(bytes)),
@@ -1280,23 +1421,36 @@ impl Stack {
 					let value = self.stack.pop()?;
 					*self.stack.get_mut(self.rbp + index)? = value;
 				}
+				Op::CallHelperFunction {
+					args,
+					locals_size,
+					location,
+				} => {
+					self.stack_frames.push((
+						self.rbp,
+						unsafe{stream.as_ptr().offset_from(instructions.stream.as_ptr()) as usize},
+					));
+					self.rbp = self.stack.len() - args;
+					self.stack.resize(self.rbp + locals_size, GrugValue{void: ()});
+					stream = instructions.stream.get(location as usize..)?;
+				}
 				Op::CallGameFunction {
 					has_return,
 					args,
 					ptr,
 				} => {
 					match (has_return, args) {
-						(false, 0) => (ptr.void_argless)(state),
+						(false, 0) => unsafe{(ptr.void_argless)(state)},
 						(false, n) => {
-							(ptr.void)(state, self.stack.as_ptr().add(self.stack.len() - n));
+							unsafe{(ptr.void)(state, self.stack.as_ptr().add(self.stack.len() - n))};
 							self.stack.truncate(self.stack.len() - n);
 						}
 						(true , 0) => {
-							let value = (ptr.value_argless)(state);
+							let value = unsafe{(ptr.value_argless)(state)};
 							self.stack.push(value);
 						}
 						(true , n) => {
-							let value = (ptr.value)(state, self.stack.as_ptr().add(self.stack.len() - n));
+							let value = unsafe{(ptr.value)(state, self.stack.as_ptr().add(self.stack.len() - n))};
 							self.stack.truncate(self.stack.len() - n);
 							self.stack.push(value);
 						}
@@ -1326,6 +1480,15 @@ mod test {
 			"A" : {
 				"description": "A",
 				"on_functions": {
+					"on_fib_naive" : {
+						"description": "calculate the fibonacci number at index i using a recursive algorithm",
+						"arguments": [
+							{
+								"name": "number",
+								"type": "number"
+							}
+						]
+					},
 					"on_fib" : {
 						"description": "calculate the fibonacci number at index i",
 						"arguments": [
@@ -1364,6 +1527,10 @@ mod test {
 	const GRUG_FILE_TEXT: &'static str = 
 r#"global: number = 2
 
+on_fib_naive(number: number) {
+    identity(helper_fib_naive(number))
+}
+
 on_fib(number: number) {
     result: number = 0
     if number <= 0 {
@@ -1388,9 +1555,20 @@ on_fib(number: number) {
 on_double(input: number) {
     identity(2 * input)
 }
+
+helper_fib_naive(n: number) number {
+    if n < 1 {
+        return 0
+    }
+    if (n == 1 or n == 2) {
+        return 1
+    }
+    return helper_fib_naive(n - 1) + helper_fib_naive(n - 2)
+}
 "#; // '
 	static mut IDENTITY_ARG: f64 = 0.;
 	extern "C" fn identity(_: &GrugState, arguments: *const GrugValue) -> GrugValue {
+		unsafe{println!("{:?}", (*arguments).number)};
 		unsafe{IDENTITY_ARG = (*arguments).number;}
 		unsafe{*arguments}
 	}
@@ -1422,15 +1600,40 @@ on_double(input: number) {
 	fn vm_test_state() {
 		let state = get_state();
 
-		let on_fib_id    = state.get_on_fn_id("A", "on_fib").unwrap();
-		let on_double_id = state.get_on_fn_id("A", "on_double").unwrap();
+		let on_fib_id      = state.get_on_fn_id("A", "on_fib").unwrap();
+		let on_fn_naive_id = state.get_on_fn_id("A", "on_fib_naive").unwrap();
+		let on_double_id   = state.get_on_fn_id("A", "on_double").unwrap();
 		let _file = state.compile_grug_file_from_str("path/test-A.gru ", GRUG_FILE_TEXT).unwrap();
 		let entity = state.create_entity(_file).unwrap();
-		assert!(state.call_on_function(&entity, on_fib_id, &[GrugValue{number: 30.}]));
-		unsafe{assert_eq!(*&raw const IDENTITY_ARG, 832040.);}
+		for i in 0..20 {
+			let fib = {
+				if i == 0 {
+					0
+				} else if i == 1 {
+					1
+				} else {
+					let mut a = 1;
+					let mut b = 1;
+					let mut counter = 2;
+					while counter < i {
+						let temp = a + b;
+						b = a;
+						a = temp;
+						counter += 1;
+					}
+					a
+				}
+			};
+			assert!(state.call_on_function(&entity, on_fib_id, &[GrugValue{number: i as f64}]));
+			unsafe{assert_eq!(*&raw const IDENTITY_ARG, fib as f64)}
+			assert!(state.call_on_function(&entity, on_fn_naive_id, &[GrugValue{number: i as f64}]));
+			unsafe{assert_eq!(*&raw const IDENTITY_ARG, fib as f64)}
+		}
 		
-		assert!(state.call_on_function(&entity, on_double_id, &[GrugValue{number: 25.}]));
-		unsafe{assert_eq!(*&raw const IDENTITY_ARG, 50.);}
+		for i in 0..20 {
+			assert!(state.call_on_function(&entity, on_double_id, &[GrugValue{number: i as f64}]));
+			unsafe{assert_eq!(*&raw const IDENTITY_ARG, (i * 2) as f64)}
+		}
 	}
 		
 	#[test]
@@ -1478,11 +1681,20 @@ on_double(input: number) {
 		test_op!(Op::CmpGe);
 		test_op!(Op::CmpL);
 		test_op!(Op::CmpLe);
-		test_op!(Op::CallGameFunction{
-			has_return: false,
-			args: 0,
-			ptr: GameFnPtr{void_argless: void_argless},
-		});
+		for i in 0..20 {
+			test_op!(Op::CallGameFunction{
+				has_return: false,
+				args: i,
+				ptr: GameFnPtr{void_argless: void_argless},
+			});
+			for j in 0..45 {
+				test_op!(Op::CallHelperFunction{
+					args: i,
+					locals_size: j,
+					location: j,
+				});
+			}
+		}
 	}
 
 	#[test]
@@ -1490,27 +1702,27 @@ on_double(input: number) {
 		let mut stream = Instructions::new();
 		for i in 0..20 {
 			stream.push_op(Op::Jmp{offset: 0});
-			unsafe{stream.try_patch_jump(Op::Jmp{offset: i as isize * 10}, 0).unwrap()};
+			unsafe{stream.try_patch(Op::Jmp{offset: i as isize * 10}, 0).unwrap()};
 			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::Jmp{offset: i as isize * 10});
 			stream.clear();
 
 			stream.push_op(Op::Jmp{offset: 0});
-			unsafe{stream.try_patch_jump(Op::Jmp{offset: i as isize * -10}, 0).unwrap()};
+			unsafe{stream.try_patch(Op::Jmp{offset: i as isize * -10}, 0).unwrap()};
 			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::Jmp{offset: i as isize * -10});
 			stream.clear();
 
 			stream.push_op(Op::JmpIf{offset: 0});
-			unsafe{stream.try_patch_jump(Op::JmpIf{offset: i as isize * 10}, 0).unwrap()};
+			unsafe{stream.try_patch(Op::JmpIf{offset: i as isize * 10}, 0).unwrap()};
 			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::JmpIf{offset: i as isize * 10});
 			stream.clear();
 
 			stream.push_op(Op::JmpIf{offset: 0});
-			unsafe{stream.try_patch_jump(Op::JmpIf{offset: i as isize * -10}, 0).unwrap()};
+			unsafe{stream.try_patch(Op::JmpIf{offset: i as isize * -10}, 0).unwrap()};
 			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::JmpIf{offset: i as isize * -10});
 			stream.clear();
 
 			stream.push_op(Op::JmpIf{offset: 0});
-			unsafe{stream.try_patch_jump(Op::JmpIf{offset: i as isize * -1000}, 0).unwrap()};
+			unsafe{stream.try_patch(Op::JmpIf{offset: i as isize * -1000}, 0).unwrap()};
 			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::JmpIf{offset: i as isize * -1000});
 			stream.clear();
 		}
@@ -1796,8 +2008,8 @@ on_double(input: number) {
 			stream.push_op(Op::LoadGlobal{index: 0});
 			stream.push_op(Op::ReturnValue);
 
-			unsafe{stream.try_patch_jump(Op::JmpIf{offset: (block_continue_loc - block_begin_jump - 3)}, block_begin_jump as usize).unwrap()};
-			unsafe{stream.try_patch_jump(Op::Jmp{offset: (cond_start - block_end_loc - 3)}, block_end_loc as usize).unwrap()};
+			unsafe{stream.try_patch(Op::JmpIf{offset: (block_continue_loc - block_begin_jump - 3)}, block_begin_jump as usize).unwrap()};
+			unsafe{stream.try_patch(Op::Jmp{offset: (cond_start - block_end_loc - 3)}, block_end_loc as usize).unwrap()};
 			let fib = {
 				let mut a = 1.;
 				let mut b = 1.;
@@ -1857,8 +2069,8 @@ on_double(input: number) {
 			stream.push_op(Op::LoadLocal{index: 0});
 			stream.push_op(Op::ReturnValue);
 
-			unsafe{stream.try_patch_jump(Op::JmpIf{offset: (block_continue_loc - block_begin_jump - 3)}, block_begin_jump as usize).unwrap()};
-			unsafe{stream.try_patch_jump(Op::Jmp{offset: (cond_start - block_end_loc - 3)}, block_end_loc as usize).unwrap()};
+			unsafe{stream.try_patch(Op::JmpIf{offset: (block_continue_loc - block_begin_jump - 3)}, block_begin_jump as usize).unwrap()};
+			unsafe{stream.try_patch(Op::Jmp{offset: (cond_start - block_end_loc - 3)}, block_end_loc as usize).unwrap()};
 			let fib = {
 				let mut a = 1.;
 				let mut b = 1.;
