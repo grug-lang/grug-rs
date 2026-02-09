@@ -7,7 +7,7 @@ use crate::types::{
 use crate::ntstring::{NTStrPtr, NTStr};
 use crate::cachemap::CacheMap;
 use crate::state::{GrugState, OnFnEntry};
-use crate::xar::ErasedXar;
+use crate::xar::{ErasedXar, ErasedPtr};
 use super::{Backend, GrugAst};
 
 use std::collections::{HashMap, HashSet};
@@ -23,7 +23,6 @@ struct Compiler {
 	locals_sizes: Vec<usize>,
 	current_scope_size: usize,
 	locals_size_max: usize,
-	strings: HashSet<Arc<NTStr>>,
 	helper_fn_patches: Vec<(/* location of call instruction */ usize, /* arg_count */ usize, Arc<str>)>,
 	while_loop_patches: Vec<(/* continue destination */ usize, Vec</* break patch locations */ usize>)>,
 }
@@ -36,7 +35,6 @@ impl Compiler {
 			locals_sizes: Vec::new(),
 			current_scope_size: 0,
 			locals_size_max: 0,
-			strings: HashSet::new(),
 			helper_fn_patches: Vec::new(),
 			while_loop_patches: Vec::new(),
 		}
@@ -46,11 +44,14 @@ impl Compiler {
 		let mut compiler = Compiler::new();
 		let mut instructions = Instructions::new();
 
-		let globals_size = ast.global_variables.len();
+		let globals_size = ast.global_variables.len() + 1;
 
-		instructions.insert_on_fn(Arc::from("init_globals"), 0, 0, 0);
-		for (i, global) in ast.global_variables.into_iter().enumerate() {
+		instructions.insert_on_fn(Arc::from("init_globals"), 0, 0, 1, 0);
+		let me_location = compiler.insert_global_variable(Arc::from("me"));
+		instructions.push_op(Op::StoreGlobal{index: me_location});
+		for global in ast.global_variables.into_iter() {
 			compiler.compile_expr(state, &mut instructions, global.assignment_expr);
+			let i = compiler.insert_global_variable(global.name);
 			instructions.push_op(Op::StoreGlobal{index: i});
 		}
 		instructions.push_op(Op::ReturnVoid);
@@ -68,6 +69,7 @@ impl Compiler {
 				.expect("helper function exists");
 			unsafe{instructions.try_patch(Op::CallHelperFunction{args, locals_size, location}, patch_loc)}.unwrap();
 		}
+		// panic!("{}", instructions);
 		CompiledFile {
 			init_fn_id,
 			instructions,
@@ -105,6 +107,7 @@ impl Compiler {
 		debug_assert_eq!(self.while_loop_patches.len(), 0);
 		self.push_scope();
 		let begin_location = instructions.get_loc();
+		let arg_count = on_function.arguments.len();
 		for arg in on_function.arguments {
 			self.insert_local_variable(Arc::clone(&arg.name));
 		}
@@ -112,7 +115,7 @@ impl Compiler {
 			self.compile_statement(state, instructions, statement);
 		}
 		instructions.push_op(Op::ReturnVoid);
-		instructions.insert_on_fn(on_function.name, index, begin_location, self.locals_size_max);
+		instructions.insert_on_fn(on_function.name, index, begin_location, arg_count, self.locals_size_max);
 		self.locals_size_max = 0;
 		self.pop_scope();
 	}
@@ -274,9 +277,9 @@ impl Compiler {
 					LiteralExpr::EntityExpr{
 						value,
 					} => {
-						match self.strings.get(&*value) {
+						match instructions.strings.get(&*value) {
 							None => {
-								self.strings.insert(Arc::clone(&value));
+								instructions.strings.insert(Arc::clone(&value));
 								// SAFETY: This returned instruction stream is only valid as long as this list of strings is available
 								let string = unsafe{value.as_ntstrptr().detach_lifetime()};
 								instructions.push_op(Op::LoadStr{string})
@@ -436,6 +439,11 @@ impl Compiler {
 		}
 	}
 
+	fn insert_global_variable(&mut self, name: Arc<str>) -> usize {
+		debug_assert!(self.globals.insert(name, self.globals.len()).is_none());
+		self.globals.len() - 1
+	}
+
 	fn insert_local_variable(&mut self, name: Arc<str>) -> usize {
 		debug_assert!(self.locals.last_mut().unwrap().insert(name, self.current_scope_size).is_none());
 		self.current_scope_size += 1;
@@ -495,14 +503,13 @@ unsafe impl Backend for BytecodeBackend {
 			}
 		}
 	}
-
 	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
 		let file = self.files.get(&entity.file_id)
 			.expect("file already compiled");
 		let globals = unsafe{&*file.data.get_slot().write_slice(file.globals_size, Cell::new(GrugValue{void: ()}))};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
-		let ret_val = unsafe{stack.run(state, globals, &file.instructions, 0, 0)}.is_some();
-
+		stack.stack.push(GrugValue{id: entity.id});
+		let ret_val = unsafe{stack.run(state, globals, &file.instructions, 1, 0)}.is_some();
 		entity.members.set(NonNull::from_ref(globals).cast::<()>());
 
 		stack = stack.reset();
@@ -510,13 +517,40 @@ unsafe impl Backend for BytecodeBackend {
 		ret_val
 	}
 	fn clear_entities(&mut self) {
-		todo!()
+		for (_, file) in self.files.iter_mut() {
+			file.entities.get_mut().clear();
+			file.data.clear();
+		}
 	}
 	fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
-		todo!()
+		let file = self.files.get(&entity.file_id)
+			.expect("file already compiled");
+		if file.entities.borrow_mut().extract_if(.., |x: &mut NonNull<GrugEntity>| !std::ptr::eq(x.as_ptr().cast_const(), entity))
+			.next().is_some() {
+			unsafe{file.data.delete(ErasedPtr::from_ptr(entity.members.get()))};
+			true
+		} else {
+			false
+		}
+		
 	}
 	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
-		todo!()
+		let file = self.files.get(&entity.file_id)
+			.expect("file already compiled");
+
+		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<GrugValue>>().as_ptr(), file.globals_size)};
+		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
+		let Some((start_loc, argument_count, locals_size)) = file.instructions.on_fn_locations[(on_fn_id - file.init_fn_id) as usize] else {
+			return false;
+		};
+		for i in 0..argument_count {
+			unsafe{stack.stack.push(*values.add(i))}
+		}
+		let ret_val = unsafe{stack.run(state, globals, &file.instructions, locals_size, start_loc)}.is_some();
+
+		stack = stack.reset();
+		self.stacks.borrow_mut().push(stack);
+		ret_val
 	}
 	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
 		let file = self.files.get(&entity.file_id)
@@ -524,9 +558,10 @@ unsafe impl Backend for BytecodeBackend {
 
 		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<GrugValue>>().as_ptr(), file.globals_size)};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
-		let Some((start_loc, locals_size)) = file.instructions.on_fn_locations[(on_fn_id - file.init_fn_id) as usize] else {
+		let Some((start_loc, argument_count, locals_size)) = file.instructions.on_fn_locations[(on_fn_id - file.init_fn_id) as usize] else {
 			return false;
 		};
+		if values.len() != argument_count {return false;}
 		for value in values {
 			stack.stack.push(*value)
 		}
@@ -904,6 +939,8 @@ pub struct Instructions{
 		Option<(
 			/* start location in instruction stream */ 
 			usize, 
+			/* number of arguments */
+			usize, 
 			/* number of locals */ 
 			usize,
 		)>
@@ -1076,11 +1113,11 @@ impl Instructions {
 		self.assert_jumps_consistency();
 	}
 
-	pub fn insert_on_fn(&mut self, name: Arc<str>, index: usize, location: usize, locals_size: usize) {
+	pub fn insert_on_fn(&mut self, name: Arc<str>, index: usize, location: usize, argument_count: usize, locals_size: usize) {
 		if self.on_fn_locations.len() <= index {
 			self.on_fn_locations.resize(index + 1, None);
 		}
-		self.on_fn_locations[index] = Some((location, locals_size));
+		self.on_fn_locations[index] = Some((location, argument_count, locals_size));
 		self.fn_labels.insert(location, name);
 	}
 
@@ -1244,10 +1281,10 @@ impl std::fmt::Display for Instructions {
 					index,
 				} => write!(f, "StoreGlobal {}", index),
 				Op::Jmp {
-					offset,
+					offset: _,
 				} => write!(f, "Jmp L_{}", self.jumps_end.get(self.jumps_start.get(&(end_addr as usize)).unwrap()).unwrap().1),
 				Op::JmpIf {
-					offset,
+					offset: _,
 				} => write!(f, "JmpIf L_{}", self.jumps_end.get(self.jumps_start.get(&(end_addr as usize)).unwrap()).unwrap().1),
 				Op::LoadLocal {
 					index,
@@ -1264,7 +1301,7 @@ impl std::fmt::Display for Instructions {
 					has_return,
 					args,
 					ptr,
-				} => write!(f, "CallGameFunction {} 0x{:016x}", args, &unsafe{std::mem::transmute::<GameFnPtr, *const ()>(ptr).addr()}),
+				} => write!(f, "CallGameFunction {} {} 0x{:016x}", has_return, args, &unsafe{std::mem::transmute::<GameFnPtr, *const ()>(ptr).addr()}),
 			}?;
 			addr = end_addr;
 			// print labels: 
@@ -1492,7 +1529,6 @@ mod test {
 	use crate::nt;
 	use crate::state::GrugState;
 	use crate::types::GameFnPtrValue;
-	use super::super::interpreter::Interpreter;
 
 	const MOD_API: &'static str /* ' */= r#"
 	{
@@ -1595,14 +1631,14 @@ helper_fib_naive(n: number) number {
 
 	extern "C" fn void_argless(_: &GrugState) {
 	}
-	extern "C" fn void_arg(_: &GrugState, _arguments: *const GrugValue) {
-	}
-	extern "C" fn value_argless(_: &GrugState) -> GrugValue {
-		GrugValue{void: ()}
-	}
-	extern "C" fn value_arg(_: &GrugState, _arguments: *const GrugValue) -> GrugValue {
-		GrugValue{void: ()}
-	}
+	// extern "C" fn void_arg(_: &GrugState, _arguments: *const GrugValue) {
+	// }
+	// extern "C" fn value_argless(_: &GrugState) -> GrugValue {
+	// 	GrugValue{void: ()}
+	// }
+	// extern "C" fn value_arg(_: &GrugState, _arguments: *const GrugValue) -> GrugValue {
+	// 	GrugValue{void: ()}
+	// }
 
 	fn get_state() -> GrugState {
 		let mut state = GrugState::new_from_text(

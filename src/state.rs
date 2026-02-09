@@ -1,6 +1,7 @@
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{GrugError, RuntimeError};
-use crate::backend::{Backend, Interpreter, ErasedBackend};
+use crate::backend::{Backend, ErasedBackend};
+use crate::backend::bytecode::BytecodeBackend;
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
 use crate::xar::Xar;
 
@@ -245,7 +246,7 @@ impl GrugState {
 			on_functions: on_fns,
 			path_to_script_ids: RefCell::new(HashMap::new()),
 			next_script_id: AtomicU64::new(0),
-			backend: Interpreter::new().into(),
+			backend: BytecodeBackend::new().into(),
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
 			call_start_time: Cell::new(Instant::now()),

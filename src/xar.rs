@@ -325,7 +325,7 @@ mod erased_xar {
 	const _: () = assert!(size_of::<ErasedPtr<'static>>() == size_of::<Option<ErasedPtr<'static>>>());
 
 	impl<'a> ErasedPtr<'a> {
-		fn from_ptr(ptr: NonNull<()>) -> Self {
+		pub fn from_ptr(ptr: NonNull<()>) -> Self {
 			Self(ptr, PhantomData)
 		}
 
@@ -341,11 +341,11 @@ mod erased_xar {
 		/// ErasedPtr must be aligned to T and must have atleast enough space
 		/// for a [T] with `len` elements
 		pub unsafe fn write_slice<T: Clone>(self, len: usize, value: T) -> *mut [T] {
-			for i in 0..(len - 1) {
+			for i in 1..len {
 				unsafe{self.0.cast::<T>().add(i).write(value.clone())};
 			}
 			if len > 0 {
-				unsafe{self.0.cast::<T>().add(len).write(value)}
+				unsafe{self.0.cast::<T>().write(value)}
 			}
 			std::ptr::slice_from_raw_parts_mut(self.0.as_ptr().cast::<T>(), len)
 		}
@@ -483,7 +483,9 @@ mod erased_xar {
 			unsafe{free_list.set(Some(handle.detach_lifetime()))};
 		}
 
-		pub unsafe fn delete<F: FnOnce(ErasedPtr)>(&self, handle: ErasedPtr) {
+		/// # SAFETY
+		/// handle must be from the current Xar
+		pub unsafe fn delete(&self, handle: ErasedPtr) {
 			unsafe{self.delete_with(handle, |_| {})}
 		}
 
@@ -504,9 +506,6 @@ mod erased_xar {
 		}
 
 		fn create_inner(mut item_layout: Layout) -> NonNull<XarInner> {
-			if item_layout.size() == 0 {
-				return NonNull::dangling();
-			}
 			let align = std::cmp::max(item_layout.align(), align_of::<Option<ErasedPtr>>());
 			let size = std::cmp::max(item_layout.size(), size_of::<Option<ErasedPtr>>());
 			item_layout = Layout::from_size_align(size, align)
