@@ -25,6 +25,7 @@ struct Compiler {
 	locals_size_max: usize,
 	strings: HashSet<Arc<NTStr>>,
 	helper_fn_patches: Vec<(/* location of call instruction */ usize, /* arg_count */ usize, Arc<str>)>,
+	while_loop_patches: Vec<(/* continue destination */ usize, Vec</* break patch locations */ usize>)>,
 }
 
 impl Compiler {
@@ -37,6 +38,7 @@ impl Compiler {
 			locals_size_max: 0,
 			strings: HashSet::new(),
 			helper_fn_patches: Vec::new(),
+			while_loop_patches: Vec::new(),
 		}
 	}
 
@@ -80,6 +82,8 @@ impl Compiler {
 	fn compile_helper_fn(&mut self, state: &GrugState, instructions: &mut Instructions, on_function: HelperFunction) {
 		debug_assert_eq!(self.locals.len(), 0);
 		debug_assert_eq!(self.current_scope_size, 0);
+		debug_assert_eq!(self.locals_size_max, 0);
+		debug_assert_eq!(self.while_loop_patches.len(), 0);
 		self.push_scope();
 		let begin_location = instructions.get_loc();
 		for arg in on_function.arguments {
@@ -97,6 +101,8 @@ impl Compiler {
 	fn compile_on_fn(&mut self, state: &GrugState, instructions: &mut Instructions, on_function: OnFunction, index: usize) {
 		debug_assert_eq!(self.locals.len(), 0);
 		debug_assert_eq!(self.current_scope_size, 0);
+		debug_assert_eq!(self.locals_size_max, 0);
+		debug_assert_eq!(self.while_loop_patches.len(), 0);
 		self.push_scope();
 		let begin_location = instructions.get_loc();
 		for arg in on_function.arguments {
@@ -203,12 +209,13 @@ impl Compiler {
 				condition,
 				statements,
 			} => {
-				// TODO: add handling for breaks and continues
 				let continue_loc = instructions.get_loc() as isize;
 				self.compile_expr(state, instructions, condition);
 				instructions.push_op(Op::Not);
 				let break_patch_loc = instructions.get_loc() as isize;
 				instructions.push_op(Op::JmpIf{offset: 0});
+
+				self.while_loop_patches.push((continue_loc as usize, Vec::new()));
 				
 				for statement in statements {
 					self.compile_statement(state, instructions, statement);
@@ -217,6 +224,10 @@ impl Compiler {
 				instructions.push_op(Op::Jmp{offset: Op::calc_offset(end_loc, continue_loc)});
 				let break_loc = instructions.get_loc() as isize;
 				unsafe{instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc as usize)}.unwrap();
+
+				for break_patch_loc in self.while_loop_patches.pop().unwrap().1 {
+					unsafe{instructions.try_patch(Op::Jmp{offset: Op::calc_offset(break_patch_loc as isize, break_loc)}, break_patch_loc)}.unwrap();
+				}
 			}
 			Statement::CallStatement {
 				expr
@@ -231,10 +242,16 @@ impl Compiler {
 					instructions.push_op(Op::ReturnVoid);
 				}
 			}
-			Statement::EmptyLineStatement => {}
-			x => {
-				panic!("{:?}", x);
+			Statement::BreakStatement => {
+				self.while_loop_patches.last_mut().unwrap().1.push(instructions.get_loc());
+				instructions.push_op(Op::Jmp{offset: 0});
 			}
+			Statement::ContinueStatement => {
+				let continue_loc = self.while_loop_patches.last().unwrap().0;
+				instructions.push_op(Op::Jmp{offset: Op::calc_offset(instructions.get_loc() as isize, continue_loc as isize)});
+			}
+			Statement::EmptyLineStatement => {},
+			Statement::Comment{..}        => {},
 		}
 	}
 
@@ -359,10 +376,6 @@ impl Compiler {
 							).unwrap()
 						};
 						println!("{}", instructions);
-					}
-					x => {
-						println!("{}", instructions);
-						panic!();
 					}
 				}
 			}
@@ -1083,7 +1096,8 @@ impl Instructions {
 	pub fn assert_jumps_consistency(&self) {
 		for (end, starts) in &self.jumps_end {
 			for start in &starts.0 {
-				assert_eq!(self.jumps_start.get(start).unwrap(), end);
+				let left = self.jumps_start.get(start).unwrap();
+				assert_eq!(left, end);
 			}
 		}
 	}
@@ -1091,10 +1105,16 @@ impl Instructions {
 	/// SAFETY:
 	/// `location` must be at the end of an instruction and the beginning of
 	/// the next one
-	/// Invalidates all instructions upto `locations`.
+	/// Invalidates all instructions upto `location`.
+	/// Any jumps that ends up past `location` needs to be redone
 	///
 	pub unsafe fn rewind_to(&mut self, location: usize) {
 		self.stream.truncate(location);
+		for (start, end) in self.jumps_start.iter() {
+			if *start > location || *end > location {
+				self.jumps_end.get_mut(end).unwrap().0.retain(|x| x != start);
+			}
+		}
 	}
 
 	pub fn get_loc(&self) -> usize {
