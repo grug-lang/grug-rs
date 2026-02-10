@@ -1,7 +1,6 @@
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{GrugError, RuntimeError};
-use crate::backend::{Backend, ErasedBackend};
-use crate::backend::bytecode::BytecodeBackend;
+use crate::backend::{Backend, ErasedBackend, Interpreter};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
 use crate::xar::Xar;
 
@@ -127,35 +126,35 @@ impl<'a> GrugInitSettings<'a> {
 		}
 	}
 
-	pub fn set_mods_dir(&mut self, dir: &'a str) -> &mut Self {
+	pub fn set_mods_dir(mut self, dir: &'a str) -> Self {
 		self.mods_dir_path = Some(NonNull::from_ref(dir).cast::<u8>());
 		self.mods_dir_path_len = dir.len();
 		self
 	}
 
-	pub fn set_mod_api_path(&mut self, mod_api: &'a str) -> &mut Self {
+	pub fn set_mod_api_path(mut self, mod_api: &'a str) -> Self {
 		self.mod_api_path = Some(NonNull::from_ref(mod_api).cast::<u8>());
 		self.mod_api_path_len = mod_api.len();
 		self
 	}
 
-	pub fn set_backend<B: Backend>(&mut self, backend: B) -> &mut Self {
+	pub fn set_backend<B: Backend>(mut self, backend: B) -> Self {
 		self.backend = Some(backend.into());
 		self
 	}
 
-	pub fn set_runtime_error_handler<F: for<'b> Fn(u32, &'b str, &'b str, &'b str)> (&mut self, f: F) -> &mut Self {
+	pub fn set_runtime_error_handler<F: for<'b> Fn(u32, &'b str, &'b str, &'b str)> (mut self, f: F) -> Self {
 		self.runtime_error_handler = f.into();
 		self
 	}
 
-	pub fn build_state(&mut self) -> Result<GrugState, GrugError> {
+	pub fn build_state(self) -> Result<GrugState, GrugError> {
 		let mod_api_path = unsafe{Self::maybe_nt_or_length(self.mod_api_path, self.mod_api_path_len)}
 			.unwrap_or("./mod_api.json");
 		let mods_dir_path = unsafe{Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)}
 			.unwrap_or("./mods");
 
-		GrugState::new(mod_api_path, mods_dir_path, std::mem::take(&mut self.runtime_error_handler))
+		GrugState::new(mod_api_path, mods_dir_path, self.runtime_error_handler, self.backend.unwrap_or_else(|| Interpreter::new().into()))
 	}
 
 	unsafe fn maybe_nt_or_length(ptr: Option<NonNull<u8>>, len: usize) -> Option<&'a str> {
@@ -213,7 +212,7 @@ pub struct GrugState {
 }
 
 impl GrugState {
-	fn new<J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, handler: RuntimeErrorHandler) -> Result<Self, GrugError> {
+	fn new<J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, handler: RuntimeErrorHandler, backend: ErasedBackend) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api(&mod_api_path)?;
 
 		let mut on_fn_id = 0;
@@ -246,7 +245,7 @@ impl GrugState {
 			on_functions: on_fns,
 			path_to_script_ids: RefCell::new(HashMap::new()),
 			next_script_id: AtomicU64::new(0),
-			backend: BytecodeBackend::new().into(),
+			backend,
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
 			call_start_time: Cell::new(Instant::now()),

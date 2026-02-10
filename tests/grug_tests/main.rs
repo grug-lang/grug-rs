@@ -4,8 +4,8 @@ use gruggers::ntstring::NTStr;
 use gruggers::nt;
 
 mod test_bindings {
-	use gruggers::state::GrugInitSettings;
-	use gruggers::state::GrugState;
+	use gruggers::state::{GrugInitSettings, GrugState};
+	use gruggers::backend::bytecode::BytecodeBackend;
 	use gruggers::error::RuntimeError;
 	use gruggers::types::{GrugValue, GrugScriptId, GrugEntityHandle};
 	use gruggers::ntstring::{NTStrPtr, NTStr};
@@ -39,6 +39,7 @@ mod test_bindings {
 					NTStrPtr::from_str_unchecked(&script_path),
 				)};
 			})
+			.set_backend(BytecodeBackend::new())
 			.build_state().unwrap();
 		// register_game_functions(&mut state);
 		super::game_fn_bindings::register_game_functions(&mut state);

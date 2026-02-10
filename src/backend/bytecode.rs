@@ -8,7 +8,7 @@ use crate::ntstring::{NTStrPtr, NTStr};
 use crate::cachemap::CacheMap;
 use crate::state::{GrugState, OnFnEntry};
 use crate::xar::{ErasedXar, ErasedPtr};
-use crate::error::{RuntimeError, ON_FN_TIME_LIMIT};
+use crate::error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
 use super::{Backend, GrugAst};
 
 use std::collections::{HashMap, HashSet};
@@ -1533,7 +1533,7 @@ impl Stack {
 				state.set_runtime_error(RuntimeError::ExceededTimeLimit);
 				return None;
 			}
-			if self.stack_frames.len() >= 100 {
+			if self.stack_frames.len() >= MAX_RECURSION_LIMIT {
 				state.set_runtime_error(RuntimeError::StackOverflow);
 				return None;
 			}
@@ -1680,7 +1680,7 @@ helper_fib_naive(n: number) number {
 		let on_double_id   = state.get_on_fn_id("A", "on_double").unwrap();
 		let _file = state.compile_grug_file_from_str("path/test-A.gru ", GRUG_FILE_TEXT).unwrap();
 		let entity = state.create_entity(_file).unwrap();
-		for i in 0..20 {
+		for i in 0..22 {
 			let fib = {
 				if i == 0 {
 					0
@@ -1701,7 +1701,7 @@ helper_fib_naive(n: number) number {
 			};
 			assert!(state.call_on_function(&entity, on_fib_id, &[GrugValue{number: i as f64}]));
 			unsafe{assert_eq!(*&raw const IDENTITY_ARG, fib as f64)}
-			assert!(state.call_on_function(&entity, on_fn_naive_id, &[GrugValue{number: i as f64}]));
+			assert!(state.call_on_function(&entity, on_fn_naive_id, &[GrugValue{number: i as f64}]), "{i}");
 			unsafe{assert_eq!(*&raw const IDENTITY_ARG, fib as f64)}
 		}
 		
