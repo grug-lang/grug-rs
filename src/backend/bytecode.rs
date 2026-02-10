@@ -8,6 +8,7 @@ use crate::ntstring::{NTStrPtr, NTStr};
 use crate::cachemap::CacheMap;
 use crate::state::{GrugState, OnFnEntry};
 use crate::xar::{ErasedXar, ErasedPtr};
+use crate::error::{RuntimeError, ON_FN_TIME_LIMIT};
 use super::{Backend, GrugAst};
 
 use std::collections::{HashMap, HashSet};
@@ -16,6 +17,7 @@ use std::cell::{Cell, RefCell};
 use std::mem::size_of;
 use std::alloc::Layout;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 struct Compiler {
 	globals: HashMap<Arc<str>, usize>,
@@ -815,7 +817,10 @@ impl Op {
 				(Op::LoadGlobal{index}, 2)
 			}
 			// u16 index
-			0x21 => {unimplemented!()}
+			0x21 => {
+				let index = u16::from_ne_bytes(get_u16_bytes(&mut bytes.get(1..)?)?) as usize;
+				(Op::LoadGlobal{index}, 3)
+			}
 			// 0x22       | 0x23
 			// 0b00100010 | 0b00100011
 			// u8 index
@@ -824,7 +829,10 @@ impl Op {
 				(Op::StoreGlobal{index}, 2)
 			}
 			// u16 index
-			0x23 => {unimplemented!()}
+			0x23 => {
+				let index = u16::from_ne_bytes(get_u16_bytes(&mut bytes.get(1..)?)?) as usize;
+				(Op::StoreGlobal{index}, 3)
+			}
 			// 0x24          | 0x25
 			// 0b00100100    | 0b00100101
 			// offset as i16 | offset as isize
@@ -1028,14 +1036,18 @@ impl Instructions {
 			Op::PrintStr  => self.stream.push(0x1f),
 			Op::LoadGlobal{index} => {
 				if index > u8::MAX as usize {
-					unimplemented!();
+					assert!(index < u16::MAX as usize);
+					self.stream.push(0x21);
+					self.stream.extend_from_slice(&index.to_ne_bytes());
 				}
 				self.stream.push(0x20);
 				self.stream.push(index as u8);
 			}
 			Op::StoreGlobal{index} => {
 				if index > u8::MAX as usize {
-					unimplemented!();
+					assert!(index < u16::MAX as usize);
+					self.stream.push(0x23);
+					self.stream.extend_from_slice(&index.to_ne_bytes());
 				}
 				self.stream.push(0x22);
 				self.stream.push(index as u8);
@@ -1339,8 +1351,8 @@ impl Stack {
 	}
 
 	pub unsafe fn run(&mut self, state: &GrugState, globals: &[Cell<GrugValue>], instructions: &Instructions, locals_size: usize, start_loc: usize) -> Option<GrugValue> {
-		let string = format!("{}", instructions);
 		let mut stream = &instructions.stream[start_loc..];
+		let start_time = Instant::now();
 		self.stack.resize(self.rbp + locals_size, GrugValue{void: ()});
 		while let Some(ins) = Op::decode(&mut stream) {
 			match ins {
@@ -1517,8 +1529,15 @@ impl Stack {
 					}
 				}
 			}
+			if start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
+				state.set_runtime_error(RuntimeError::ExceededTimeLimit);
+				return None;
+			}
+			if self.stack_frames.len() >= 100 {
+				state.set_runtime_error(RuntimeError::StackOverflow);
+				return None;
+			}
 		}
-		println!("{}", string);
 		None
 	}
 }
