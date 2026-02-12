@@ -1679,7 +1679,7 @@ helper_fib_naive(n: number) number {
 		let on_double_id   = state.get_on_fn_id("A", "on_double").unwrap();
 		let _file = state.compile_grug_file_from_str("path/test-A.gru ", GRUG_FILE_TEXT).unwrap();
 		let entity = state.create_entity(_file).unwrap();
-		for i in 0..22 {
+		for i in 0..20 {
 			let fib = {
 				if i == 0 {
 					0

@@ -18,8 +18,8 @@ use game_fns::*;
 
 fn main () {
 	let mut state = GrugInitSettings::new()
-		.set_mods_dir("examples/minimal/mods")
-		.set_mod_api_path("examples/minimal/mod_api.json")
+		.set_mods_dir("gruggers/examples/minimal/mods")
+		.set_mod_api_path("gruggers/examples/minimal/mod_api.json")
 		.build_state().unwrap();
 	state.register_game_fn("print_string", print_string as for<'a> extern "C" fn(&'a GrugState, _)).unwrap();
 	assert!(state.all_game_fns_registered());
@@ -29,8 +29,8 @@ fn main () {
 	let on_bark_id = state.get_on_fn_id("Dog", "on_bark").unwrap();
 
 	loop {
-		if state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: nt!("woof").as_ntstrptr()}]) {panic!()};
-		if state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: nt!("arg").as_ntstrptr()}]) {panic!()};
+		if !state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: nt!("woof").as_ntstrptr()}]) {panic!()};
+		if !state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: nt!("arf").as_ntstrptr()}]) {panic!()};
 		std::thread::sleep(Duration::from_secs(1));
 	}
 }
