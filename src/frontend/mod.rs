@@ -62,7 +62,6 @@ impl GrugState {
 			on_functions,
 			helper_functions,
 		};
-		let on_functions = self.get_entity_on_functions(entity_type).unwrap();
 		let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
 		let id = match path_to_script_ids.get(path) {
 			Some(id) => *id,
@@ -72,7 +71,7 @@ impl GrugState {
 				id
 			}
 		};
-		self.backend.insert_file(self, id, on_functions, file);
+		self.backend.insert_file(self, id, file);
 		Ok(id)
 	}
 }

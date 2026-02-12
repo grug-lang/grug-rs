@@ -215,23 +215,20 @@ impl GrugState {
 	fn new<J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, handler: RuntimeErrorHandler, backend: ErasedBackend) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api(&mod_api_path)?;
 
-		let mut on_fn_id = 0;
 		let mut on_fns = Vec::new();
 		let init_globals = Arc::from("init_globals");
 		for (entity_type, entity) in mod_api.entities() {
 			on_fns.push(OnFnEntry {
 				entity_type: Arc::clone(entity_type),
 				on_fn_name : Arc::clone(&init_globals),
-				id         : on_fn_id,
+				index      : 0,
 			});
-			on_fn_id += 1;
-			for (on_fn_name, _) in &entity.on_fns {
+			for (i, (on_fn_name, _)) in entity.on_fns.iter().enumerate() {
 				on_fns.push(OnFnEntry{
 					entity_type: Arc::clone(entity_type),
-					on_fn_name:  Arc::clone(on_fn_name),
-					id: on_fn_id,
+					on_fn_name : Arc::clone(on_fn_name),
+					index      : i,
 				});
-				on_fn_id += 1;
 			}
 		}
 
@@ -256,23 +253,20 @@ impl GrugState {
 	pub fn new_from_text<D: AsRef<Path>> (mod_api_text: &str, mods_dir_path: D, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend>) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api_from_text(mod_api_text)?;
 
-		let mut on_fn_id = 0;
 		let mut on_fns = Vec::new();
 		let init_globals = Arc::from("init_globals");
 		for (entity_type, entity) in mod_api.entities() {
 			on_fns.push(OnFnEntry {
 				entity_type: Arc::clone(entity_type),
 				on_fn_name : Arc::clone(&init_globals),
-				id         : on_fn_id,
+				index      : 0,
 			});
-			on_fn_id += 1;
-			for (on_fn_name, _) in &entity.on_fns {
+			for (i, (on_fn_name, _)) in entity.on_fns.iter().enumerate() {
 				on_fns.push(OnFnEntry{
 					entity_type: Arc::clone(entity_type),
 					on_fn_name : Arc::clone(on_fn_name),
-					id         : on_fn_id,
+					index      : i,
 				});
-				on_fn_id += 1;
 			}
 		}
 
@@ -300,9 +294,9 @@ impl GrugState {
 				entity_type: String::from(entity_type),
 			});
 		}
-		for on_fn_entry in &self.on_functions {
+		for (i, on_fn_entry) in self.on_functions.iter().enumerate() {
 			if &*on_fn_entry.entity_type == entity_type && &*on_fn_entry.on_fn_name == on_fn_name {
-				return Ok(on_fn_entry.id)
+				return Ok(i as u64)
 			}
 		}
 		Err(StateError::UnknownOnFunction {
@@ -312,12 +306,7 @@ impl GrugState {
 	}
 	
 	pub fn get_on_fn_name(&self, on_fn_id: GrugOnFnId) -> Option<&str> {
-		for on_fn_entry in &self.on_functions {
-			if on_fn_entry.id == on_fn_id {
-				return Some(&*on_fn_entry.on_fn_name);
-			}
-		}
-		None
+		return self.on_functions.get(on_fn_id as usize).map(|entry| &*entry.on_fn_name)
 	}
 
 	pub fn get_entity_on_functions(&self, entity_type: &str) -> Result<&[OnFnEntry], StateError> {
@@ -450,9 +439,9 @@ impl GrugState {
 		self.is_errorring.set(false);
 	}
 
-	// pub fn reload_load_mods(&self) -> GrugModsDir {
-		
-	// }
+	fn get_on_fn_index(&self, id: GrugOnFnId) -> usize {
+		self.on_functions[id as usize].index
+	}
 }
 
 // should be moved into backend later
@@ -469,7 +458,7 @@ impl GrugState {
 		self.current_on_fn_id.set(Some(on_fn_id));
 
 		let ret_val = unsafe {
-			self.backend.call_on_function_raw(self, entity, on_fn_id, values)
+			self.backend.call_on_function_raw(self, entity, self.get_on_fn_index(on_fn_id), values)
 		};
 
 		self.current_script  .set(old_script);
@@ -485,7 +474,7 @@ impl GrugState {
 		self.current_script  .set(Some(entity.file_id));
 		self.current_on_fn_id.set(Some(on_fn_id));
 
-		let ret_val = self.backend.call_on_function(self, entity, on_fn_id, values);
+		let ret_val = self.backend.call_on_function(self, entity, self.get_on_fn_index(on_fn_id), values);
 
 		self.current_script  .set(old_script);
 		self.current_on_fn_id.set(old_on_fn_id);
@@ -534,5 +523,5 @@ impl std::fmt::Display for StateError {
 pub struct OnFnEntry {
 	pub entity_type: Arc<str>,
 	pub on_fn_name : Arc<str>,
-	pub id         : GrugOnFnId,
+	pub index      : usize,
 }

@@ -1,5 +1,5 @@
-use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugScriptId, GrugEntity, GrugOnFnId, GrugValue};
-use crate::state::{GrugState, OnFnEntry};
+use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugScriptId, GrugEntity, GrugValue};
+use crate::state::GrugState;
 
 use std::ptr::NonNull;
 
@@ -11,10 +11,10 @@ pub struct GrugAst {
 }
 
 pub mod interpreter {
-	use crate::types::{GrugValue, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugOnFnId, GrugScriptId, GrugEntity};
+	use crate::types::{GrugValue, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugScriptId, GrugEntity};
 	use super::{GrugAst, Backend};
 	use crate::error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
-	use crate::state::{GrugState, OnFnEntry};
+	use crate::state::GrugState;
 	use crate::cachemap::CacheMap;
 	use crate::xar::ErasedXar;
 
@@ -38,17 +38,15 @@ pub mod interpreter {
 	#[derive(Debug)]
 	struct CompiledFile {
 		file: GrugAst,
-		init_on_fn_id: GrugOnFnId,
 		entities: RefCell<Vec<NonNull<GrugEntity>>>,
 		data: ErasedXar,
 	}
 
 	impl CompiledFile {
-		fn new(file: GrugAst, init_on_fn_id: GrugOnFnId) -> Self {
+		fn new(file: GrugAst) -> Self {
 			Self {
 				file,
 				entities: RefCell::new(Vec::new()),
-				init_on_fn_id,
 				data: ErasedXar::new(Layout::new::<GrugEntityData>()),
 			}
 		}
@@ -429,16 +427,13 @@ pub mod interpreter {
 	}
 
 	unsafe impl Backend for Interpreter {
-		fn insert_file(&self, _state: &GrugState, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst) {
+		fn insert_file(&self, _state: &GrugState, id: GrugScriptId, file: GrugAst) {
 			match self.files.get(&id) {
 				Some(_file) => {
 					todo!();
 				}
 				None => {
-					for i in 0..on_functions.len() - 1 {
-						assert_eq!(on_functions[i].id, on_functions[i+1].id - 1);
-					}
-					self.files.try_insert(id, CompiledFile::new(file, on_functions[0].id)).unwrap();
+					self.files.try_insert(id, CompiledFile::new(file)).unwrap();
 				}
 			}
 		}
@@ -478,12 +473,11 @@ pub mod interpreter {
 			return true;
 		}
 
-		unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
+		unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 			let file = &self.files.get(&entity.file_id)
 				.expect("file already created");
 
-			let on_fn_index = on_fn_id - file.init_on_fn_id;
-			let Some(on_function) = &file.file.on_functions[on_fn_index as usize - 1] else {
+			let Some(on_function) = &file.file.on_functions[on_fn_index] else {
 				return false;
 			};
 
@@ -505,12 +499,11 @@ pub mod interpreter {
 			).is_some()
 		}
 
-		fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
+		fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
 			let file = &self.files.get(&entity.file_id)
 				.expect("file already created");
 
-			let on_fn_index = on_fn_id - file.init_on_fn_id;
-			let Some(on_function) = &file.file.on_functions[on_fn_index as usize - 1] else {
+			let Some(on_function) = &file.file.on_functions[on_fn_index] else {
 				return false;
 			};
 
@@ -542,7 +535,7 @@ pub unsafe trait Backend {
 	///
 	/// The entity data of all entities created from the old script should be
 	/// regenerated
-	fn insert_file(&self, state: &GrugState, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst);
+	fn insert_file(&self, state: &GrugState, id: GrugScriptId, file: GrugAst);
 	/// Initialize the member data of the newly created entity. When this
 	/// function is called, the member field of `entity` points to garbage and
 	/// must not be deinitialized. The GrugScriptId to be used is obtained from
@@ -554,6 +547,7 @@ pub unsafe trait Backend {
 	/// within self so that it can be used during `destroy_entity_data` to
 	/// check for pointer equality. 
 	/// It is safe to use that pointer as a &GrugEntity in the meantime.
+	// TODO: This should pass in a pinned shared reference to strengthen the guarantee
 	#[must_use]
 	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool;
 	/// Deinitialize all the data associated with all entities. The pointers
@@ -575,36 +569,22 @@ pub unsafe trait Backend {
 	#[must_use]
 	fn destroy_entity_data(&self, entity: &GrugEntity) -> bool;
 
-	/// Run the on function with id `on_fn_id` of the script associated with `entity`.
-	/// The id of an on_ function is based on its order within mod_Api.json. 
-	///
-	/// GrugAst.on_function stores the on_ function data based on the order
-	/// within mod_api.json. The function id MUST be 1 indexed based on the
-	/// mod_api. This is because id '0' indicates the implicit `init_globals`
-	/// function that initializes the entity's members. The backend is
-	/// responsible for preserving the mapping from id to on_ function code
-	/// after all required transformations
+	/// Run the on function at index `on_fn_index` of the script associated
+	/// with `entity`.
 	///
 	/// # SAFETY: `values` must point to an array of GrugValues of at least as
 	/// many elements as the number of arguments to the on_ function
 	///
 	/// If the number of arguments is 0, then `values` is allowed to be null
 	#[must_use]
-	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool;
-	/// Run the on function with id `on_fn_id` of the script associated with `entity`.
-	/// The id of an on_ function is based on its order within mod_Api.json. 
-	///
-	/// GrugAst.on_function stores the on_ function data based on the order
-	/// within mod_api.json. The function id MUST be 1 indexed based on the
-	/// mod_api. This is because id '0' indicates the implicit `init_globals`
-	/// function that initializes the entity's members. The backend is
-	/// responsible for preserving the mapping from id to on_ function code
-	/// after all required transformations
+	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool;
+	/// Run the on function at index `on_fn_index` of the script associated
+	/// with `entity`.
 	///
 	/// # Panics: The length of `values` must exactly match the number of
 	/// expected arguments to the on_ function
 	#[must_use]
-	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool;
+	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool;
 }
 
 // This check ensures that c code can safely zero the backend field in GrugInitSettings
@@ -620,20 +600,20 @@ pub struct ErasedBackend {
 #[repr(C)]
 pub struct BackendVTable {
 	/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
-	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, state: &GrugState, id: GrugScriptId, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst),
+	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, state: &GrugState, id: GrugScriptId, file: GrugAst),
 	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
 	pub(crate) clear_entities      : extern "C" fn(data: NonNull<()>),
 	pub(crate) destroy_entity_data : extern "C" fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
 	/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
-	pub(crate) call_on_function_raw: unsafe extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool,
-	pub(crate) call_on_function    : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool,
+	pub(crate) call_on_function_raw: unsafe extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool,
+	pub(crate) call_on_function    : fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool,
 	// destroys the resources owned by the backend
 	pub(crate) drop                : extern "C" fn(data: NonNull<()>),
 }
 
 impl ErasedBackend {
-	pub fn insert_file(&self, state: &GrugState, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst) {
-		unsafe{(self.vtable.insert_file)(self.data, state, id, on_functions.as_ptr(), on_functions.len(), file)}
+	pub fn insert_file(&self, state: &GrugState, id: GrugScriptId, file: GrugAst) {
+		unsafe{(self.vtable.insert_file)(self.data, state, id, file)}
 	}
 	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
 		(self.vtable.init_entity)(self.data, state, entity)
@@ -644,11 +624,11 @@ impl ErasedBackend {
 	pub fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
 		(self.vtable.destroy_entity_data)(self.data, entity)
 	}
-	pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
-		unsafe{(self.vtable.call_on_function_raw)(self.data, state, entity, on_fn_id, values)}
+	pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
+		unsafe{(self.vtable.call_on_function_raw)(self.data, state, entity, on_fn_index, values)}
 	}
-	pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
-		(self.vtable.call_on_function)(self.data, state, entity, on_fn_id, values)
+	pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
+		(self.vtable.call_on_function)(self.data, state, entity, on_fn_index, values)
 	}
 }
 
@@ -660,12 +640,11 @@ impl Drop for ErasedBackend {
 
 impl<T: Backend> From<T> for ErasedBackend {
 	fn from(other: T) -> Self {
-		unsafe fn insert_file<T: Backend>(data: NonNull<()>, state: &GrugState, id: GrugScriptId, on_functions: *const OnFnEntry, on_functions_len: usize, file: GrugAst) {
+		unsafe fn insert_file<T: Backend>(data: NonNull<()>, state: &GrugState, id: GrugScriptId, file: GrugAst) {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
 				state, 
 				id,
-				unsafe{std::slice::from_raw_parts(on_functions, on_functions_len)},
 				file
 			)
 		}
@@ -691,21 +670,21 @@ impl<T: Backend> From<T> for ErasedBackend {
 			)
 		}
 		/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
-		unsafe extern "C" fn call_on_function_raw<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
+		unsafe extern "C" fn call_on_function_raw<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 			unsafe{T::call_on_function_raw(
 				data.cast::<T>().as_ref(),
 				state, 
 				entity,
-				on_fn_id,
+				on_fn_index,
 				values
 			)}
 		}
-		fn call_on_function<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
+		fn call_on_function<T: Backend>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
 			T::call_on_function(
 				unsafe{data.cast::<T>().as_ref()},
 				state, 
 				entity,
-				on_fn_id,
+				on_fn_index,
 				values
 			)
 		}

@@ -1,12 +1,11 @@
-#![warn(warnings)]
 use crate::types::{
-	GrugValue, GrugScriptId, GrugOnFnId, GrugEntity, Expr, ExprType,
+	GrugValue, GrugScriptId, GrugEntity, Expr, ExprType,
 	LiteralExpr, OnFunction, Statement, Variable, BinaryOperator, GrugType,
 	GameFnPtr, HelperFunction, UnaryOperator
 };
 use crate::ntstring::{NTStrPtr, NTStr};
 use crate::cachemap::CacheMap;
-use crate::state::{GrugState, OnFnEntry};
+use crate::state::GrugState;
 use crate::xar::{ErasedXar, ErasedPtr};
 use crate::error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
 use super::{Backend, GrugAst};
@@ -42,7 +41,7 @@ impl Compiler {
 		}
 	}
 
-	fn compile(state: &GrugState, ast: GrugAst, init_fn_id: GrugOnFnId) -> CompiledFile {
+	fn compile(state: &GrugState, ast: GrugAst) -> CompiledFile {
 		let mut compiler = Compiler::new();
 		let mut instructions = Instructions::new();
 
@@ -73,7 +72,6 @@ impl Compiler {
 		}
 		// panic!("{}", instructions);
 		CompiledFile {
-			init_fn_id,
 			instructions,
 			entities: RefCell::new(Vec::new()),
 			globals_size,
@@ -442,12 +440,14 @@ impl Compiler {
 	}
 
 	fn insert_global_variable(&mut self, name: Arc<str>) -> usize {
-		debug_assert!(self.globals.insert(name, self.globals.len()).is_none());
+		let check = self.globals.insert(name, self.globals.len());
+		debug_assert!(check.is_none());
 		self.globals.len() - 1
 	}
 
 	fn insert_local_variable(&mut self, name: Arc<str>) -> usize {
-		debug_assert!(self.locals.last_mut().unwrap().insert(name, self.current_scope_size).is_none());
+		let check = self.locals.last_mut().unwrap().insert(name, self.current_scope_size);
+		debug_assert!(check.is_none());
 		self.current_scope_size += 1;
 		self.locals_size_max = std::cmp::max(self.locals_size_max, self.current_scope_size);
 		self.current_scope_size - 1
@@ -474,7 +474,6 @@ impl Compiler {
 
 #[derive(Debug)]
 struct CompiledFile {
-	init_fn_id: GrugOnFnId,
 	instructions: Instructions,
 	entities: RefCell<Vec<NonNull<GrugEntity>>>,
 	globals_size: usize,
@@ -496,8 +495,8 @@ impl BytecodeBackend {
 }
 
 unsafe impl Backend for BytecodeBackend {
-	fn insert_file(&self, state: &GrugState, id: GrugScriptId, on_functions: &[OnFnEntry], file: GrugAst) {
-		let compiled_file = Compiler::compile(state, file, on_functions[0].id);
+	fn insert_file(&self, state: &GrugState, id: GrugScriptId, file: GrugAst) {
+		let compiled_file = Compiler::compile(state, file);
 		match self.files.try_insert(id, compiled_file) {
 			Ok(()) => (),
 			Err((_id, _compiled_file)) => {
@@ -536,13 +535,13 @@ unsafe impl Backend for BytecodeBackend {
 		}
 		
 	}
-	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
+	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 		let file = self.files.get(&entity.file_id)
 			.expect("file already compiled");
 
 		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<GrugValue>>().as_ptr(), file.globals_size)};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
-		let Some((start_loc, argument_count, locals_size)) = file.instructions.on_fn_locations[(on_fn_id - file.init_fn_id) as usize] else {
+		let Some((start_loc, argument_count, locals_size)) = file.instructions.on_fn_locations[on_fn_index + 1] else {
 			return false;
 		};
 		for i in 0..argument_count {
@@ -554,13 +553,13 @@ unsafe impl Backend for BytecodeBackend {
 		self.stacks.borrow_mut().push(stack);
 		ret_val
 	}
-	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
+	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
 		let file = self.files.get(&entity.file_id)
 			.expect("file already compiled");
 
 		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<GrugValue>>().as_ptr(), file.globals_size)};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
-		let Some((start_loc, argument_count, locals_size)) = file.instructions.on_fn_locations[(on_fn_id - file.init_fn_id) as usize] else {
+		let Some((start_loc, argument_count, locals_size)) = file.instructions.on_fn_locations[on_fn_index + 1] else {
 			return false;
 		};
 		if values.len() != argument_count {return false;}
