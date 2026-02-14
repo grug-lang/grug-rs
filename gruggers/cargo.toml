@@ -2,7 +2,7 @@
 name = "gruggers"
 version = "0.2.0"
 edition = "2024"
-authors = "Nikhil Nathanael Ilango"
+authors = ["Nikhil Nathanael Ilango"]
 description = "rust implementation of the grug language"
 repository = "https://github.com/grug-lang/grug-rs"
 license = "MIT"
