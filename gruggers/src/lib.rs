@@ -18,24 +18,30 @@ pub mod ntstring;
 mod cachemap;
 
 
-// Ideal Usage 
-// 
-// let state = GrugState::new(
-// 		"mod_api_path",
-// 		"mods_path",
-// );
-// for func in game_funcs {
-// 	state.register_fn(func.name, func.ptr);
-// }
-// if !state.all_game_fns_registered() {
-// 	return 1;
-// }
-// state.compile_grug_file("test/hello-A.grug");
-// let id = state.create_entity("test/hello-A.grug")
-// id.call_on_fn("on_b", grug_args![25, 30, 32]);
-
 // TODO: Debug info to backends
 // TODO: implementation errors like 'too many statements in block' should not be grug errors
 // TODO: Better Error handling
 // TODO: ModsDir struct 
 // TODO: Standard Library
+
+// MIT LICENSE
+// 
+// Copyright (c) 2026 NikhilNathanael
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy of
+// this software and associated documentation files (the “Software”), to deal in
+// the Software without restriction, including without limitation the rights to
+// use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+// of the Software, and to permit persons to whom the Software is furnished to do
+// so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
