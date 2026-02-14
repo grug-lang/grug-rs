@@ -541,8 +541,6 @@ impl AST {
 			name: fn_name.into(),
 			arguments: args,
 			body_statements,
-			calls_helper_fn: false,
-			has_while_loop: false,
 			return_ty
 		}))
 	}
@@ -576,8 +574,6 @@ impl AST {
 			name: fn_name.into(),
 			arguments: args,
 			body_statements,
-			calls_helper_fn: false,
-			has_while_loop: false,
 		}))
 	}
 

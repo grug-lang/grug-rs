@@ -46,8 +46,6 @@ mod ser {
 				name,
 				arguments,
 				body_statements,
-				calls_helper_fn: _,
-				has_while_loop: _,
 			}) => {
 				object! {
 					"kind": "on_function",
@@ -60,8 +58,6 @@ mod ser {
 				name,
 				arguments,
 				body_statements,
-				calls_helper_fn: _,
-				has_while_loop: _,
 				return_ty: GrugType::Void,
 			}) => {
 				object! {
@@ -75,8 +71,6 @@ mod ser {
 				name,
 				arguments,
 				body_statements,
-				calls_helper_fn: _,
-				has_while_loop: _,
 				return_ty,
 			}) => {
 				object! {

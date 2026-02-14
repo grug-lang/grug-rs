@@ -13,8 +13,6 @@ pub(super) struct TypePropogator<'a> {
 	global_variables: HashMap<Arc<str>, GrugType>,
 	local_variables: Vec<HashMap<Arc<str>, GrugType>>,
 	num_while_loops_deep: usize,
-	current_fn_calls_helper_fn: bool,
-	current_fn_has_while_loop: bool,
 	current_fn_name: Option<Arc<str>>,
 }
 
@@ -585,8 +583,6 @@ impl<'a> TypePropogator<'a> {
 			global_variables: HashMap::new(),
 			local_variables: Vec::new(),
 			num_while_loops_deep: 0,
-			current_fn_calls_helper_fn: false,
-			current_fn_has_while_loop: false,
 			current_fn_name: None,
 		}
 	}
@@ -602,9 +598,6 @@ impl<'a> TypePropogator<'a> {
 		for variable in variables {
 			self.check_global_expr(&variable.assignment_expr, &variable.name)?;
 			let result_ty = self.fill_expr(&ast.helper_fn_signatures, &mut variable.assignment_expr)?;
-			
-			// global expr cant call helper function and this has been checked
-			debug_assert!(!self.current_fn_calls_helper_fn);
 
 			if let ExprType::LiteralExpr{expr: LiteralExpr::IdentifierExpr{name, ..}, ..} = &variable.assignment_expr.ty 
 				&& &**name == "me" {
@@ -678,8 +671,6 @@ impl<'a> TypePropogator<'a> {
 			// These should only be set inside self.fill_statements
 			debug_assert!(self.local_variables.is_empty());
 			debug_assert!(self.num_while_loops_deep == 0);
-			debug_assert!(self.current_fn_calls_helper_fn == false);
-			debug_assert!(self.current_fn_has_while_loop == false);
 			debug_assert!(self.current_fn_name.is_none());
 
 			self.current_fn_name = Some(Arc::clone(&current_on_fn.name));
@@ -692,11 +683,6 @@ impl<'a> TypePropogator<'a> {
 
 			debug_assert!(self.current_fn_name.as_ref() == Some(&current_on_fn.name));
 			self.current_fn_name = None;
-
-			current_on_fn.calls_helper_fn = self.current_fn_calls_helper_fn;
-			current_on_fn.has_while_loop = self.current_fn_has_while_loop;
-			self.current_fn_calls_helper_fn = false;
-			self.current_fn_has_while_loop  = false;
 		}
 		let entity_on_functions = &self.entity.on_fns;
 		for on_fn in on_functions {
@@ -717,14 +703,10 @@ impl<'a> TypePropogator<'a> {
 					name,
 					arguments,
 					body_statements,
-					calls_helper_fn,
-					has_while_loop,
 					return_ty,
 				}) => {
 					debug_assert!(self.local_variables.is_empty());
 					debug_assert!(self.num_while_loops_deep == 0);
-					debug_assert!(self.current_fn_calls_helper_fn == false);
-					debug_assert!(self.current_fn_has_while_loop == false);
 					debug_assert!(self.current_fn_name.is_none());
 
 					self.current_fn_name = Some(Arc::clone(name));
@@ -737,11 +719,6 @@ impl<'a> TypePropogator<'a> {
 
 					debug_assert!(self.current_fn_name.as_ref() == Some(name));
 					self.current_fn_name = None;
-
-					*calls_helper_fn = self.current_fn_calls_helper_fn;
-					*has_while_loop = self.current_fn_has_while_loop;
-					self.current_fn_calls_helper_fn = false;
-					self.current_fn_has_while_loop  = false;
 				}
 				GlobalStatement::Comment{..} => (),
 			}
@@ -847,7 +824,6 @@ impl<'a> TypePropogator<'a> {
 					self.num_while_loops_deep += 1;
 					self.fill_statements(helper_fns, statements, expected_return_type)?;
 					self.num_while_loops_deep -= 1;
-					self.current_fn_has_while_loop = true;
 
 				}
 				Statement::ReturnStatement {
@@ -1069,9 +1045,6 @@ impl<'a> TypePropogator<'a> {
 			} => {
 				// TODO: Move this line to within check_arguments
 				arguments.iter_mut().map(|argument| self.fill_expr(helper_fns, argument)).collect::<Result<Vec<_>, _>>()?;
-				if function_name.starts_with("helper_") {
-					self.current_fn_calls_helper_fn = true;
-				}
 				if let Some((return_ty, sig_arguments)) = helper_fns.get(function_name) {
 					self.check_arguments(function_name, sig_arguments, arguments)?;
 					return_ty.clone()

@@ -396,8 +396,6 @@ pub struct OnFunction {
 	pub name: Arc<str>,
 	pub arguments: Vec<Argument>,
 	pub body_statements: Vec<Statement>,
-	pub calls_helper_fn: bool,
-	pub has_while_loop: bool,
 }
 
 #[derive(Debug)]
@@ -405,8 +403,6 @@ pub struct HelperFunction {
 	pub name: Arc<str>,
 	pub arguments: Vec<Argument>,
 	pub body_statements: Vec<Statement>,
-	pub calls_helper_fn: bool,
-	pub has_while_loop: bool,
 	pub return_ty: GrugType,
 }
 
