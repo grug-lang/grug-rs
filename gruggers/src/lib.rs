@@ -18,6 +18,7 @@ pub mod ntstring;
 mod cachemap;
 
 
+// TODO: Pratt parser for frontend expressions
 // TODO: Debug info to backends
 // TODO: Better Error handling
 // TODO: ModsDir struct 

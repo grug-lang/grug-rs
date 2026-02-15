@@ -676,7 +676,7 @@ impl AST {
 				match next_tokens[1].ty {
 					TokenType::OpenParenthesis => {
 						Ok(Statement::CallStatement{
-							expr: self.parse_call(tokens, parsing_depth + 1)?,
+							expr: self.parse_expression(tokens, parsing_depth + 1, 0.)?,
 						})
 					}
 					TokenType::Colon | TokenType::Space => {
@@ -719,7 +719,7 @@ impl AST {
 					None
 				} else {
 					consume_space(tokens)?;
-					Some(self.parse_expression(tokens, parsing_depth + 1)?)
+					Some(self.parse_expression(tokens, parsing_depth + 1, 0.)?)
 				};
 				Ok(Statement::ReturnStatement{
 					expr
@@ -761,7 +761,7 @@ impl AST {
 		assert_parsing_depth(parsing_depth)?;
 		consume_next_token_types(tokens, &[TokenType::While, TokenType::Space])?;
 
-		let condition = self.parse_expression(tokens, parsing_depth + 1)?;
+		let condition = self.parse_expression(tokens, parsing_depth + 1, 0.)?;
 		let statements = self.parse_statements(tokens, parsing_depth + 1, indentation + 1)?;
 
 		Ok(Statement::WhileStatement{
@@ -775,7 +775,7 @@ impl AST {
 		assert_parsing_depth(parsing_depth)?;
 		consume_next_token_types(tokens, &[TokenType::If, TokenType::Space])?;
 
-		let condition = self.parse_expression(tokens, parsing_depth + 1)?;
+		let condition = self.parse_expression(tokens, parsing_depth + 1, 0.)?;
 		let statements = self.parse_statements(tokens, parsing_depth + 1, indentation + 1)?;
 
 		Ok((condition, statements))
@@ -835,7 +835,7 @@ impl AST {
 		consume_next_token_types(tokens, &[TokenType::Equal])?;
 
 		consume_space(tokens)?;
-		let assignment_expr = self.parse_expression(tokens, parsing_depth + 1)?;
+		let assignment_expr = self.parse_expression(tokens, parsing_depth + 1, 0.)?;
 		Ok(Statement::Variable(Variable{
 			name: local_name.into(),
 			ty,
@@ -885,7 +885,7 @@ impl AST {
 
 		consume_space(tokens)?;
 		
-		let assignment_expr = self.parse_expression(tokens, 0)?;
+		let assignment_expr = self.parse_expression(tokens, 0, 0.)?;
 		
 		Ok(GlobalStatement::Variable(GlobalVariable{
 			name: global_name.into(),
@@ -896,420 +896,263 @@ impl AST {
 
 	// Recursive descent parsing adapted from the implementation in grug:
 	// https://github.com/grug-lang/grug
-	fn parse_expression<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
+	// fn parse_expression<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
+	// 	assert_parsing_depth(parsing_depth)?;
+	// 	self.parse_or(tokens, parsing_depth + 1)
+	// }
+
+	fn parse_expression<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, min_precedence: f32) -> Result<Expr, ParserError> {
 		assert_parsing_depth(parsing_depth)?;
-		self.parse_or(tokens, parsing_depth + 1)
-	}
+		let mut current: Expr = {
+			let Token{ty, line, col, value} = get_next_token(tokens)?;
+			match ty {
+				TokenType::OpenParenthesis => {
+					let expr = self.parse_expression(tokens, parsing_depth + 1, 0.)?;
+					let close_paren = &consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?[0];
 
-	// or -> and + " " + "||" + and
-
-	fn parse_or<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-		assert_parsing_depth(parsing_depth)?;
-		let mut expr = self.parse_and(tokens, parsing_depth + 1)?;
-
-		while consume_next_token_types(tokens, &[TokenType::Space, TokenType::Or]).is_ok() {
-			let left_expr = expr;
-			consume_space(tokens)?;
-			let right_expr = self.parse_and(tokens, parsing_depth + 1)?;
-			expr = Expr {
-				ty: ExprType::BinaryExpr{
-					operands: Box::new((left_expr, right_expr)),
-					operator: BinaryOperator::Or,
-				},
-				result_ty: None,
-			};
-		}
-		Ok(expr)
-	}
-	
-	// and -> equality + " " + "||" + equality
-
-	fn parse_and<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-		assert_parsing_depth(parsing_depth)?;
-		let mut expr = self.parse_equality(tokens, parsing_depth + 1)?;
-
-		while consume_next_token_types(tokens, &[TokenType::Space, TokenType::And]).is_ok() {
-			let left_expr = expr;
-			consume_space(tokens)?;
-			let right_expr = self.parse_equality(tokens, parsing_depth + 1)?;
-			expr = Expr {
-				ty: ExprType::BinaryExpr{
-					operands: Box::new((left_expr, right_expr)),
-					operator: BinaryOperator::And,
-				},
-				result_ty: None,
-			};
-		}
-		Ok(expr)
-	}
-	
-	// equality -> comparison + " " + ("==" | "!=") + comparison
-
-	fn parse_equality<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-		assert_parsing_depth(parsing_depth)?;
-		let mut expr = self.parse_comparison(tokens, parsing_depth + 1)?;
-
-		loop {
-			if consume_next_token_types(tokens, &[TokenType::Space, TokenType::DoubleEquals]).is_ok() {
-				let left_expr = expr;
-				consume_space(tokens)?;
-				let right_expr = self.parse_comparison(tokens, parsing_depth + 1)?;
-				expr = Expr {
-					ty: ExprType::BinaryExpr{
-						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::DoubleEquals,
-					},
-					result_ty: None,
-				};
-			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::NotEquals]).is_ok() {
-				let left_expr = expr;
-				consume_space(tokens)?;
-				let right_expr = self.parse_comparison(tokens, parsing_depth + 1)?;
-				expr = Expr {
-					ty: ExprType::BinaryExpr{
-						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::NotEquals,
-					},
-					result_ty: None,
-				};
-			} else {
-				break
-			}
-		}
-		Ok(expr)
-	}
-
-	fn parse_comparison<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-		assert_parsing_depth(parsing_depth)?;
-		let mut expr = self.parse_term(tokens, parsing_depth + 1)?;
-
-		loop {
-			if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Greater]).is_ok() {
-				let left_expr = expr;
-				consume_space(tokens)?;
-				let right_expr = self.parse_term(tokens, parsing_depth + 1)?;
-				expr = Expr {
-					ty: ExprType::BinaryExpr{
-						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::Greater,
-					},
-					result_ty: None,
-				};
-			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::GreaterEquals]).is_ok() {
-				let left_expr = expr;
-				consume_space(tokens)?;
-				let right_expr = self.parse_term(tokens, parsing_depth + 1)?;
-				expr = Expr {
-					ty: ExprType::BinaryExpr{
-						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::GreaterEquals,
-					},
-					result_ty: None,
-				};
-			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Less]).is_ok() {
-				let left_expr = expr;
-				consume_space(tokens)?;
-				let right_expr = self.parse_term(tokens, parsing_depth + 1)?;
-				expr = Expr {
-					ty: ExprType::BinaryExpr{
-						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::Less,
-					},
-					result_ty: None,
-				};
-			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::LessEquals]).is_ok() {
-				let left_expr = expr;
-				consume_space(tokens)?;
-				let right_expr = self.parse_term(tokens, parsing_depth + 1)?;
-				expr = Expr {
-					ty: ExprType::BinaryExpr{
-						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::LessEquals,
-					},
-					result_ty: None,
-				};
-			} else {
-				break
-			}
-		}
-		Ok(expr)
-	}
-
-	fn parse_term<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-		assert_parsing_depth(parsing_depth)?;
-		let mut expr = self.parse_factor(tokens, parsing_depth + 1)?;
-
-		loop {
-			if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Plus]).is_ok() {
-				let left_expr = expr;
-				consume_space(tokens)?;
-				let right_expr = self.parse_factor(tokens, parsing_depth + 1)?;
-				expr = Expr {
-					ty: ExprType::BinaryExpr{
-						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::Plus,
-					},
-					result_ty: None,
-				};
-			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Minus]).is_ok() {
-				let left_expr = expr;
-				consume_space(tokens)?;
-				let right_expr = self.parse_factor(tokens, parsing_depth + 1)?;
-				expr = Expr {
-					ty: ExprType::BinaryExpr{
-						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::Minus,
-					},
-					result_ty: None,
-				};
-			} else {
-				break
-			}
-		}
-		Ok(expr)
-	}
-
-	fn parse_factor<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-		assert_parsing_depth(parsing_depth)?;
-		let mut expr = self.parse_unary(tokens, parsing_depth + 1)?;
-
-		loop {
-			if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Star]).is_ok() {
-				let left_expr = expr;
-				consume_space(tokens)?;
-				let right_expr = self.parse_unary(tokens, parsing_depth + 1)?;
-				expr = Expr {
-					ty: ExprType::BinaryExpr{
-						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::Multiply,
-					},
-					result_ty: None,
-				};
-			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::ForwardSlash]).is_ok() {
-				let left_expr = expr;
-				consume_space(tokens)?;
-				let right_expr = self.parse_unary(tokens, parsing_depth + 1)?;
-				expr = Expr {
-					ty: ExprType::BinaryExpr{
-						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::Division,
-					},
-					result_ty: None,
-				};
-			} else if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Percent]).is_ok() {
-				let left_expr = expr;
-				consume_space(tokens)?;
-				let right_expr = self.parse_unary(tokens, parsing_depth + 1)?;
-				expr = Expr {
-					ty: ExprType::BinaryExpr{
-						operands: Box::new((left_expr, right_expr)),
-						operator: BinaryOperator::Remainder,
-					},
-					result_ty: None,
-				};
-			} else {
-				break
-			}
-		}
-		Ok(expr)
-	}
-
-	fn parse_unary<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-		assert_parsing_depth(parsing_depth)?;
-
-		if consume_next_token_types(tokens, &[TokenType::Minus]).is_ok() {
-			Ok(Expr {
-				ty: ExprType::UnaryExpr{
-					operator: UnaryOperator::Minus,
-					expr: Box::new(self.parse_unary(tokens, parsing_depth + 1)?),
-				},
-				result_ty: None,
-			})
-		} else if consume_next_token_types(tokens, &[TokenType::Not]).is_ok() {
-			consume_space(tokens)?;
-			Ok(Expr {
-				ty: ExprType::UnaryExpr{
-					operator: UnaryOperator::Not,
-					expr: Box::new(self.parse_unary(tokens, parsing_depth + 1)?),
-				},
-				result_ty: None,
-			})
-		} else {
-			self.parse_call(tokens, parsing_depth + 1)
-		}
-	}
-
-	// call -> primary | word + "(" + (expr + ("," + " " + expr)*) ? + ")"
-	fn parse_call<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-		assert_parsing_depth(parsing_depth)?;
-		let expr = self.parse_primary(tokens, parsing_depth + 1)?;
-
-		// Not a function call
-		if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenParenthesis]) {
-			// functions can only be identifiers for now
-			match expr.ty {
-				ExprType::LiteralExpr {
-					expr: LiteralExpr::IdentifierExpr{
-						name,
-					},
-					..
-				} => {
-					// TODO: Add called helper_functions tracking
-					if name.starts_with("helper_") {
-						self.called_helper_fns.insert(Arc::clone(&name));
+					Expr{
+						ty: ExprType::ParenthesizedExpr{
+							expr: Box::new(expr),
+							line: close_paren.line,
+							col: close_paren.col,
+						},
+						result_ty: None,
 					}
-					if let Ok([close_paren_token]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
-						return Ok(Expr{
-							ty: ExprType::CallExpr {
-								function_name: name,
-								arguments: Vec::new(),
-								line: close_paren_token.line,
-								col: close_paren_token.col,
+				}
+				TokenType::True => {
+					Expr{
+						ty: ExprType::LiteralExpr{
+							expr: LiteralExpr::TrueExpr,
+							line: *line,
+							col: *col
+						},
+						result_ty: None,
+					}
+				}
+				TokenType::False => {
+					Expr{
+						ty: ExprType::LiteralExpr{
+							expr: LiteralExpr::FalseExpr,
+							line: *line,
+							col: *col
+						},
+						result_ty: None,
+					}
+				}
+				TokenType::String => {
+					Expr{
+						ty: ExprType::LiteralExpr{
+							expr: LiteralExpr::StringExpr {
+								value: NTStr::arc_from_str(value),
 							},
-							result_ty: None,
-						});
+							line: *line,
+							col: *col
+						},
+						result_ty: None,
 					}
-
-					let mut arguments = Vec::new();
-
-					loop {
-						arguments.push(self.parse_expression(tokens, parsing_depth + 1)?);
-						if consume_next_token_types(tokens, &[TokenType::Comma]).is_err() {
-							let [close_paren_token] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
-							return Ok(Expr{
+				}
+				TokenType::Word => {
+					let value: Arc<str> = Arc::from(*value);
+					// a word token can actually be a function call
+					if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenParenthesis]) {
+						if value.starts_with("helper_") {
+							self.called_helper_fns.insert(Arc::clone(&value));
+						}
+						// immediate ")" | (expr + ("," + " " + expr)*) + ")"
+						
+						if let Ok([close_paren_token]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
+							Expr{
 								ty: ExprType::CallExpr {
-									function_name: name,
-									arguments,
+									function_name: value,
+									arguments: Vec::new(),
 									line: close_paren_token.line,
 									col: close_paren_token.col,
 								},
 								result_ty: None,
-							});
+							}
+						} else {
+							let mut arguments = Vec::new();
+							loop {
+								arguments.push(self.parse_expression(tokens, parsing_depth + 1, 0.)?);
+								if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Comma, TokenType::Space]) {
+									
+								} else {
+									let [close_paren_token] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
+									break Expr{
+										ty: ExprType::CallExpr {
+											function_name: value,
+											arguments: arguments,
+											line: close_paren_token.line,
+											col: close_paren_token.col,
+										},
+										result_ty: None,
+									};
+								}
+							}
 						}
-						consume_space(tokens)?;
+					} else {
+						Expr{
+							ty: ExprType::LiteralExpr{
+								expr: LiteralExpr::IdentifierExpr {
+									name: value,
+								},
+								line: *line,
+								col: *col
+							},
+							result_ty: None,
+						}
 					}
 				}
-				_ => {
-					let (line, col) = expr.ty.get_last_known_location();
-					Err(ParserError::UnexpectedOpenParenthesis{
-						got_ty: expr.ty,
-						line, 
-						col,
+				TokenType::Int32 => {
+					Expr{
+						ty: ExprType::LiteralExpr{
+							expr: LiteralExpr::NumberExpr {
+								value: value.parse::<i64>().unwrap() as f64,
+								string: Arc::from(*value),
+							},
+							line: *line,
+							col: *col
+						},
+						result_ty: None,
+					}
+				}
+				TokenType::Float32 => {
+					let number = value.parse::<f64>().unwrap();
+					if number > f64::MAX {
+						return Err(ParserError::FloatTooBig{
+							value: String::from(*value),
+						});
+					} else if number != 0. && number < f64::MIN_POSITIVE {
+						return Err(ParserError::FloatTooSmall{
+							value: String::from(*value),
+						});
+					}
+
+					Expr{
+						ty: ExprType::LiteralExpr{
+							expr: LiteralExpr::NumberExpr {
+								value: number,
+								string: Arc::from(*value),
+							},
+							line: *line,
+							col: *col
+						},
+						result_ty: None,
+					}
+				}
+				TokenType::Minus | TokenType::Not => {
+					let unary_op = match ty {
+						TokenType::Minus => UnaryOperator::Minus,
+						TokenType::Not => {consume_space(tokens)?; UnaryOperator::Not},
+						_ => unreachable!(),
+					};
+					let ((), r_bp) = Self::get_prefix_precedence(unary_op);
+					let expr = self.parse_expression(tokens, parsing_depth + 1, r_bp)?;
+					Expr {
+						result_ty: None,
+						ty: ExprType::UnaryExpr{
+							operator: unary_op,
+							expr: Box::new(expr),
+						},
+					}
+				}
+				_ =>  {
+					return Err(ParserError::ExpectedPrimaryExpression{
+						got_token: *ty,
+						line: *line, 
+						col: *col,
 					})
 				}
 			}
-		} else {
-			Ok(expr)
-		}
+		};
+		while let Ok([space, op]) = peek_next_tokens(tokens) {
+			let TokenType::Space = space.ty else {
+				break;
+			};
+			let bin_op = match op.ty {
+				TokenType::Or => {
+					BinaryOperator::Or
+				}
+				TokenType::And => {
+					BinaryOperator::And
+				}
+				TokenType::DoubleEquals => {
+					BinaryOperator::DoubleEquals
+				}
+				TokenType::NotEquals => {
+					BinaryOperator::NotEquals
+				}
+				TokenType::Greater => {
+					BinaryOperator::Greater
+				}
+				TokenType::GreaterEquals => {
+					BinaryOperator::GreaterEquals
+				}
+				TokenType::Less => {
+					BinaryOperator::Less
+				}
+				TokenType::LessEquals => {
+					BinaryOperator::LessEquals
+				}
+				TokenType::Plus => {
+					BinaryOperator::Plus
+				}
+				TokenType::Minus => {
+					BinaryOperator::Minus
+				}
+				TokenType::Star => {
+					BinaryOperator::Multiply
+				}
+				TokenType::ForwardSlash => {
+					BinaryOperator::Division
+				}
+				TokenType::Percent => {
+					BinaryOperator::Remainder
+				}
+				_ => break,
+			};
+			let (l_bp, r_bp) = Self::get_infix_precedence(bin_op);
+			if l_bp < min_precedence {
+				break;
+			}
+			consume_space(tokens)?;
+			_ = get_next_token(tokens)?;
+			consume_space(tokens)?;
+			let next = self.parse_expression(tokens, parsing_depth + 1, r_bp)?;
 
+			current = Expr {
+				result_ty: None,
+				ty: ExprType::BinaryExpr {
+					operator: bin_op,
+					operands: Box::new((current, next)),
+				}
+			};
+		}
+		Ok(current)
 	}
 
-	// primary -> "(" + expr + ")" | "true" | "false" | string | word | i32 | f32;
-	fn parse_primary<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize) -> Result<Expr, ParserError> {
-		assert_parsing_depth(parsing_depth)?;
-		
-		match get_next_token(tokens)? {
-			Token{ty: TokenType::OpenParenthesis, ..} => {
-				let expr = self.parse_expression(tokens, parsing_depth + 1)?;
-				let close_paren = &consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?[0];
+	fn get_prefix_precedence(op: UnaryOperator) -> ((), f32) {
+		match op {
+			UnaryOperator::Minus => ((), 7.0),
+			UnaryOperator::Not   => ((), 8.0),
+		}
+	}
 
-				Ok(Expr{
-					ty: ExprType::ParenthesizedExpr{
-						expr: Box::new(expr),
-						line: close_paren.line,
-						col: close_paren.col,
-					},
-					result_ty: None,
-				})
-			}
-			Token{ty: TokenType::True, line, col, ..} => {
-				Ok(Expr{
-					ty: ExprType::LiteralExpr{
-						expr: LiteralExpr::TrueExpr,
-						line: *line,
-						col: *col
-					},
-					result_ty: None,
-				})
-			}
-			Token{ty: TokenType::False, line, col, ..} => {
-				Ok(Expr{
-					ty: ExprType::LiteralExpr{
-						expr: LiteralExpr::FalseExpr,
-						line: *line,
-						col: *col
-					},
-					result_ty: None,
-				})
-			}
-			Token{ty: TokenType::String, line, col, value} => {
-				Ok(Expr{
-					ty: ExprType::LiteralExpr{
-						expr: LiteralExpr::StringExpr {
-							value: NTStr::arc_from_str(value),
-						},
-						line: *line,
-						col: *col
-					},
-					result_ty: None,
-				})
-			}
-			Token{ty: TokenType::Word, line, col, value} => {
-				Ok(Expr{
-					ty: ExprType::LiteralExpr{
-						expr: LiteralExpr::IdentifierExpr {
-							name: (*value).into(),
-						},
-						line: *line,
-						col: *col
-					},
-					result_ty: None,
-				})
-			}
-			Token{ty: TokenType::Int32, line, col, value} => {
-				Ok(Expr{
-					ty: ExprType::LiteralExpr{
-						expr: LiteralExpr::NumberExpr {
-							value: value.parse::<i64>().unwrap() as f64,
-							string: Arc::from(*value),
-						},
-						line: *line,
-						col: *col
-					},
-					result_ty: None,
-				})
-			}
-			Token{ty: TokenType::Float32, line, col, value} => {
-				let number = value.parse::<f64>().unwrap();
-				if number > f64::MAX {
-					return Err(ParserError::FloatTooBig{
-						value: String::from(*value),
-					});
-				} else if number != 0. && number < f64::MIN_POSITIVE {
-					return Err(ParserError::FloatTooSmall{
-						value: String::from(*value),
-					});
-				}
-
-				Ok(Expr{
-					ty: ExprType::LiteralExpr{
-						expr: LiteralExpr::NumberExpr {
-							value: number,
-							string: Arc::from(*value),
-						},
-						line: *line,
-						col: *col
-					},
-					result_ty: None,
-				})
-			}
-			Token{ty, line, col,..} =>  {
-				Err(ParserError::ExpectedPrimaryExpression{
-					got_token: *ty,
-					line: *line, 
-					col: *col,
-				})
-			}
+	fn get_infix_precedence(op: BinaryOperator) -> (f32, f32) {
+		match op {
+			BinaryOperator::Or            => (1.0, 1.1),
+			BinaryOperator::And           => (2.0, 2.1),
+			BinaryOperator::DoubleEquals  => (3.0, 3.1),
+			BinaryOperator::NotEquals     => (3.0, 3.1),
+			BinaryOperator::Greater       => (4.0, 4.1),
+			BinaryOperator::GreaterEquals => (4.0, 4.1),
+			BinaryOperator::Less          => (4.0, 4.1),
+			BinaryOperator::LessEquals    => (4.0, 4.1),
+			BinaryOperator::Plus          => (5.0, 5.1),
+			BinaryOperator::Minus         => (5.0, 5.1),
+			BinaryOperator::Multiply      => (6.0, 6.1),
+			BinaryOperator::Division      => (6.0, 6.1),
+			BinaryOperator::Remainder     => (6.0, 6.1),
 		}
 	}
 	
