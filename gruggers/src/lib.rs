@@ -12,7 +12,7 @@ pub mod state;
 
 // pub mod capi;
 pub mod xar;
-// pub mod ast;
+pub mod ast;
 
 pub mod ntstring;
 
