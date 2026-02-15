@@ -12,13 +12,14 @@ pub mod state;
 
 // pub mod capi;
 pub mod xar;
+// pub mod ast;
 
 pub mod ntstring;
 
 mod cachemap;
 
 
-// TODO: Pratt parser for frontend expressions
+// TODO: update AST to be like new grug-for-c ast
 // TODO: Debug info to backends
 // TODO: Better Error handling
 // TODO: ModsDir struct 
