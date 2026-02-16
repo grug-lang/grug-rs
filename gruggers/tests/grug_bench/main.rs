@@ -4,7 +4,7 @@ mod test_bindings {
 	use gruggers::ntstring::{NTStrPtr, NTStr};
 	use gruggers::state::{GrugState, GrugInitSettings};
 	use gruggers::backend::BytecodeBackend;
-	use gruggers::types::{GrugEntityHandle, GrugEntity, GrugScriptId, GrugOnFnId};
+	use gruggers::types::{GrugEntityHandle, GrugEntity, GrugScriptId, GrugOnFnId, GrugValue};
 
 	use super::game_functions::*;
 	
@@ -16,7 +16,7 @@ mod test_bindings {
 		compile_grug_file: extern "C" fn(&GrugState, NTStrPtr<'_>) -> GrugScriptId,
 		create_entity: for<'a> extern "C" fn(&'a GrugState, GrugScriptId) -> GrugEntityHandle<'a>,
 		get_on_fn_id: extern "C" fn(&GrugState, NTStrPtr<'_>, NTStrPtr<'_>) -> GrugOnFnId,
-		call_entity_on_fn: extern "C" fn(&GrugState, &GrugEntity, GrugOnFnId),
+		call_entity_on_fn: extern "C" fn(&GrugState, &GrugEntity, GrugOnFnId, *const GrugValue, usize),
 		destroy_entity: for<'a> extern "C" fn(&'a GrugState, GrugEntityHandle<'a>),
 	}
 
@@ -24,7 +24,7 @@ mod test_bindings {
 		let mut state = GrugInitSettings::new()
 			.set_mods_dir(mods_dir_path.to_str())
 			.set_mod_api_path(mod_api_path.to_str())
-			// .set_backend(BytecodeBackend::new())
+			.set_backend(BytecodeBackend::new())
 			.set_runtime_error_handler(|code, reason, fn_name, script_path| {
 				let reason      = NTStr::arc_from_str(reason);
 				let fn_name     = NTStr::arc_from_str(fn_name);
@@ -64,8 +64,13 @@ mod test_bindings {
 		state.destroy_entity(handle)
 	}
 
-	extern "C" fn call_entity_on_fn(state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId) {
-		assert!(state.call_on_function(entity, on_fn_id, &[]));
+	extern "C" fn call_entity_on_fn(state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue, values_len: usize) {
+		let values = unsafe{if values.is_null() {&[]} else {std::slice::from_raw_parts(values, values_len)}};
+		assert!(state.call_on_function(
+			entity, 
+			on_fn_id, 
+			values,
+		));
 	}
 
 	pub const GRUG_VTABLE: GrugVTable = GrugVTable{
