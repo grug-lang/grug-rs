@@ -2,3 +2,6 @@
 	path = gruggers/src/grug-tests
 	url = https://github.com/grug-lang/grug-tests
 	branch = development
+[submodule "gruggers/src/grug-bench"]
+	path = gruggers/src/grug-bench
+	url = https://github.com/grug-lang/grug-bench/

@@ -796,5 +796,3 @@ pub mod rust_api {
 		}
 	}
 }
-
-

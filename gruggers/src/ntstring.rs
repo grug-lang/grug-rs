@@ -164,7 +164,7 @@ impl<'a> NTStrPtr<'a> {
 	}
 
 	pub fn to_str(self) -> &'a str {
-		self.to_ntstr().as_str_with_null()
+		self.to_ntstr().as_str()
 	}
 	
 	/// SAFETY: There must be at least one null byte within the str

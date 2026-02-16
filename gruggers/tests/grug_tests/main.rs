@@ -260,7 +260,7 @@ mod game_fn_bindings {
 use std::io::Write;
 
 #[test]
-fn main () {
+fn grug_tests () {
 	let mut args = std::env::args().collect::<Vec<_>>();
 
 	let mut whitelisted_test = None;
@@ -275,34 +275,6 @@ fn main () {
 
 	let grug_tests_path = nt!("src/grug-tests/tests");
 	let mod_api_path = nt!("src/grug-tests/mod_api.json");
-
-	// let mut state = GrugInitSettings::new()
-	// 	.set_mod_api_path("src/grug-tests/mod_api.json")
-	// 	.set_mods_dir(grug_tests_path.as_str())
-	// 	.set_runtime_error_handler(|kind, msg, fn_name, script_path| {
-	// 		let mut msg = String::from(msg);
-	// 		msg.push('\0');
-	// 		let mut fn_name = String::from(fn_name);
-	// 		fn_name.push('\0');
-	// 		let mut script_path = String::from(script_path);
-	// 		script_path.push('\0');
-	// 		unsafe{
-	// 			grug_tests_runtime_error_handler (
-	// 			NTStrPtr::from_str_unchecked(&msg),
-	// 			kind as i32,
-	// 			NTStrPtr::from_str_unchecked(&fn_name),
-	// 			NTStrPtr::from_str_unchecked(&script_path),
-	// 		)};
-	// 	})
-	// 	.build_state().unwrap();
-	// // register_game_functions(&mut state);
-	// register_game_functions(&mut state);
-	// // let game_functions = get_game_functions();
-	// assert!(state.all_game_fns_registered());
-		
-	// unsafe {
-	// 	GLOBAL_TEST_STATE = Some(state);
-	// }
 
 	std::panic::set_hook(Box::new(|info| {
 		_ = std::io::stdout().write_fmt(
