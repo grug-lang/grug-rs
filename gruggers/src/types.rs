@@ -436,9 +436,9 @@ pub enum Statement {
 	},
 	IfStatement{
 		condition: Expr,
+		is_chained: bool,
 		if_statements: Vec<Statement>,
-		else_if_statements: Vec<(Expr, Vec<Statement>)>,
-		else_statements: Option<Vec<Statement>>,
+		else_statements: Vec<Statement>,
 	},
 	ReturnStatement{
 		expr: Option<Expr>,

@@ -275,35 +275,24 @@ mod ser {
 			},
 			Statement::IfStatement{
 				condition,
+				is_chained: _,
 				if_statements,
-				else_if_statements,
-				else_statements: None,
-			} => object! {
+				else_statements,
+			} if else_statements.is_empty() => object! {
 				"kind": "if",
 				"cond": serialize_expr(condition),
 				"if_block": if_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
-				"else_if_statements": else_if_statements.iter().map(|(condition, statements)| {
-					object! {
-						"cond": serialize_expr(condition),
-						"block": statements.iter().map(serialize_statement).collect::<Vec<_>>(),
-					}
-				}).collect::<Vec<_>>(),
 			},
 			Statement::IfStatement{
 				condition,
+				is_chained,
 				if_statements,
-				else_if_statements,
-				else_statements: Some(else_statements),
+				else_statements,
 			} => object! {
 				"kind": "if",
 				"cond": serialize_expr(condition),
 				"if_block": if_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
-				"else_if_statements": else_if_statements.iter().map(|(condition, statements)| {
-					object! {
-						"cond": serialize_expr(condition),
-						"block": statements.iter().map(serialize_statement).collect::<Vec<_>>(),
-					}
-				}).collect::<Vec<_>>(),
+				"is_chained": *is_chained,
 				"else_block": else_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 			},
 			Statement::ReturnStatement{
@@ -376,9 +365,9 @@ mod de {
 		StatementKindNotString,
 		LocalVariableNameNotString,
 		LocalVariableTypeNotString,
-		ElseIfStatementsNotArray,
-		ElseIfBlockNotObject,
 		ElseBlockNotArray,
+		IfStatementMissingIsChained,
+		IsChainedNotBool,
 		CommentValueNotString,
 		HelperFunctionNameNotString,
 		HelperFunctionReturnTypeNotString,
@@ -503,7 +492,8 @@ mod de {
 	
 	fn apply_statements(statements: &JsonValue, indentation: usize, output: &mut String) -> Result<(), JsonDeserializeError> {
 		let JsonValue::Array(statements) = statements else {
-			return Err(JsonDeserializeError::StatementsNotArray)
+			panic!("{:#?}", statements);
+			// return Err(JsonDeserializeError::StatementsNotArray)
 		};
 		output.push_str("{\n");
 		for statement in statements {
@@ -542,31 +532,38 @@ mod de {
 				}
 				"if" => {
 					apply_indentation(indentation, output);
-					output.push_str("if ");
-					apply_expr(get_object_field(statement, "cond", "if")?, output)?;
-					output.push_str(" ");
-					apply_statements(get_object_field(statement, "if_block", "if")?, indentation + 1, output)?;
-
-					let JsonValue::Array(else_if_blocks) = get_object_field(statement, "else_if_statements", "if")? else {
-						return Err(JsonDeserializeError::ElseIfStatementsNotArray);
-					};
-					for else_if in else_if_blocks {
-						let JsonValue::Object(else_if) = else_if else {
-							return Err(JsonDeserializeError::ElseIfBlockNotObject);
-						};
-						output.push_str(" else if ");
-						apply_expr(get_object_field(else_if, "cond", "else_if")?, output)?;
+					let mut statement = statement;
+					loop {
+						output.push_str("if ");
+						apply_expr(get_object_field(statement, "cond", "if")?, output)?;
 						output.push_str(" ");
-						apply_statements(get_object_field(else_if, "block", "if")?, indentation + 1, output)?;
-					}
-					if let Ok(else_block) = get_object_field(statement, "else_block", "if") {
-						let value@JsonValue::Array(else_block) = else_block else {
-							return Err(JsonDeserializeError::ElseBlockNotArray);
-						};
-						if !else_block.is_empty() {
-							output.push_str(" else ");
-							apply_statements(value, indentation + 1, output)?;
+						apply_statements(get_object_field(statement, "if_block", "if")?, indentation + 1, output)?;
+
+						if let Ok(else_block) = get_object_field(statement, "else_block", "if") {
+							let value@JsonValue::Array(else_block) = else_block else {
+								return Err(JsonDeserializeError::ElseBlockNotArray);
+							};
+							let Ok(is_chained) = get_object_field(statement, "is_chained", "if") else {
+								return Err(JsonDeserializeError::IfStatementMissingIsChained);
+							};
+							let JsonValue::Boolean(is_chained) = is_chained else {
+								return Err(JsonDeserializeError::IsChainedNotBool);
+							};
+							if *is_chained {
+								output.push_str(" else ");
+								assert!(else_block.len() == 1);
+								let JsonValue::Object(if_statement) = &value[0] else {
+									return Err(JsonDeserializeError::StatementNotObject);
+								};
+								statement = if_statement;
+								continue;
+							} else if !else_block.is_empty() {
+								output.push_str(" else ");
+								apply_statements(value, indentation + 1, output)?;
+								break;
+							}
 						}
+						break;
 					}
 				}
 				"while" => {

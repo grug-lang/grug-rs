@@ -715,6 +715,14 @@ impl<'a> TypePropogator<'a> {
 						self.add_local_variable(Arc::clone(&arg.name), arg.ty.clone())?;
 					}
 					self.fill_statements(&ast.helper_fn_signatures, body_statements, return_ty)?;
+
+					if *return_ty != GrugType::Void && !matches!(body_statements.last(), Some(Statement::ReturnStatement{..})) {
+						return Err(TypePropogatorError::LastStatementNotReturn {
+							function_name: Arc::clone(self.current_fn_name.as_ref().unwrap()),
+							expected_return_type: return_ty.clone(),
+						});
+					}
+
 					self.pop_scope();
 
 					debug_assert!(self.current_fn_name.as_ref() == Some(name));
@@ -785,8 +793,8 @@ impl<'a> TypePropogator<'a> {
 				}
 				Statement::IfStatement {
 					condition,
+					is_chained: _,
 					if_statements,
-					else_if_statements,
 					else_statements,
 				} => {
 					let cond_type = self.fill_expr(helper_fns, condition)?;
@@ -796,16 +804,7 @@ impl<'a> TypePropogator<'a> {
 						});
 					}
 					self.fill_statements(helper_fns, if_statements, expected_return_type)?;
-					for (condition, else_if_statements) in else_if_statements {
-						let cond_type = self.fill_expr(helper_fns, condition)?;
-						if cond_type != GrugType::Bool {
-							return Err(TypePropogatorError::IfConditionTypeMismatch {
-								got_type: cond_type
-							});
-						}
-						self.fill_statements(helper_fns, else_if_statements, expected_return_type)?;
-					}
-					if let Some(else_statements) = else_statements {
+					if !else_statements.is_empty() {
 						self.fill_statements(helper_fns, else_statements, expected_return_type)?;
 					}
 					// TODO: Maybe this should be looked at again
@@ -853,12 +852,6 @@ impl<'a> TypePropogator<'a> {
 				}
 				_ => (),
 			}
-		}
-		if *expected_return_type != GrugType::Void && !matches!(statements.last(), Some(Statement::ReturnStatement{..})) {
-			return Err(TypePropogatorError::LastStatementNotReturn {
-				function_name: Arc::clone(self.current_fn_name.as_ref().unwrap()),
-				expected_return_type: expected_return_type.clone(),
-			});
 		}
 		self.pop_scope();
 		Ok(())

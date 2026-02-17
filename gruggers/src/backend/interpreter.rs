@@ -162,13 +162,13 @@ impl Interpreter {
 				},
 				Statement::IfStatement{
 					condition,
+					is_chained: _,
 					if_statements,
-					else_if_statements,
 					else_statements,
 				} => {
-					let condition = unsafe{self.run_expr(call_stack, state, file, entity, condition)?.bool};
+					let condition = unsafe{self.run_expr(call_stack, state, file, entity, condition)?.bool} != 0;
 					// if statement
-					if condition != 0 {
+					if condition {
 						let control_flow = self.run_statements(call_stack, state, file, entity, if_statements)?;
 						if let GrugControlFlow::None = control_flow {
 							continue;
@@ -177,31 +177,14 @@ impl Interpreter {
 							break 'outer;
 						} 
 					} else {
-						// else if statements
-						for (condition, else_if_statements) in else_if_statements {
-							let condition = unsafe{self.run_expr(call_stack, state, file, entity, condition)?.bool};
-							if condition != 0 {
-								let control_flow = self.run_statements(call_stack, state, file, entity, else_if_statements)?;
-								if let GrugControlFlow::None = control_flow {
-									// go to the next outer statment if any else if
-									// condition was true and there was no return
-									continue 'outer;
-								} else {
-									ret_val = control_flow;
-									break 'outer;
-								} 
-							}
-						}
 						// else statements
-						if let Some(else_statements) = else_statements {
-							let control_flow = self.run_statements(call_stack, state, file, entity, else_statements)?;
-							if let GrugControlFlow::None = control_flow {
-								continue;
-							} else {
-								ret_val = control_flow;
-								break 'outer;
-							} 
-						}
+						let control_flow = self.run_statements(call_stack, state, file, entity, else_statements)?;
+						if let GrugControlFlow::None = control_flow {
+							continue;
+						} else {
+							ret_val = control_flow;
+							break 'outer;
+						} 
 					}
 				},
 				Statement::ReturnStatement{

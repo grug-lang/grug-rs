@@ -693,23 +693,27 @@ impl AST {
 			}
 			TokenType::If => {
 				let (condition, if_statements) = self.parse_if_statement(tokens, parsing_depth + 1, indentation)?;
-				let mut else_if_statements = Vec::new();
-				let mut else_statements = None;
+				let is_chained;
+				let else_statements;
 
-				while consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]).is_ok() {
+				if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]).is_ok() {
 					let [space_token, if_token] = peek_next_tokens(tokens)?;
 					if TokenType::Space == space_token.ty && TokenType::If == if_token.ty {
+						is_chained = true;
 						consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
-						else_if_statements.push(self.parse_if_statement(tokens, parsing_depth, indentation)?);
+						else_statements = vec![self.parse_statement(tokens, parsing_depth + 1, indentation)?];
 					} else {
-						else_statements = Some(self.parse_statements(tokens, parsing_depth, indentation + 1)?);
-						break;
+						is_chained = false;
+						else_statements = self.parse_statements(tokens, parsing_depth, indentation + 1)?;
 					}
+				} else {
+					is_chained = false;
+					else_statements = Vec::new();
 				}
 				Ok(Statement::IfStatement{
 					condition, 
+					is_chained,
 					if_statements,
-					else_if_statements,
 					else_statements,
 				})
 			}

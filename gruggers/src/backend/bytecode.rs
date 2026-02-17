@@ -143,16 +143,14 @@ impl Compiler {
 			}
 			Statement::IfStatement {
 				condition,
+				is_chained,
 				if_statements,
-				else_if_statements,
 				else_statements,
 			} => {
-				let mut end_patches = Vec::new();
-
 				self.compile_expr(state, instructions, condition);
 
 				instructions.push_op(Op::Not);
-				let mut cur_patch_loc = instructions.get_loc() as isize;
+				let condition_patch_loc = instructions.get_loc() as isize;
 				instructions.push_op(Op::JmpIf{offset: 0});
 
 				self.push_scope();
@@ -160,51 +158,33 @@ impl Compiler {
 					self.compile_statement(state, instructions, statement);
 				}
 				self.pop_scope();
-				end_patches.push(instructions.get_loc() as isize);
 
-				instructions.push_op(Op::Jmp{offset: 0});
-
-				let cur_loc = instructions.get_loc() as isize;
-				unsafe{instructions.try_patch(Op::JmpIf{offset: cur_loc - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
-					.expect("Could not patch jump because offset is too large");
-
-				for (cond, elif_statements) in else_if_statements {
-					self.compile_expr(state, instructions, cond);
-
-					instructions.push_op(Op::Not);
-					cur_patch_loc = instructions.get_loc() as isize;
-					instructions.push_op(Op::JmpIf{offset: 0});
-
-					self.push_scope();
-					for statement in elif_statements {
-						self.compile_statement(state, instructions, statement);
-					}
-					self.pop_scope();
-					end_patches.push(instructions.get_loc() as isize);
-
+				if !else_statements.is_empty() {
+					let end_patch_loc = instructions.get_loc() as isize;
 					instructions.push_op(Op::Jmp{offset: 0});
-
 					let cur_loc = instructions.get_loc() as isize;
-					unsafe{instructions.try_patch(Op::JmpIf{offset: cur_loc - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
+					// jump from the false condtion to the start of the else block
+					unsafe{instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc as usize)}
 						.expect("Could not patch jump because offset is too large");
-				}
-				
-				if let Some(else_statements) = else_statements {
-					self.push_scope();
-					for statement in else_statements {
-						self.compile_statement(state, instructions, statement);
+					if is_chained {
+						for statement in else_statements {
+							self.compile_statement(state, instructions, statement);
+						}
+					} else {
+						self.push_scope();
+						for statement in else_statements {
+							self.compile_statement(state, instructions, statement);
+						}
+						self.pop_scope();
 					}
-					self.pop_scope();
-				} else {
-					let new_end = end_patches.pop().unwrap();
-					unsafe{instructions.try_patch(Op::JmpIf{offset: new_end - (cur_patch_loc + 3)}, cur_patch_loc as usize)}
+					let end_loc = instructions.get_loc() as isize;
+					// jump from the end of the previous block to the end of the else block
+					unsafe{instructions.try_patch(Op::Jmp{offset: Op::calc_offset(end_patch_loc, end_loc)}, end_patch_loc as usize)}
 						.expect("Could not patch jump because offset is too large");
-					unsafe{instructions.rewind_to(new_end as usize)};
-				}
-
-				let end_loc = instructions.get_loc();
-				for end_patch in end_patches {
-					unsafe{instructions.try_patch(Op::Jmp{offset: end_loc as isize - (end_patch + 3)}, end_patch as usize)}
+				} else {
+					let cur_loc = instructions.get_loc() as isize;
+					// jump from the false condtion to the end of the if statement
+					unsafe{instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc as usize)}
 						.expect("Could not patch jump because offset is too large");
 				}
 			}
@@ -533,7 +513,6 @@ unsafe impl Backend for BytecodeBackend {
 		} else {
 			false
 		}
-		
 	}
 	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 		let file = self.files.get(&entity.file_id)
@@ -559,7 +538,7 @@ unsafe impl Backend for BytecodeBackend {
 
 		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<GrugValue>>().as_ptr(), file.globals_size)};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
-		let Some((start_loc, argument_count, locals_size)) = file.instructions.on_fn_locations[on_fn_index + 1] else {
+		let Some(&Some((start_loc, argument_count, locals_size))) = file.instructions.on_fn_locations.get(on_fn_index + 1) else {
 			return false;
 		};
 		if values.len() != argument_count {return false;}
