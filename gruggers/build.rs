@@ -14,6 +14,10 @@ fn build_tests() {
 	let bench_source_path = String::from("./src/grug-bench/build/");
 	let archive_path = var("OUT_DIR").unwrap();
 
+	println!("cargo::rustc-link-search={}", out_dir.display());
+	println!("cargo::rerun-if-changed={}", test_source_path);
+	println!("cargo::rerun-if-changed={}", bench_source_path);
+
 	#[cfg(target_os = "linux")]
 	{
 		_ = std::fs::copy(test_source_path + "/libtests.so", archive_path + "/libtests.so");
@@ -26,5 +30,4 @@ fn build_tests() {
 		_ = std::fs::copy(bench_source_path.clone() + "bench.dll", archive_path.clone() + "/bench.dll");
 		_ = std::fs::copy(bench_source_path + "bench.lib", archive_path + "/bench.lib");
 	}
-	println!("cargo::rustc-link-search={}", out_dir.display());
 }

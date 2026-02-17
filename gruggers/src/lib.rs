@@ -14,6 +14,8 @@ pub mod state;
 pub mod xar;
 pub mod ast;
 
+pub mod arena;
+
 pub mod ntstring;
 
 mod cachemap;
