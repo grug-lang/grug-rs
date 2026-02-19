@@ -1,4 +1,4 @@
-// #![deny(warnings)]
+#![deny(warnings)]
 #![allow(clippy::single_char_add_str, clippy::bool_comparison)]
 
 pub mod frontend;

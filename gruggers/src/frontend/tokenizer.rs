@@ -1,4 +1,6 @@
 use super::SPACES_PER_INDENT;
+use allocator_api2::vec::Vec;
+use crate::arena::Arena;
 
 #[derive(Debug)]
 pub struct Token<'a> {
@@ -157,8 +159,8 @@ impl std::fmt::Display for TokenizerError {
 	}
 }
 
-pub fn tokenize(file_text: &str) -> Result<Vec<Token<'_>>, TokenizerError> {
-	let mut tokens = Vec::new();
+pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Token<'b>, &'a Arena>, TokenizerError> {
+	let mut tokens = Vec::new_in(arena);
 	let mut cur_line = 1;
 	let mut last_new_line = 0;
 

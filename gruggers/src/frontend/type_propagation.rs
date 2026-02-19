@@ -2,9 +2,14 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use crate::ntstring::NTStr;
-use crate::types::{self, *};
+use crate::types::{
+	GrugType, UnaryOperator, BinaryOperator, GlobalStatement,
+	ExprType, LiteralExpr, HelperFunction, Statement, Argument, Variable, Expr
+};
 use crate::frontend::parser::AST;
 use crate::mod_api::{ModApiEntity, ModApiGameFn};
+
+use allocator_api2::vec::Vec;
 
 pub(super) struct TypePropogator<'a> {
 	entity: &'a ModApiEntity,
@@ -735,11 +740,11 @@ impl<'a> TypePropogator<'a> {
 	}
 	
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_statements(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, statements: &mut [Statement], expected_return_type: &GrugType) -> Result<(), TypePropogatorError> {
+	fn fill_statements(&mut self, helper_fns: &[(&str, (GrugType, Vec<Argument>))], statements: &mut [Statement], expected_return_type: &GrugType) -> Result<(), TypePropogatorError> {
 		self.push_scope();
 		for statement in &mut *statements {
 			match statement {
-				Statement::Variable(types::Variable {
+				Statement::Variable(Variable {
 					name,
 					ty,
 					assignment_expr
@@ -899,7 +904,7 @@ impl<'a> TypePropogator<'a> {
 	}
 
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_expr(&mut self, helper_fns: &HashMap<Arc<str>, (GrugType, Vec<Argument>)>, assignment_expr: &mut Expr) -> Result<GrugType, TypePropogatorError> {
+	fn fill_expr(&mut self, helper_fns: &[(&str, (GrugType, Vec<Argument>))], assignment_expr: &mut Expr) -> Result<GrugType, TypePropogatorError> {
 		// MUST be None before type propogation
 		assert!(assignment_expr.result_ty.is_none());
 		let result_ty = match assignment_expr.ty {
@@ -1038,7 +1043,7 @@ impl<'a> TypePropogator<'a> {
 			} => {
 				// TODO: Move this line to within check_arguments
 				arguments.iter_mut().map(|argument| self.fill_expr(helper_fns, argument)).collect::<Result<Vec<_>, _>>()?;
-				if let Some((return_ty, sig_arguments)) = helper_fns.get(function_name) {
+				if let Some((_, (return_ty, sig_arguments))) = helper_fns.iter().find(|(name, _)| *name == &**function_name) {
 					self.check_arguments(function_name, sig_arguments, arguments)?;
 					return_ty.clone()
 				} else if let Some(game_fn) = self.game_fns.get(function_name) {

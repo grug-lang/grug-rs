@@ -5,6 +5,8 @@ use std::ptr::NonNull;
 use crate::xar::XarHandle;
 use crate::ntstring::{NTStr, NTStrPtr};
 use crate::state::GrugState;
+
+use allocator_api2::vec::Vec;
 // TODO Unnest some of these enums
 
 #[repr(C)]
@@ -413,7 +415,7 @@ pub struct GlobalVariable {
 	pub assignment_expr: Expr,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Argument {
 	pub(super) name: Arc<str>,
 	pub(super) ty: GrugType,

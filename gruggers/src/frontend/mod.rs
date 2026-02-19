@@ -7,6 +7,7 @@ use crate::error::GrugError;
 use crate::state::GrugState;
 use crate::backend::GrugAst;
 use crate::types::{GlobalStatement, GlobalVariable, OnFunction, HelperFunction, GrugScriptId};
+use crate::arena::Arena;
 
 use std::sync::Arc;
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
@@ -29,49 +30,54 @@ impl GrugState {
 		let mod_name = get_mod_name(path)?;
 		let entity_type = get_entity_type(path)?;
 
-		let tokens = tokenizer::tokenize(file_text)?;
+		let arena = Arena::new();
+		let id = {
+			let tokens = tokenizer::tokenize(file_text, &arena)?;
 
-		let mut ast = parser::parse(&tokens)?;
+			let mut ast = parser::parse(&tokens, &arena)?;
 
-		let entity = self.mod_api.entities().get(&*entity_type).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
-			entity_name: Arc::from(entity_type),
-		})?;
-		let game_functions = self.mod_api.game_functions();
-		
-		TypePropogator::new(entity, game_functions, mod_name.into()).fill_result_types(entity_type, &mut ast)?;
+			let entity = self.mod_api.entities().get(&*entity_type).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
+				entity_name: Arc::from(entity_type),
+			})?;
+			let game_functions = self.mod_api.game_functions();
+			
+			TypePropogator::new(entity, game_functions, mod_name.into()).fill_result_types(entity_type, &mut ast)?;
 
-		// let mod_api_entity = self.mod_api.entities.get(entity_type);
-		let mut global_variables = Vec::new();
-		let mut on_functions = (0..entity.on_fns.len()).map(|_| None).collect::<Vec<_>>();
-		let mut helper_functions = Vec::new();
+			// let mod_api_entity = self.mod_api.entities.get(entity_type);
+			let mut global_variables = Vec::new();
+			let mut on_functions = (0..entity.on_fns.len()).map(|_| None).collect::<Vec<_>>();
+			let mut helper_functions = Vec::new();
 
-		ast.global_statements.into_iter().for_each(|statement| {
-			match statement {
-				GlobalStatement::Variable(st@GlobalVariable      {..}) => global_variables.push(st),
-				GlobalStatement::OnFunction(st@OnFunction        {..}) => {
-					let (i, _) = entity.get_on_fn(&st.name).unwrap();
-					on_functions[i] = Some(st);
+			ast.global_statements.into_iter().for_each(|statement| {
+				match statement {
+					GlobalStatement::Variable(st@GlobalVariable      {..}) => global_variables.push(st),
+					GlobalStatement::OnFunction(st@OnFunction        {..}) => {
+						let (i, _) = entity.get_on_fn(&st.name).unwrap();
+						on_functions[i] = Some(st);
+					}
+					GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),
+					_ => (),
 				}
-				GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),
-				_ => (),
-			}
-		});
+			});
 
-		let file = GrugAst{
-			global_variables,
-			on_functions,
-			helper_functions,
+			let file = GrugAst{
+				global_variables,
+				on_functions,
+				helper_functions,
+			};
+			let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
+			let id = match path_to_script_ids.get(path) {
+				Some(id) => *id,
+				None => {
+					let id = self.get_next_script_id();
+					assert!(path_to_script_ids.insert(String::from(path), id).is_none());
+					id
+				}
+			};
+			self.backend.insert_file(self, id, file);
+			id
 		};
-		let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
-		let id = match path_to_script_ids.get(path) {
-			Some(id) => *id,
-			None => {
-				let id = self.get_next_script_id();
-				assert!(path_to_script_ids.insert(String::from(path), id).is_none());
-				id
-			}
-		};
-		self.backend.insert_file(self, id, file);
+		arena.free();
 		Ok(id)
 	}
 }

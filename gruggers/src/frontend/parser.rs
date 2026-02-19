@@ -1,8 +1,11 @@
 use super::tokenizer::{Token, TokenType};
 use crate::types::*;
 use crate::ntstring::NTStr;
-use std::collections::{HashSet, HashMap};
+use crate::arena::Arena;
 use std::sync::Arc;
+
+use allocator_api2::vec::Vec;
+use allocator_api2::vec;
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -323,15 +326,15 @@ impl std::fmt::Display for ParserError {
 
 const MAX_PARSING_DEPTH: usize = 100;
 
-pub(crate) struct AST {
-	pub(crate) global_statements: Vec<GlobalStatement>,
-	pub(crate) called_helper_fns: HashSet<Arc<str>>, 
-	pub(crate) helper_fn_signatures: HashMap<Arc<str>, (GrugType, Vec<Argument>)>,
-	pub(crate) on_fn_signatures: HashMap<Arc<str>, Vec<Argument>>,
+pub(crate) struct AST<'a> {
+	pub(crate) global_statements: Vec<GlobalStatement, &'a Arena>,
+	pub(crate) called_helper_fns: Vec<&'a str, &'a Arena>, 
+	pub(crate) helper_fn_signatures: Vec<(&'a str, (GrugType, Vec<Argument>)), &'a Arena>,
+	pub(crate) on_fn_signatures: Vec<(&'a str, Vec<Argument>), &'a Arena>,
 }
 
-pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
-	let mut ast = AST::new();
+pub(crate) fn parse<'a>(tokens: &'_ [Token], arena: &'a Arena) -> Result<AST<'a>, ParserError> {
+	let mut ast = AST::new_in(arena);
 	let mut seen_helper_fn = false;
 
 	let mut seen_on_fn = false;
@@ -386,16 +389,15 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 			}
 
 			let on_fn = ast.parse_on_fn(&mut tokens)?;
-			let (on_fn_name, on_fn_arguments) = if let GlobalStatement::OnFunction(OnFunction{name, arguments, ..}) = &on_fn {(Arc::clone(name), arguments)} else {unreachable!()};
 
-			if ast.on_fn_signatures.contains_key(&on_fn_name) {
+			if ast.on_fn_signatures.iter().find(|(name, _)| *name == &*on_fn.name).is_some() {
 				return Err(ParserError::AlreadyDefinedOnFn{
-					on_fn_name,
+					on_fn_name: on_fn.name,
 				});
 			}
 			
-			ast.on_fn_signatures.insert(on_fn_name, on_fn_arguments.clone());
-			ast.global_statements.push(on_fn);
+			ast.on_fn_signatures.push((Box::leak(Box::from(&*on_fn.name)), on_fn.arguments.clone()));
+			ast.global_statements.push(GlobalStatement::OnFunction(on_fn));
 
 			seen_on_fn = true;
 
@@ -416,17 +418,16 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 			}
 
 			let helper_fn = ast.parse_helper_fn(&mut tokens)?;
-			let (helper_fn_name, return_ty, helper_fn_arguments) = if let GlobalStatement::HelperFunction(HelperFunction{name, return_ty, arguments, ..}) = &helper_fn {(Arc::clone(name), return_ty.clone(), arguments)} else {unreachable!()};
 			seen_helper_fn = true;
 
-			if ast.helper_fn_signatures.contains_key(&helper_fn_name) {
+			if ast.helper_fn_signatures.iter().find(|(name, _)| *name == &*helper_fn.name).is_some() {
 				return Err(ParserError::AlreadyDefinedHelperFunction{
-					helper_fn_name,
+					helper_fn_name: helper_fn.name,
 				});
 			}
 
-			ast.helper_fn_signatures.insert(helper_fn_name, (return_ty, helper_fn_arguments.clone()));
-			ast.global_statements.push(helper_fn);
+			ast.helper_fn_signatures.push((Box::leak(Box::from(&*helper_fn.name)), (helper_fn.return_ty.clone(), helper_fn.arguments.clone())));
+			ast.global_statements.push(GlobalStatement::HelperFunction(helper_fn));
 
 			newline_allowed = true;
 			newline_seen = false;
@@ -477,22 +478,22 @@ pub(crate) fn parse(tokens: &'_ [Token]) -> Result<AST, ParserError> {
 	Ok(ast)
 }
 
-impl AST {
-	fn new() -> Self {
+impl<'arena> AST<'arena> {
+	fn new_in(arena: &'arena Arena) -> Self {
 		Self {
-			global_statements: Vec::new(),
-			called_helper_fns: HashSet::new(),
-			helper_fn_signatures: HashMap::new(),
-			on_fn_signatures: HashMap::new(),
+			global_statements: Vec::new_in(arena),
+			called_helper_fns: Vec::new_in(arena),
+			helper_fn_signatures: Vec::new_in(arena),
+			on_fn_signatures: Vec::new_in(arena),
 		}
 	}
 
 	// helper_fn -> "on_" + name + "(" + arguments? + ")" + type + statements 
-	fn parse_helper_fn<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<GlobalStatement, ParserError> {
+	fn parse_helper_fn<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<HelperFunction, ParserError> {
 		let name_token = tokens.next().unwrap();
 		let fn_name = name_token.value;
 
-		if !self.called_helper_fns.contains(fn_name) {
+		if self.called_helper_fns.iter().find(|val| &***val == fn_name).is_none() {
 			return Err(ParserError::HelperFnDefinedBeforeCall {
 				helper_fn_name: fn_name.into(),
 			});
@@ -537,16 +538,16 @@ impl AST {
 			});
 		}
 
-		Ok(GlobalStatement::HelperFunction(HelperFunction{
+		Ok(HelperFunction{
 			name: fn_name.into(),
 			arguments: args,
 			body_statements,
 			return_ty
-		}))
+		})
 	}
 
 	// on_fn -> "on_" + name + "(" + arguments? + ")" + statements 
-	fn parse_on_fn<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<GlobalStatement, ParserError> {
+	fn parse_on_fn<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<OnFunction, ParserError> {
 		let name_token = tokens.next().unwrap();
 		let fn_name = name_token.value;
 
@@ -570,11 +571,11 @@ impl AST {
 			});
 		}
 
-		Ok(GlobalStatement::OnFunction(OnFunction{
+		Ok(OnFunction{
 			name: fn_name.into(),
 			arguments: args,
 			body_statements,
-		}))
+		})
 	}
 
 	// arguments -> argument + ("," + argument)*;
@@ -694,7 +695,7 @@ impl AST {
 			TokenType::If => {
 				let (condition, if_statements) = self.parse_if_statement(tokens, parsing_depth + 1, indentation)?;
 				let is_chained;
-				let else_statements;
+				let else_statements: Vec<Statement>;
 
 				if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]).is_ok() {
 					let [space_token, if_token] = peek_next_tokens(tokens)?;
@@ -960,7 +961,9 @@ impl AST {
 					// a word token can actually be a function call
 					if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenParenthesis]) {
 						if value.starts_with("helper_") {
-							self.called_helper_fns.insert(Arc::clone(&value));
+							if self.called_helper_fns.iter().find(|name| **name == &*value).is_none() {
+								self.called_helper_fns.push(Box::leak(Box::from(&*value)));
+							}
 						}
 						// immediate ")" | (expr + ("," + " " + expr)*) + ")"
 						

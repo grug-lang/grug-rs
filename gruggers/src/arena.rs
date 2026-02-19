@@ -432,7 +432,7 @@ mod arena {
 		///
 		/// use `Self::free` to free all held memory
 		/// SAFETY: All pointers into this arena will be invalidated
-		pub unsafe fn clear(&mut self) {
+		pub fn clear(&mut self) {
 			if let Some(first_block) = self.current_block() {
 				// SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
 				let mut current = first_block.prev;
@@ -453,7 +453,7 @@ mod arena {
 
 		/// Deallocates all memory held by this arena
 		/// SAFETY: Same as `Self::clear` 
-		pub unsafe fn free(&mut self) {
+		pub fn free(self) {
 			// SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
 			let mut current = self.current.get();
 			self.current.set(std::ptr::null_mut());
@@ -488,11 +488,11 @@ mod arena {
 		use super::*;
 		#[test]
 		fn arena_test () {
-			let mut x = Arena::new();
+			let x = Arena::new();
 			assert!(x.current.get() == std::ptr::null_mut());
-			unsafe{ x.free(); }
+			x.free(); 
 
-			let mut y = Arena::new();
+			let y = Arena::new();
 			y.alloc(Layout::new::<[usize;25]>()).unwrap();
 			assert_eq!(
 				y.current_block()
@@ -517,7 +517,7 @@ mod arena {
 				(*PAGE_SIZE as usize) * 4 - std::mem::size_of::<ArenaHeader>()
 			);
 			
-			unsafe{ y.free() }
+			y.free();
 		}
 	}
 }

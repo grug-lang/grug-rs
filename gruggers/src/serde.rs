@@ -1,17 +1,23 @@
 use crate::error::GrugError;
 use crate::frontend::*;
+use crate::arena::Arena;
 
 pub fn dump_file_to_json (grug_path: &str, output_path: &str) -> Result<(), GrugError> {
 	let file_text = std::fs::read_to_string(grug_path).unwrap();
 
-	let tokens = tokenizer::tokenize(&file_text)?;
+	let arena = Arena::new();
 
-	let ast = parser::parse(&tokens)?;
+	let tokens = tokenizer::tokenize(&file_text, &arena)?;
+
+	let ast = parser::parse(&tokens, &arena)?;
 	
 	let string = ast_to_json(&ast.global_statements);
 
 	std::fs::write(output_path, &string).unwrap();
 
+	drop(tokens);
+	drop(ast);
+	arena.free();
 	Ok(())
 }
 
@@ -492,8 +498,7 @@ mod de {
 	
 	fn apply_statements(statements: &JsonValue, indentation: usize, output: &mut String) -> Result<(), JsonDeserializeError> {
 		let JsonValue::Array(statements) = statements else {
-			panic!("{:#?}", statements);
-			// return Err(JsonDeserializeError::StatementsNotArray)
+			return Err(JsonDeserializeError::StatementsNotArray)
 		};
 		output.push_str("{\n");
 		for statement in statements {
