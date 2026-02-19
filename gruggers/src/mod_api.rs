@@ -1,7 +1,11 @@
-use crate::types::*;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+
+use crate::ntstring::NTStr;
+use crate::ast::{Argument, GrugType};
+
+use allocator_api2::alloc::Global;
 
 #[derive(Debug)]
 pub struct ModApi {
@@ -35,15 +39,15 @@ impl ModApiEntity {
 pub struct ModApiOnFn {
 	#[allow(dead_code)]
 	pub(super) description: Option<String>,
-	pub(super) arguments: Vec<Argument>,
+	pub(super) arguments: Vec<Argument<'static>>,
 }
 
 #[derive(Debug)]
 pub struct ModApiGameFn {
 	#[allow(dead_code)]
 	pub(super) description: Option<String>,
-	pub(super) return_ty: GrugType,
-	pub(super) arguments: Vec<Argument>,
+	pub(super) return_ty: GrugType<'static>,
+	pub(super) arguments: Vec<Argument<'static>>,
 }
 
 // TODO: Add Display impl for all variants
@@ -197,7 +201,7 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 						argument_name: argument_name.to_string(),
 					})?,
 					type_name => {
-						let extra_value = type_name.into();
+						let extra_value = Box::leak(NTStr::box_from_str_in(type_name, Global));
 						GrugType::Id {
 							custom_name: Some(extra_value),
 						}
@@ -258,10 +262,11 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 				"string"   => GrugType::String,
 				"id"       => GrugType::Id{custom_name: None},
 				"entity"   => {
-					let entity_type: Arc<str> = argument_values["entity_type"].as_str().ok_or(ModApiError::GameFnEntityMissingType{
+					let entity_type = argument_values["entity_type"].as_str().ok_or(ModApiError::GameFnEntityMissingType{
 						game_fn_name: fn_name.to_string(),
 						argument_name: argument_name.to_string(),
-					})?.into();
+					})?;
+					let entity_type = Box::leak(NTStr::box_from_str_in(entity_type, Global));
 					GrugType::Entity {
 						ty: (!entity_type.is_empty()).then_some(entity_type)
 					}
@@ -270,13 +275,14 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 					let extension = argument_values["resource_extension"].as_str().ok_or(ModApiError::GameFnResourceMissingExtension{
 						game_fn_name: fn_name.to_string(),
 						argument_name: argument_name.to_string(),
-					})?.into();
+					})?;
+					let extension = Box::leak(NTStr::box_from_str_in(extension, Global));
 					GrugType::Resource {
 						extension
 					}
 				}
 				type_name => {
-					let extra_value = type_name.into();
+					let extra_value = Box::leak(NTStr::box_from_str_in(type_name, Global));
 					GrugType::Id {
 						custom_name: Some(extra_value),
 					}
@@ -303,7 +309,7 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 				game_fn_name: fn_name.to_string(),
 			})?,
 			type_name => {
-				let extra_value = type_name.into();
+				let extra_value = Box::leak(NTStr::box_from_str_in(type_name, Global));
 				GrugType::Id {
 					custom_name: Some(extra_value),
 				}

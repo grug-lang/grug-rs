@@ -95,13 +95,20 @@ pub mod capi {
 
 	#[repr(C)]
 	#[derive(Clone, Copy)]
+	pub struct c_number_data<'a> {
+		pub value: f64,
+		pub string: NTStrPtr<'a>,
+	}
+
+	#[repr(C)]
+	#[derive(Clone, Copy)]
 	pub union c_expr_data<'a> {
 		pub bool          : (),
 		pub string        : NTStrPtr<'a>,
 		pub resource      : NTStrPtr<'a>,
 		pub entity        : NTStrPtr<'a>,
 		pub identifier    : NTStrPtr<'a>,
-		pub number        : f64,
+		pub number        : c_number_data<'a>,
 		pub unary         : c_unary_op_data<'a>,
 		pub binary        : c_binary_op_data<'a>,
 		pub call          : c_call_data<'a>,
@@ -235,7 +242,7 @@ pub mod capi {
 		pub helper_functions_count : usize,
 	}
 }
-use capi::*;
+pub use capi::*;
 
 pub mod rust_api {
 	use super::*;
@@ -243,15 +250,71 @@ pub mod rust_api {
 
 	use std::mem::MaybeUninit;
 
-	#[derive(Clone, Copy)]
+	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 	pub enum GrugType<'a> {
 		Void,
 		Bool,
 		Number,
 		String,
-		ID{custom_name: Option<&'a NTStr>},
+		Id{custom_name: Option<&'a NTStr>},
 		Resource{extension: &'a NTStr},
 		Entity{entity_type: Option<&'a NTStr>},
+	}
+
+	impl<'a> GrugType<'a> {
+		pub(crate) fn match_non_exact(&self, other: &Self) -> bool {
+			use GrugType::*;
+			match (self, other) {
+				(Void, Void) => true,
+				(Bool, Bool) => true,
+				(Number, Number) => true,
+				(String, String) => true,
+				(Id{custom_name: custom_name_1}, Id{custom_name: custom_name_2}) => custom_name_1 == custom_name_2 || custom_name_1.is_none() || custom_name_2.is_none(),
+				(
+					Resource {
+						extension: extension_1,
+					}, 
+					Resource {
+						extension: extension_2,
+					}, 
+				) => extension_1 == extension_2 || extension_1.is_empty() || extension_2.is_empty(),
+				(
+					Entity {
+						ty: ty_1,
+					}, 
+					Entity {
+						ty: ty_2,
+					}, 
+				) => ty_1 == ty_2 || ty_1.is_none() || ty_2.is_none(),
+				_ => false,
+			}
+		}
+	}
+
+	impl<'a> std::fmt::Display for GrugType<'a> {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				Self::Void => write!(f, "void"),
+				Self::Bool => write!(f, "bool"),
+				Self::Number => write!(f, "number"),
+				Self::String => write!(f, "string"),
+				Self::Id{
+					custom_name: None,
+				} => write!(f, "id"),
+				Self::Id{
+					custom_name: Some(custom_name),
+				} => write!(f, "{}", custom_name),
+				Self::Resource {
+					extension: _,
+				} => write!(f, "resource"),
+				Self::Entity {
+					ty: Some(name),
+				} => write!(f, "{}", name),
+				Self::Entity {
+					ty: None,
+				} => write!(f, "entity"),
+			}
+		}
 	}
 
 	impl<'a> From<GrugType<'a>> for c_grug_type<'a> {
@@ -261,7 +324,7 @@ pub mod rust_api {
 				GrugType::Bool => (c_grug_type_enum::BOOL, None),
 				GrugType::Number => (c_grug_type_enum::NUMBER, None),
 				GrugType::String => (c_grug_type_enum::STRING, None),
-				GrugType::ID{custom_name} => (c_grug_type_enum::ID, custom_name),
+				GrugType::Id{custom_name} => (c_grug_type_enum::ID, custom_name),
 				GrugType::Resource{extension} => (c_grug_type_enum::RESOURCE, Some(extension)),
 				GrugType::Entity{entity_type} => (c_grug_type_enum::ENTITY, entity_type),
 			};
@@ -279,7 +342,7 @@ pub mod rust_api {
 				c_grug_type_enum::BOOL     => Self::Bool,
 				c_grug_type_enum::NUMBER   => Self::Number,
 				c_grug_type_enum::STRING   => Self::String,
-				c_grug_type_enum::ID       => Self::ID {custom_name: other.extra_data.map(NTStrPtr::to_ntstr)},
+				c_grug_type_enum::ID       => Self::Id {custom_name: other.extra_data.map(NTStrPtr::to_ntstr)},
 				c_grug_type_enum::RESOURCE => Self::Resource {extension: other.extra_data.expect("Resource extension must be non null").to_ntstr()},
 				c_grug_type_enum::ENTITY   => Self::Entity {entity_type: other.extra_data.map(NTStrPtr::to_ntstr)},
 				_                        => panic!("unexpected grug_type variant: {}", other.ty.0),
@@ -287,7 +350,7 @@ pub mod rust_api {
 		}
 	}
 
-	#[derive(Clone, Copy)]
+	#[derive(Debug, Clone, Copy)]
 	pub enum UnaryOperator {
 		Not = 0,
 		Minus, 
@@ -312,7 +375,16 @@ pub mod rust_api {
 		}
 	}
 
-	#[derive(Clone, Copy)]
+	impl std::fmt::Display for UnaryOperator {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				Self::Not => write!(f, "NOT_TOKEN"),
+				Self::Minus => write!(f, "MINUS_TOKEN"),
+			}
+		}
+	}
+
+	#[derive(Debug, Clone, Copy)]
 	pub enum BinaryOperator {
 		Or = 0,
 		And, 
@@ -370,7 +442,27 @@ pub mod rust_api {
 		}
 	}
 
-	#[derive(Clone, Copy)]
+	impl std::fmt::Display for BinaryOperator {
+		fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+			match self {
+				Self::Or => write!(f, "OR_TOKEN"),
+				Self::And => write!(f, "AND_TOKEN"),
+				Self::DoubleEquals => write!(f, "EQUALS_TOKEN"),
+				Self::NotEquals => write!(f, "NOT_EQUALS_TOKEN"),
+				Self::Greater => write!(f, "GREATER_TOKEN"),
+				Self::GreaterEquals => write!(f, "GREATER_OR_EQUAL_TOKEN"),
+				Self::Less => write!(f, "LESS_TOKEN"),
+				Self::LessEquals => write!(f, "LESS_OR_EQUAL_TOKEN"),
+				Self::Plus => write!(f, "PLUS_TOKEN"),
+				Self::Minus => write!(f, "MINUS_TOKEN"),
+				Self::Multiply => write!(f, "MULTIPLICATION_TOKEN"),
+				Self::Division => write!(f, "DIVISION_TOKEN"),
+				Self::Remainder => write!(f, "REMAINDER_TOKEN"),
+			}
+		}
+	}
+
+	#[derive(Debug, Clone, Copy)]
 	pub enum LiteralExprData<'a> {
 		True,
 		False,
@@ -378,10 +470,10 @@ pub mod rust_api {
 		Resource(&'a NTStr),
 		Entity(&'a NTStr),
 		Identifier(&'a NTStr),
-		Number(f64),
+		Number(f64, &'a NTStr),
 	}
 
-	#[derive(Clone, Copy)]
+	#[derive(Debug, Clone, Copy)]
 	pub enum ExprData<'a> {
 		Literal(LiteralExprData<'a>),
 		Unary {
@@ -400,10 +492,10 @@ pub mod rust_api {
 		Parenthesized(&'a c_expr<'a>),
 	}
 
-	#[derive(Clone, Copy)]
+	#[derive(Debug, Clone, Copy)]
 	pub struct Expr<'a> {
-		result_type : Option<GrugType<'a>>,
-		data        : ExprData<'a>,
+		pub result_type : Option<GrugType<'a>>,
+		pub data        : ExprData<'a>,
 	}
 
 	impl<'a> From<c_expr<'a>> for Expr<'a> {
@@ -417,7 +509,7 @@ pub mod rust_api {
 					c_expr_type::RESOURCE      => ExprData::Literal(LiteralExprData::Resource(other.expr_data.resource.to_ntstr())),
 					c_expr_type::ENTITY        => ExprData::Literal(LiteralExprData::Entity(other.expr_data.entity.to_ntstr())),
 					c_expr_type::IDENTIFIER    => ExprData::Literal(LiteralExprData::Identifier(other.expr_data.identifier.to_ntstr())),
-					c_expr_type::NUMBER        => ExprData::Literal(LiteralExprData::Number(other.expr_data.number)),
+					c_expr_type::NUMBER        => ExprData::Literal(LiteralExprData::Number(other.expr_data.number, other.expr_data.number.string.to_ntstr())),
 					c_expr_type::UNARY         => ExprData::Unary{
 						op   : other.expr_data.unary.op.into(), 
 						expr : other.expr_data.unary.expr,
@@ -448,13 +540,13 @@ pub mod rust_api {
 			let (ty, data) = match other.data {
 				ExprData::Literal(literal) => {
 					match literal {
-						LiteralExprData::True                  => (c_expr_type::TRUE, c_expr_data{bool: ()}),
-						LiteralExprData::False                 => (c_expr_type::FALSE, c_expr_data{bool: ()}),
-						LiteralExprData::String(string)        => (c_expr_type::STRING, c_expr_data{string: string.as_ntstrptr()}),
-						LiteralExprData::Resource(string)      => (c_expr_type::RESOURCE, c_expr_data{resource: string.as_ntstrptr()}),
-						LiteralExprData::Entity(string)        => (c_expr_type::ENTITY, c_expr_data{entity: string.as_ntstrptr()}),
-						LiteralExprData::Identifier(string)    => (c_expr_type::IDENTIFIER, c_expr_data{identifier: string.as_ntstrptr()}),
-						LiteralExprData::Number(number)        => (c_expr_type::NUMBER, c_expr_data{number}),
+						LiteralExprData::True                   => (c_expr_type::TRUE, c_expr_data{bool: ()}),
+						LiteralExprData::False                  => (c_expr_type::FALSE, c_expr_data{bool: ()}),
+						LiteralExprData::String(string)         => (c_expr_type::STRING, c_expr_data{string: string.as_ntstrptr()}),
+						LiteralExprData::Resource(string)       => (c_expr_type::RESOURCE, c_expr_data{resource: string.as_ntstrptr()}),
+						LiteralExprData::Entity(string)         => (c_expr_type::ENTITY, c_expr_data{entity: string.as_ntstrptr()}),
+						LiteralExprData::Identifier(string)     => (c_expr_type::IDENTIFIER, c_expr_data{identifier: string.as_ntstrptr()}),
+						LiteralExprData::Number(number, string) => (c_expr_type::NUMBER, c_expr_data{number, string: string.as_ntstrptr()}),
 					}
 				}
 				ExprData::Unary{op, expr}  => {
@@ -498,7 +590,7 @@ pub mod rust_api {
 		}
 	}
 
-	#[derive(Clone, Copy)]
+	#[derive(Debug, Clone, Copy)]
 	pub enum Statement<'a> {
 		Variable {
 			name            : &'a NTStr,
@@ -678,9 +770,10 @@ pub mod rust_api {
 		}
 	}
 
-	struct Argument<'a> {
-		name: &'a NTStr,
-		ty  : GrugType<'a>,
+	#[derive(Debug, Clone, Copy, PartialEq)]
+	pub struct Argument<'a> {
+		pub name: &'a NTStr,
+		pub ty  : GrugType<'a>,
 	}
 
 	impl<'a> From<c_argument<'a>> for Argument<'a> {
@@ -701,10 +794,38 @@ pub mod rust_api {
 		}
 	}
 
-	struct OnFunction<'a> {
-		name: &'a NTStr,
-		arguments: &'a [c_argument<'a>],
-		body_statements: &'a [c_statement<'a>],
+	pub struct MemberVariable<'a> {
+		pub name            : &'a NTStr,
+		pub ty              : GrugType<'a>,
+		pub assignment_expr : Expr<'a>,
+	}
+
+	impl<'a> From<c_member_variable<'a>> for MemberVariable<'a> {
+		fn from(other: c_member_variable<'a>) -> Self {
+			unsafe {
+				Self {
+					name: other.name.to_ntstr(),
+					ty: other.ty.into(),
+					assignment_expr: other.assignment_expr.into(),
+				}
+			}
+		}
+	}
+
+	impl<'a> From<MemberVariable<'a>> for c_member_variable<'a> {
+		fn from(other: MemberVariable<'a>) -> Self {
+			Self {
+				name            : other.name.as_ntstrptr(),
+				ty              : other.ty.into(),
+				assignment_expr : other.assignment_expr.into(),
+			}
+		}
+	}
+
+	pub struct OnFunction<'a> {
+		pub name: &'a NTStr,
+		pub arguments: &'a [c_argument<'a>],
+		pub body_statements: &'a [c_statement<'a>],
 	}
 
 	impl<'a> From<c_on_function<'a>> for OnFunction<'a> {
@@ -731,11 +852,11 @@ pub mod rust_api {
 		}
 	}
 
-	struct HelperFunction<'a> {
-		name: &'a NTStr,
-		return_type: GrugType<'a>,
-		arguments: &'a [c_argument<'a>],
-		body_statements: &'a [c_statement<'a>],
+	pub struct HelperFunction<'a> {
+		pub name: &'a NTStr,
+		pub return_type: GrugType<'a>,
+		pub arguments: &'a [c_argument<'a>],
+		pub body_statements: &'a [c_statement<'a>],
 	}
 
 	impl<'a> From<c_helper_function<'a>> for HelperFunction<'a> {
@@ -764,11 +885,11 @@ pub mod rust_api {
 		}
 	}
 
-	#[derive(Clone, Copy)]
+	#[derive(Debug, Clone, Copy)]
 	pub struct GrugAst<'a> {
-		members: &'a [c_member_variable<'a>],
-		on_functions: &'a [c_on_function<'a>],
-		helper_functions: &'a [c_helper_function<'a>],
+		pub members: &'a [c_member_variable<'a>],
+		pub on_functions: &'a [Option<&'a c_on_function<'a>>],
+		pub helper_functions: &'a [c_helper_function<'a>],
 	}
 
 	impl<'a> From<c_grug_ast<'a>> for GrugAst<'a> {
@@ -795,4 +916,16 @@ pub mod rust_api {
 			}
 		}
 	}
+
+	#[derive(Debug)]
+	pub enum GlobalStatement<'a> {
+		Variable(MemberVariable<'a>),
+		OnFunction(OnFunction<'a>),
+		HelperFunction(HelperFunction<'a>),
+		Comment{
+			value: &'a NTStr,
+		},
+		EmptyLine,
+	}
 }
+pub use rust_api::*;

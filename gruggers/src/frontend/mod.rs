@@ -5,9 +5,13 @@
 // #![deny(warnings)]
 use crate::error::GrugError;
 use crate::state::GrugState;
-use crate::backend::GrugAst;
-use crate::types::{GlobalStatement, GlobalVariable, OnFunction, HelperFunction, GrugScriptId};
+// use crate::backend::GrugAst;
+use crate::types::GrugScriptId;
+use crate::ast::*;
 use crate::arena::Arena;
+
+use allocator_api2::vec::Vec;
+use allocator_api2::boxed::Box;
 
 use std::sync::Arc;
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
@@ -41,29 +45,30 @@ impl GrugState {
 			})?;
 			let game_functions = self.mod_api.game_functions();
 			
-			TypePropogator::new(entity, game_functions, mod_name.into()).fill_result_types(entity_type, &mut ast)?;
+			TypePropogator::new(entity, game_functions, mod_name.into()).fill_result_types(entity_type, &mut ast, &arena)?;
 
 			// let mod_api_entity = self.mod_api.entities.get(entity_type);
-			let mut global_variables = Vec::new();
-			let mut on_functions = (0..entity.on_fns.len()).map(|_| None).collect::<Vec<_>>();
-			let mut helper_functions = Vec::new();
+			let mut member_variables = Vec::new_in(arena);
+			let mut on_functions = Vec::new_in(arena);
+			on_functions.extend((0..entity.on_fns.len()).map(|_| None));
+			let mut helper_functions = Vec::new_in(arena);
 
 			ast.global_statements.into_iter().for_each(|statement| {
 				match statement {
-					GlobalStatement::Variable(st@GlobalVariable      {..}) => global_variables.push(st),
+					GlobalStatement::Variable(st@MemberVariable      {..}) => member_variables.push(st.into()),
 					GlobalStatement::OnFunction(st@OnFunction        {..}) => {
 						let (i, _) = entity.get_on_fn(&st.name).unwrap();
-						on_functions[i] = Some(st);
+						on_functions[i] = Some(&*Box::leak(Box::new_in(st.into(), &arena)));
 					}
-					GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),
+					GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st.into()),
 					_ => (),
 				}
 			});
 
 			let file = GrugAst{
-				global_variables,
-				on_functions,
-				helper_functions,
+				members: member_variables.leak(),
+				on_functions: on_functions.leak(),
+				helper_functions: helper_functions.leak(),
 			};
 			let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
 			let id = match path_to_script_ids.get(path) {

@@ -2,21 +2,26 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use crate::ntstring::NTStr;
-use crate::types::{
+use crate::ast::{
 	GrugType, UnaryOperator, BinaryOperator, GlobalStatement,
-	ExprType, LiteralExpr, HelperFunction, Statement, Argument, Variable, Expr
+	ExprData, LiteralExprData, HelperFunction, Statement, Expr,
+
+	c_expr, c_argument, c_statement,
 };
+use crate::nt;
+use crate::arena::Arena;
 use crate::frontend::parser::AST;
 use crate::mod_api::{ModApiEntity, ModApiGameFn};
 
 use allocator_api2::vec::Vec;
+use allocator_api2::boxed::Box;
 
 pub(super) struct TypePropogator<'a> {
 	entity: &'a ModApiEntity,
 	game_fns: &'a HashMap<Arc<str>, ModApiGameFn>,
 	current_mod_name: String,
-	global_variables: HashMap<Arc<str>, GrugType>,
-	local_variables: Vec<HashMap<Arc<str>, GrugType>>,
+	global_variables: HashMap<&'a str, GrugType<'a>>,
+	local_variables: Vec<HashMap<&'a str, GrugType<'a>>>,
 	num_while_loops_deep: usize,
 	current_fn_name: Option<Arc<str>>,
 }
@@ -34,14 +39,10 @@ pub enum TypePropogatorError {
 	// grug_assert(!starts_with(expr->call.fn_name, "helper_"), "The global variable '%s' isn't allowed to call helper functions", name);
 	GlobalCantCallHelperFn {
 		global_name: Arc<str>,
-		line: usize,
-		col: usize,
 	},
 	// grug_assert(var, "The variable '%s' does not exist", expr->literal.string);
 	VariableDoesNotExist {
 		name: Arc<str>,
-		line: usize, 
-		col: usize,
 	},
 	// grug_assert(expr->unary.operator != expr->unary.expr->unary.operator, "Found '%s' directly next to another '%s', which can be simplified by just removing both of them", get_token_type_str[expr->unary.operator], get_token_type_str[expr->unary.expr->unary.operator]);
 	AdjacentUnaryOperators {
@@ -49,11 +50,11 @@ pub enum TypePropogatorError {
 	},
 	// grug_assert(expr->result_type == type_bool, "Found 'not' before %s, but it can only be put before a bool", expr->result_type_name);
 	NotOperatorNotBeforeBool{
-		got: GrugType,
+		got: GrugType<'static>,
 	},
 	// grug_assert(expr->result_type == type_i32 || expr->result_type == type_f32, "Found '-' before %s, but it can only be put before an i32 or f32", expr->result_type_name);
 	MinusOperatorNotBeforeNumber {
-		got: GrugType,
+		got: GrugType<'static>,
 	},
 	// grug_assert(binary_expr.operator == EQUALS_TOKEN || binary_expr.operator == NOT_EQUALS_TOKEN, "You can't use the %s operator on a string", get_token_type_str[binary_expr.operator]);
 	CannotCompareStrings {
@@ -63,8 +64,8 @@ pub enum TypePropogatorError {
 	// grug_error("The left and right operand of a binary expression ('%s') must have the same type, but got %s and %s", get_token_type_str[binary_expr.operator], binary_expr.left_expr->result_type_name, binary_expr.right_expr->result_type_name);
 	BinaryOperatorTypeMismatch {
 		operator: BinaryOperator,
-		left: GrugType,
-		right: GrugType,
+		left: GrugType<'static>,
+		right: GrugType<'static>,
 	},
 	// grug_assert(binary_expr.left_expr->result_type == type_bool, "'%s' operator expects bool", get_token_type_str[binary_expr.operator]);
 	LogicalOperatorExpectsBool {
@@ -75,17 +76,17 @@ pub enum TypePropogatorError {
 	ComparisonOperatorExpectsNumber {
 		// Must be '>', '>=', '<', or '<=' operators
 		operator: BinaryOperator,
-		got_type: GrugType,
+		got_type: GrugType<'static>,
 	},
 	// grug_assert(binary_expr.left_expr->result_type == type_i32 || binary_expr.left_expr->result_type == type_f32, "'%s' operator expects i32 or f32", get_token_type_str[binary_expr.operator]);
 	ArithmeticOperatorExpectsNumber {
 		// Must be '+', '-', '*', or '/' operators
 		operator: BinaryOperator,
-		got_type: GrugType,
+		got_type: GrugType<'static>,
 	},
 	// grug_assert(binary_expr.left_expr->result_type == type_i32, "'%%' operator expects i32");
 	RemainderOperatorExpectsNumber {
-		got_ty: GrugType,
+		got_ty: GrugType<'static>,
 	},
 	// grug_error("Mods aren't allowed to call their own on_ functions, but '%s' was called", name);
 	CallOnFnWithinOnFn {
@@ -99,26 +100,26 @@ pub enum TypePropogatorError {
 	TooFewArguments{
 		function_name: Arc<str>,
 		expected_name: Arc<str>,
-		expected_type: GrugType,
+		expected_type: GrugType<'static>,
 	},
 	// grug_assert(call_expr.argument_count <= param_count, "Function call '%s' got an unexpected extra argument with type %s", name, call_expr.arguments[param_count].result_type_name);
 	TooManyArguments{
 		function_name: Arc<str>,
-		got_type: GrugType,
+		got_type: GrugType<'static>,
 	},
 	ResourceValidationError(ResourceValidationError),
 	EntityValidationError(EntityValidationError),
 	// grug_assert(arg->result_type != type_void, "Function call '%s' expected the type %s for argument '%s', but got a function call that doesn't return anything", name, param.type_name, param.name);
 	VoidArgumentInFunctionCall {
 		function_name: Arc<str>,
-		signature_type: GrugType,
+		signature_type: GrugType<'static>,
 		parameter_name: Arc<str>
 	},
 	// grug_error("Function call '%s' expected the type %s for argument '%s', but got %s", name, param.type_name, param.name, arg->result_type_name);
 	FunctionArgumentMismatch {
 		function_name: Arc<str>,
-		expected_type: GrugType,
-		got_type: GrugType,
+		expected_type: GrugType<'static>,
+		got_type: GrugType<'static>,
 		parameter_name: Arc<str>
 	},
 	// grug_assert(entity_on_fn, "The function '%s' was not declared by entity '%s' in mod_api.json", on_fns[fn_index].fn_name, file_entity_type);
@@ -130,13 +131,13 @@ pub enum TypePropogatorError {
 	TooFewParameters{
 		function_name: Arc<str>,
 		expected_name: Arc<str>,
-		expected_type: GrugType,
+		expected_type: GrugType<'static>,
 	},
 	// grug_assert(arg_count <= param_count, "Function '%s' got an unexpected extra parameter '%s' with type %s", name, args[param_count].name, args[param_count].type_name);
 	TooManyParameters{
 		function_name: Arc<str>,
 		parameter_name: Arc<str>,
-		parameter_type: GrugType,
+		parameter_type: GrugType<'static>,
 	},
 	// grug_assert(streq(arg_name, param.name), "Function '%s' its '%s' parameter was supposed to be named '%s'", name, arg_name, param.name);
 	OnFnParameterNameMismatch{
@@ -148,8 +149,8 @@ pub enum TypePropogatorError {
 	OnFnParameterTypeMismatch{
 		function_name: Arc<str>,
 		parameter_name: Arc<str>,
-		got_type: GrugType,
-		expected_type: GrugType,
+		got_type: GrugType<'static>,
+		expected_type: GrugType<'static>,
 	},
 	// grug_assert(!streq(global->assignment_expr.literal.string, "me"), "Global variables can't be assigned 'me'");
 	GlobalCantBeAssignedMe {
@@ -158,8 +159,8 @@ pub enum TypePropogatorError {
 	// grug_error("Can't assign %s to '%s', which has type %s", global->assignment_expr.result_type_name, global->name, global->type_name);
 	VariableTypeMismatch {
 		name: Arc<str>,
-		got_type: GrugType,
-		expected_type: GrugType,
+		got_type: GrugType<'static>,
+		expected_type: GrugType<'static>,
 	},
 	// grug_assert(!get_local_variable(name), "The local variable '%s' shadows an earlier local variable with the same name, so change the name of one of them", name);
 	LocalVariableShadowedByGlobal {
@@ -175,11 +176,11 @@ pub enum TypePropogatorError {
 	},
 	// "If condition must be bool but got '%s'", 
 	IfConditionTypeMismatch {
-		got_type: GrugType,
+		got_type: GrugType<'static>,
 	},
 	// "While condition must be bool but got '%s'", 
 	WhileConditionTypeMismatch {
-		got_type: GrugType,
+		got_type: GrugType<'static>,
 	},
 	// TODO: This needs location information 
 	// "There is a break statement that isn't inside of a while loop" 
@@ -200,13 +201,13 @@ pub enum TypePropogatorError {
 	// grug_assert(fn_return_type == type_void, "Function '%s' is supposed to return a value of type %s", filled_fn_name, fn_return_type_name);
 	MismatchedReturnType {
 		function_name: Arc<str>,
-		expected_type: GrugType,
-		got_type: GrugType,
+		expected_type: GrugType<'static>,
+		got_type: GrugType<'static>,
 	},
 	// grug_assert(last_statement.type == RETURN_STATEMENT, "Function '%s' is supposed to return %s as its last line", filled_fn_name, fn_return_type_name);
 	LastStatementNotReturn {
 		function_name: Arc<str>,
-		expected_return_type: GrugType,
+		expected_return_type: GrugType<'static>,
 	},
 	// grug_assert(previous_on_fn_index <= on_fn_index, "The function '%s' needs to be moved before/after a different on_ function, according to the entity '%s' in mod_api.json", on_fn->fn_name, grug_entity->name);
 	OutOfOrderOnFn {
@@ -226,13 +227,9 @@ impl std::fmt::Display for TypePropogatorError {
 			} => write!(f, "The global variable '{}' shadows an earlier global variable with the same name, so change the name of one of them", name),
 			Self::GlobalCantCallHelperFn {
 				global_name,
-				line: _,
-				col: _,
 			} => write!(f, "The global variable '{}' isn't allowed to call helper functions", global_name),
 			Self::VariableDoesNotExist {
 				name,
-				line: _, 
-				col: _,
 			} => write!(f, "The variable '{}' does not exist", name),
 			Self::AdjacentUnaryOperators {
 				operator,
@@ -592,33 +589,31 @@ impl<'a> TypePropogator<'a> {
 		}
 	}
 
-	pub fn fill_result_types(&mut self, entity_name: &str, ast: &mut AST) -> Result<(), TypePropogatorError> {
-		let entity_name = Arc::from(entity_name);
-		
-		self.add_global_variable(Arc::from("me"), GrugType::Id{custom_name: Some(Arc::clone(&entity_name))})?;
+	pub fn fill_result_types(&mut self, entity_name: &str, ast: &mut AST<'a>, arena: &'a Arena) -> Result<(), TypePropogatorError> {
+		self.add_global_variable(nt!("me"), GrugType::Id{custom_name: Some(Box::leak(NTStr::box_from_str_in(entity_name, arena)))})?;
 
 		let variables = ast.global_statements
 			.iter_mut().filter_map(|st| match st {GlobalStatement::Variable(x) => Some(x), _ => None})
 			.collect::<Vec<_>>();
 		for variable in variables {
-			self.check_global_expr(&variable.assignment_expr, &variable.name)?;
-			let result_ty = self.fill_expr(&ast.helper_fn_signatures, &mut variable.assignment_expr)?;
+			self.check_global_expr(&variable.assignment_expr, variable.name.as_str())?;
+			let result_ty = self.fill_expr(&*ast.helper_fn_signatures, &mut variable.assignment_expr.into(), arena)?;
 
-			if let ExprType::LiteralExpr{expr: LiteralExpr::IdentifierExpr{name, ..}, ..} = &variable.assignment_expr.ty 
-				&& &**name == "me" {
+			if let ExprData::Literal(LiteralExprData::Identifier(name)) = &variable.assignment_expr.data 
+				&& name.as_str() == "me" {
 				// grug_assert(!streq(global->assignment_expr.literal.string, "me"), "Global variables can't be assigned 'me'");
 				return Err(TypePropogatorError::GlobalCantBeAssignedMe {
-					name: Arc::clone(name),
+					name: Arc::from(name.as_str()),
 				});
 			}
 			if !(variable.ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && result_ty != variable.ty {
 				return Err(TypePropogatorError::VariableTypeMismatch {
-					name: Arc::clone(&variable.name),
+					name: Arc::from(variable.name.as_str()),
 					got_type: result_ty.clone(),
 					expected_type: variable.ty.clone(),
 				});
 			}
-			self.add_global_variable(Arc::clone(&variable.name), result_ty)?;
+			self.add_global_variable(variable.name.as_str(), result_ty)?;
 		}
 
 		let mut previous_on_fn_index = 0;
@@ -631,33 +626,33 @@ impl<'a> TypePropogator<'a> {
 		{
 			let Some((current_index, current_on_fn)) = 
 				on_functions.iter_mut().enumerate()
-				.find(|(_, on_fn)| *on_fn.name == **on_fn_name) else 
+				.find(|(_, on_fn)| on_fn.name.as_str() == &**on_fn_name) else 
 			{
 				continue;
 			};
 			if previous_on_fn_index > current_index {
 				return Err(TypePropogatorError::OutOfOrderOnFn {
-					entity_name: Arc::clone(&entity_name),
-					on_fn_name: Arc::clone(&current_on_fn.name),
+					entity_name: Arc::from(entity_name),
+					on_fn_name: Arc::from(current_on_fn.name.as_str()),
 				});
 			}
 			previous_on_fn_index = current_index;
 			
 			if mod_api_on_fn.arguments.len() > current_on_fn.arguments.len() {
 				return Err(TypePropogatorError::TooFewParameters{
-					function_name: Arc::clone(&current_on_fn.name),
-					expected_name: Arc::clone(&mod_api_on_fn.arguments[current_on_fn.arguments.len()].name),
+					function_name: Arc::from(current_on_fn.name.as_str()),
+					expected_name: Arc::from(mod_api_on_fn.arguments[current_on_fn.arguments.len()].name.as_str()),
 					expected_type: mod_api_on_fn.arguments[current_on_fn.arguments.len()].ty.clone(),
 				});
 			} else if mod_api_on_fn.arguments.len() < current_on_fn.arguments.len() {
 				return Err(TypePropogatorError::TooManyParameters{
-					function_name: Arc::clone(&current_on_fn.name),
-					parameter_name: Arc::clone(&current_on_fn.arguments[mod_api_on_fn.arguments.len()].name),
-					parameter_type: current_on_fn.arguments[mod_api_on_fn.arguments.len()].ty.clone(),
+					function_name: Arc::from(current_on_fn.name.as_str()),
+					parameter_name: Arc::from(current_on_fn.arguments[mod_api_on_fn.arguments.len()].name.to_str()),
+					parameter_type: current_on_fn.arguments[mod_api_on_fn.arguments.len()].ty.into(),
 				});
 			}
 			for (param, arg) in mod_api_on_fn.arguments.iter().zip(current_on_fn.arguments.iter()) {
-				if param.name != arg.name {
+				if param.name != arg.name.to_ntstr() {
 					return Err(TypePropogatorError::OnFnParameterNameMismatch {
 						function_name: Arc::clone(&current_on_fn.name),
 						got_name: Arc::clone(&arg.name),
@@ -740,16 +735,16 @@ impl<'a> TypePropogator<'a> {
 	}
 	
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_statements(&mut self, helper_fns: &[(&str, (GrugType, Vec<Argument>))], statements: &mut [Statement], expected_return_type: &GrugType) -> Result<(), TypePropogatorError> {
+	fn fill_statements(&mut self, helper_fns: &[(&NTStr, (GrugType, &[c_argument<'a>]))], statements: &mut [c_statement], expected_return_type: &GrugType, arena: &'a Arena) -> Result<(), TypePropogatorError> {
 		self.push_scope();
 		for statement in &mut *statements {
 			match statement {
-				Statement::Variable(Variable {
+				Statement::Variable{
 					name,
 					ty,
 					assignment_expr
-				}) => {
-					let result_ty = self.fill_expr(helper_fns, assignment_expr)?;
+				} => {
+					let result_ty = self.fill_expr(helper_fns, assignment_expr, arena)?;
 					
 					if let Some(ty) = ty {
 						if self.get_variable_type(name).is_some() {
@@ -794,7 +789,7 @@ impl<'a> TypePropogator<'a> {
 				Statement::CallStatement {
 					expr
 				} => {
-					self.fill_expr(helper_fns, expr)?;
+					self.fill_expr(helper_fns, expr, arena)?;
 				}
 				Statement::IfStatement {
 					condition,
@@ -802,7 +797,7 @@ impl<'a> TypePropogator<'a> {
 					if_statements,
 					else_statements,
 				} => {
-					let cond_type = self.fill_expr(helper_fns, condition)?;
+					let cond_type = self.fill_expr(helper_fns, condition, arena)?;
 					if cond_type != GrugType::Bool {
 						return Err(TypePropogatorError::IfConditionTypeMismatch {
 							got_type: cond_type
@@ -819,7 +814,7 @@ impl<'a> TypePropogator<'a> {
 					condition,
 					statements,
 				} => {
-					let cond_type = self.fill_expr(helper_fns, condition)?;
+					let cond_type = self.fill_expr(helper_fns, condition, arena)?;
 					if cond_type != GrugType::Bool {
 						return Err(TypePropogatorError::WhileConditionTypeMismatch {
 							got_type: cond_type
@@ -835,7 +830,7 @@ impl<'a> TypePropogator<'a> {
 				} => {
 					// result_ty MUST be filled
 					let return_ty = expr.as_mut()
-						.map(|expr| self.fill_expr(helper_fns, expr))
+						.map(|expr| self.fill_expr(helper_fns, expr, arena))
 						.unwrap_or(Ok(GrugType::Void))?;
 					if *expected_return_type != (GrugType::Id{custom_name: None}) && *expected_return_type != return_ty {
 						return Err(TypePropogatorError::MismatchedReturnType{
@@ -863,141 +858,134 @@ impl<'a> TypePropogator<'a> {
 	}
 
 	// Check that the global variable's assigned value doesn't contain a call_to a helper function nor identifier
-	fn check_global_expr(&mut self, assignment_expr: &Expr, name: &Arc<str>) -> Result<(), TypePropogatorError> {
+	fn check_global_expr(&mut self, assignment_expr: &Expr<'_>, name: &str) -> Result<(), TypePropogatorError> {
 		match assignment_expr.ty {
-			ExprType::LiteralExpr{expr: LiteralExpr::EntityExpr{..}, ..} => unreachable!(),
-			ExprType::LiteralExpr{expr: LiteralExpr::ResourceExpr{..}, ..} => unreachable!(),
-			ExprType::LiteralExpr{..} => (),
-			ExprType::UnaryExpr{
-				operator: _,
-				ref expr,
-			} => self.check_global_expr(expr, name)?,
-			ExprType::BinaryExpr{
-				ref operands,
+			ExprData::Literal(LiteralExprData::Entity(_)) => unreachable!(),
+			ExprData::Literal(LiteralExprData::Resource(_)) => unreachable!(),
+			ExprData::Literal(_) => (),
+			ExprData::Unary{
+				op: _,
+				expr,
+			} => self.check_global_expr(expr.into(), name)?,
+			ExprData::Binary{
+				left,
+				right,
 				operator: _,
 			} => {
-				self.check_global_expr(&operands.0, name)?;
-				self.check_global_expr(&operands.1, name)?;
+				self.check_global_expr(&left.into(), name)?;
+				self.check_global_expr(&right.into(), name)?;
 			},
-			ExprType::CallExpr{
-				ref function_name,
-				ref arguments,
-				line,
-				col,
+			ExprData::Call{
+				name: fn_name,
+				args,
 			} => {
-				if function_name.starts_with("helper_") {
+				if fn_name.starts_with("helper_") {
 					Err(TypePropogatorError::GlobalCantCallHelperFn{
 						global_name: Arc::clone(name),
-						line,
-						col,
 					})?;
 				}
-				arguments.iter().map(|argument| self.check_global_expr(argument, name))
+				args.iter().map(|argument| self.check_global_expr(argument.into(), name))
 					.collect::<Result<Vec<_>, _>>()?;
 			},
-			ExprType::ParenthesizedExpr{
-				ref expr,
+			ExprData::ParenthesizedExpr{
+				expr,
 				..
-			} => self.check_global_expr(expr, name)?,
+			} => self.check_global_expr(expr.into(), name)?,
 		}
 		Ok(())
 	}
 
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_expr(&mut self, helper_fns: &[(&str, (GrugType, Vec<Argument>))], assignment_expr: &mut Expr) -> Result<GrugType, TypePropogatorError> {
+	fn fill_expr(&mut self, helper_fns: &[(&NTStr, (GrugType, &[c_argument<'a>]))], assignment_expr: &mut c_expr<'a>, arena: &'a Arena) -> Result<GrugType, TypePropogatorError> {
+		let new_expr = assignment_expr.into();
 		// MUST be None before type propogation
 		assert!(assignment_expr.result_ty.is_none());
-		let result_ty = match assignment_expr.ty {
-			ExprType::LiteralExpr{
-				ref mut expr,
-				line,
-				col,
-			} => {
+		let result_ty = match assignment_expr.data {
+			ExprData::Literal(expr) => {
 				match expr {
-					LiteralExpr::TrueExpr => GrugType::Bool,
-					LiteralExpr::FalseExpr => GrugType::Bool,
-					LiteralExpr::StringExpr{
+					LiteralExprData::True => GrugType::Bool,
+					LiteralExprData::False => GrugType::Bool,
+					LiteralExprData::String{
 						..
 					} => GrugType::String,
-					LiteralExpr::ResourceExpr{
+					LiteralExprData::Resource{
 						..
 					} => {
 						// TODO: Figure out why this is
 						panic!("This is supposed to be unreachable but i don't remember why");
 					}
-					LiteralExpr::EntityExpr{
+					LiteralExprData::Entity{
 						..
 					} => {
 						// TODO: Figure out why this is
 						panic!("This is supposed to be unreachable but i don't remember why");
 					}
-					LiteralExpr::IdentifierExpr{
+					LiteralExprData::Identifier{
 						name
 					} => {
 						let ty = self.get_variable_type(&*name).ok_or_else(|| TypePropogatorError::VariableDoesNotExist{
-							name: Arc::clone(name),
-							line,
-							col,
+							name: Arc::from(name.as_str()),
 						})?;
-						ty.clone()
+						ty
 					},
-					LiteralExpr::NumberExpr{
+					LiteralExprData::Number{
 						..
 					} => GrugType::Number,
 				}
 			},
-			ExprType::UnaryExpr{
+			ExprData::Unary{
 				operator,
-				ref mut expr,
+				expr,
 			} => {
-				if let ExprType::UnaryExpr{operator: next_operator, ..} = expr.ty && next_operator == operator {
+				if let ExprData::Unary{op: next_operator, ..} = expr.into().data && next_operator == operator {
 					return Err(TypePropogatorError::AdjacentUnaryOperators{
 						operator
 					});
 				}
-				let result_ty = self.fill_expr(helper_fns, expr)?;
+				let result_ty = self.fill_expr(helper_fns, expr, arena)?;
 				match (operator, &result_ty) {
 					(UnaryOperator::Not, GrugType::Bool) => (),
 					(UnaryOperator::Not, got) => return Err(TypePropogatorError::NotOperatorNotBeforeBool{
-						got: got.clone(),
+						got,
 					}),
 					(UnaryOperator::Minus, GrugType::Number) => (),
 					(UnaryOperator::Minus, got) => return Err(TypePropogatorError::MinusOperatorNotBeforeNumber{
-						got: got.clone(),
+						got,
 					}),
 					// _ => (),
 				};
 				result_ty
 			},
-			ExprType::BinaryExpr{
-				ref mut operands,
-				operator,
+			ExprData::Binary{
+				left,
+				right,
+				op,
 			} => {
-				let result_0 = self.fill_expr(helper_fns, &mut operands.0)?;
-				let result_1 = self.fill_expr(helper_fns, &mut operands.1)?;
-				match (&result_1, operator) {
+				let result_0 = self.fill_expr(helper_fns, &mut left, arena)?;
+				let result_1 = self.fill_expr(helper_fns, &mut right, arena)?;
+				match (&result_1, op) {
 					(GrugType::String, BinaryOperator::DoubleEquals) | 
 					(GrugType::String, BinaryOperator::NotEquals) => (),
 					(GrugType::String, _) => {
 						return Err(TypePropogatorError::CannotCompareStrings{
-							operator
+							operator: op
 						});
 					},
 					_ => (),
 				}
 				if !GrugType::match_non_exact(&result_0, &result_1) {
 					return Err(TypePropogatorError::BinaryOperatorTypeMismatch{
-						operator,
+						operator: op,
 						left: result_0,
 						right: result_1,
 					});
 				}
 
-				match operator {
+				match op {
 					BinaryOperator::Or | BinaryOperator::And => {
 						if result_0 != GrugType::Bool {
 							return Err(TypePropogatorError::LogicalOperatorExpectsBool {
-								operator,
+								operator: op,
 							});
 						}
 						GrugType::Bool
@@ -1009,7 +997,7 @@ impl<'a> TypePropogator<'a> {
 					BinaryOperator::Less | BinaryOperator::LessEquals => {
 						if result_0 != GrugType::Number {
 							return Err(TypePropogatorError::ComparisonOperatorExpectsNumber {
-								operator,
+								operator: op,
 								got_type: result_0,
 							});
 						}
@@ -1019,7 +1007,7 @@ impl<'a> TypePropogator<'a> {
 					BinaryOperator::Multiply | BinaryOperator::Division => {
 						if result_0 != GrugType::Number {
 							return Err(TypePropogatorError::ArithmeticOperatorExpectsNumber {
-								operator,
+								operator: op,
 								got_type: result_0,
 							});
 						}
@@ -1035,71 +1023,80 @@ impl<'a> TypePropogator<'a> {
 					},
 				}
 			},
-			ExprType::CallExpr{
-				ref mut function_name,
-				ref mut arguments,
-				line: _,
-				col: _,
+			ExprData::CallExpr{
+				name: fn_name,
+				args,
 			} => {
 				// TODO: Move this line to within check_arguments
-				arguments.iter_mut().map(|argument| self.fill_expr(helper_fns, argument)).collect::<Result<Vec<_>, _>>()?;
-				if let Some((_, (return_ty, sig_arguments))) = helper_fns.iter().find(|(name, _)| *name == &**function_name) {
-					self.check_arguments(function_name, sig_arguments, arguments)?;
+				args.iter_mut().map(|argument| self.fill_expr(helper_fns, argument, arena)).collect::<Result<Vec<_>, _>>()?;
+				if let Some((_, (return_ty, sig_arguments))) = helper_fns.iter().find(|(name, _)| *name == fn_name.as_str()) {
+					self.check_arguments(fn_name, sig_arguments, args, arena)?;
 					return_ty.clone()
-				} else if let Some(game_fn) = self.game_fns.get(function_name) {
-					self.check_arguments(function_name, &game_fn.arguments, arguments)?;
-					game_fn.return_ty.clone()
-				} else if function_name.starts_with("on_") {
+				} else if let Some(game_fn) = self.game_fns.get(fn_name) {
+					self.check_arguments(fn_name, &game_fn.arguments, args, arena)?;
+					game_fn.return_ty
+				} else if fn_name.starts_with("on_") {
 					return Err(TypePropogatorError::CallOnFnWithinOnFn {
-						on_fn_name: Arc::clone(function_name)
+						on_fn_name: Arc::from(fn_name)
 					});
 				} else {
 					return Err(TypePropogatorError::FunctionDoesNotExist {
-						function_name: Arc::clone(function_name)
+						function_name: Arc::from(fn_name)
 					});
 				}
 			},
-			ExprType::ParenthesizedExpr{
+			ExprData::ParenthesizedExpr{
 				ref mut expr,
 				line: _,
 				col: _,
 			} => {
-				self.fill_expr(helper_fns, expr)?
+				self.fill_expr(helper_fns, expr, arena)?
 			},
 		};
-		assignment_expr.result_ty = Some(result_ty.clone());
+		new_expr.result_ty = Some(result_ty);
+		*assignment_expr = new_expr.into();
 		Ok(result_ty)
 	}
 
-	fn check_arguments(&mut self, function_name: &Arc<str>, signature: &[Argument], arguments: &mut [Expr]) -> Result<(), TypePropogatorError> {
-		debug_assert!(arguments.iter().all(|arg| arg.result_ty.is_some()));
+	fn check_arguments(&mut self, function_name: &NTStr, signature: &[c_argument<'_>], arguments: &mut [c_expr<'a>], arena: &'a Arena) -> Result<(), TypePropogatorError> {
+		debug_assert!(arguments.iter().all(|arg| arg.into().result_type.is_some()));
 		if signature.len() > arguments.len() {
 			return Err(TypePropogatorError::TooFewArguments{
-				function_name: Arc::clone(function_name),
-				expected_name: Arc::clone(&signature[arguments.len()].name),
-				expected_type: signature[arguments.len()].ty.clone(),
+				function_name: Arc::from(function_name.as_str()),
+				expected_name: Arc::from(&signature[arguments.len()].name.as_str()),
+				expected_type: signature[arguments.len()].ty,
 			});
 		} else if signature.len() < arguments.len() {
 			return Err(TypePropogatorError::TooManyArguments{
-				function_name: Arc::clone(function_name),
-				got_type: arguments[signature.len()].result_ty.clone().unwrap(),
+				function_name: Arc::from(function_name),
+				got_type: arguments[signature.len()].result_type.unwrap(),
 			});
 		}
 		for (param, arg) in signature.iter().zip(arguments) {
-			if let GrugType::Resource{ref extension} = param.ty 
-				&& let ExprType::LiteralExpr{expr: LiteralExpr::StringExpr{ref mut value}, line: _, col: _} = arg.ty {
-				self.validate_resource_string(value, extension)?;
-				*value = self.fix_resource_string(value);
-				arg.result_ty = Some(GrugType::Resource{
-					extension: Arc::clone(extension)
-				});
-			} else if let GrugType::Entity{ref ty} = param.ty 
-				&& let ExprType::LiteralExpr{expr: LiteralExpr::StringExpr{ref mut value}, line: _, col: _} = arg.ty {
+			if let GrugType::Resource{extension} = param.into().ty 
+				&& let ExprData::Literal(LiteralExprData::String(mut value)) = arg.into().data {
+				self.validate_resource_string(value, extension.as_str())?;
+				value = self.fix_resource_string(value);
+				*arg = {
+					Expr {
+						data: ExprData::Literal(LiteralExprData::String(value)),
+						result_type: Some(GrugType::Resource{
+							extension,
+						}),
+					}.into()
+				};
+			} else if let GrugType::Entity{entity_type: ty} = param.into().ty 
+				&& let ExprData::Literal(LiteralExprData::String(mut value)) = arg.into().ty {
 				self.validate_entity_string(value)?;
-				if let Some(fixed_entity) = self.fix_entity_string(value) {*value = fixed_entity}
-				arg.result_ty = Some(GrugType::Entity{
-					ty: ty.clone()
-				});
+				if let Some(fixed_entity) = self.fix_entity_string(value, arena) {value = fixed_entity}
+				*arg = {
+					Expr {
+						data: ExprData::Literal(LiteralExprData::String(value)),
+						result_type: Some(GrugType::Entity{
+							entity_type: ty,
+						}),
+					}.into()
+				};
 			} else if arg.result_ty.as_ref().unwrap() == &GrugType::Void {
 				return Err(TypePropogatorError::VoidArgumentInFunctionCall{
 					function_name: Arc::clone(function_name),
@@ -1169,8 +1166,8 @@ impl<'a> TypePropogator<'a> {
 		}
 	}
 
-	fn fix_resource_string(&mut self, value: &NTStr) -> Arc<NTStr> {
-		NTStr::arc_from_str(&format!("{}/{}", self.current_mod_name, value))
+	fn fix_resource_string(&mut self, value: &NTStr, arena: &'a Arena) -> &'a NTStr {
+		Box::leak(NTStr::box_from_str_in(&format!("{}/{}", self.current_mod_name, value), arena))
 	}
 
 	fn validate_entity_string(&mut self, entity_string: &mut Arc<NTStr>) -> Result<(), EntityValidationError> {
@@ -1218,9 +1215,9 @@ impl<'a> TypePropogator<'a> {
 		Ok(())
 	}
 
-	fn fix_entity_string(&mut self, value: &NTStr) -> Option<Arc<NTStr>> {
+	fn fix_entity_string(&mut self, value: &NTStr, arena: &'a Arena) -> Option<&'a NTStr> {
 		if value.split_once(":").is_none() {
-			Some(NTStr::arc_from_str(&format!("{}:{}", self.current_mod_name, value)))
+			Some(Box::leak(NTStr::box_from_str_in(&format!("{}:{}", self.current_mod_name, value), arena)))
 		} else {
 			None
 		}
@@ -1256,7 +1253,7 @@ impl<'a> TypePropogator<'a> {
 		self.global_variables.get(var_name).cloned()
 	}
 
-	fn add_local_variable(&mut self, name: Arc<str>, ty: GrugType) -> Result<(), TypePropogatorError> {
+	fn add_local_variable(&mut self, name: &'a str, ty: GrugType<'a>) -> Result<(), TypePropogatorError> {
 		if self.get_global_variable_type(&name).is_some() {
 			return Err(TypePropogatorError::LocalVariableShadowedByGlobal{
 				name,
@@ -1271,7 +1268,7 @@ impl<'a> TypePropogator<'a> {
 		Ok(())
 	}
 
-	fn add_global_variable(&mut self, name: Arc<str>, ty: GrugType) -> Result<(), TypePropogatorError> {
+	fn add_global_variable(&mut self, name: &'a str, ty: GrugType<'a>) -> Result<(), TypePropogatorError> {
 		match self.global_variables.entry(Arc::clone(&name)) {
 			Entry::Occupied(_) => return Err(TypePropogatorError::GlobalVariableShadowed{
 				name,

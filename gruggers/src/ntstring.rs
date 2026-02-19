@@ -4,6 +4,9 @@ use std::ffi::{CStr, c_char};
 use std::ptr::NonNull;
 use std::marker::PhantomData;
 
+use allocator_api2::alloc::Allocator;
+use allocator_api2::boxed::Box;
+
 /// represents a utf-8 string with a single null byte at the end.
 #[repr(transparent)]
 pub struct NTStr(str);
@@ -16,6 +19,17 @@ impl NTStr {
 			std::ptr::copy(value.as_ptr(), arc.cast_mut().cast(), value.len());
 			arc.cast_mut().cast::<u8>().add(value.len()).write(b'\0');
 			std::mem::transmute(Arc::from_raw(arc).assume_init())
+		}
+	}
+
+	pub fn box_from_str_in<A: Allocator>(value: &str, a: A) -> Box<Self, A> {
+		let ptr = Box::into_raw(Box::<[u8]>::new_uninit_slice(value.len() + 1));
+
+		unsafe{
+			std::ptr::copy(value.as_ptr(), ptr.cast_mut().cast(), value.len());
+			ptr.cast_mut().cast::<u8>().add(value.len()).write(b'\0');
+			let ptr = std::mem::transmute::<*mut [u8], *mut NTStr>();
+			Box::from_raw_in(ptr, a).assume_init();
 		}
 	}
 
