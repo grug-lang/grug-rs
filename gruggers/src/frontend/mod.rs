@@ -48,17 +48,17 @@ impl GrugState {
 			TypePropogator::new(entity, game_functions, mod_name.into()).fill_result_types(entity_type, &mut ast, &arena)?;
 
 			// let mod_api_entity = self.mod_api.entities.get(entity_type);
-			let mut member_variables = Vec::new_in(arena);
-			let mut on_functions = Vec::new_in(arena);
+			let mut member_variables = Vec::new_in(&arena);
+			let mut on_functions = Vec::new_in(&arena);
 			on_functions.extend((0..entity.on_fns.len()).map(|_| None));
-			let mut helper_functions = Vec::new_in(arena);
+			let mut helper_functions = Vec::new_in(&arena);
 
 			ast.global_statements.into_iter().for_each(|statement| {
 				match statement {
 					GlobalStatement::Variable(st@MemberVariable      {..}) => member_variables.push(st.into()),
 					GlobalStatement::OnFunction(st@OnFunction        {..}) => {
-						let (i, _) = entity.get_on_fn(&st.name).unwrap();
-						on_functions[i] = Some(Box::leak(Box::new_in(st.into(), &arena)));
+						let (i, _) = entity.get_on_fn(st.name.to_str()).unwrap();
+						on_functions[i] = Some(&*Box::leak(Box::new_in(st.into(), &arena)));
 					}
 					GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st.into()),
 					_ => (),

@@ -1,6 +1,6 @@
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{GrugError, RuntimeError};
-use crate::backend::{Backend, ErasedBackend, Interpreter};
+use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
 use crate::xar::Xar;
 
@@ -154,7 +154,7 @@ impl<'a> GrugInitSettings<'a> {
 		let mods_dir_path = unsafe{Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)}
 			.unwrap_or("./mods");
 
-		GrugState::new(mod_api_path, mods_dir_path, self.runtime_error_handler, self.backend.unwrap_or_else(|| Interpreter::new().into()))
+		GrugState::new(mod_api_path, mods_dir_path, self.runtime_error_handler, self.backend.unwrap_or_else(|| BytecodeBackend::new().into()))
 	}
 
 	unsafe fn maybe_nt_or_length(ptr: Option<NonNull<u8>>, len: usize) -> Option<&'a str> {

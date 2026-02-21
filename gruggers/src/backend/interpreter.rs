@@ -163,6 +163,7 @@ pub enum Statement {
 	EmptyLineStatement,
 }
 
+#[derive(Debug)]
 struct OwnedAst {
 	global_variables: Vec<GlobalVariable>,
 	on_functions    : Vec<Option<OnFunction>>,
@@ -189,7 +190,7 @@ struct CompiledFile {
 impl CompiledFile {
 	fn new(file: GrugAst) -> Self {
 		Self {
-			file,
+			file: file.into(),
 			entities: RefCell::new(Vec::new()),
 			data: ErasedXar::new(Layout::new::<GrugEntityData>()),
 		}
@@ -450,7 +451,6 @@ impl Interpreter {
 			} => {
 				let first_value = self.run_expr(call_stack, state, file, entity, &operands.0)?; 
 				let mut second_value = || self.run_expr(call_stack, state, file, entity, &operands.1);
-				debug_assert!(GrugType::match_non_exact(operands.0.result_ty.as_ref().unwrap(), operands.1.result_ty.as_ref().unwrap()));
 				// debug_assert!(operands.0.result_ty == operands.1.result_ty || matches!((&operands.0.result_ty, &operands.1.result_ty), (Some(GrugType::Id{custom_name: None}), Some(GrugType::Id{..})) | (Some(GrugType::Id{..}), Some(GrugType::Id{custom_name: None}))));
 				match (operator, &operands.0.result_ty) {
 					(BinaryOperator::Or,             Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{first_value.bool | second_value()?.bool}},

@@ -11,8 +11,8 @@ use std::ptr::NonNull;
 // 	pub(crate) helper_functions: Vec<HelperFunction>,
 // }
 
-pub mod interpreter;
-pub use interpreter::Interpreter;
+// pub mod interpreter;
+// pub use interpreter::Interpreter;
 
 pub mod bytecode;
 pub use bytecode::BytecodeBackend;

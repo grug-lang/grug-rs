@@ -15,8 +15,8 @@ pub fn dump_file_to_json (grug_path: &str, output_path: &str) -> Result<(), Grug
 
 	std::fs::write(output_path, &string).unwrap();
 
-	drop(tokens);
 	drop(ast);
+	drop(tokens);
 	arena.free();
 	Ok(())
 }
@@ -31,19 +31,19 @@ pub fn generate_file_from_json (json_path: &str, output_path: &str) -> Result<()
 }
 
 mod ser {
-	use crate::types::*;
+	use crate::ast::*;
 	use json::{JsonValue, object};
-	pub(super) fn ast_to_json(ast: &[GlobalStatement]) -> String {
+	pub(super) fn ast_to_json(ast: &[GlobalStatement<'_>]) -> String {
 		// let mut json_ast = Vec::new();
 		let ast = ast.iter().map(|statement| match statement {
-			GlobalStatement::Variable(GlobalVariable{
+			GlobalStatement::Variable(MemberVariable{
 				name,
 				ty,
 				assignment_expr,
 			}) => {
 				object! {
 					"kind": "global_variable",
-					"name": &**name, 
+					"name": name.to_str(), 
 					"type": serialize_type(ty),
 					"assignment_expr": serialize_expr(assignment_expr),
 				}
@@ -55,7 +55,7 @@ mod ser {
 			}) => {
 				object! {
 					"kind": "on_function",
-					"name": &**name,
+					"name": name.to_str(),
 					"arguments": arguments.iter().map(serialize_argument).collect::<Vec<_>>(),
 					"body_statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				}
@@ -64,11 +64,11 @@ mod ser {
 				name,
 				arguments,
 				body_statements,
-				return_ty: GrugType::Void,
+				return_type: GrugType::Void,
 			}) => {
 				object! {
 					"kind": "helper_function",
-					"name": &**name,
+					"name": name.to_str(),
 					"arguments": arguments.iter().map(serialize_argument).collect::<Vec<_>>(),
 					"body_statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				}
@@ -77,14 +77,14 @@ mod ser {
 				name,
 				arguments,
 				body_statements,
-				return_ty,
+				return_type,
 			}) => {
 				object! {
 					"kind": "helper_function",
-					"name": &**name,
+					"name": name.to_str(),
 					"arguments": arguments.iter().map(serialize_argument).collect::<Vec<_>>(),
 					"body_statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
-					"return_type": serialize_type(return_ty),
+					"return_type": serialize_type(return_type),
 				}
 			},
 			GlobalStatement::Comment{
@@ -92,7 +92,7 @@ mod ser {
 			} => {
 				object! {
 					"kind": "comment",
-					"value": &**value,
+					"value": value.to_str(),
 				}
 			},
 			GlobalStatement::EmptyLine => {
@@ -115,107 +115,87 @@ mod ser {
 			} => "id".into(),
 			GrugType::Id{
 				custom_name: Some(name),
-			} => (&**name).into(),
+			} => name.to_str().into(),
 			GrugType::Resource {
-				extension: _,
+				..
 			} => unreachable!(),
 			GrugType::Entity {
-				ty: _,
+				..
 			} => unreachable!(),
 		}
 	}
 
 	fn serialize_expr(expr: &Expr) -> JsonValue {
-		match &expr.ty {
-			ExprType::LiteralExpr{
-				expr,
-				line: _,
-				col: _,
-			} => {
+		match &expr.data {
+			ExprData::Literal(expr) => {
 				object! {
 					"type": "literal",
 					"expr": serializer_literal_expr(expr),
 				}
 			},
-			ExprType::UnaryExpr{
-				operator,
+			ExprData::Unary{
+				op,
 				expr,
 			} => object! {
 				"type": "unary",
-				"operator": serialize_unary_operator(operator),
+				"operator": serialize_unary_operator(op),
 				"expr": serialize_expr(expr),
 			},
-			ExprType::BinaryExpr{
-				operands,
-				operator,
+			ExprData::Binary{
+				left,
+				right,
+				op,
 			} => object! {
 				"type": "binary",
-				"operator": serialize_binary_operator(operator),
-				"left": serialize_expr(&operands.0),
-				"right": serialize_expr(&operands.1),
+				"operator": serialize_binary_operator(op),
+				"left": serialize_expr(left),
+				"right": serialize_expr(right),
 			},
-			ExprType::CallExpr{
-				function_name,
-				arguments,
-				line: _,
-				col: _,
+			ExprData::Call{
+				name,
+				args,
 			} => object! {
 				"type": "call",
-				"function_name": &**function_name,
-				"arguments": arguments.iter().map(serialize_expr).collect::<Vec<_>>(),
+				"function_name": name.to_str(),
+				"arguments": args.iter().map(serialize_expr).collect::<Vec<_>>(),
 			},
-			ExprType::ParenthesizedExpr{
-				expr,
-				line: _,
-				col: _,
-			} => object! {
+			ExprData::Parenthesized(expr) => object! {
 				"type": "parenthesized",
 				"expr": serialize_expr(expr),
 			},
 		}
 	}
 
-	fn serializer_literal_expr(expr: &LiteralExpr) -> JsonValue {
+	fn serializer_literal_expr(expr: &LiteralExprData) -> JsonValue {
 		match expr {
-			LiteralExpr::TrueExpr => object! {
+			LiteralExprData::True => object! {
 				"type": "boolean",
 				"value": "true",
 			},
-			LiteralExpr::FalseExpr => object! {
+			LiteralExprData::False => object! {
 				"type": "boolean",
 				"value": "false",
 			},
-			LiteralExpr::StringExpr{
-				value,
-			} => object! { 
+			LiteralExprData::String(value) => object! { 
 				"type": "string",
-				"value": &***value,
+				"value": value.to_str(),
 			},
-			LiteralExpr::ResourceExpr{
-				value,
-			} => object! { 
+			LiteralExprData::Resource(value) => object! { 
 				"type": "resource",
-				"value": &***value,
+				"value": value.to_str(),
 			},
-			LiteralExpr::EntityExpr{
-				value,
-			} => object! { 
+			LiteralExprData::Entity(value) => object! { 
 				"type": "entity",
-				"value": &***value,
+				"value": value.to_str(),
 			},
-			LiteralExpr::IdentifierExpr{
-				name
-			} => object! { 
+			LiteralExprData::Identifier(name) => object! { 
 				"type": "identifier",
-				"value": &**name,
+				"value": name.to_str(),
 			},
-			LiteralExpr::NumberExpr {
-				value,
-				string,
-			} => object! { 
+			LiteralExprData::Number (value, string) => object! { 
 				"type": "number",
 				"value": *value,
-				"string": &**string,
+				"string": string.to_str(),
 			},
 		}
 	}
@@ -247,88 +227,84 @@ mod ser {
 
 	fn serialize_argument(argument: &Argument) -> JsonValue {
 		object! {
-			"name": &*argument.name,
+			"name": argument.name.to_str(),
 			"type": serialize_type(&argument.ty),
 		}
 	}
 
 	fn serialize_statement(statement: &Statement) -> JsonValue {
 		match statement {
-			Statement::Variable(Variable{
+			Statement::Variable{
 				name,
 				ty: Some(ty),
 				assignment_expr,
-			}) => object! {
+			} => object! {
 				"kind": "variable",
-				"name": &**name,
+				"name": name.to_str(),
 				"type": serialize_type(ty),
 				"assignment_expr": serialize_expr(assignment_expr),
 			},
-			Statement::Variable(Variable{
+			Statement::Variable{
 				name,
 				ty: None,
 				assignment_expr,
-			}) => object! {
-				"name": &**name,
+			} => object! {
+				"name": name.to_str(),
 				"kind": "variable",
 				"assignment_expr": serialize_expr(assignment_expr),
 			},
-			Statement::CallStatement {
-				expr
-			} => object! {
+			Statement::Call(expr) => object! {
 				"kind": "call",
 				"expr": serialize_expr(expr),
 			},
-			Statement::IfStatement{
+			Statement::If{
 				condition,
 				is_chained: _,
-				if_statements,
-				else_statements,
-			} if else_statements.is_empty() => object! {
+				if_block,
+				else_block,
+			} if else_block.is_empty() => object! {
 				"kind": "if",
 				"cond": serialize_expr(condition),
-				"if_block": if_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
+				"if_block": if_block.iter().map(serialize_statement).collect::<Vec<_>>(),
 			},
-			Statement::IfStatement{
+			Statement::If{
 				condition,
 				is_chained,
-				if_statements,
-				else_statements,
+				if_block,
+				else_block,
 			} => object! {
 				"kind": "if",
 				"cond": serialize_expr(condition),
-				"if_block": if_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
+				"if_block": if_block.iter().map(serialize_statement).collect::<Vec<_>>(),
 				"is_chained": *is_chained,
-				"else_block": else_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
+				"else_block": else_block.iter().map(serialize_statement).collect::<Vec<_>>(),
 			},
-			Statement::ReturnStatement{
+			Statement::Return{
 				expr: None,
 			} => object! {
 				"kind": "return",
 			},
-			Statement::ReturnStatement{
+			Statement::Return{
 				expr: Some(expr),
 			} => object! {
 				"kind": "return",
 				"expr": serialize_expr(expr),
 			},
-			Statement::WhileStatement{
+			Statement::While{
 				condition,
-				statements,
+				block,
 			} => object! {
 				"kind": "while",
 				"cond": serialize_expr(condition),
-				"statements": statements.iter().map(serialize_statement).collect::<Vec<_>>(),
+				"statements": block.iter().map(serialize_statement).collect::<Vec<_>>(),
 			},
-			Statement::Comment{
-				value,
-			} => object! {
+			Statement::Comment(value) => object! {
 				"kind": "comment",
-				"value": &**value,
+				"value": value.to_str(),
 			},
-			Statement::BreakStatement => object!{"kind": "break"},
-			Statement::ContinueStatement => object!{"kind": "continue"},
-			Statement::EmptyLineStatement => object!{"kind": "empty_line"},
+			Statement::Break => object!{"kind": "break"},
+			Statement::Continue => object!{"kind": "continue"},
+			Statement::EmptyLine => object!{"kind": "empty_line"},
 		}
 	}
 }

@@ -26,10 +26,10 @@ impl NTStr {
 		let ptr = Box::into_raw(Box::<[u8]>::new_uninit_slice(value.len() + 1));
 
 		unsafe{
-			std::ptr::copy(value.as_ptr(), ptr.cast_mut().cast(), value.len());
-			ptr.cast_mut().cast::<u8>().add(value.len()).write(b'\0');
-			let ptr = std::mem::transmute::<*mut [u8], *mut NTStr>();
-			Box::from_raw_in(ptr, a).assume_init();
+			std::ptr::copy(value.as_ptr(), ptr.cast(), value.len());
+			ptr.cast::<u8>().add(value.len()).write(b'\0');
+			let ptr = std::mem::transmute::<_, *mut NTStr>(ptr);
+			Box::from_raw_in(ptr, a)
 		}
 	}
 
@@ -153,6 +153,11 @@ impl<'a> NTStrPtr<'a> {
 		self.0.cast::<u8>().as_ptr().cast_const()
 	}
 
+	pub fn is_empty(self) -> bool {
+		// SAFETY: NTStrPtr is guaranteed to point to allocated memory that ends in a null byte
+		unsafe{self.0.cast::<u8>().read() == b'\0'}
+	}
+
 	pub unsafe fn from_ptr (ptr: NonNull<c_char>) -> Self {
 		Self(ptr, PhantomData)
 	}
@@ -199,6 +204,12 @@ impl<'a> NTStrPtr<'a> {
 	}
 }
 
+impl<'a> std::fmt::Display for NTStrPtr<'a> {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		self.to_str().fmt(f)
+	}
+}
+
 impl<'a> PartialEq for NTStrPtr<'a> {
 	fn eq(&self, other: &Self) -> bool {
 		if self.0 == other.0 {
@@ -217,6 +228,8 @@ impl<'a> PartialEq for NTStrPtr<'a> {
 		}
 	}
 }
+
+impl<'a> Eq for NTStrPtr<'a> {}
 
 impl<'a> From<&'a NTStr> for NTStrPtr<'a> {
 	fn from (other: &'a NTStr) -> Self {

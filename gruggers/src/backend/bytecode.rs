@@ -1,7 +1,9 @@
 use crate::types::{
-	GrugValue, GrugScriptId, GrugEntity, Expr, ExprType,
-	LiteralExpr, OnFunction, Statement, Variable, BinaryOperator, GrugType,
-	GameFnPtr, HelperFunction, UnaryOperator
+	GrugValue, GrugScriptId, GrugEntity, GameFnPtr,
+};
+use crate::ast::{
+	Expr, ExprData, LiteralExprData, OnFunction, Statement,
+	BinaryOperator, GrugType, HelperFunction, UnaryOperator
 };
 use crate::ntstring::{NTStrPtr, NTStr};
 use crate::cachemap::CacheMap;
@@ -18,17 +20,17 @@ use std::alloc::Layout;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-struct Compiler {
-	globals: HashMap<Arc<str>, usize>,
-	locals: Vec<HashMap<Arc<str>, usize>>,
+struct Compiler<'a> {
+	globals: HashMap<&'a str, usize>,
+	locals: Vec<HashMap<&'a str, usize>>,
 	locals_sizes: Vec<usize>,
 	current_scope_size: usize,
 	locals_size_max: usize,
-	helper_fn_patches: Vec<(/* location of call instruction */ usize, /* arg_count */ usize, Arc<str>)>,
+	helper_fn_patches: Vec<(/* location of call instruction */ usize, /* arg_count */ usize, /* name */ &'a str)>,
 	while_loop_patches: Vec<(/* continue destination */ usize, Vec</* break patch locations */ usize>)>,
 }
 
-impl Compiler {
+impl<'a> Compiler<'a> {
 	fn new() -> Self {
 		Self {
 			globals: HashMap::new(),
@@ -41,25 +43,25 @@ impl Compiler {
 		}
 	}
 
-	fn compile(state: &GrugState, ast: GrugAst) -> CompiledFile {
+	fn compile(state: &GrugState, ast: GrugAst<'a>) -> CompiledFile {
 		let mut compiler = Compiler::new();
 		let mut instructions = Instructions::new();
 
-		let globals_size = ast.global_variables.len() + 1;
+		let globals_size = ast.members.len() + 1;
 
-		instructions.insert_on_fn(Arc::from("init_globals"), 0, 0, 1, 0);
-		let me_location = compiler.insert_global_variable(Arc::from("me"));
+		instructions.insert_on_fn("init_globals", 0, 0, 1, 0);
+		let me_location = compiler.insert_global_variable("me");
 		instructions.push_op(Op::StoreGlobal{index: me_location});
-		for global in ast.global_variables.into_iter() {
-			compiler.compile_expr(state, &mut instructions, global.assignment_expr);
-			let i = compiler.insert_global_variable(global.name);
+		for global in ast.members.into_iter() {
+			compiler.compile_expr(state, &mut instructions, &global.assignment_expr);
+			let i = compiler.insert_global_variable(global.name.to_str());
 			instructions.push_op(Op::StoreGlobal{index: i});
 		}
 		instructions.push_op(Op::ReturnVoid);
 
 		for (i, on_function) in ast.on_functions.into_iter().enumerate() {
 			let Some(on_function) = on_function else {continue};
-			compiler.compile_on_fn(state, &mut instructions, on_function, i + 1);
+			compiler.compile_on_fn(state, &mut instructions, *on_function, i + 1);
 		}
 
 		for helper_function in ast.helper_functions {
@@ -81,26 +83,26 @@ impl Compiler {
 		}
 	}
 	
-	fn compile_helper_fn(&mut self, state: &GrugState, instructions: &mut Instructions, on_function: HelperFunction) {
+	fn compile_helper_fn(&mut self, state: &GrugState, instructions: &mut Instructions, helper_function: &'a HelperFunction) {
 		debug_assert_eq!(self.locals.len(), 0);
 		debug_assert_eq!(self.current_scope_size, 0);
 		debug_assert_eq!(self.locals_size_max, 0);
 		debug_assert_eq!(self.while_loop_patches.len(), 0);
 		self.push_scope();
 		let begin_location = instructions.get_loc();
-		for arg in on_function.arguments {
-			self.insert_local_variable(Arc::clone(&arg.name));
+		for arg in helper_function.arguments {
+			self.insert_local_variable(arg.name.to_str());
 		}
-		for statement in on_function.body_statements {
+		for statement in &*helper_function.body_statements {
 			self.compile_statement(state, instructions, statement);
 		}
 		instructions.push_op(Op::ReturnVoid);
-		instructions.insert_helper_fn(on_function.name, begin_location, self.locals_size_max);
+		instructions.insert_helper_fn(helper_function.name.to_str(), begin_location, self.locals_size_max);
 		self.locals_size_max = 0;
 		self.pop_scope();
 	}
 
-	fn compile_on_fn(&mut self, state: &GrugState, instructions: &mut Instructions, on_function: OnFunction, index: usize) {
+	fn compile_on_fn(&mut self, state: &GrugState, instructions: &mut Instructions, on_function: &'a OnFunction, index: usize) {
 		debug_assert_eq!(self.locals.len(), 0);
 		debug_assert_eq!(self.current_scope_size, 0);
 		debug_assert_eq!(self.locals_size_max, 0);
@@ -109,43 +111,44 @@ impl Compiler {
 		let begin_location = instructions.get_loc();
 		let arg_count = on_function.arguments.len();
 		for arg in on_function.arguments {
-			self.insert_local_variable(Arc::clone(&arg.name));
+			self.insert_local_variable(arg.name.to_str());
 		}
-		for statement in on_function.body_statements {
+		for statement in &*on_function.body_statements {
 			self.compile_statement(state, instructions, statement);
 		}
 		instructions.push_op(Op::ReturnVoid);
-		instructions.insert_on_fn(on_function.name, index, begin_location, arg_count, self.locals_size_max);
+		instructions.insert_on_fn(on_function.name.to_str(), index, begin_location, arg_count, self.locals_size_max);
 		self.locals_size_max = 0;
 		self.pop_scope();
 	}
 
-	fn compile_statement(&mut self, state: &GrugState, instructions: &mut Instructions, statement: Statement) {
+	fn compile_statement(&mut self, state: &GrugState, instructions: &mut Instructions, statement: &'a Statement) {
 		match statement {
-			Statement::Variable(Variable{
+			Statement::Variable{
 				name,
 				ty,
 				assignment_expr,
-			}) => {
+			} => {
+				let name = name.to_str();
 				self.compile_expr(state, instructions, assignment_expr);
 				if let Some(_) = ty {
 					let loc = self.insert_local_variable(name);
 					instructions.push_op(Op::StoreLocal{index: loc});
 				} else {
-					if let Some(loc) = self.get_local_location(&name) {
+					if let Some(loc) = self.get_local_location(name) {
 						instructions.push_op(Op::StoreLocal{index: loc});
-					} else if let Some(loc) = self.get_global_location(&name) {
+					} else if let Some(loc) = self.get_global_location(name) {
 						instructions.push_op(Op::StoreGlobal{index: loc});
 					} else {
 						unreachable!();
 					}
 				}
 			}
-			Statement::IfStatement {
+			Statement::If {
 				condition,
 				is_chained,
-				if_statements,
-				else_statements,
+				if_block,
+				else_block,
 			} => {
 				self.compile_expr(state, instructions, condition);
 
@@ -154,25 +157,25 @@ impl Compiler {
 				instructions.push_op(Op::JmpIf{offset: 0});
 
 				self.push_scope();
-				for statement in if_statements {
+				for statement in &**if_block {
 					self.compile_statement(state, instructions, statement);
 				}
 				self.pop_scope();
 
-				if !else_statements.is_empty() {
+				if !else_block.is_empty() {
 					let end_patch_loc = instructions.get_loc() as isize;
 					instructions.push_op(Op::Jmp{offset: 0});
 					let cur_loc = instructions.get_loc() as isize;
 					// jump from the false condtion to the start of the else block
 					unsafe{instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc as usize)}
 						.expect("Could not patch jump because offset is too large");
-					if is_chained {
-						for statement in else_statements {
+					if *is_chained {
+						for statement in &**else_block {
 							self.compile_statement(state, instructions, statement);
 						}
 					} else {
 						self.push_scope();
-						for statement in else_statements {
+						for statement in &**else_block {
 							self.compile_statement(state, instructions, statement);
 						}
 						self.pop_scope();
@@ -188,9 +191,9 @@ impl Compiler {
 						.expect("Could not patch jump because offset is too large");
 				}
 			}
-			Statement::WhileStatement {
+			Statement::While {
 				condition,
-				statements,
+				block,
 			} => {
 				let continue_loc = instructions.get_loc() as isize;
 				self.compile_expr(state, instructions, condition);
@@ -200,7 +203,7 @@ impl Compiler {
 
 				self.while_loop_patches.push((continue_loc as usize, Vec::new()));
 				
-				for statement in statements {
+				for statement in &**block {
 					self.compile_statement(state, instructions, statement);
 				}
 				let end_loc = instructions.get_loc() as isize;
@@ -212,12 +215,8 @@ impl Compiler {
 					unsafe{instructions.try_patch(Op::Jmp{offset: Op::calc_offset(break_patch_loc as isize, break_loc)}, break_patch_loc)}.unwrap();
 				}
 			}
-			Statement::CallStatement {
-				expr
-			} => self.compile_expr(state, instructions, expr),
-			Statement::ReturnStatement {
-				expr,
-			} => {
+			Statement::Call(expr) => self.compile_expr(state, instructions, expr),
+			Statement::Return{expr} => {
 				if let Some(expr) = expr {
 					self.compile_expr(state, instructions, expr);
 					instructions.push_op(Op::ReturnValue);
@@ -225,43 +224,33 @@ impl Compiler {
 					instructions.push_op(Op::ReturnVoid);
 				}
 			}
-			Statement::BreakStatement => {
+			Statement::Break => {
 				self.while_loop_patches.last_mut().unwrap().1.push(instructions.get_loc());
 				instructions.push_op(Op::Jmp{offset: 0});
 			}
-			Statement::ContinueStatement => {
+			Statement::Continue => {
 				let continue_loc = self.while_loop_patches.last().unwrap().0;
 				instructions.push_op(Op::Jmp{offset: Op::calc_offset(instructions.get_loc() as isize, continue_loc as isize)});
 			}
-			Statement::EmptyLineStatement => {},
+			Statement::EmptyLine => {},
 			Statement::Comment{..}        => {},
 		}
 	}
 
-	fn compile_expr(&mut self, state: &GrugState, instructions: &mut Instructions, expr: Expr) {
-		match expr.ty {
-			ExprType::LiteralExpr {
-				expr,
-				line: _,
-				col: _,
-			} => {
+	fn compile_expr(&mut self, state: &GrugState, instructions: &mut Instructions, expr: &'a Expr) {
+		match &expr.data {
+			ExprData::Literal(expr) => {
 				match expr {
-					LiteralExpr::TrueExpr  => instructions.push_op(Op::LoadTrue ),
-					LiteralExpr::FalseExpr => instructions.push_op(Op::LoadFalse),
-					LiteralExpr::StringExpr{
-						value,
-					}                      |
-					LiteralExpr::ResourceExpr{
-						value,
-					}                      |
-					LiteralExpr::EntityExpr{
-						value,
-					} => {
-						match instructions.strings.get(&*value) {
+					LiteralExprData::True  => instructions.push_op(Op::LoadTrue ),
+					LiteralExprData::False => instructions.push_op(Op::LoadFalse),
+					LiteralExprData::String(value)   |
+					LiteralExprData::Resource(value) |
+					LiteralExprData::Entity(value)   => {
+						match instructions.strings.get(value.to_ntstr()) {
 							None => {
-								instructions.strings.insert(Arc::clone(&value));
+								instructions.strings.insert(NTStr::arc_from_str(value.to_ntstr()));
 								// SAFETY: This returned instruction stream is only valid as long as this list of strings is available
-								let string = unsafe{value.as_ntstrptr().detach_lifetime()};
+								let string = unsafe{value.detach_lifetime()};
 								instructions.push_op(Op::LoadStr{string})
 							}
 							Some(value) => {
@@ -270,16 +259,12 @@ impl Compiler {
 							}
 						}
 					}
-					LiteralExpr::NumberExpr {
-						value,
-						string: _,
-					} => instructions.push_op(Op::LoadNumber{number: value}),
-					LiteralExpr::IdentifierExpr{
-						name
-					} => {
-						if let Some(loc) = self.get_local_location(&name) {
+					LiteralExprData::Number (value, _) => instructions.push_op(Op::LoadNumber{number: *value}),
+					LiteralExprData::Identifier(name) => {
+						let name = name.to_str();
+						if let Some(loc) = self.get_local_location(name) {
 							instructions.push_op(Op::LoadLocal{index: loc});
-						} else if let Some(loc) = self.get_global_location(&name) {
+						} else if let Some(loc) = self.get_global_location(name) {
 							instructions.push_op(Op::LoadGlobal{index: loc});
 						} else {
 							unreachable!();
@@ -287,44 +272,45 @@ impl Compiler {
 					}
 				}
 			}
-			ExprType::BinaryExpr {
-				operands,
-				operator,
+			ExprData::Binary {
+				left,
+				right,
+				op,
 			} => {
-				self.compile_expr(state, instructions, operands.0);
-				match operator {
-					BinaryOperator::Greater       => {self.compile_expr(state, instructions, operands.1); instructions.push_op(Op::CmpG);}
-					BinaryOperator::GreaterEquals => {self.compile_expr(state, instructions, operands.1); instructions.push_op(Op::CmpGe);}
-					BinaryOperator::Less          => {self.compile_expr(state, instructions, operands.1); instructions.push_op(Op::CmpL);}
-					BinaryOperator::LessEquals    => {self.compile_expr(state, instructions, operands.1); instructions.push_op(Op::CmpLe);}
-					BinaryOperator::Plus          => {self.compile_expr(state, instructions, operands.1); instructions.push_op(Op::Add);}
-					BinaryOperator::Minus         => {self.compile_expr(state, instructions, operands.1); instructions.push_op(Op::Sub);}
-					BinaryOperator::Multiply      => {self.compile_expr(state, instructions, operands.1); instructions.push_op(Op::Mul);}
-					BinaryOperator::Division      => {self.compile_expr(state, instructions, operands.1); instructions.push_op(Op::Div);}
-					BinaryOperator::Remainder     => {self.compile_expr(state, instructions, operands.1); instructions.push_op(Op::Rem);}
+				self.compile_expr(state, instructions, left);
+				match op {
+					BinaryOperator::Greater       => {self.compile_expr(state, instructions, right); instructions.push_op(Op::CmpG);}
+					BinaryOperator::GreaterEquals => {self.compile_expr(state, instructions, right); instructions.push_op(Op::CmpGe);}
+					BinaryOperator::Less          => {self.compile_expr(state, instructions, right); instructions.push_op(Op::CmpL);}
+					BinaryOperator::LessEquals    => {self.compile_expr(state, instructions, right); instructions.push_op(Op::CmpLe);}
+					BinaryOperator::Plus          => {self.compile_expr(state, instructions, right); instructions.push_op(Op::Add);}
+					BinaryOperator::Minus         => {self.compile_expr(state, instructions, right); instructions.push_op(Op::Sub);}
+					BinaryOperator::Multiply      => {self.compile_expr(state, instructions, right); instructions.push_op(Op::Mul);}
+					BinaryOperator::Division      => {self.compile_expr(state, instructions, right); instructions.push_op(Op::Div);}
+					BinaryOperator::Remainder     => {self.compile_expr(state, instructions, right); instructions.push_op(Op::Rem);}
 					BinaryOperator::DoubleEquals  => {
-						match &operands.1.result_ty.as_ref().unwrap() {
+						match right.result_type.unwrap() {
 							GrugType::String => {
-								self.compile_expr(state, instructions, operands.1);
+								self.compile_expr(state, instructions, right);
 								instructions.push_op(Op::StrEq);
 							}
 							GrugType::Void   => unreachable!(),
 							_ => {
-								self.compile_expr(state, instructions, operands.1);
+								self.compile_expr(state, instructions, right);
 								instructions.push_op(Op::CmpEq);
 							}
 						}
 					}
 					BinaryOperator::NotEquals     => {
-						match operands.1.result_ty.as_ref().unwrap() {
+						match right.result_type.unwrap() {
 							GrugType::String => {
-								self.compile_expr(state, instructions, operands.1);
+								self.compile_expr(state, instructions, right);
 								instructions.push_op(Op::StrEq);
 								instructions.push_op(Op::Not);
 							}
 							GrugType::Void   => unreachable!(),
 							_ => {
-								self.compile_expr(state, instructions, operands.1);
+								self.compile_expr(state, instructions, right);
 								instructions.push_op(Op::CmpNeq);
 							}
 						}
@@ -333,7 +319,7 @@ impl Compiler {
 						instructions.push_op(Op::Dup{index: 0});
 						let first_patch_loc = instructions.get_loc();
 						instructions.push_op(Op::JmpIf{offset: 0});
-						self.compile_expr(state, instructions, operands.1);
+						self.compile_expr(state, instructions, right);
 						unsafe{
 							instructions.try_patch(
 								Op::JmpIf{
@@ -349,7 +335,7 @@ impl Compiler {
 						instructions.push_op(Op::Not);
 						let first_patch_loc = instructions.get_loc();
 						instructions.push_op(Op::JmpIf{offset: 0});
-						self.compile_expr(state, instructions, operands.1);
+						self.compile_expr(state, instructions, right);
 						unsafe{
 							instructions.try_patch(
 								Op::JmpIf{
@@ -362,70 +348,63 @@ impl Compiler {
 					}
 				}
 			}
-			ExprType::CallExpr {
-				function_name,
-				arguments,
-				line: _,
-				col: _,
-			} if function_name.starts_with("helper_") => {
-				let args = arguments.len();
-				for argument in arguments {
-					self.compile_expr(state, instructions, argument);
-				}
-
-				let (location, locals_size) = if let Some(info) = instructions.get_helper_fn_info(&function_name) {
-					info
-				} else {
-					self.helper_fn_patches.push((instructions.get_loc(), args, function_name));
-					(0, 0)
-				};
-				instructions.push_op(Op::CallHelperFunction{args, locals_size, location});
-			},
-			ExprType::CallExpr {
-				function_name,
-				arguments,
-				line: _,
-				col: _,
-			} => {
-				let args = arguments.len();
-				for argument in arguments {
-					self.compile_expr(state, instructions, argument);
-				}
-				let fn_ptr = state.game_functions.get(&*function_name)
-					.expect("Can't find game function");
-				
-				let has_return = state.mod_api.game_functions().get(&function_name).unwrap().return_ty != GrugType::Void;
-				instructions.push_op(Op::CallGameFunction {
-					has_return,
-					args,
-					ptr: *fn_ptr,
-				});
-			}
-			ExprType::ParenthesizedExpr {
-				expr,
-				line: _,
-				col: _,
-			} => self.compile_expr(state, instructions, *expr),
-			ExprType::UnaryExpr {
-				operator,
+			ExprData::Unary {
+				op,
 				expr,
 			} => {
-				self.compile_expr(state, instructions, *expr);
-				match operator {
+				self.compile_expr(state, instructions, expr);
+				match op {
 					UnaryOperator::Not   => instructions.push_op(Op::Not),
 					UnaryOperator::Minus => {instructions.push_op(Op::LoadNumber{number: -1.0}); instructions.push_op(Op::Mul);}
 				}
 			}
+			ExprData::Call {
+				name,
+				args,
+			} if name.to_str().starts_with("helper_") => {
+				let args_count = args.len();
+				for argument in &**args {
+					self.compile_expr(state, instructions, argument);
+				}
+
+				let (location, locals_size) = if let Some(info) = instructions.get_helper_fn_info(name.to_str()) {
+					info
+				} else {
+					self.helper_fn_patches.push((instructions.get_loc(), args_count, name.to_str()));
+					(0, 0)
+				};
+				instructions.push_op(Op::CallHelperFunction{args: args_count, locals_size, location});
+			},
+			ExprData::Call {
+				name,
+				args,
+			} => {
+				let name = name.to_ntstr();
+				let args_count = args.len();
+				for argument in &**args {
+					self.compile_expr(state, instructions, argument);
+				}
+				let fn_ptr = state.game_functions.get(name.as_str())
+					.expect("Can't find game function");
+				
+				let has_return = state.mod_api.game_functions().get(name.as_str()).unwrap().return_ty != GrugType::Void;
+				instructions.push_op(Op::CallGameFunction {
+					has_return,
+					args: args_count,
+					ptr: *fn_ptr,
+				});
+			}
+			ExprData::Parenthesized(expr) => self.compile_expr(state, instructions, expr),
 		}
 	}
 
-	fn insert_global_variable(&mut self, name: Arc<str>) -> usize {
+	fn insert_global_variable(&mut self, name: &'a str) -> usize {
 		let check = self.globals.insert(name, self.globals.len());
 		debug_assert!(check.is_none());
 		self.globals.len() - 1
 	}
 
-	fn insert_local_variable(&mut self, name: Arc<str>) -> usize {
+	fn insert_local_variable(&mut self, name: &'a str) -> usize {
 		let check = self.locals.last_mut().unwrap().insert(name, self.current_scope_size);
 		debug_assert!(check.is_none());
 		self.current_scope_size += 1;
@@ -1103,7 +1082,8 @@ impl Instructions {
 		self.assert_jumps_consistency();
 	}
 
-	pub fn insert_on_fn(&mut self, name: Arc<str>, index: usize, location: usize, argument_count: usize, locals_size: usize) {
+	pub fn insert_on_fn(&mut self, name: &str, index: usize, location: usize, argument_count: usize, locals_size: usize) {
+		let name = Arc::from(name);
 		if self.on_fn_locations.len() <= index {
 			self.on_fn_locations.resize(index + 1, None);
 		}
@@ -1115,7 +1095,8 @@ impl Instructions {
 		self.helper_fn_locations.get(name).copied()
 	}
 
-	pub fn insert_helper_fn(&mut self, name: Arc<str>, location: usize, locals_size: usize) {
+	pub fn insert_helper_fn(&mut self, name: &str, location: usize, locals_size: usize) {
+		let name = Arc::from(name);
 		self.helper_fn_locations.insert(Arc::clone(&name), (location, locals_size));
 		self.fn_labels.insert(location, name);
 	}

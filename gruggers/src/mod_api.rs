@@ -6,6 +6,7 @@ use crate::ntstring::NTStr;
 use crate::ast::{Argument, GrugType};
 
 use allocator_api2::alloc::Global;
+use allocator_api2::boxed::Box;
 
 #[derive(Debug)]
 pub struct ModApi {
@@ -174,6 +175,7 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 					entity_name: entity_name.to_string(),
 					on_fn_name: fn_name.to_string(),
 				})?;
+				let argument_name = Box::leak(NTStr::box_from_str_in(argument_name, Global));
 				// "type" string
 				let ty = argument_values["type"].as_str().ok_or(ModApiError::OnFnArgumentMissingType{
 					entity_name: entity_name.to_string(),
@@ -203,12 +205,12 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 					type_name => {
 						let extra_value = Box::leak(NTStr::box_from_str_in(type_name, Global));
 						GrugType::Id {
-							custom_name: Some(extra_value),
+							custom_name: Some(extra_value.as_ntstrptr()),
 						}
 					}
 				};
 				Ok(Argument{
-					name: argument_name.into(),
+					name: argument_name.as_ntstrptr(),
 					ty,
 				})
 			}).collect::<Result<Vec<_>, ModApiError>>()?;
@@ -246,6 +248,7 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 			let argument_name = argument_values["name"].as_str().ok_or(ModApiError::GameFnArgumentMissingName{
 				game_fn_name: fn_name.to_string(),
 			})?;
+			let argument_name = Box::leak(NTStr::box_from_str_in(argument_name, Global));
 			// "type" string
 			let ty = argument_values["type"].as_str().ok_or(ModApiError::GameFnArgumentMissingType{
 				game_fn_name: fn_name.to_string(),
@@ -266,9 +269,11 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 						game_fn_name: fn_name.to_string(),
 						argument_name: argument_name.to_string(),
 					})?;
-					let entity_type = Box::leak(NTStr::box_from_str_in(entity_type, Global));
 					GrugType::Entity {
-						ty: (!entity_type.is_empty()).then_some(entity_type)
+						entity_type: (!entity_type.is_empty()).then(|| {
+							let entity_type = Box::leak(NTStr::box_from_str_in(entity_type, Global));
+							entity_type.as_ntstrptr()
+						})
 					}
 				},
 				"resource" => {
@@ -276,20 +281,20 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 						game_fn_name: fn_name.to_string(),
 						argument_name: argument_name.to_string(),
 					})?;
-					let extension = Box::leak(NTStr::box_from_str_in(extension, Global));
+					let extension = Box::leak(NTStr::box_from_str_in(extension, Global)).as_ntstrptr();
 					GrugType::Resource {
 						extension
 					}
 				}
 				type_name => {
-					let extra_value = Box::leak(NTStr::box_from_str_in(type_name, Global));
+					let extra_value = Box::leak(NTStr::box_from_str_in(type_name, Global)).as_ntstrptr();
 					GrugType::Id {
 						custom_name: Some(extra_value),
 					}
 				}
 			};
 			Ok(Argument{
-				name: argument_name.into(),
+				name: argument_name.as_ntstrptr(),
 				ty,
 			})
 		}).collect::<Result<Vec<_>, ModApiError>>()?;
@@ -309,7 +314,7 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 				game_fn_name: fn_name.to_string(),
 			})?,
 			type_name => {
-				let extra_value = Box::leak(NTStr::box_from_str_in(type_name, Global));
+				let extra_value = Box::leak(NTStr::box_from_str_in(type_name, Global)).as_ntstrptr();
 				GrugType::Id {
 					custom_name: Some(extra_value),
 				}

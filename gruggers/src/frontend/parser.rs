@@ -3,8 +3,6 @@ use crate::ast::{
 	GlobalStatement, GrugType, HelperFunction, Statement, OnFunction, Argument,
 	MemberVariable, Expr, ExprData, LiteralExprData, UnaryOperator,
 	BinaryOperator, 
-
-	c_argument, c_statement, c_expr
 };
 use crate::ntstring::NTStr;
 use crate::arena::Arena;
@@ -327,14 +325,14 @@ impl std::fmt::Display for ParserError {
 
 const MAX_PARSING_DEPTH: usize = 100;
 
-pub(crate) struct AST<'a> {
-	pub(crate) global_statements: Vec<GlobalStatement<'a>, &'a Arena>,
-	pub(crate) called_helper_fns: Vec<&'a NTStr, &'a Arena>, 
-	pub(crate) helper_fn_signatures: Vec<(&'a NTStr, (GrugType<'a>, &'a [c_argument<'a>])), &'a Arena>,
-	pub(crate) on_fn_signatures: Vec<(&'a NTStr, &'a [c_argument<'a>]), &'a Arena>,
+pub(crate) struct AST<'arena> {
+	pub(crate) global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
+	pub(crate) called_helper_fns: Vec<&'arena str, &'arena Arena>, 
+	pub(crate) helper_fn_signatures: Vec<(&'arena str, (GrugType<'arena>, &'arena [Argument<'arena>])), &'arena Arena>,
+	pub(crate) on_fn_signatures: Vec<(&'arena str, &'arena [Argument<'arena>]), &'arena Arena>,
 }
 
-pub(crate) fn parse<'a>(tokens: &'_ [Token], arena: &'a Arena) -> Result<AST<'a>, ParserError> {
+pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>, ParserError> {
 	let mut ast = AST::new_in(arena);
 	let mut seen_helper_fn = false;
 
@@ -391,13 +389,14 @@ pub(crate) fn parse<'a>(tokens: &'_ [Token], arena: &'a Arena) -> Result<AST<'a>
 
 			let on_fn = ast.parse_on_fn(&mut tokens, arena)?;
 
-			if ast.on_fn_signatures.iter().find(|(name, _)| *name == &*on_fn.name).is_some() {
+			let on_fn_name = on_fn.name.to_str();
+			if ast.on_fn_signatures.iter().find(|(name, _)| *name == on_fn_name).is_some() {
 				return Err(ParserError::AlreadyDefinedOnFn{
-					on_fn_name: Arc::from(on_fn.name.as_str()),
+					on_fn_name: Arc::from(on_fn.name.to_str()),
 				});
 			}
 			
-			ast.on_fn_signatures.push((Box::leak(Box::from(&*on_fn.name)), on_fn.arguments));
+			ast.on_fn_signatures.push((on_fn.name.to_str(), on_fn.arguments));
 			ast.global_statements.push(GlobalStatement::OnFunction(on_fn));
 
 			seen_on_fn = true;
@@ -421,13 +420,14 @@ pub(crate) fn parse<'a>(tokens: &'_ [Token], arena: &'a Arena) -> Result<AST<'a>
 			let helper_fn = ast.parse_helper_fn(&mut tokens, arena)?;
 			seen_helper_fn = true;
 
-			if ast.helper_fn_signatures.iter().find(|(name, _)| *name == &*helper_fn.name).is_some() {
+			let helper_fn_name = helper_fn.name.to_str();
+			if ast.helper_fn_signatures.iter().find(|(name, _)| *name == helper_fn_name).is_some() {
 				return Err(ParserError::AlreadyDefinedHelperFunction{
-					helper_fn_name: Arc::from(helper_fn.name.as_str()),
+					helper_fn_name: Arc::from(helper_fn.name.to_str()),
 				});
 			}
 
-			ast.helper_fn_signatures.push((Box::leak(Box::from(&*helper_fn.name)), (helper_fn.return_type, helper_fn.arguments.clone())));
+			ast.helper_fn_signatures.push(((helper_fn.name.to_str()), (helper_fn.return_type, helper_fn.arguments.clone())));
 			ast.global_statements.push(GlobalStatement::HelperFunction(helper_fn));
 
 			newline_allowed = true;
@@ -455,7 +455,7 @@ pub(crate) fn parse<'a>(tokens: &'_ [Token], arena: &'a Arena) -> Result<AST<'a>
 			newline_allowed = true;
 
 			ast.global_statements.push(GlobalStatement::Comment{
-				value: Box::leak(NTStr::box_from_str_in(comment_token.value, arena)),
+				value: Box::leak(NTStr::box_from_str_in(comment_token.value, arena)).as_ntstrptr(),
 			});
 			consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
 		} else {
@@ -479,8 +479,8 @@ pub(crate) fn parse<'a>(tokens: &'_ [Token], arena: &'a Arena) -> Result<AST<'a>
 	Ok(ast)
 }
 
-impl<'arena> AST<'arena> {
-	fn new_in(arena: &'arena Arena) -> Self {
+impl<'a> AST<'a> {
+	fn new_in(arena: &'a Arena) -> Self {
 		Self {
 			global_statements: Vec::new_in(arena),
 			called_helper_fns: Vec::new_in(arena),
@@ -490,11 +490,11 @@ impl<'arena> AST<'arena> {
 	}
 
 	// helper_fn -> "on_" + name + "(" + arguments? + ")" + type + statements 
-	fn parse_helper_fn<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<HelperFunction<'a>, ParserError> {
+	fn parse_helper_fn(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<HelperFunction<'a>, ParserError> {
 		let name_token = tokens.next().unwrap();
 		let fn_name = name_token.value;
 
-		if self.called_helper_fns.iter().find(|val| val.as_str() == fn_name).is_none() {
+		if self.called_helper_fns.iter().find(|val| **val == fn_name).is_none() {
 			return Err(ParserError::HelperFnDefinedBeforeCall {
 				helper_fn_name: fn_name.into(),
 			});
@@ -531,7 +531,7 @@ impl<'arena> AST<'arena> {
 		
 		let body_statements = self.parse_statements(tokens, 0, 1, arena)?;
 
-		if body_statements.iter().all(|&x| matches!(x.into(), Statement::Comment{..} | Statement::EmptyLine)) {
+		if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
 			return Err(ParserError::EmptyFunction{
 				name: fn_name.to_string(),
 				line: name_token.line, 
@@ -540,7 +540,7 @@ impl<'arena> AST<'arena> {
 		}
 
 		Ok(HelperFunction{
-			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)),
+			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
 			arguments: args,
 			body_statements,
 			return_type
@@ -548,7 +548,7 @@ impl<'arena> AST<'arena> {
 	}
 
 	// on_fn -> "on_" + name + "(" + arguments? + ")" + statements 
-	fn parse_on_fn<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<OnFunction<'a>, ParserError> {
+	fn parse_on_fn(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<OnFunction<'a>, ParserError> {
 		let name_token = tokens.next().unwrap();
 		let fn_name = name_token.value;
 
@@ -564,7 +564,7 @@ impl<'arena> AST<'arena> {
 		
 		let body_statements = self.parse_statements(tokens, 0, 1, arena)?;
 
-		if body_statements.iter().all(|&x| matches!(x.into(), Statement::Comment{..} | Statement::EmptyLine)) {
+		if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
 			return Err(ParserError::EmptyFunction{
 				name: fn_name.to_string(),
 				line: name_token.line, 
@@ -573,14 +573,14 @@ impl<'arena> AST<'arena> {
 		}
 
 		Ok(OnFunction{
-			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)),
+			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
 			arguments: args,
 			body_statements,
 		})
 	}
 
 	// arguments -> argument + ("," + argument)*;
-	fn parse_arguments<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<&'a [c_argument<'a>], ParserError> {
+	fn parse_arguments(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<&'a [Argument<'a>], ParserError> {
 		let mut arguments = Vec::new_in(arena);
 		loop {
 			// parse_arg
@@ -604,7 +604,7 @@ impl<'arena> AST<'arena> {
 				_ => (),
 			}
 			arguments.push(Argument{
-				name: Box::leak(NTStr::box_from_str_in(arg_name, arena)),
+				name: Box::leak(NTStr::box_from_str_in(arg_name, arena)).as_ntstrptr(),
 				ty: arg_type,
 			}.into());
 			
@@ -619,7 +619,7 @@ impl<'arena> AST<'arena> {
 
 	// TODO: Get the grammar for statements
 	// This parser consumes a space before consuming the curly braces
-	fn parse_statements<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<&'a mut [c_statement<'a>], ParserError> {
+	fn parse_statements(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<&'a mut [Statement<'a>], ParserError> {
 		assert_parsing_depth(parsing_depth)?;
 		consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
 
@@ -671,7 +671,7 @@ impl<'arena> AST<'arena> {
 	}
 
 	// stmt -> variable_stmt | if_stmt | return_stmt | while_stmt | ;
-	fn parse_statement<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<Statement<'a>, ParserError> {
+	fn parse_statement(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<Statement<'a>, ParserError> {
 		let next_tokens = peek_next_tokens::<2>(tokens)?;
 		match next_tokens[0].ty {
 			TokenType::Word => {
@@ -732,7 +732,7 @@ impl<'arena> AST<'arena> {
 					consume_space(tokens)?;
 					Some(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?)
 				};
-				Ok(Statement::Return{ expr })
+				Ok(Statement::Return{ expr: expr.map(|expr| Box::leak(Box::new_in(expr, arena))) })
 			}
 			TokenType::While => {
 				assert_parsing_depth(parsing_depth)?;
@@ -760,7 +760,7 @@ impl<'arena> AST<'arena> {
 			}
 			TokenType::Comment => {
 				tokens.next();
-				Ok(Statement::Comment(Box::leak(NTStr::box_from_str_in(next_tokens[1].value, arena))))
+				Ok(Statement::Comment(Box::leak(NTStr::box_from_str_in(next_tokens[0].value, arena)).as_ntstrptr()))
 			}
 			got_token => {
 				Err(ParserError::ExpectedStatementToken{
@@ -773,7 +773,7 @@ impl<'arena> AST<'arena> {
 	}
 
 	// local_variable -> word + (":" + type)? + "=" + " " + expr
-	fn parse_local_variable<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, arena: &'a Arena) -> Result<Statement<'a>, ParserError> {
+	fn parse_local_variable(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, arena: &'a Arena) -> Result<Statement<'a>, ParserError> {
 		assert_parsing_depth(parsing_depth)?;
 		let name_token = get_next_token(tokens)?;
 		let local_name = name_token.value; 
@@ -828,14 +828,14 @@ impl<'arena> AST<'arena> {
 		consume_space(tokens)?;
 		let assignment_expr = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
 		Ok(Statement::Variable{
-			name: Box::leak(NTStr::box_from_str_in(local_name, arena)),
-			ty,
+			name: Box::leak(NTStr::box_from_str_in(local_name, arena)).as_ntstrptr(),
+			ty: ty.map(|ty| &*Box::leak(Box::new_in(ty, arena))),
 			assignment_expr,
 		})
 	}
 
 	// global -> word + ":" + type + " =" + expr;
-	fn parse_global_variable<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<MemberVariable<'a>, ParserError> {
+	fn parse_global_variable(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<MemberVariable<'a>, ParserError> {
 		let name_token = get_next_token(tokens)?;
 		let global_name = name_token.value; 
 
@@ -879,7 +879,7 @@ impl<'arena> AST<'arena> {
 		let assignment_expr = self.parse_expression(tokens, 0, 0., arena)?;
 		
 		Ok(MemberVariable{
-			name: Box::leak(NTStr::box_from_str_in(global_name, arena)),
+			name: Box::leak(NTStr::box_from_str_in(global_name, arena)).as_ntstrptr(),
 			ty: global_type,
 			assignment_expr: assignment_expr.into(),
 		})
@@ -892,14 +892,14 @@ impl<'arena> AST<'arena> {
 	// 	self.parse_or(tokens, parsing_depth + 1)
 	// }
 
-	fn parse_expression<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, min_precedence: f32, arena: &'a Arena) -> Result<c_expr<'a>, ParserError> {
+	fn parse_expression(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, min_precedence: f32, arena: &'a Arena) -> Result<Expr<'a>, ParserError> {
 		assert_parsing_depth(parsing_depth)?;
 		let mut current: Expr = {
 			let Token{ty, line, col, value} = get_next_token(tokens)?;
 			match ty {
 				TokenType::OpenParenthesis => {
 					let expr = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
-					let close_paren = &consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?[0];
+					let _ = &consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?[0];
 
 					Expr{
 						data: ExprData::Parenthesized(Box::leak(Box::new_in(expr.into(), arena))),
@@ -920,7 +920,7 @@ impl<'arena> AST<'arena> {
 				}
 				TokenType::String => {
 					Expr{
-						data: ExprData::Literal(LiteralExprData::String(Box::leak(NTStr::box_from_str_in(value, arena)))),
+						data: ExprData::Literal(LiteralExprData::String(Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr())),
 						result_type: None,
 					}
 				}
@@ -929,16 +929,16 @@ impl<'arena> AST<'arena> {
 					// a word token can actually be a function call
 					if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenParenthesis]) {
 						if value.as_str().starts_with("helper_") {
-							if self.called_helper_fns.iter().find(|name| **name == &*value).is_none() {
+							if self.called_helper_fns.iter().find(|name| **name == &*value.as_str()).is_none() {
 								self.called_helper_fns.push(value);
 							}
 						}
 						// immediate ")" | (expr + ("," + " " + expr)*) + ")"
 						
-						if let Ok([close_paren_token]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
+						if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
 							Expr{
 								data: ExprData::Call {
-									name: value,
+									name: value.as_ntstrptr(),
 									args: Vec::new().leak(),
 								},
 								result_type: None,
@@ -953,7 +953,7 @@ impl<'arena> AST<'arena> {
 									let [close_paren_token] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 									break Expr {
 										data: ExprData::Call {
-											name: value,
+											name: value.as_ntstrptr(),
 											args: arguments.leak(),
 										},
 										result_type: None,
@@ -963,7 +963,7 @@ impl<'arena> AST<'arena> {
 						}
 					} else {
 						Expr{
-							data: ExprData::Literal(LiteralExprData::Identifier(value)),
+							data: ExprData::Literal(LiteralExprData::Identifier(value.as_ntstrptr())),
 							result_type: None,
 						}
 					}
@@ -973,7 +973,7 @@ impl<'arena> AST<'arena> {
 						data: ExprData::Literal(
 							LiteralExprData::Number(
 								value.parse::<i64>().unwrap() as f64,
-								Box::leak(NTStr::box_from_str_in(value, arena)),
+								Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
 							)
 						),
 						result_type: None,
@@ -995,7 +995,7 @@ impl<'arena> AST<'arena> {
 						data: ExprData::Literal(
 							LiteralExprData::Number(
 								number,
-								Box::leak(NTStr::box_from_str_in(value, arena)),
+								Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
 							)
 						),
 						result_type: None,
@@ -1118,7 +1118,7 @@ impl<'arena> AST<'arena> {
 		}
 	}
 	
-	fn parse_type<'a>(&mut self, type_token: &'a Token, arena: &'a Arena) -> Result<GrugType<'a>, ParserError> {
+	fn parse_type(&mut self, type_token: &'a Token, arena: &'a Arena) -> Result<GrugType<'a>, ParserError> {
 		if type_token.ty != TokenType::Word {
 			return Err (ParserError::MissingType{
 				line: type_token.line,
@@ -1131,7 +1131,7 @@ impl<'arena> AST<'arena> {
 			"number"   => GrugType::Number,
 			"string"   => GrugType::String,
 			"resource" => GrugType::Resource{
-				extension: Box::leak(NTStr::box_from_str_in("", arena)),
+				extension: Box::leak(NTStr::box_from_str_in("", arena)).as_ntstrptr(),
 			},
 			"id"       => GrugType::Id {custom_name: None},
 			"entity"   => GrugType::Entity {
@@ -1139,7 +1139,7 @@ impl<'arena> AST<'arena> {
 			},
 			type_name => {
 				GrugType::Id {
-					custom_name: Some(Box::leak(NTStr::box_from_str_in(type_name, arena))),
+					custom_name: Some(Box::leak(NTStr::box_from_str_in(type_name, arena)).as_ntstrptr()),
 				}
 			}
 		})
