@@ -133,18 +133,6 @@ impl std::fmt::Display for BinaryOperator {
 
 #[derive(Debug)]
 #[repr(C, u32)]
-pub enum LiteralExprData<'a> {
-	True,
-	False,
-	String(NTStrPtr<'a>),
-	Resource(NTStrPtr<'a>),
-	Entity(NTStrPtr<'a>),
-	Identifier(NTStrPtr<'a>),
-	Number(f64, NTStrPtr<'a>),
-}
-
-#[derive(Debug)]
-#[repr(C, u32)]
 pub enum ExprData<'a> {
 	True,
 	False,
