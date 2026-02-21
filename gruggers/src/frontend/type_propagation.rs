@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::ntstring::NTStr;
 use crate::ast::{
 	GrugType, UnaryOperator, BinaryOperator, GlobalStatement,
-	ExprData, LiteralExprData, HelperFunction, Statement, Expr,
+	ExprData, HelperFunction, Statement, Expr,
 	Argument,
 };
 use crate::nt;
@@ -659,7 +659,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			self.check_global_expr(&variable.assignment_expr, variable.name.to_str())?;
 			let result_ty = self.fill_expr(&*ast.helper_fn_signatures, &mut variable.assignment_expr, arena)?;
 
-			if let ExprData::Literal(LiteralExprData::Identifier(name)) = &variable.assignment_expr.data 
+			if let ExprData::Identifier(name) = &variable.assignment_expr.data 
 				&& name.to_str() == "me" {
 				// grug_assert(!streq(global->assignment_expr.literal.string, "me"), "Global variables can't be assigned 'me'");
 				return Err(TypePropogatorError::GlobalCantBeAssignedMe {
@@ -918,9 +918,13 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	// Check that the global variable's assigned value doesn't contain a call_to a helper function nor identifier
 	fn check_global_expr(&mut self, assignment_expr: &Expr<'_>, name: &str) -> Result<(), TypePropogatorError> {
 		match &assignment_expr.data {
-			ExprData::Literal(LiteralExprData::Entity(_)) => unreachable!(),
-			ExprData::Literal(LiteralExprData::Resource(_)) => unreachable!(),
-			ExprData::Literal(_) => (),
+			ExprData::Entity(_) => unreachable!(),
+			ExprData::Resource(_) => unreachable!(),
+			ExprData::True          |
+			ExprData::False         |
+			ExprData::String(_)     | 
+			ExprData::Identifier(_) |
+			ExprData::Number(_, _)  => (),
 			ExprData::Unary{
 				op: _,
 				expr,
@@ -955,27 +959,23 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		// MUST be None before type propogation
 		assert!(assignment_expr.result_type.is_none());
 		let result_ty = match &mut assignment_expr.data {
-			ExprData::Literal(expr) => {
-				match expr {
-					LiteralExprData::True => GrugType::Bool,
-					LiteralExprData::False => GrugType::Bool,
-					LiteralExprData::String{
-						..
-					} => GrugType::String,
-					LiteralExprData::Resource{..} | LiteralExprData::Entity{..} => {
-						panic!("Cannot encounter resource or entity string when filling expression");
-					}
-					LiteralExprData::Identifier(name) => {
-						let ty = self.get_variable_type(name.to_str()).ok_or_else(|| TypePropogatorError::VariableDoesNotExist{
-							name: Arc::from(name.to_str()),
-						})?;
-						ty
-					},
-					LiteralExprData::Number{
-						..
-					} => GrugType::Number,
-				}
+			ExprData::True => GrugType::Bool,
+			ExprData::False => GrugType::Bool,
+			ExprData::String{
+				..
+			} => GrugType::String,
+			ExprData::Resource{..} | ExprData::Entity{..} => {
+				panic!("Cannot encounter resource or entity string when filling expression");
+			}
+			ExprData::Identifier(name) => {
+				let ty = self.get_variable_type(name.to_str()).ok_or_else(|| TypePropogatorError::VariableDoesNotExist{
+					name: Arc::from(name.to_str()),
+				})?;
+				ty
 			},
+			ExprData::Number{
+				..
+			} => GrugType::Number,
 			ExprData::Unary{
 				op: operator,
 				expr,
@@ -1112,12 +1112,12 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		}
 		for (param, arg) in signature.iter().zip(arguments) {
 			if let GrugType::Resource{extension} = param.ty 
-				&& let ExprData::Literal(LiteralExprData::String(ref mut value)) = arg.data {
+				&& let ExprData::String(ref mut value) = arg.data {
 				let value_ntstr = value.to_ntstr();
 				self.validate_resource_string(value_ntstr.as_str(), extension.to_str())?;
 				*value = self.fix_resource_string(value_ntstr, arena).as_ntstrptr();
 			} else if let GrugType::Entity{entity_type: _} = param.ty 
-				&& let ExprData::Literal(LiteralExprData::String(ref mut value)) = arg.data {
+				&& let ExprData::String(ref mut value) = arg.data {
 				let value_ntstr = value.to_ntstr();
 				self.validate_entity_string(value_ntstr.as_str())?;
 				if let Some(fixed_entity) = self.fix_entity_string(value_ntstr, arena) {*value = fixed_entity.as_ntstrptr()}

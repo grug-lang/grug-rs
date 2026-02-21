@@ -127,11 +127,34 @@ mod ser {
 
 	fn serialize_expr(expr: &Expr) -> JsonValue {
 		match &expr.data {
-			ExprData::Literal(expr) => {
-				object! {
-					"type": "literal",
-					"expr": serializer_literal_expr(expr),
-				}
+			ExprData::True => object! {
+				"type": "boolean",
+				"value": "true",
+			},
+			ExprData::False => object! {
+				"type": "boolean",
+				"value": "false",
+			},
+			ExprData::String(value) => object! { 
+				"type": "string",
+				"value": value.to_str(),
+			},
+			ExprData::Resource(value) => object! { 
+				"type": "resource",
+				"value": value.to_str(),
+			},
+			ExprData::Entity(value) => object! { 
+				"type": "entity",
+				"value": value.to_str(),
+			},
+			ExprData::Identifier(name) => object! { 
+				"type": "identifier",
+				"value": name.to_str(),
+			},
+			ExprData::Number (value, string) => object! { 
+				"type": "number",
+				"value": *value,
+				"string": string.to_str(),
 			},
 			ExprData::Unary{
 				op,
@@ -162,40 +185,6 @@ mod ser {
 			ExprData::Parenthesized(expr) => object! {
 				"type": "parenthesized",
 				"expr": serialize_expr(expr),
-			},
-		}
-	}
-
-	fn serializer_literal_expr(expr: &LiteralExprData) -> JsonValue {
-		match expr {
-			LiteralExprData::True => object! {
-				"type": "boolean",
-				"value": "true",
-			},
-			LiteralExprData::False => object! {
-				"type": "boolean",
-				"value": "false",
-			},
-			LiteralExprData::String(value) => object! { 
-				"type": "string",
-				"value": value.to_str(),
-			},
-			LiteralExprData::Resource(value) => object! { 
-				"type": "resource",
-				"value": value.to_str(),
-			},
-			LiteralExprData::Entity(value) => object! { 
-				"type": "entity",
-				"value": value.to_str(),
-			},
-			LiteralExprData::Identifier(name) => object! { 
-				"type": "identifier",
-				"value": name.to_str(),
-			},
-			LiteralExprData::Number (value, string) => object! { 
-				"type": "number",
-				"value": *value,
-				"string": string.to_str(),
 			},
 		}
 	}
@@ -328,11 +317,8 @@ mod de {
 		GlobalVariableTypeNotString,
 		ExpressionNotObject,
 		ExpressionKindNotString,
-		LiteralExpressionNotObject,
-		LiteralExpressionTypeNotString,
 		LiteralExpressionValueNotString,
 		LiteralExpressionStringNotString,
-		UnknownLiteralType,
 		UnaryExpressionOperatorNotString,
 		BinaryExpressionOperatorNotString,
 		CallExpressionFunctionNameNotString,
@@ -602,39 +588,28 @@ mod de {
 			return Err(JsonDeserializeError::ExpressionKindNotString);
 		};
 		match ty {
-			"literal" => {
-				let JsonValue::Object(expr) = get_object_field(input, "expr", "literal_expression")? else {
-					return Err(JsonDeserializeError::LiteralExpressionNotObject);
+			"string" | "entity" | "resource" => {
+				let Some(value) = get_object_field(input, "value", "literal_expression")?.as_str() else {
+					return Err(JsonDeserializeError::LiteralExpressionValueNotString);
 				};
-				let Some(ty) = get_object_field(expr, "type", "literal_expression")?.as_str() else {
-					return Err(JsonDeserializeError::LiteralExpressionTypeNotString);
+				output.push_str("\"");
+				output.push_str(value);
+				output.push_str("\"");
+				Ok(())
+			}
+			"boolean" | "identifier" => {
+				let Some(value) = get_object_field(input, "value", "literal_expression")?.as_str() else {
+					return Err(JsonDeserializeError::LiteralExpressionValueNotString);
 				};
-				match ty {
-					"string" | "entity" | "resource" => {
-						let Some(value) = get_object_field(expr, "value", "literal_expression")?.as_str() else {
-							return Err(JsonDeserializeError::LiteralExpressionValueNotString);
-						};
-						output.push_str("\"");
-						output.push_str(value);
-						output.push_str("\"");
-					}
-					"boolean" | "identifier" => {
-						let Some(value) = get_object_field(expr, "value", "literal_expression")?.as_str() else {
-							return Err(JsonDeserializeError::LiteralExpressionValueNotString);
-						};
-						output.push_str(value);
-					}
-					"number" => {
-						let Some(string) = get_object_field(expr, "string", "literal_expression")?.as_str() else {
-							return Err(JsonDeserializeError::LiteralExpressionStringNotString);
-						};
-						use std::fmt::Write;
-						write!(output, "{}", string).unwrap();
-					}
-					_ => {
-						return Err(JsonDeserializeError::UnknownLiteralType)
-					}
-				}
+				output.push_str(value);
+				Ok(())
+			}
+			"number" => {
+				let Some(string) = get_object_field(input, "string", "literal_expression")?.as_str() else {
+					return Err(JsonDeserializeError::LiteralExpressionStringNotString);
+				};
+				use std::fmt::Write;
+				write!(output, "{}", string).unwrap();
 				Ok(())
 			}
 			"unary" => {

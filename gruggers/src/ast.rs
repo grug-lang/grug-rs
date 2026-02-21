@@ -11,7 +11,15 @@ pub enum GrugType<'a> {
 	Resource{extension: NTStrPtr<'a>},
 	Entity{entity_type: Option<NTStrPtr<'a>>},
 }
-// const _: () = const {assert!(std::mem::size_of::<GrugType<'static>>() != std::mem::size_of::<Option<GrugType<'static>>>())};
+
+const _: () = const {
+	struct Test {
+		_value: u32,
+		_data: *const u8,
+	}
+
+	assert!(std::mem::size_of::<Test>() == std::mem::size_of::<GrugType>())
+};
 
 impl<'a> std::fmt::Display for GrugType<'a> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
@@ -138,7 +146,13 @@ pub enum LiteralExprData<'a> {
 #[derive(Debug)]
 #[repr(C, u32)]
 pub enum ExprData<'a> {
-	Literal(LiteralExprData<'a>),
+	True,
+	False,
+	String(NTStrPtr<'a>),
+	Resource(NTStrPtr<'a>),
+	Entity(NTStrPtr<'a>),
+	Identifier(NTStrPtr<'a>),
+	Number(f64, NTStrPtr<'a>),
 	Unary {
 		op   : UnaryOperator,
 		expr : &'a mut Expr<'a>,

@@ -1,7 +1,7 @@
 use super::tokenizer::{Token, TokenType};
 use crate::ast::{
 	GlobalStatement, GrugType, HelperFunction, Statement, OnFunction, Argument,
-	MemberVariable, Expr, ExprData, LiteralExprData, UnaryOperator,
+	MemberVariable, Expr, ExprData, UnaryOperator,
 	BinaryOperator, 
 };
 use crate::ntstring::NTStr;
@@ -908,19 +908,19 @@ impl<'a> AST<'a> {
 				}
 				TokenType::True => {
 					Expr{
-						data: ExprData::Literal(LiteralExprData::True),
+						data: ExprData::True,
 						result_type: None,
 					}
 				}
 				TokenType::False => {
 					Expr{
-						data: ExprData::Literal(LiteralExprData::False),
+						data: ExprData::False,
 						result_type: None,
 					}
 				}
 				TokenType::String => {
 					Expr{
-						data: ExprData::Literal(LiteralExprData::String(Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr())),
+						data: ExprData::String(Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr()),
 						result_type: None,
 					}
 				}
@@ -963,18 +963,16 @@ impl<'a> AST<'a> {
 						}
 					} else {
 						Expr{
-							data: ExprData::Literal(LiteralExprData::Identifier(value.as_ntstrptr())),
+							data: ExprData::Identifier(value.as_ntstrptr()),
 							result_type: None,
 						}
 					}
 				}
 				TokenType::Int32 => {
 					Expr{
-						data: ExprData::Literal(
-							LiteralExprData::Number(
-								value.parse::<i64>().unwrap() as f64,
-								Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
-							)
+						data: ExprData::Number(
+							value.parse::<i64>().unwrap() as f64,
+							Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
 						),
 						result_type: None,
 					}
@@ -992,11 +990,9 @@ impl<'a> AST<'a> {
 					}
 
 					Expr{
-						data: ExprData::Literal(
-							LiteralExprData::Number(
-								number,
-								Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
-							)
+						data: ExprData::Number(
+							number,
+							Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
 						),
 						result_type: None,
 					}

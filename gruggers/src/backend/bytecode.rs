@@ -2,7 +2,7 @@ use crate::types::{
 	GrugValue, GrugScriptId, GrugEntity, GameFnPtr,
 };
 use crate::ast::{
-	Expr, ExprData, LiteralExprData, OnFunction, Statement,
+	Expr, ExprData, OnFunction, Statement,
 	BinaryOperator, GrugType, HelperFunction, UnaryOperator
 };
 use crate::ntstring::{NTStrPtr, NTStr};
@@ -239,37 +239,33 @@ impl<'a> Compiler<'a> {
 
 	fn compile_expr(&mut self, state: &GrugState, instructions: &mut Instructions, expr: &'a Expr) {
 		match &expr.data {
-			ExprData::Literal(expr) => {
-				match expr {
-					LiteralExprData::True  => instructions.push_op(Op::LoadTrue ),
-					LiteralExprData::False => instructions.push_op(Op::LoadFalse),
-					LiteralExprData::String(value)   |
-					LiteralExprData::Resource(value) |
-					LiteralExprData::Entity(value)   => {
-						match instructions.strings.get(value.to_ntstr()) {
-							None => {
-								instructions.strings.insert(NTStr::arc_from_str(value.to_ntstr()));
-								// SAFETY: This returned instruction stream is only valid as long as this list of strings is available
-								let string = unsafe{value.detach_lifetime()};
-								instructions.push_op(Op::LoadStr{string})
-							}
-							Some(value) => {
-								let string = unsafe{value.as_ntstrptr().detach_lifetime()};
-								instructions.push_op(Op::LoadStr{string})
-							}
-						}
+			ExprData::True  => instructions.push_op(Op::LoadTrue ),
+			ExprData::False => instructions.push_op(Op::LoadFalse),
+			ExprData::String(value)   |
+			ExprData::Resource(value) |
+			ExprData::Entity(value)   => {
+				match instructions.strings.get(value.to_ntstr()) {
+					None => {
+						instructions.strings.insert(NTStr::arc_from_str(value.to_ntstr()));
+						// SAFETY: This returned instruction stream is only valid as long as this list of strings is available
+						let string = unsafe{value.detach_lifetime()};
+						instructions.push_op(Op::LoadStr{string})
 					}
-					LiteralExprData::Number (value, _) => instructions.push_op(Op::LoadNumber{number: *value}),
-					LiteralExprData::Identifier(name) => {
-						let name = name.to_str();
-						if let Some(loc) = self.get_local_location(name) {
-							instructions.push_op(Op::LoadLocal{index: loc});
-						} else if let Some(loc) = self.get_global_location(name) {
-							instructions.push_op(Op::LoadGlobal{index: loc});
-						} else {
-							unreachable!();
-						}
+					Some(value) => {
+						let string = unsafe{value.as_ntstrptr().detach_lifetime()};
+						instructions.push_op(Op::LoadStr{string})
 					}
+				}
+			}
+			ExprData::Number (value, _) => instructions.push_op(Op::LoadNumber{number: *value}),
+			ExprData::Identifier(name) => {
+				let name = name.to_str();
+				if let Some(loc) = self.get_local_location(name) {
+					instructions.push_op(Op::LoadLocal{index: loc});
+				} else if let Some(loc) = self.get_global_location(name) {
+					instructions.push_op(Op::LoadGlobal{index: loc});
+				} else {
+					unreachable!();
 				}
 			}
 			ExprData::Binary {
