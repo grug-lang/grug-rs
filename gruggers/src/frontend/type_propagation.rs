@@ -23,7 +23,7 @@ pub(super) struct TypePropogator<'a> {
 	global_variables: HashMap<&'a str, GrugType<'a>>,
 	local_variables: Vec<HashMap<&'a str, GrugType<'a>>>,
 	num_while_loops_deep: usize,
-	current_fn_name: Option<Arc<str>>,
+	current_fn_name: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -654,17 +654,17 @@ impl<'a> TypePropogator<'a> {
 			for (param, arg) in mod_api_on_fn.arguments.iter().zip(current_on_fn.arguments.iter()) {
 				if param.name != arg.name.to_ntstr() {
 					return Err(TypePropogatorError::OnFnParameterNameMismatch {
-						function_name: Arc::clone(&current_on_fn.name),
-						got_name: Arc::clone(&arg.name),
-						expected_name: Arc::clone(&param.name),
+						function_name: Arc::from(current_on_fn.name.as_str()),
+						got_name: Arc::from(arg.name.to_str()),
+						expected_name: Arc::from(param.name.as_str()),
 					});
 				}
-				if param.ty != arg.ty {
+				if param.ty != arg.ty.into() {
 					return Err(TypePropogatorError::OnFnParameterTypeMismatch {
-						function_name: Arc::clone(&current_on_fn.name),
-						parameter_name: Arc::clone(&param.name),
-						got_type: arg.ty.clone(),
-						expected_type: param.ty.clone(),
+						function_name: Arc::from(current_on_fn.name.as_str()),
+						parameter_name: Arc::from(param.name.as_str()),
+						got_type: arg.ty.into(),
+						expected_type: param.ty.into(),
 					});
 				}
 			}
@@ -673,23 +673,23 @@ impl<'a> TypePropogator<'a> {
 			debug_assert!(self.num_while_loops_deep == 0);
 			debug_assert!(self.current_fn_name.is_none());
 
-			self.current_fn_name = Some(Arc::clone(&current_on_fn.name));
+			self.current_fn_name = Some(current_on_fn.name.as_str());
 			self.push_scope();
-			for arg in &current_on_fn.arguments {
-				self.add_local_variable(Arc::clone(&arg.name), arg.ty.clone())?;
+			for arg in current_on_fn.arguments {
+				self.add_local_variable(arg.name.to_str(), arg.ty.into())?;
 			}
-			self.fill_statements(&ast.helper_fn_signatures, &mut current_on_fn.body_statements, &GrugType::Void)?;
+			self.fill_statements(&ast.helper_fn_signatures, &mut current_on_fn.body_statements, &GrugType::Void, arena)?;
 			self.pop_scope();
 
-			debug_assert!(self.current_fn_name.as_ref() == Some(&current_on_fn.name));
+			debug_assert!(self.current_fn_name.as_deref() == Some(current_on_fn.name.as_str()));
 			self.current_fn_name = None;
 		}
 		let entity_on_functions = &self.entity.on_fns;
 		for on_fn in on_functions {
-			if !entity_on_functions.iter().any(|(name, _)| **name == *on_fn.name) {
+			if !entity_on_functions.iter().any(|(name, _)| **name == *on_fn.name.as_str()) {
 				return Err(TypePropogatorError::OnFnDoesNotExist {
-					function_name: Arc::clone(&on_fn.name),
-					entity_name: Arc::clone(&entity_name),
+					function_name: Arc::from(on_fn.name.as_str()),
+					entity_name: Arc::from(entity_name),
 				});
 			}
 		}
@@ -703,29 +703,29 @@ impl<'a> TypePropogator<'a> {
 					name,
 					arguments,
 					body_statements,
-					return_ty,
+					return_type,
 				}) => {
 					debug_assert!(self.local_variables.is_empty());
 					debug_assert!(self.num_while_loops_deep == 0);
 					debug_assert!(self.current_fn_name.is_none());
 
-					self.current_fn_name = Some(Arc::clone(name));
+					self.current_fn_name = Some(name);
 					self.push_scope();
-					for arg in arguments {
-						self.add_local_variable(Arc::clone(&arg.name), arg.ty.clone())?;
+					for arg in *arguments {
+						self.add_local_variable(arg.name.to_str(), arg.ty.into())?;
 					}
-					self.fill_statements(&ast.helper_fn_signatures, body_statements, return_ty)?;
+					self.fill_statements(&ast.helper_fn_signatures, body_statements, return_type, arena)?;
 
-					if *return_ty != GrugType::Void && !matches!(body_statements.last(), Some(Statement::ReturnStatement{..})) {
+					if *return_type != GrugType::Void && !matches!(body_statements.last().map(|&x| x.into()), Some(Statement::Return{..})) {
 						return Err(TypePropogatorError::LastStatementNotReturn {
-							function_name: Arc::clone(self.current_fn_name.as_ref().unwrap()),
-							expected_return_type: return_ty.clone(),
+							function_name: Arc::from(self.current_fn_name.unwrap()),
+							expected_return_type: return_type.clone(),
 						});
 					}
 
 					self.pop_scope();
 
-					debug_assert!(self.current_fn_name.as_ref() == Some(name));
+					debug_assert!(self.current_fn_name == Some(name));
 					self.current_fn_name = None;
 				}
 				GlobalStatement::Comment{..} => (),
@@ -737,8 +737,9 @@ impl<'a> TypePropogator<'a> {
 	// out parameter self.current_on_fn_calls_helper_fn
 	fn fill_statements(&mut self, helper_fns: &[(&NTStr, (GrugType, &[c_argument<'a>]))], statements: &mut [c_statement], expected_return_type: &GrugType, arena: &'a Arena) -> Result<(), TypePropogatorError> {
 		self.push_scope();
-		for statement in &mut *statements {
-			match statement {
+		for statement in statements {
+			let mut r_statement = (*statement).into();
+			match &mut r_statement {
 				Statement::Variable{
 					name,
 					ty,
@@ -749,18 +750,18 @@ impl<'a> TypePropogator<'a> {
 					if let Some(ty) = ty {
 						if self.get_variable_type(name).is_some() {
 							return Err(TypePropogatorError::VariableAlreadyExists{
-								variable_name: Arc::clone(name),
+								variable_name: Arc::from(name.as_str()),
 							});
 						}
 						if !(*ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && *ty != result_ty {
 						// if *ty == (GrugType::Id{custom_name: None}) || GrugType::match_non_exact(ty, &result_ty) {
 							return Err(TypePropogatorError::VariableTypeMismatch {
-								name: Arc::clone(name),
-								got_type: result_ty.clone(),
-								expected_type: ty.clone(),
+								name: Arc::from(name.as_str()),
+								got_type: result_ty,
+								expected_type: *ty,
 							});
 						} else {
-							self.add_local_variable(Arc::clone(name), ty.clone())?
+							self.add_local_variable(name.as_str(), ty.clone())?
 						}
 					} else {
 						let ty = if let Some(ty) = self.get_global_variable_type(name) {
@@ -772,30 +773,28 @@ impl<'a> TypePropogator<'a> {
 							ty
 						} else {
 							return Err(TypePropogatorError::CantAssignBecauseVariableDoesntExist {
-								name: Arc::clone(name),
+								name: Arc::from(name.as_str()),
 							});
 						};
 
 						if !(ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && ty != result_ty {
 						// if result_ty != var.ty {
 							return Err(TypePropogatorError::VariableTypeMismatch {
-								name: Arc::clone(name),
+								name: Arc::from(name.as_str()),
 								got_type: result_ty.clone(),
 								expected_type: ty.clone(),
 							});
 						}
 					}
 				}
-				Statement::CallStatement {
-					expr
-				} => {
+				Statement::Call(expr) => {
 					self.fill_expr(helper_fns, expr, arena)?;
 				}
-				Statement::IfStatement {
+				Statement::If {
 					condition,
 					is_chained: _,
-					if_statements,
-					else_statements,
+					if_block,
+					else_block,
 				} => {
 					let cond_type = self.fill_expr(helper_fns, condition, arena)?;
 					if cond_type != GrugType::Bool {
@@ -803,16 +802,16 @@ impl<'a> TypePropogator<'a> {
 							got_type: cond_type
 						});
 					}
-					self.fill_statements(helper_fns, if_statements, expected_return_type)?;
-					if !else_statements.is_empty() {
-						self.fill_statements(helper_fns, else_statements, expected_return_type)?;
+					self.fill_statements(helper_fns, if_block, expected_return_type, arena)?;
+					if !else_block.is_empty() {
+						self.fill_statements(helper_fns, else_block, expected_return_type, arena)?;
 					}
 					// TODO: Maybe this should be looked at again
 					// [https://github.com/grug-lang/grug/issues/116]
 				}
-				Statement::WhileStatement {
+				Statement::While {
 					condition,
-					statements,
+					block,
 				} => {
 					let cond_type = self.fill_expr(helper_fns, condition, arena)?;
 					if cond_type != GrugType::Bool {
@@ -821,11 +820,11 @@ impl<'a> TypePropogator<'a> {
 						});
 					}
 					self.num_while_loops_deep += 1;
-					self.fill_statements(helper_fns, statements, expected_return_type)?;
+					self.fill_statements(helper_fns, block, expected_return_type, arena)?;
 					self.num_while_loops_deep -= 1;
 
 				}
-				Statement::ReturnStatement {
+				Statement::Return {
 					expr,
 				} => {
 					// result_ty MUST be filled
@@ -834,24 +833,25 @@ impl<'a> TypePropogator<'a> {
 						.unwrap_or(Ok(GrugType::Void))?;
 					if *expected_return_type != (GrugType::Id{custom_name: None}) && *expected_return_type != return_ty {
 						return Err(TypePropogatorError::MismatchedReturnType{
-							function_name: Arc::clone(self.current_fn_name.as_ref().unwrap()),
+							function_name: Arc::from(self.current_fn_name.unwrap()),
 							expected_type: expected_return_type.clone(),
 							got_type: return_ty.clone(),
 						})
 					}
 				}
-				Statement::BreakStatement => {
+				Statement::Break => {
 					if self.num_while_loops_deep == 0 {
 						return Err(TypePropogatorError::BreakStatementOutsideWhileLoop);
 					}
 				}
-				Statement::ContinueStatement => {
+				Statement::Continue => {
 					if self.num_while_loops_deep == 0 {
 						return Err(TypePropogatorError::ContinueStatementOutsideWhileLoop);
 					}
 				}
 				_ => (),
 			}
+			*statement = r_statement.into();
 		}
 		self.pop_scope();
 		Ok(())
@@ -859,21 +859,21 @@ impl<'a> TypePropogator<'a> {
 
 	// Check that the global variable's assigned value doesn't contain a call_to a helper function nor identifier
 	fn check_global_expr(&mut self, assignment_expr: &Expr<'_>, name: &str) -> Result<(), TypePropogatorError> {
-		match assignment_expr.ty {
+		match assignment_expr.data {
 			ExprData::Literal(LiteralExprData::Entity(_)) => unreachable!(),
 			ExprData::Literal(LiteralExprData::Resource(_)) => unreachable!(),
 			ExprData::Literal(_) => (),
 			ExprData::Unary{
 				op: _,
 				expr,
-			} => self.check_global_expr(expr.into(), name)?,
+			} => self.check_global_expr(&(*expr).into(), name)?,
 			ExprData::Binary{
 				left,
 				right,
-				operator: _,
+				op: _,
 			} => {
-				self.check_global_expr(&left.into(), name)?;
-				self.check_global_expr(&right.into(), name)?;
+				self.check_global_expr(&(*left).into(), name)?;
+				self.check_global_expr(&(*right).into(), name)?;
 			},
 			ExprData::Call{
 				name: fn_name,
@@ -881,26 +881,23 @@ impl<'a> TypePropogator<'a> {
 			} => {
 				if fn_name.starts_with("helper_") {
 					Err(TypePropogatorError::GlobalCantCallHelperFn{
-						global_name: Arc::clone(name),
+						global_name: Arc::from(name),
 					})?;
 				}
-				args.iter().map(|argument| self.check_global_expr(argument.into(), name))
+				args.iter().map(|argument| self.check_global_expr(&(*argument).into(), name))
 					.collect::<Result<Vec<_>, _>>()?;
 			},
-			ExprData::ParenthesizedExpr{
-				expr,
-				..
-			} => self.check_global_expr(expr.into(), name)?,
+			ExprData::Parenthesized(expr) => self.check_global_expr(&(*expr).into(), name)?,
 		}
 		Ok(())
 	}
 
 	// out parameter self.current_on_fn_calls_helper_fn
 	fn fill_expr(&mut self, helper_fns: &[(&NTStr, (GrugType, &[c_argument<'a>]))], assignment_expr: &mut c_expr<'a>, arena: &'a Arena) -> Result<GrugType, TypePropogatorError> {
-		let new_expr = assignment_expr.into();
+		let new_expr: Expr = (*assignment_expr).into();
 		// MUST be None before type propogation
-		assert!(assignment_expr.result_ty.is_none());
-		let result_ty = match assignment_expr.data {
+		assert!(new_expr.result_type.is_none());
+		let result_ty = match &mut new_expr.data {
 			ExprData::Literal(expr) => {
 				match expr {
 					LiteralExprData::True => GrugType::Bool,
@@ -908,21 +905,10 @@ impl<'a> TypePropogator<'a> {
 					LiteralExprData::String{
 						..
 					} => GrugType::String,
-					LiteralExprData::Resource{
-						..
-					} => {
-						// TODO: Figure out why this is
-						panic!("This is supposed to be unreachable but i don't remember why");
+					LiteralExprData::Resource{..} | LiteralExprData::Entity{..} => {
+						panic!("Cannot encounter resource or entity string when filling expression");
 					}
-					LiteralExprData::Entity{
-						..
-					} => {
-						// TODO: Figure out why this is
-						panic!("This is supposed to be unreachable but i don't remember why");
-					}
-					LiteralExprData::Identifier{
-						name
-					} => {
+					LiteralExprData::Identifier(name) => {
 						let ty = self.get_variable_type(&*name).ok_or_else(|| TypePropogatorError::VariableDoesNotExist{
 							name: Arc::from(name.as_str()),
 						})?;
@@ -934,14 +920,18 @@ impl<'a> TypePropogator<'a> {
 				}
 			},
 			ExprData::Unary{
-				operator,
+				op: operator,
 				expr,
 			} => {
-				if let ExprData::Unary{op: next_operator, ..} = expr.into().data && next_operator == operator {
-					return Err(TypePropogatorError::AdjacentUnaryOperators{
-						operator
-					});
-				}
+				*expr = {
+					let r_expr = (**expr).into();
+					if let Expr{data: ExprData::Unary{op: next_operator, ..}, ..} = r_expr && next_operator == operator {
+						return Err(TypePropogatorError::AdjacentUnaryOperators{
+							operator
+						});
+					}
+					r_expr.into()
+				};
 				let result_ty = self.fill_expr(helper_fns, expr, arena)?;
 				match (operator, &result_ty) {
 					(UnaryOperator::Not, GrugType::Bool) => (),
@@ -1023,7 +1013,7 @@ impl<'a> TypePropogator<'a> {
 					},
 				}
 			},
-			ExprData::CallExpr{
+			ExprData::Call{
 				name: fn_name,
 				args,
 			} => {
@@ -1045,11 +1035,7 @@ impl<'a> TypePropogator<'a> {
 					});
 				}
 			},
-			ExprData::ParenthesizedExpr{
-				ref mut expr,
-				line: _,
-				col: _,
-			} => {
+			ExprData::Parenthesized(expr) => {
 				self.fill_expr(helper_fns, expr, arena)?
 			},
 		};

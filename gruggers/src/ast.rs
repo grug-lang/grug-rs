@@ -2,7 +2,7 @@ pub mod capi {
 	#![allow(non_camel_case_types)]
 	use crate::ntstring::NTStrPtr;
 
-	use std::mem::MaybeUninit;
+	use std::mem::{MaybeUninit, ManuallyDrop};
 
 	#[repr(transparent)]
 	#[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,7 +28,7 @@ pub mod capi {
 	}
 
 	#[repr(transparent)]
-	#[derive(Clone, Copy, PartialEq, Eq)]
+	#[derive(PartialEq, Eq)]
 	pub struct c_unary_operator(pub u32);
 	impl c_unary_operator {
 		pub const NOT   : Self = Self(0);
@@ -36,7 +36,7 @@ pub mod capi {
 	}
 
 	#[repr(transparent)]
-	#[derive(Clone, Copy, PartialEq, Eq)]
+	#[derive(PartialEq, Eq)]
 	pub struct c_binary_operator(pub u32);
 	impl c_binary_operator {
 		pub const OR            : Self = Self(0 );
@@ -55,7 +55,7 @@ pub mod capi {
 	}
 
 	#[repr(transparent)]
-	#[derive(Clone, Copy, PartialEq, Eq)]
+	#[derive(PartialEq, Eq)]
 	pub struct c_expr_type(pub u32);
 	impl c_expr_type {
 		pub const TRUE          : Self = Self(0 );
@@ -72,13 +72,11 @@ pub mod capi {
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_unary_op_data<'a> {
 		pub op   : c_unary_operator,
 		pub expr : &'a c_expr<'a>,
 	}
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_binary_op_data<'a> {
 		pub op   : c_binary_operator,
 		pub left : &'a c_expr<'a>,
@@ -86,37 +84,33 @@ pub mod capi {
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_call_data<'a> {
 		pub name       : NTStrPtr<'a>,
-		pub args       : *const c_expr<'a>,
+		pub args       : *mut c_expr<'a>,
 		pub args_count : usize,
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_number_data<'a> {
 		pub value: f64,
 		pub string: NTStrPtr<'a>,
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub union c_expr_data<'a> {
 		pub bool          : (),
 		pub string        : NTStrPtr<'a>,
 		pub resource      : NTStrPtr<'a>,
 		pub entity        : NTStrPtr<'a>,
 		pub identifier    : NTStrPtr<'a>,
-		pub number        : c_number_data<'a>,
-		pub unary         : c_unary_op_data<'a>,
-		pub binary        : c_binary_op_data<'a>,
-		pub call          : c_call_data<'a>,
+		pub number        : ManuallyDrop<c_number_data<'a>>,
+		pub unary         : ManuallyDrop<c_unary_op_data<'a>>,
+		pub binary        : ManuallyDrop<c_binary_op_data<'a>>,
+		pub call          : ManuallyDrop<c_call_data<'a>>,
 		pub parenthesized : &'a c_expr<'a>,
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_expr<'a> {
 		pub result_filled : u8, /* bool */
 		pub result_type   : MaybeUninit::<c_grug_type<'a>>,
@@ -125,7 +119,6 @@ pub mod capi {
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_member_variable<'a> {
 		name            : NTStrPtr<'a>,
 		ty              : c_grug_type<'a>,
@@ -133,7 +126,7 @@ pub mod capi {
 	}
 
 	#[repr(transparent)]
-	#[derive(Clone, Copy, PartialEq, Eq)]
+	#[derive(PartialEq, Eq)]
 	pub struct c_statement_type(pub u32);
 	impl c_statement_type {
 		pub const VARIABLE  : Self = Self(0);
@@ -148,7 +141,6 @@ pub mod capi {
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_local_variable_data<'a> {
 		pub name            : NTStrPtr<'a>,
 		pub has_type        : u8, /* bool */
@@ -157,45 +149,40 @@ pub mod capi {
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_if_stmt_data<'a> {
 		pub condition      : c_expr<'a>,
 		pub is_chained     : u8 /* bool */,
-		pub if_block       : *const c_statement<'a>,
+		pub if_block       : *mut c_statement<'a>,
 		pub if_block_len   : usize,
-		pub else_block     : *const c_statement<'a>,
+		pub else_block     : *mut c_statement<'a>,
 		pub else_block_len : usize,
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_while_stmt_data<'a> {
 		pub condition : c_expr<'a>,
-		pub block     : *const c_statement<'a>,
+		pub block     : *mut c_statement<'a>,
 		pub block_len : usize,
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_return_stmt_data<'a> {
 		pub has_value : u8 /* bool */,
 		pub expr      : MaybeUninit<c_expr<'a>>,
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub union c_statement_data<'a> {
-		pub variable    : c_local_variable_data<'a>,
-		pub call        : c_expr<'a>,
-		pub if_stmt     : c_if_stmt_data<'a>,
-		pub while_stmt  : c_while_stmt_data<'a>,
-		pub return_stmt : c_return_stmt_data<'a>,
+		pub variable    : ManuallyDrop<c_local_variable_data<'a>>,
+		pub call        : ManuallyDrop<c_expr<'a>>,
+		pub if_stmt     : ManuallyDrop<c_if_stmt_data<'a>>,
+		pub while_stmt  : ManuallyDrop<c_while_stmt_data<'a>>,
+		pub return_stmt : ManuallyDrop<c_return_stmt_data<'a>>,
 		pub comment     : NTStrPtr<'a>,
 		pub empty       : (),
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_statement<'a> {
 		pub ty  : c_statement_type,
 		pub data: c_statement_data<'a>,
@@ -209,36 +196,33 @@ pub mod capi {
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_on_function<'a> {
 		pub name                : NTStrPtr<'a>,
 		pub arguments           : *const c_argument<'a>,
 		pub arguments_len       : usize,
-		pub body_statements     : *const c_statement<'a>,
+		pub body_statements     : *mut c_statement<'a>,
 		pub body_statements_len : usize,
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_helper_function<'a> {
 		pub name                : NTStrPtr<'a>,
 		pub return_type         : c_grug_type<'a>,
-		pub arguments           : *const c_argument<'a>,
+		pub arguments           : *mut c_argument<'a>,
 		pub arguments_len       : usize,
-		pub body_statements     : *const c_statement<'a>,
+		pub body_statements     : *mut c_statement<'a>,
 		pub body_statements_len : usize,
 	}
 
 	#[repr(C)]
-	#[derive(Clone, Copy)]
 	pub struct c_grug_ast<'a> {
-		pub members                : *const c_member_variable<'a>,
+		pub members                : *mut c_member_variable<'a>,
 		pub members_count          : usize,
 
-		pub on_functions           : *const c_on_function<'a>,
+		pub on_functions           : *mut c_on_function<'a>,
 		pub on_functions_count     : usize,
 
-		pub helper_functions       : *const c_helper_function<'a>,
+		pub helper_functions       : *mut c_helper_function<'a>,
 		pub helper_functions_count : usize,
 	}
 }
@@ -249,8 +233,19 @@ pub mod rust_api {
 	use crate::ntstring::{NTStr, NTStrPtr};
 
 	use std::mem::MaybeUninit;
+	use std::ptr::NonNull;
+	use std::marker::PhantomData;
 
-	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+	/// Like Box<T> except it does not own the underlying allocation, so it is
+	/// safe to move into and out of it.
+	pub struct OwnRef<'a, T: ?Sized> {
+		inner: NonNull<T>,
+		marker: PhantomData<&'a ()>,
+	}
+
+	impl<'a, T: ?Sized> OwnRef 
+
+	#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 	pub enum GrugType<'a> {
 		Void,
 		Bool,
@@ -350,7 +345,7 @@ pub mod rust_api {
 		}
 	}
 
-	#[derive(Debug, Clone, Copy)]
+	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 	pub enum UnaryOperator {
 		Not = 0,
 		Minus, 
@@ -384,7 +379,7 @@ pub mod rust_api {
 		}
 	}
 
-	#[derive(Debug, Clone, Copy)]
+	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 	pub enum BinaryOperator {
 		Or = 0,
 		And, 
@@ -473,26 +468,26 @@ pub mod rust_api {
 		Number(f64, &'a NTStr),
 	}
 
-	#[derive(Debug, Clone, Copy)]
+	#[derive(Debug)]
 	pub enum ExprData<'a> {
 		Literal(LiteralExprData<'a>),
 		Unary {
 			op   : UnaryOperator,
-			expr : &'a c_expr<'a>,
+			expr : &'a mut c_expr<'a>,
 		},
 		Binary {
 			op    : BinaryOperator,
-			left  : &'a c_expr<'a>,
-			right : &'a c_expr<'a>,
+			left  : &'a mut c_expr<'a>,
+			right : &'a mut c_expr<'a>,
 		},
 		Call {
 			name : &'a NTStr,
-			args : &'a [c_expr<'a>],
+			args : &'a mut [c_expr<'a>],
 		},
-		Parenthesized(&'a c_expr<'a>),
+		Parenthesized(&'a mut c_expr<'a>),
 	}
 
-	#[derive(Debug, Clone, Copy)]
+	#[derive(Debug)]
 	pub struct Expr<'a> {
 		pub result_type : Option<GrugType<'a>>,
 		pub data        : ExprData<'a>,
@@ -521,7 +516,7 @@ pub mod rust_api {
 					},
 					c_expr_type::CALL          => ExprData::Call{
 						name : other.expr_data.call.name.to_ntstr(), 
-						args : std::slice::from_raw_parts(other.expr_data.call.args, other.expr_data.call.args_count),
+						args : std::slice::from_raw_parts_mut(other.expr_data.call.args, other.expr_data.call.args_count),
 					},
 					c_expr_type::PARENTHESIZED => ExprData::Parenthesized(other.expr_data.parenthesized),
 					_                        => panic!("unexpected expression variant: {}", other.expr_type.0),
@@ -590,26 +585,26 @@ pub mod rust_api {
 		}
 	}
 
-	#[derive(Debug, Clone, Copy)]
+	#[derive(Debug)]
 	pub enum Statement<'a> {
 		Variable {
 			name            : &'a NTStr,
 			ty              : Option<GrugType<'a>>,
-			assignment_expr : Expr<'a>,
+			assignment_expr : c_expr <'a>,
 		},
-		Call(Expr<'a>),
+		Call(c_expr<'a>),
 		If {
-			condition: Expr<'a>,
+			condition: c_expr<'a>,
 			is_chained: bool,
-			if_block: &'a [c_statement<'a>],
-			else_block: &'a [c_statement<'a>],
+			if_block: &'a mut [c_statement<'a>],
+			else_block: &'a mut [c_statement<'a>],
 		},
 		While {
-			condition: Expr<'a>,
-			block: &'a [c_statement<'a>],
+			condition: c_expr<'a>,
+			block: &'a mut [c_statement<'a>],
 		},
 		Return {
-			expr: Option<Expr<'a>>,
+			expr: Option<c_expr<'a>>,
 		},
 		Comment(&'a NTStr),
 		Break,
@@ -626,32 +621,32 @@ pub mod rust_api {
 						Statement::Variable {
 							name: name.to_ntstr(),
 							ty: (has_type != 0).then(|| actual_type.assume_init().into()),
-							assignment_expr: assignment_expr.into(),
+							assignment_expr,
 						}
 					}
 					c_statement_type::CALL      => {
-						Statement::Call(other.data.call.into())
+						Statement::Call(other.data.call)
 					}
 					c_statement_type::IF        => {
 						let c_if_stmt_data{condition, is_chained, if_block, if_block_len, else_block, else_block_len} = other.data.if_stmt;
 						Statement::If {
-							condition: condition.into(),
+							condition,
 							is_chained: is_chained != 0,
-							if_block: std::slice::from_raw_parts(if_block, if_block_len),
-							else_block: std::slice::from_raw_parts(else_block, else_block_len),
+							if_block: std::slice::from_raw_parts_mut(if_block, if_block_len),
+							else_block: std::slice::from_raw_parts_mut(else_block, else_block_len),
 						}
 					}
 					c_statement_type::WHILE     => {
 						let c_while_stmt_data{condition, block, block_len} = other.data.while_stmt;
 						Statement::While {
-							condition: condition.into(),
-							block: std::slice::from_raw_parts(block, block_len),
+							condition,
+							block: std::slice::from_raw_parts_mut(block, block_len),
 						}
 					}
 					c_statement_type::RETURN    => {
 						let c_return_stmt_data{has_value, expr} = other.data.return_stmt;
 						Statement::Return {
-							expr: (has_value != 0).then(|| expr.assume_init().into()),
+							expr: (has_value != 0).then(|| expr.assume_init()),
 						}
 					}
 					c_statement_type::COMMENT   => {
@@ -678,7 +673,7 @@ pub mod rust_api {
 								name: name.as_ntstrptr(),
 								has_type,
 								actual_type,
-								assignment_expr: assignment_expr.into(),
+								assignment_expr,
 							}
 						}
 					)
@@ -687,7 +682,7 @@ pub mod rust_api {
 					(
 						c_statement_type::CALL,
 						c_statement_data {
-							call: expr.into(),
+							call: expr,
 						}
 					)
 				}
@@ -696,7 +691,7 @@ pub mod rust_api {
 						c_statement_type::IF,
 						c_statement_data {
 							if_stmt: c_if_stmt_data {
-								condition: condition.into(),
+								condition,
 								is_chained: is_chained as u8,
 								if_block: if_block.as_ptr(),
 								if_block_len: if_block.len(),
@@ -711,7 +706,7 @@ pub mod rust_api {
 						c_statement_type::WHILE,
 						c_statement_data {
 							while_stmt: c_while_stmt_data {
-								condition: condition.into(),
+								condition,
 								block: block.as_ptr(),
 								block_len: block.len(),
 							}
@@ -725,7 +720,7 @@ pub mod rust_api {
 						c_statement_data {
 							return_stmt: c_return_stmt_data {
 								has_value,
-								expr: expr.into()
+								expr
 							}
 						}
 					)
@@ -770,7 +765,7 @@ pub mod rust_api {
 		}
 	}
 
-	#[derive(Debug, Clone, Copy, PartialEq)]
+	#[derive(Debug, PartialEq)]
 	pub struct Argument<'a> {
 		pub name: &'a NTStr,
 		pub ty  : GrugType<'a>,
@@ -825,7 +820,7 @@ pub mod rust_api {
 	pub struct OnFunction<'a> {
 		pub name: &'a NTStr,
 		pub arguments: &'a [c_argument<'a>],
-		pub body_statements: &'a [c_statement<'a>],
+		pub body_statements: &'a mut [c_statement<'a>],
 	}
 
 	impl<'a> From<c_on_function<'a>> for OnFunction<'a> {
@@ -834,7 +829,7 @@ pub mod rust_api {
 				Self {
 					name: other.name.to_ntstr(),
 					arguments: std::slice::from_raw_parts(other.arguments, other.arguments_len),
-					body_statements: std::slice::from_raw_parts(other.body_statements, other.body_statements_len),
+					body_statements: std::slice::from_raw_parts_mut(other.body_statements, other.body_statements_len),
 				}
 			}
 		}
@@ -853,10 +848,10 @@ pub mod rust_api {
 	}
 
 	pub struct HelperFunction<'a> {
-		pub name: &'a NTStr,
+		pub name: &'a mut NTStr,
 		pub return_type: GrugType<'a>,
 		pub arguments: &'a [c_argument<'a>],
-		pub body_statements: &'a [c_statement<'a>],
+		pub body_statements: &'a mut [c_statement<'a>],
 	}
 
 	impl<'a> From<c_helper_function<'a>> for HelperFunction<'a> {
@@ -866,7 +861,7 @@ pub mod rust_api {
 					name: other.name.to_ntstr(),
 					return_type: other.return_type.into(),
 					arguments: std::slice::from_raw_parts(other.arguments, other.arguments_len),
-					body_statements: std::slice::from_raw_parts(other.body_statements, other.body_statements_len),
+					body_statements: std::slice::from_raw_parts_mut(other.body_statements, other.body_statements_len),
 				}
 			}
 		}
@@ -885,20 +880,20 @@ pub mod rust_api {
 		}
 	}
 
-	#[derive(Debug, Clone, Copy)]
+	#[derive(Debug)]
 	pub struct GrugAst<'a> {
-		pub members: &'a [c_member_variable<'a>],
-		pub on_functions: &'a [Option<&'a c_on_function<'a>>],
-		pub helper_functions: &'a [c_helper_function<'a>],
+		pub members: &'a mut [c_member_variable<'a>],
+		pub on_functions: &'a mut [Option<&'a mut c_on_function<'a>>],
+		pub helper_functions: &'a mut [c_helper_function<'a>],
 	}
 
 	impl<'a> From<c_grug_ast<'a>> for GrugAst<'a> {
 		fn from(other: c_grug_ast<'a>) -> Self {
 			unsafe {
 				Self {
-					members: std::slice::from_raw_parts(other.members, other.members_count),
-					on_functions: std::slice::from_raw_parts(other.on_functions, other.on_functions_count),
-					helper_functions: std::slice::from_raw_parts(other.helper_functions, other.helper_functions_count),
+					members: std::slice::from_raw_parts_mut(other.members, other.members_count),
+					on_functions: std::slice::from_raw_parts_mut(other.on_functions, other.on_functions_count),
+					helper_functions: std::slice::from_raw_parts_mut(other.helper_functions, other.helper_functions_count),
 				}
 			}
 		}

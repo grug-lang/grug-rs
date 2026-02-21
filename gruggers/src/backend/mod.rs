@@ -1,14 +1,15 @@
-use crate::types::{GlobalVariable, OnFunction, HelperFunction, GrugScriptId, GrugEntity, GrugValue};
+use crate::types::{GrugScriptId, GrugEntity, GrugValue};
+use crate::ast::GrugAst;
 use crate::state::GrugState;
 
 use std::ptr::NonNull;
 
-#[derive(Debug)]
-pub struct GrugAst {
-	pub(crate) global_variables: Vec<GlobalVariable>,
-	pub(crate) on_functions: Vec<Option<OnFunction>>,
-	pub(crate) helper_functions: Vec<HelperFunction>,
-}
+// #[derive(Debug)]
+// pub struct GrugAst {
+// 	pub(crate) global_variables: Vec<GlobalVariable>,
+// 	pub(crate) on_functions: Vec<Option<OnFunction>>,
+// 	pub(crate) helper_functions: Vec<HelperFunction>,
+// }
 
 pub mod interpreter;
 pub use interpreter::Interpreter;
@@ -27,7 +28,7 @@ pub unsafe trait Backend {
 	///
 	/// The entity data of all entities created from the old script should be
 	/// regenerated
-	fn insert_file(&self, state: &GrugState, id: GrugScriptId, file: GrugAst);
+	fn insert_file(&self, state: &GrugState, id: GrugScriptId, file: GrugAst<'_>);
 	/// Initialize the member data of the newly created entity. When this
 	/// function is called, the member field of `entity` points to garbage and
 	/// must not be deinitialized. The GrugScriptId to be used is obtained from
@@ -92,7 +93,7 @@ pub struct ErasedBackend {
 #[repr(C)]
 pub struct BackendVTable {
 	/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
-	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, state: &GrugState, id: GrugScriptId, file: GrugAst),
+	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, state: &GrugState, id: GrugScriptId, file: GrugAst<'_>),
 	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
 	pub(crate) clear_entities      : extern "C" fn(data: NonNull<()>),
 	pub(crate) destroy_entity_data : extern "C" fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
@@ -104,7 +105,7 @@ pub struct BackendVTable {
 }
 
 impl ErasedBackend {
-	pub fn insert_file(&self, state: &GrugState, id: GrugScriptId, file: GrugAst) {
+	pub fn insert_file(&self, state: &GrugState, id: GrugScriptId, file: GrugAst<'_>) {
 		unsafe{(self.vtable.insert_file)(self.data, state, id, file)}
 	}
 	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
@@ -132,7 +133,7 @@ impl Drop for ErasedBackend {
 
 impl<T: Backend> From<T> for ErasedBackend {
 	fn from(other: T) -> Self {
-		unsafe fn insert_file<T: Backend>(data: NonNull<()>, state: &GrugState, id: GrugScriptId, file: GrugAst) {
+		unsafe fn insert_file<T: Backend>(data: NonNull<()>, state: &GrugState, id: GrugScriptId, file: GrugAst<'_>) {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
 				state, 

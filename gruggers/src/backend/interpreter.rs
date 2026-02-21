@@ -1,9 +1,11 @@
-use crate::types::{GrugValue, Argument, Statement, Expr, ExprType, LiteralExpr, UnaryOperator, GrugType, BinaryOperator, Variable, GrugScriptId, GrugEntity};
+use crate::types::{GrugValue, GrugEntity, GrugScriptId};
+use crate::types::{UnaryOperator, BinaryOperator};
 use super::{GrugAst, Backend};
 use crate::error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
 use crate::state::GrugState;
 use crate::cachemap::CacheMap;
 use crate::xar::ErasedXar;
+use crate::ntstring::NTStr;
 
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -12,7 +14,162 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use std::alloc::Layout;
 
-pub struct GrugEntityData {
+#[derive(Debug)]
+pub enum LiteralExpr {
+	TrueExpr,
+	FalseExpr,
+	StringExpr{
+		value: Arc<NTStr>,
+	},
+	ResourceExpr{
+		value: Arc<NTStr>,
+	},
+	EntityExpr{
+		value: Arc<NTStr>,
+	},
+	IdentifierExpr{
+		name: Arc<str>
+	},
+	NumberExpr {
+		value: f64,
+		string: Arc<str>,
+	}
+}
+
+#[derive(Debug)]
+pub enum ExprType {
+	LiteralExpr{
+		expr: LiteralExpr,
+		line: usize,
+		col: usize,
+	},
+	UnaryExpr{
+		operator: UnaryOperator,
+		expr: Box<Expr>,
+	},
+	BinaryExpr{
+		operands: Box<(Expr, Expr)>,
+		operator: BinaryOperator,
+	},
+	CallExpr{
+		function_name: Arc<str>,
+		arguments: Vec<Expr>,
+		line: usize,
+		col: usize,
+	},
+	ParenthesizedExpr{
+		expr: Box<Expr>,
+		line: usize,
+		col: usize,
+	},
+}
+
+#[derive(Debug)]
+pub struct Expr {
+	pub(super) ty: ExprType,
+	// Can be None before Type checking but MUST be Some after
+	pub(super) result_ty: Option<GrugType>,
+}
+
+#[derive(Debug)]
+pub enum GlobalStatement {
+	Variable(GlobalVariable),
+	OnFunction(OnFunction),
+	HelperFunction(HelperFunction),
+	Comment{
+		value: Arc<str>,
+	},
+	EmptyLine,
+}
+
+#[derive(Debug)]
+pub struct OnFunction {
+	pub name: Arc<str>,
+	pub arguments: Vec<Argument>,
+	pub body_statements: Vec<Statement>,
+}
+
+#[derive(Debug)]
+pub struct HelperFunction {
+	pub name: Arc<str>,
+	pub arguments: Vec<Argument>,
+	pub body_statements: Vec<Statement>,
+	pub return_ty: GrugType,
+}
+
+#[derive(Debug)]
+pub struct GlobalVariable {
+	pub name: Arc<str>,
+	pub ty: GrugType,
+	pub assignment_expr: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Argument {
+	pub(super) name: Arc<str>,
+	pub(super) ty: GrugType,
+}
+
+#[derive(Debug)]
+pub struct Variable {
+	pub name: Arc<str>,
+	pub ty: Option<GrugType>,
+	pub assignment_expr: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GrugType {
+	Void,
+	Bool,
+	Number,
+	String,
+	Id{
+		custom_name: Option<Arc<str>>,
+	},
+	Resource {
+		extension: Arc<str>,
+	},
+	Entity {
+		ty: Option<Arc<str>>,
+	},
+}
+
+// TODO: remove Statement suffix from these variants
+// TODO: Statements needs location information
+#[derive(Debug)]
+pub enum Statement {
+	Variable(Variable),
+	CallStatement {
+		expr: Expr
+	},
+	IfStatement{
+		condition: Expr,
+		is_chained: bool,
+		if_statements: Vec<Statement>,
+		else_statements: Vec<Statement>,
+	},
+	ReturnStatement{
+		expr: Option<Expr>,
+	},
+	WhileStatement{
+		condition: Expr,
+		statements: Vec<Statement>,
+	},
+	Comment{
+		value: Arc<str>,
+	},
+	BreakStatement,
+	ContinueStatement,
+	EmptyLineStatement,
+}
+
+struct OwnedAst {
+	global_variables: Vec<GlobalVariable>,
+	on_functions    : Vec<Option<OnFunction>>,
+	helper_functions: Vec<HelperFunction>,
+}
+
+struct GrugEntityData {
 	pub(crate) global_variables: HashMap<Arc<str>, Cell<GrugValue>>,
 }
 
@@ -24,7 +181,7 @@ impl GrugEntityData {
 
 #[derive(Debug)]
 struct CompiledFile {
-	file: GrugAst,
+	file: OwnedAst,
 	entities: RefCell<Vec<NonNull<GrugEntity>>>,
 	data: ErasedXar,
 }

@@ -58,7 +58,7 @@ impl GrugState {
 					GlobalStatement::Variable(st@MemberVariable      {..}) => member_variables.push(st.into()),
 					GlobalStatement::OnFunction(st@OnFunction        {..}) => {
 						let (i, _) = entity.get_on_fn(&st.name).unwrap();
-						on_functions[i] = Some(&*Box::leak(Box::new_in(st.into(), &arena)));
+						on_functions[i] = Some(Box::leak(Box::new_in(st.into(), &arena)));
 					}
 					GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st.into()),
 					_ => (),

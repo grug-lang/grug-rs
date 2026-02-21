@@ -4,7 +4,7 @@ use crate::ast::{
 	MemberVariable, Expr, ExprData, LiteralExprData, UnaryOperator,
 	BinaryOperator, 
 
-	c_argument, c_statement, 
+	c_argument, c_statement, c_expr
 };
 use crate::ntstring::NTStr;
 use crate::arena::Arena;
@@ -619,7 +619,7 @@ impl<'arena> AST<'arena> {
 
 	// TODO: Get the grammar for statements
 	// This parser consumes a space before consuming the curly braces
-	fn parse_statements<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<&'a [c_statement<'a>], ParserError> {
+	fn parse_statements<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<&'a mut [c_statement<'a>], ParserError> {
 		assert_parsing_depth(parsing_depth)?;
 		consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
 
@@ -708,7 +708,7 @@ impl<'arena> AST<'arena> {
 					if TokenType::Space == space_token.ty && TokenType::If == if_token.ty {
 						is_chained = true;
 						consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
-						else_block = std::slice::from_ref(Box::leak(Box::new_in(self.parse_statement(tokens, parsing_depth + 1, indentation, arena)?.into(), arena)));
+						else_block = std::slice::from_mut(Box::leak(Box::new_in(self.parse_statement(tokens, parsing_depth + 1, indentation, arena)?.into(), arena)));
 					} else {
 						is_chained = false;
 						else_block = self.parse_statements(tokens, parsing_depth, indentation + 1, arena)?;
@@ -881,7 +881,7 @@ impl<'arena> AST<'arena> {
 		Ok(MemberVariable{
 			name: Box::leak(NTStr::box_from_str_in(global_name, arena)),
 			ty: global_type,
-			assignment_expr,
+			assignment_expr: assignment_expr.into(),
 		})
 	}
 
@@ -892,7 +892,7 @@ impl<'arena> AST<'arena> {
 	// 	self.parse_or(tokens, parsing_depth + 1)
 	// }
 
-	fn parse_expression<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, min_precedence: f32, arena: &'a Arena) -> Result<Expr<'a>, ParserError> {
+	fn parse_expression<'a>(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, min_precedence: f32, arena: &'a Arena) -> Result<c_expr<'a>, ParserError> {
 		assert_parsing_depth(parsing_depth)?;
 		let mut current: Expr = {
 			let Token{ty, line, col, value} = get_next_token(tokens)?;
@@ -1090,7 +1090,7 @@ impl<'arena> AST<'arena> {
 				}
 			};
 		}
-		Ok(current)
+		Ok(current.into())
 	}
 
 	fn get_prefix_precedence(op: UnaryOperator) -> ((), f32) {
