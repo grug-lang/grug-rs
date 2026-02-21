@@ -427,7 +427,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>
 				});
 			}
 
-			ast.helper_fn_signatures.push(((helper_fn.name.to_str()), (helper_fn.return_type, helper_fn.arguments.clone())));
+			ast.helper_fn_signatures.push(((helper_fn.name.to_str()), (helper_fn.return_type, helper_fn.arguments)));
 			ast.global_statements.push(GlobalStatement::HelperFunction(helper_fn));
 
 			newline_allowed = true;
@@ -950,7 +950,7 @@ impl<'a> AST<'a> {
 								if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Comma, TokenType::Space]) {
 									
 								} else {
-									let [close_paren_token] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
+									let [_] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 									break Expr {
 										data: ExprData::Call {
 											name: value.as_ntstrptr(),

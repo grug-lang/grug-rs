@@ -240,3 +240,25 @@ pub enum GlobalStatement<'a> {
 	},
 	EmptyLine,
 }
+
+const _: () = const{
+	// The C interop defined above assumes that slice pointers have a layout like this
+	// struct Slice<T> {
+	// 		data: NonNull<T>,
+	// 		len : usize,
+	// }
+	// 
+	// The rust compiler currently does not guarantee the layout of slice pointer.
+	// These assertions ensure that if the assumption is broken, we get a
+	// compile error instead of random crashes
+	let x: &[MemberVariable] = &[];
+	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
+	let x: &[OnFunction] = &[];
+	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
+	let x: &[HelperFunction] = &[];
+	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
+	let x: &[Argument] = &[];
+	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
+	let x: &[Statement] = &[];
+	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
+};

@@ -92,8 +92,8 @@ pub struct ErasedBackend {
 
 #[repr(C)]
 pub struct BackendVTable {
-	/// SAFETY: `path` must be a utf-8 buffer that is valid to read for atleast `path_len`
-	pub(crate) insert_file         : unsafe fn(data: NonNull<()>, state: &GrugState, id: GrugScriptId, file: GrugAst<'_>),
+	#[allow(improper_ctypes_definitions)]
+	pub(crate) insert_file         : extern "C" fn(data: NonNull<()>, state: &GrugState, id: GrugScriptId, file: GrugAst<'_>),
 	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
 	pub(crate) clear_entities      : extern "C" fn(data: NonNull<()>),
 	pub(crate) destroy_entity_data : extern "C" fn(data: NonNull<()>, entity: &GrugEntity) -> bool,
@@ -106,7 +106,7 @@ pub struct BackendVTable {
 
 impl ErasedBackend {
 	pub fn insert_file(&self, state: &GrugState, id: GrugScriptId, file: GrugAst<'_>) {
-		unsafe{(self.vtable.insert_file)(self.data, state, id, file)}
+		(self.vtable.insert_file)(self.data, state, id, file)
 	}
 	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
 		(self.vtable.init_entity)(self.data, state, entity)
@@ -133,7 +133,8 @@ impl Drop for ErasedBackend {
 
 impl<T: Backend> From<T> for ErasedBackend {
 	fn from(other: T) -> Self {
-		unsafe fn insert_file<T: Backend>(data: NonNull<()>, state: &GrugState, id: GrugScriptId, file: GrugAst<'_>) {
+		#[allow(improper_ctypes_definitions)]
+		extern "C" fn insert_file<T: Backend>(data: NonNull<()>, state: &GrugState, id: GrugScriptId, file: GrugAst<'_>) {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
 				state, 

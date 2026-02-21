@@ -1116,7 +1116,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				let value_ntstr = value.to_ntstr();
 				self.validate_resource_string(value_ntstr.as_str(), extension.to_str())?;
 				*value = self.fix_resource_string(value_ntstr, arena).as_ntstrptr();
-			} else if let GrugType::Entity{entity_type: ty} = param.ty 
+			} else if let GrugType::Entity{entity_type: _} = param.ty 
 				&& let ExprData::Literal(LiteralExprData::String(ref mut value)) = arg.data {
 				let value_ntstr = value.to_ntstr();
 				self.validate_entity_string(value_ntstr.as_str())?;

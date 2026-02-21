@@ -10,7 +10,6 @@ use std::cell::{Cell, RefCell, Ref};
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
-use std::time::Instant;
 
 #[repr(C)]
 pub struct RuntimeErrorHandler {
@@ -207,7 +206,6 @@ pub struct GrugState {
 	// pub(crate) backend: Interpreter,
 	pub(crate) current_script: Cell<Option<GrugScriptId>>,
 	pub(crate) current_on_fn_id: Cell<Option<GrugOnFnId>>,
-	pub(crate) call_start_time: Cell<Instant>,
 	pub(crate) is_errorring: Cell<bool>,
 }
 
@@ -245,7 +243,6 @@ impl GrugState {
 			backend,
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
-			call_start_time: Cell::new(Instant::now()),
 			is_errorring: Cell::new(false),
 		})
 	}
@@ -283,7 +280,6 @@ impl GrugState {
 			backend: backend.into(),
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
-			call_start_time: Cell::new(Instant::now()),
 			is_errorring: Cell::new(false),
 		})
 	}
