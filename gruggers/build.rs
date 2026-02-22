@@ -20,7 +20,8 @@ fn build_tests() {
 
 	#[cfg(target_os = "linux")]
 	{
-		_ = std::fs::copy(test_source_path + "/libtests.so", archive_path + "/libtests.so");
+		_ = std::fs::copy(test_source_path + "/libtests.so", archive_path.clone() + "/libtests.so");
+		_ = std::fs::copy(bench_source_path + "/libbench.so", archive_path + "/libbench.so");
 	}
 	#[cfg(target_os = "windows")]
 	{
