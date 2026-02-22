@@ -164,6 +164,14 @@ pub struct Expr<'a> {
 	pub data        : ExprData<'a>,
 }
 
+#[repr(C)]
+#[derive(Debug)]
+pub struct MemberVariable<'a> {
+	pub name: NTStrPtr<'a>,
+	pub ty  : GrugType<'a>,
+	pub assignment_expr: Expr<'a>,
+}
+
 #[derive(Debug)]
 #[repr(C, u32)]
 pub enum Statement<'a> {
@@ -197,14 +205,6 @@ pub enum Statement<'a> {
 pub struct Argument<'a> {
 	pub name: NTStrPtr<'a>,
 	pub ty  : GrugType<'a>,
-}
-
-#[repr(C)]
-#[derive(Debug)]
-pub struct MemberVariable<'a> {
-	pub name: NTStrPtr<'a>,
-	pub ty  : GrugType<'a>,
-	pub assignment_expr: Expr<'a>,
 }
 
 #[repr(C)]

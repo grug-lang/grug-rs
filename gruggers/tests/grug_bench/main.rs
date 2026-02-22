@@ -111,11 +111,25 @@ mod game_functions {
 	unsafe extern "C" {
 		safe fn game_fn_print_number<'a>(state: &'a GrugState, arguments: *const GrugValue);
 		safe fn game_fn_get_1       <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_get_mass    <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_get_number  <'a>(state: &'a GrugState                             ) -> GrugValue;
+		safe fn game_fn_x           <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_y           <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_sqrt        <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_set_x       <'a>(state: &'a GrugState, arguments: *const GrugValue);
+		safe fn game_fn_set_y       <'a>(state: &'a GrugState, arguments: *const GrugValue);
 	}
 
 	pub fn register_game_functions(state: &mut GrugState) {
 		state.register_game_fn("print_number", game_fn_print_number as for<'a> extern "C" fn(&'a _, _)     ).unwrap();
 		state.register_game_fn("get_1"       , game_fn_get_1        as for<'a> extern "C" fn(&'a _, _) -> _).unwrap();
+		state.register_game_fn("get_mass"    , game_fn_get_mass     as for<'a> extern "C" fn(&'a _, _) -> _).unwrap();
+		state.register_game_fn("get_number"  , game_fn_get_number   as for<'a> extern "C" fn(&'a _,  ) -> _).unwrap();
+		state.register_game_fn("x"           , game_fn_x            as for<'a> extern "C" fn(&'a _, _) -> _).unwrap();
+		state.register_game_fn("y"           , game_fn_y            as for<'a> extern "C" fn(&'a _, _) -> _).unwrap();
+		state.register_game_fn("sqrt"        , game_fn_sqrt         as for<'a> extern "C" fn(&'a _, _) -> _).unwrap();
+		state.register_game_fn("set_x"       , game_fn_set_x        as for<'a> extern "C" fn(&'a _, _)     ).unwrap();
+		state.register_game_fn("set_y"       , game_fn_set_y        as for<'a> extern "C" fn(&'a _, _)     ).unwrap();
 	}
 }
 
