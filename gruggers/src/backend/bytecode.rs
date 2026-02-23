@@ -24,8 +24,8 @@ struct Compiler<'a> {
 	locals: Vec<HashMap<&'a str, usize>>,
 	locals_sizes: Vec<usize>,
 	current_scope_size: usize,
-	locals_size_max: usize,
-	helper_fn_patches: Vec<(/* location of call instruction */ usize, /* arg_count */ usize, /* name */ &'a str)>,
+	locals_size_max: u32,
+	helper_fn_patches: Vec<(/* location of call instruction */ usize, /* arg_count */ u16, /* name */ &'a str)>,
 	while_loop_patches: Vec<(/* continue destination */ usize, Vec</* break patch locations */ usize>)>,
 }
 
@@ -352,6 +352,9 @@ impl<'a> Compiler<'a> {
 				args,
 			} if name.to_str().starts_with("helper_") => {
 				let args_count = args.len();
+				if args_count > u16::MAX as usize {
+					panic!("cannot have more than {} arguments in a helper functions", u16::MAX);
+				}
 				for argument in &**args {
 					self.compile_expr(state, instructions, argument);
 				}
@@ -359,10 +362,10 @@ impl<'a> Compiler<'a> {
 				let (location, locals_size) = if let Some(info) = instructions.get_helper_fn_info(name.to_str()) {
 					info
 				} else {
-					self.helper_fn_patches.push((instructions.get_loc(), args_count, name.to_str()));
+					self.helper_fn_patches.push((instructions.get_loc(), args_count as u16, name.to_str()));
 					(0, 0)
 				};
-				instructions.push_op(Op::CallHelperFunction{args: args_count, locals_size, location});
+				instructions.push_op(Op::CallHelperFunction{args: args_count as u16, locals_size, location});
 			},
 			ExprData::Call {
 				name,
@@ -397,7 +400,10 @@ impl<'a> Compiler<'a> {
 		let check = self.locals.last_mut().unwrap().insert(name, self.current_scope_size);
 		debug_assert!(check.is_none());
 		self.current_scope_size += 1;
-		self.locals_size_max = std::cmp::max(self.locals_size_max, self.current_scope_size);
+		if self.current_scope_size > u32::MAX as usize {
+			panic!("Cannot have more than {} local variables", u32::MAX);
+		}
+		self.locals_size_max = std::cmp::max(self.locals_size_max, self.current_scope_size as u32);
 		self.current_scope_size - 1
 	}
 
@@ -576,8 +582,8 @@ pub enum Op {
 		index: usize,
 	},
 	CallHelperFunction {
-		args: usize,
-		locals_size: usize,
+		args: u16,
+		locals_size: u32,
 		location: usize,
 	},
 	CallGameFunction {
@@ -646,10 +652,10 @@ pub struct Instructions{
 			/* number of arguments */
 			usize, 
 			/* number of locals */ 
-			usize,
+			u32,
 		)>
 	>,
-	helper_fn_locations: HashMap<Arc<str>, (/* location */ usize, /* locals_size */ usize)>,
+	helper_fn_locations: HashMap<Arc<str>, (/* location */ usize, /* locals_size */ u32)>,
 	fn_labels: HashMap<usize, Arc<str>>,
 	strings: HashSet<Arc<NTStr>>,
 	jumps_count: usize,
@@ -702,7 +708,7 @@ impl Instructions {
 		self.assert_jumps_consistency();
 	}
 
-	pub fn insert_on_fn(&mut self, name: &str, index: usize, location: usize, argument_count: usize, locals_size: usize) {
+	pub fn insert_on_fn(&mut self, name: &str, index: usize, location: usize, argument_count: usize, locals_size: u32) {
 		let name = Arc::from(name);
 		if self.on_fn_locations.len() <= index {
 			self.on_fn_locations.resize(index + 1, None);
@@ -711,11 +717,11 @@ impl Instructions {
 		self.fn_labels.insert(location, name);
 	}
 
-	pub fn get_helper_fn_info(&mut self, name: &str) -> Option<(/* location */ usize, /* locals_size */ usize)>{
+	pub fn get_helper_fn_info(&mut self, name: &str) -> Option<(/* location */ usize, /* locals_size */ u32)>{
 		self.helper_fn_locations.get(name).copied()
 	}
 
-	pub fn insert_helper_fn(&mut self, name: &str, location: usize, locals_size: usize) {
+	pub fn insert_helper_fn(&mut self, name: &str, location: usize, locals_size: u32) {
 		let name = Arc::from(name);
 		self.helper_fn_locations.insert(Arc::clone(&name), (location, locals_size));
 		self.fn_labels.insert(location, name);
@@ -898,10 +904,10 @@ impl Stack {
 		self
 	}
 
-	pub unsafe fn run(&mut self, state: &GrugState, globals: &[Cell<GrugValue>], instructions: &Instructions, locals_size: usize, start_loc: usize) -> Option<GrugValue> {
+	pub unsafe fn run(&mut self, state: &GrugState, globals: &[Cell<GrugValue>], instructions: &Instructions, locals_size: u32, start_loc: usize) -> Option<GrugValue> {
 		let mut stream = &instructions.stream[start_loc..];
 		let start_time = Instant::now();
-		self.stack.resize(self.rbp + locals_size, GrugValue{void: ()});
+		self.stack.resize(self.rbp + locals_size as usize, GrugValue{void: ()});
 		let mut i_count: usize = 0;
 		while let Some((ins, next)) = stream.split_first() {
 			stream = next;
@@ -1058,8 +1064,8 @@ impl Stack {
 						self.rbp,
 						unsafe{stream.as_ptr().offset_from(instructions.stream.as_ptr()) as usize},
 					));
-					self.rbp = self.stack.len() - args;
-					self.stack.resize(self.rbp + locals_size, GrugValue{void: ()});
+					self.rbp = self.stack.len() - args as usize;
+					self.stack.resize(self.rbp + locals_size as usize, GrugValue{void: ()});
 					stream = instructions.stream.get(location as usize..)?;
 				}
 				Op::CallGameFunction {
