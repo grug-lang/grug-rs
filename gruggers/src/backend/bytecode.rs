@@ -1309,6 +1309,7 @@ impl Stack {
 		let mut stream = &instructions.stream[start_loc..];
 		let start_time = Instant::now();
 		self.stack.resize(self.rbp + locals_size, GrugValue{void: ()});
+		let mut i_count: usize = 0;
 		while let Some(ins) = Op::decode(&mut stream) {
 			match ins {
 				Op::ReturnVoid         => {
@@ -1484,10 +1485,13 @@ impl Stack {
 					}
 				}
 			}
-			if start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
-				state.set_runtime_error(RuntimeError::ExceededTimeLimit);
-				return None;
+			if i_count & 0xFFFFF == 0 {
+				if start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
+					state.set_runtime_error(RuntimeError::ExceededTimeLimit);
+					return None;
+				}
 			}
+			i_count += 1;
 			if self.stack_frames.len() >= MAX_RECURSION_LIMIT {
 				state.set_runtime_error(RuntimeError::StackOverflow);
 				return None;
