@@ -15,7 +15,6 @@ use super::{Backend, GrugAst};
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 use std::cell::{Cell, RefCell};
-use std::mem::size_of;
 use std::alloc::Layout;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -70,7 +69,7 @@ impl<'a> Compiler<'a> {
 		for (patch_loc, args, name) in compiler.helper_fn_patches {
 			let (location, locals_size) = instructions.get_helper_fn_info(&name)
 				.expect("helper function exists");
-			unsafe{instructions.try_patch(Op::CallHelperFunction{args, locals_size, location}, patch_loc)}.unwrap();
+			instructions.try_patch(Op::CallHelperFunction{args, locals_size, location}, patch_loc).unwrap();
 		}
 		// panic!("{}", instructions);
 		CompiledFile {
@@ -153,7 +152,7 @@ impl<'a> Compiler<'a> {
 				self.compile_expr(state, instructions, condition);
 
 				instructions.push_op(Op::Not);
-				let condition_patch_loc = instructions.get_loc() as isize;
+				let condition_patch_loc = instructions.get_loc();
 				instructions.push_op(Op::JmpIf{offset: 0});
 
 				self.push_scope();
@@ -163,11 +162,11 @@ impl<'a> Compiler<'a> {
 				self.pop_scope();
 
 				if !else_block.is_empty() {
-					let end_patch_loc = instructions.get_loc() as isize;
+					let end_patch_loc = instructions.get_loc();
 					instructions.push_op(Op::Jmp{offset: 0});
-					let cur_loc = instructions.get_loc() as isize;
+					let cur_loc = instructions.get_loc();
 					// jump from the false condtion to the start of the else block
-					unsafe{instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc as usize)}
+					instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc)
 						.expect("Could not patch jump because offset is too large");
 					if *is_chained {
 						for statement in &**else_block {
@@ -180,14 +179,14 @@ impl<'a> Compiler<'a> {
 						}
 						self.pop_scope();
 					}
-					let end_loc = instructions.get_loc() as isize;
+					let end_loc = instructions.get_loc();
 					// jump from the end of the previous block to the end of the else block
-					unsafe{instructions.try_patch(Op::Jmp{offset: Op::calc_offset(end_patch_loc, end_loc)}, end_patch_loc as usize)}
+					instructions.try_patch(Op::Jmp{offset: Op::calc_offset(end_patch_loc, end_loc)}, end_patch_loc)
 						.expect("Could not patch jump because offset is too large");
 				} else {
-					let cur_loc = instructions.get_loc() as isize;
+					let cur_loc = instructions.get_loc();
 					// jump from the false condtion to the end of the if statement
-					unsafe{instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc as usize)}
+					instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc)
 						.expect("Could not patch jump because offset is too large");
 				}
 			}
@@ -195,24 +194,24 @@ impl<'a> Compiler<'a> {
 				condition,
 				block,
 			} => {
-				let continue_loc = instructions.get_loc() as isize;
+				let continue_loc = instructions.get_loc();
 				self.compile_expr(state, instructions, condition);
 				instructions.push_op(Op::Not);
-				let break_patch_loc = instructions.get_loc() as isize;
+				let break_patch_loc = instructions.get_loc();
 				instructions.push_op(Op::JmpIf{offset: 0});
 
-				self.while_loop_patches.push((continue_loc as usize, Vec::new()));
+				self.while_loop_patches.push((continue_loc, Vec::new()));
 				
 				for statement in &**block {
 					self.compile_statement(state, instructions, statement);
 				}
-				let end_loc = instructions.get_loc() as isize;
+				let end_loc = instructions.get_loc();
 				instructions.push_op(Op::Jmp{offset: Op::calc_offset(end_loc, continue_loc)});
-				let break_loc = instructions.get_loc() as isize;
-				unsafe{instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc as usize)}.unwrap();
+				let break_loc = instructions.get_loc();
+				instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc).unwrap();
 
 				for break_patch_loc in self.while_loop_patches.pop().unwrap().1 {
-					unsafe{instructions.try_patch(Op::Jmp{offset: Op::calc_offset(break_patch_loc as isize, break_loc)}, break_patch_loc)}.unwrap();
+					instructions.try_patch(Op::Jmp{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc).unwrap();
 				}
 			}
 			Statement::Call(expr) => self.compile_expr(state, instructions, expr),
@@ -230,7 +229,7 @@ impl<'a> Compiler<'a> {
 			}
 			Statement::Continue => {
 				let continue_loc = self.while_loop_patches.last().unwrap().0;
-				instructions.push_op(Op::Jmp{offset: Op::calc_offset(instructions.get_loc() as isize, continue_loc as isize)});
+				instructions.push_op(Op::Jmp{offset: Op::calc_offset(instructions.get_loc(), continue_loc)});
 			}
 			Statement::EmptyLine => {},
 			Statement::Comment{..}        => {},
@@ -316,15 +315,12 @@ impl<'a> Compiler<'a> {
 						let first_patch_loc = instructions.get_loc();
 						instructions.push_op(Op::JmpIf{offset: 0});
 						self.compile_expr(state, instructions, right);
-						unsafe{
-							instructions.try_patch(
-								Op::JmpIf{
-									offset: Op::calc_offset(first_patch_loc as isize, instructions.get_loc() as isize),
-								},
-								first_patch_loc,
-							).unwrap()
-						};
-						println!("{}", instructions);
+						instructions.try_patch(
+							Op::JmpIf{
+								offset: Op::calc_offset(first_patch_loc, instructions.get_loc()),
+							},
+							first_patch_loc,
+						).unwrap();
 					}
 					BinaryOperator::And           => {
 						instructions.push_op(Op::Dup{index: 0});
@@ -332,15 +328,12 @@ impl<'a> Compiler<'a> {
 						let first_patch_loc = instructions.get_loc();
 						instructions.push_op(Op::JmpIf{offset: 0});
 						self.compile_expr(state, instructions, right);
-						unsafe{
-							instructions.try_patch(
-								Op::JmpIf{
-									offset: Op::calc_offset(first_patch_loc as isize, instructions.get_loc() as isize),
-								},
-								first_patch_loc,
-							).unwrap()
-						};
-						println!("{}", instructions);
+						instructions.try_patch(
+							Op::JmpIf{
+								offset: Op::calc_offset(first_patch_loc, instructions.get_loc()),
+							},
+							first_patch_loc,
+						).unwrap();
 					}
 				}
 			}
@@ -386,7 +379,7 @@ impl<'a> Compiler<'a> {
 				let has_return = state.mod_api.game_functions().get(name.as_str()).unwrap().return_ty != GrugType::Void;
 				instructions.push_op(Op::CallGameFunction {
 					has_return,
-					args: args_count,
+					args: args_count as u32,
 					ptr: *fn_ptr,
 				});
 			}
@@ -531,117 +524,65 @@ unsafe impl Backend for BytecodeBackend {
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum Op {
-	// 0x00
-	ReturnVoid,
-	// 0x01
+	ReturnVoid = 0x00,
 	ReturnValue,
-	// All the four following types have the same instruction
-	// representation. The variants just exist to make encoding easier
-	// 0x03
-	LoadQW {
-		bytes: [u8; 8],
-	},
-	// 0x03
 	LoadNumber {
 		number: f64,
 	},
-	// 0x04
 	LoadStr {
 		string: NTStrPtr<'static>,
 	},
-	// 0x05
 	LoadFalse,
-	// 0x06
 	LoadTrue,
-	// 0x07        | 0x08
-	// 0b00000111  | 0b00001000
-	// index as u8 | index as u16
 	Dup{
 		index: usize,
 	},
-	// 0x09
 	Pop,
-	// 0b00010000
-	// 0x10
 	Add,
-	// 0x11
 	Sub,
-	// 0x12
 	Mul,
-	// 0x13
 	Div,
-	// 0x14
 	Rem,
-	// 0x15
 	And,
-	// 0x16
 	Or,
-	// 0x17
 	Not,
-	// 0x18
 	CmpEq,
-	// 0x19
 	CmpNeq,
-	// 0x1a
 	StrEq,
-	// 0x1b
 	CmpG,
-	// 0x1c
 	CmpGe,
-	// 0x1d
 	CmpL,
-	// 0x1e
 	CmpLe,
-	// 0x1f
 	PrintStr,
-	// 0x20          | 0x21
-	// 0b00100000    | 0b00100001
-	// index as u8   | index as u16
 	LoadGlobal {
 		index: usize,
 	},
-	// 0x22          | 0x23
-	// 0b00100010    | 0b00100011
-	// index as u8   | index as u16
 	StoreGlobal {
 		index: usize,
 	},
-	// 0x24          | 0x25
-	// 0b00100100    | 0b00100101
-	// offset as i16 | offset as isize
 	Jmp {
 		offset: isize,
 	},
-	// 0x26          | 0x27
-	// 0b00100110    | 0b00100111
-	// offset as i16 | offset as isize
+	JmpIfNot {
+		offset: isize,
+	},
 	JmpIf {
 		offset: isize,
 	},
-	// 0x28          | 0x29
-	// 0b00101000    | 0b00101001
 	LoadLocal {
 		index: usize,
 	},
-	// 0x2a          | 0x2b
-	// 0b00101010    | 0b00101011
 	StoreLocal {
 		index: usize,
 	},
-	// 0x2c                       | 0x2d
-	// 0b00101100                 | 0b00101101
-	// args and locals_size as u8 | tbd
 	CallHelperFunction {
 		args: usize,
 		locals_size: usize,
 		location: usize,
 	},
-	// 0x2e          | 0x2f
-	// 0b00101110    | 0b00101111
-	// args as u7    | args as u15
 	CallGameFunction {
 		has_return: bool,
-		args: usize,
+		args: u32,
 		ptr: GameFnPtr,
 	},
 }
@@ -651,22 +592,8 @@ impl PartialEq for Op {
 		match (self, other) {
 			(Self::ReturnVoid, Self::ReturnVoid)       => true,
 			(Self::ReturnValue, Self::ReturnValue)     => true,
-			(Self::LoadQW{..} | Self::LoadNumber{..} | Self::LoadStr{..}, 
-			Self::LoadQW{..} | Self::LoadNumber{..} | Self::LoadStr{..}) => {
-				let self_bytes = match self {
-					Self::LoadQW{bytes} => bytes,
-					Self::LoadNumber{number} => &number.to_ne_bytes(),
-					Self::LoadStr{string} => &(string.as_ptr() as usize).to_ne_bytes(),
-					_ => unreachable!(),
-				};
-				let other_bytes = match other {
-					Self::LoadQW{bytes} => bytes,
-					Self::LoadNumber{number} => &number.to_ne_bytes(),
-					Self::LoadStr{string} => &(string.as_ptr() as usize).to_ne_bytes(),
-					_ => unreachable!(),
-				};
-				self_bytes == other_bytes
-			}
+			(Self::LoadNumber{number: n_0}, Self::LoadNumber{number: n_1}) => n_0 == n_1,
+			(Self::LoadStr{string: s_0}, Self::LoadStr{string: s_1}) => s_0.to_str() == s_1.to_str(),
 			(Self::LoadFalse, Self::LoadFalse)  => true,
 			(Self::LoadTrue , Self::LoadTrue )  => true,
 			(Self::Dup{index: i0}  , Self::Dup{index: i1})  => i0 == i1,
@@ -703,199 +630,15 @@ impl PartialEq for Op {
 }
 
 impl Op {
-	fn decode(bytes: &mut &[u8]) -> Option<Self> {
-		let (value, len) = match bytes.get(0)? {
-			0x00 => (Self::ReturnVoid, 1),
-			0x01 => (Self::ReturnValue, 1),
-			// LoadQW
-			// LoadNumber
-			// LoadId
-			0x03 => {
-				let bytes = &mut bytes.get(1..)?;
-				let value = get_u64_bytes(bytes)?;
-				(Op::LoadQW{
-					bytes: value,
-				}, 1 + size_of::<u64>())
-			}
-			// LoadStr
-			0x04 => {
-				let bytes = &mut bytes.get(1..)?;
-				use std::ptr::NonNull;
-				let value = unsafe{NTStrPtr::from_ptr(NonNull::new_unchecked(std::ptr::with_exposed_provenance_mut(usize::from_ne_bytes(get_u64_bytes(bytes)?))))};
-				(Op::LoadStr{
-					string: value,
-				}, 1 + size_of::<u64>())
-			}
-			// LoadTrue
-			0x05 => (Op::LoadFalse, 1),
-			// LoadFalse
-			0x06 => (Op::LoadTrue, 1),
-			// Dup
-			0x07 => {
-				let index = *bytes.get(1)? as usize;
-				(Op::Dup{
-					index
-				}, 2)
-			}
-			0x08 => {
-				unimplemented!();
-				// let bytes = &mut bytes.get(1..)?;
-				// let index = u16::from_ne_bytes(get_u16_bytes(bytes)?) as usize;
-				// (Op::Dup{
-				// 	index
-				// }, 2)
-			}
-			0x09 => (Op::Pop   ,   1),
-			0x10 => (Op::Add   ,   1),
-			0x11 => (Op::Sub   ,   1),
-			0x12 => (Op::Mul   ,   1),
-			0x13 => (Op::Div   ,   1),
-			0x14 => (Op::Rem   ,   1),
-			0x15 => (Op::And   ,   1),
-			0x16 => (Op::Or    ,   1),
-			0x17 => (Op::Not   ,   1),
-			0x18 => (Op::CmpEq ,   1),
-			0x19 => (Op::CmpNeq,   1),
-			0x1a => (Op::StrEq ,   1),
-			0x1b => (Op::CmpG  ,   1),
-			0x1c => (Op::CmpGe ,   1),
-			0x1d => (Op::CmpL  ,   1),
-			0x1e => (Op::CmpLe ,   1),
-			0x1f => (Op::PrintStr, 1),
-			// 0x20       | 0x21
-			// 0b00100000 | 0b00100001
-			// u8 index
-			0x20 => {
-				let index = *bytes.get(1)? as usize;
-				(Op::LoadGlobal{index}, 2)
-			}
-			// u16 index
-			0x21 => {
-				let index = u16::from_ne_bytes(get_u16_bytes(&mut bytes.get(1..)?)?) as usize;
-				(Op::LoadGlobal{index}, 3)
-			}
-			// 0x22       | 0x23
-			// 0b00100010 | 0b00100011
-			// u8 index
-			0x22 => {
-				let index = *bytes.get(1)? as usize;
-				(Op::StoreGlobal{index}, 2)
-			}
-			// u16 index
-			0x23 => {
-				let index = u16::from_ne_bytes(get_u16_bytes(&mut bytes.get(1..)?)?) as usize;
-				(Op::StoreGlobal{index}, 3)
-			}
-			// 0x24          | 0x25
-			// 0b00100100    | 0b00100101
-			// offset as i16 | offset as isize
-			0x24 => {
-				let bytes = &mut bytes.get(1..)?;
-				let offset = i16::from_ne_bytes(get_u16_bytes(bytes)?) as isize;
-				(Op::Jmp{offset}, 1 + size_of::<i16>())
-			}
-			0x25 => {
-				let bytes = &mut bytes.get(1..)?;
-				let offset = u64::from_ne_bytes(get_u64_bytes(bytes)?) as isize;
-				(Op::Jmp{offset}, 1 + size_of::<i64>())
-			}
-			// 0x26          | 0x27
-			// 0b00100110    | 0b00100111
-			// offset as i16 | offset as isize
-			0x26 => {
-				let bytes = &mut bytes.get(1..)?;
-				let offset = i16::from_ne_bytes(get_u16_bytes(bytes)?) as isize;
-				(Op::JmpIf{offset}, 1 + size_of::<i16>())
-			}
-			0x27 => {
-				let bytes = &mut bytes.get(1..)?;
-				let offset = u64::from_ne_bytes(get_u64_bytes(bytes)?) as isize;
-				(Op::JmpIf{offset}, 1 + size_of::<i64>())
-			}
-			// 0x22       | 0x23
-			// 0b00100010 | 0b00100011
-			// u8 index
-			0x28 => {
-				let index = *bytes.get(1)? as usize;
-				(Op::LoadLocal{index}, 2)
-			}
-			// u16 index
-			0x29 => {unimplemented!()}
-			// 0x22       | 0x23
-			// 0b00100010 | 0b00100011
-			// u8 index
-			0x2a => {
-				let index = *bytes.get(1)? as usize;
-				(Op::StoreLocal{index}, 2)
-			}
-			// u16 index
-			0x2b => {unimplemented!()}
-			// u8 arg count and locals_size
-			0x2c => {
-				let args = *bytes.get(1)? as usize;
-				let locals_size = *bytes.get(2)? as usize;
-				let location = usize::from_ne_bytes(get_usize_bytes(&mut bytes.get(3..)?)?);
-				(Op::CallHelperFunction{args, locals_size, location}, 1 + 1 + 1 + size_of::<usize>())
-			}
-			// tbd
-			0x2d => {unimplemented!()}
-			0x2e => {
-				let next_byte = bytes.get(1)?;
-				let kind = next_byte >> (size_of::<u8>() * 8 - 1) == 1;
-				let args = (next_byte & (0b01111111)) as usize;
-
-				let bytes = &mut bytes.get(2..)?;
-				let ptr = unsafe{std::mem::transmute::<*const (), GameFnPtr>(
-					std::ptr::with_exposed_provenance(
-						usize::from_ne_bytes(get_usize_bytes(bytes)?)
-					)
-				)};
-				(Op::CallGameFunction {
-					has_return: kind,
-					args,
-					ptr,
-				}, 1 + 1 + size_of::<usize>())
-			}
-			0x2f => {unimplemented!()}
-			_ => return None,
-		};
-		*bytes = &bytes[len..];
-		return Some(value);
-
-		fn get_usize_bytes(bytes: &mut &[u8]) -> Option<[u8; size_of::<usize>()]> {
-			if bytes.len() < size_of::<usize>() {
-				return None;
-			}
-			Some(unsafe{*bytes.as_ptr().cast::<[u8; _]>()})
-		}
-
-		fn get_u64_bytes(bytes: &mut &[u8]) -> Option<[u8; size_of::<u64>()]> {
-			if bytes.len() < size_of::<u64>() {
-				return None;
-			}
-			Some(unsafe{*bytes.as_ptr().cast::<[u8; _]>()})
-		}
-
-		fn get_u16_bytes(bytes: &mut &[u8]) -> Option<[u8; size_of::<u16>()]> {
-			if bytes.len() < size_of::<u16>() {
-				return None;
-			}
-			Some(unsafe{*bytes.as_ptr().cast::<[u8; _]>()})
-		}
-	}
-
-	fn calc_offset(from: isize, to: isize) -> isize {
-		let offset_from_start = to - from;
-		if offset_from_start < i16::MIN as isize || offset_from_start > i16::MAX as isize {
-			todo!();
-		}
+	fn calc_offset(from: usize, to: usize) -> isize {
+		let offset_from_start = to as isize - from as isize ;
 		// opcode is 1 byte, offset fits in two bytes
-		offset_from_start - 3
+		offset_from_start - 1
 	}
 }
 
 pub struct Instructions{
-	stream: Vec<u8>,
+	stream: Vec<Op>,
 	on_fn_locations: Vec<
 		Option<(
 			/* start location in instruction stream */ 
@@ -940,131 +683,12 @@ impl Instructions {
 	}
 
 	pub fn push_op(&mut self, op: Op) {
+		self.stream.push(op);
 		match op {
-			Op::ReturnVoid  =>  self.stream.push(0x00),
-			Op::ReturnValue => self.stream.push(0x01),
-			Op::LoadQW{bytes}  => {
-				self.stream.push(
-					0x03
-				);
-				self.stream.extend_from_slice(&bytes);
-			}
-			Op::LoadNumber{number}  => {
-				self.stream.push(
-					0x03
-				);
-				self.stream.extend_from_slice(&number.to_ne_bytes());
-			}
-			Op::LoadStr{string}  => {
-				self.stream.push(
-					0x04
-				);
-				self.stream.extend_from_slice(&string.as_ptr().expose_provenance().to_ne_bytes());
-			}
-			Op::LoadFalse => self.stream.push(0x05),
-			Op::LoadTrue  => self.stream.push(0x06),
-			Op::Dup{index} => {
-				if index > u8::MAX as usize {
-					unimplemented!();
-				}
-				self.stream.push(0x07);
-				self.stream.push(index as u8);
-			}
-			Op::Pop       => self.stream.push(0x09),
-			Op::Add       => self.stream.push(0x10),
-			Op::Sub       => self.stream.push(0x11),
-			Op::Mul       => self.stream.push(0x12),
-			Op::Div       => self.stream.push(0x13),
-			Op::Rem       => self.stream.push(0x14),
-			Op::And       => self.stream.push(0x15),
-			Op::Or        => self.stream.push(0x16),
-			Op::Not       => self.stream.push(0x17),
-			Op::CmpEq     => self.stream.push(0x18),
-			Op::CmpNeq    => self.stream.push(0x19),
-			Op::StrEq     => self.stream.push(0x1a),
-			Op::CmpG      => self.stream.push(0x1b),
-			Op::CmpGe     => self.stream.push(0x1c),
-			Op::CmpL      => self.stream.push(0x1d),
-			Op::CmpLe     => self.stream.push(0x1e),
-			Op::PrintStr  => self.stream.push(0x1f),
-			Op::LoadGlobal{index} => {
-				if index > u8::MAX as usize {
-					assert!(index < u16::MAX as usize);
-					self.stream.push(0x21);
-					self.stream.extend_from_slice(&index.to_ne_bytes());
-				}
-				self.stream.push(0x20);
-				self.stream.push(index as u8);
-			}
-			Op::StoreGlobal{index} => {
-				if index > u8::MAX as usize {
-					assert!(index < u16::MAX as usize);
-					self.stream.push(0x23);
-					self.stream.extend_from_slice(&index.to_ne_bytes());
-				}
-				self.stream.push(0x22);
-				self.stream.push(index as u8);
-			}
-			Op::Jmp{offset} => {
-				if offset > i16::MAX as isize || offset < i16::MIN as isize {
-					unimplemented!();
-				}
-				self.stream.push(0x24);
-				let bytes = offset.to_ne_bytes();
-				self.stream.push(bytes[0]);
-				self.stream.push(bytes[1]);
+			Op::Jmp{offset} | Op::JmpIf{offset} | Op::JmpIfNot{offset} => {
 				self.insert_jmp(self.stream.len(), offset);
 			}
-			Op::JmpIf{offset} => {
-				if offset > i16::MAX as isize || offset < i16::MIN as isize {
-					unimplemented!();
-				}
-				self.stream.push(0x26);
-				let bytes = offset.to_ne_bytes();
-				self.stream.push(bytes[0]);
-				self.stream.push(bytes[1]);
-				self.insert_jmp(self.stream.len(), offset);
-			}
-			Op::LoadLocal{index} => {
-				if index > u8::MAX as usize {
-					unimplemented!();
-				}
-				self.stream.push(0x28);
-				self.stream.push(index as u8);
-			}
-			Op::StoreLocal{index} => {
-				if index > u8::MAX as usize {
-					unimplemented!();
-				}
-				self.stream.push(0x2a);
-				self.stream.push(index as u8);
-			}
-			Op::CallHelperFunction {
-				args,
-				locals_size,
-				location,
-			} => {
-				if args >= u8::MAX as usize && locals_size >= u8::MAX as usize {
-					unimplemented!();
-				}
-				self.stream.push(0x2c);
-				self.stream.push(args as u8);
-				self.stream.push(locals_size as u8);
-				self.stream.extend_from_slice(&location.to_ne_bytes());
-			}
-			Op::CallGameFunction {
-				has_return,
-				args,
-				ptr,
-			} => {
-				if args > (u8::MAX / 2) as usize {
-					unimplemented!();
-				}
-				self.stream.push(0x2e);
-				let next_byte = ((args as u8) & 0b01111111) | ((has_return as u8) << 7);
-				self.stream.push(next_byte);
-				self.stream.extend_from_slice(&unsafe{(ptr.void as usize).to_ne_bytes()});
-			}
+			_ => (),
 		}
 	}
 
@@ -1125,43 +749,19 @@ impl Instructions {
 		self.stream.len()
 	}
 
-	/// SAFETY: 
-	/// location passed in must be the position returned by a previous call to push_op.
-	///
-	/// It will succeed if opcode matches and there is enough space to store a jump of that type
-	pub unsafe fn try_patch(&mut self, op: Op, location: usize) -> Option<()> {
-		macro_rules! patch {
-			($offset_type: ty, $new_offset: expr) => {{
-				unsafe {
-					*(self.stream.get_mut((location + 1)..)? as *mut [u8] as *mut [u8; size_of::<$offset_type>()]) = ($new_offset as $offset_type).to_ne_bytes();
-				} 
-				(location + 1 + size_of::<$offset_type>(), $new_offset as isize)
-			}}
-		}
-		let (old_start, new_offset)  = match (self.stream.get(location)?, op) {
-			// Jmp
-			(0x24, Op::Jmp{offset}) if offset >= i16::MIN as isize && offset <= i16::MAX as isize => {
-				patch!(i16, offset)
+	pub fn try_patch(&mut self, op: Op, location: usize) -> Option<()> {
+		let (old_start, new_offset)  = match (self.stream.get_mut(location)?, op) {
+			(Op::Jmp{offset: patch}, Op::Jmp{offset}) | 
+			(Op::JmpIf{offset: patch}, Op::JmpIf{offset}) |
+			(Op::JmpIfNot{offset: patch}, Op::JmpIfNot{offset}) => {
+				*patch = offset;
+				(location + 1, offset)
 			}
-			(0x25, Op::Jmp{offset}) => {
-				patch!(isize, offset)
-			}
-			// JmpIf
-			(0x26, Op::JmpIf{offset}) if offset >= i16::MIN as isize && offset <= i16::MAX as isize => {
-				patch!(i16, offset)
-			}
-			(0x27, Op::JmpIf{offset}) => {
-				patch!(isize, offset)
-			}
-			(0x2c, Op::CallHelperFunction{args, locals_size, location: jmp_location}) if args <= u8::MAX as usize && locals_size <= u8::MAX as usize => {
-				if args != *self.stream.get(location as usize + 1)? as usize {
-					return None;
-				}
-				
-				unsafe {
-					*self.stream.get_mut(location as usize + 2)? = locals_size as u8;
-					*(self.stream.get_mut((location as usize + 3)..)? as *mut [u8] as *mut [u8; size_of::<usize>()]) = (jmp_location).to_ne_bytes();
-				}
+			(Op::CallHelperFunction{args: patch_args, locals_size: patch_locals_size, location: patch_location}, 
+			 Op::CallHelperFunction{args, locals_size, location}) => {
+				*patch_args = args;
+				*patch_locals_size = locals_size;
+				*patch_location = location;
 				return Some(());
 			}
 			_ => return None,
@@ -1178,17 +778,9 @@ impl Instructions {
 
 impl std::fmt::Debug for Instructions {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		let mut buf = &*self.stream;
 		f.debug_list()
 			.entries(
-				std::iter::from_fn(|| {
-					if buf.len() == 0 {
-						None
-					} else {
-						Some(Op::decode(&mut buf)
-							.expect("Invalid instruction"))
-					}
-				})
+				self.stream.iter()
 			)
 			.finish()
 	}
@@ -1197,28 +789,26 @@ impl std::fmt::Debug for Instructions {
 impl std::fmt::Display for Instructions {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		let stream = &mut &*self.stream;
-		let mut addr = unsafe{stream.as_ptr().byte_offset_from(self.stream.as_ptr())};
+		let mut addr = unsafe{stream.as_ptr().offset_from(self.stream.as_ptr())};
 		if let Some(name) = self.fn_labels.get(&(addr as usize)) {
 			writeln!(f, "{}:", name)?;
 		}
 		if let Some((froms, label)) = self.jumps_end.get(&(addr as usize)) && !froms.is_empty() {
 			writeln!(f, "L_{}: ", label)?;
 		}
-		while let Some(ins) = Op::decode(stream) {
-			let end_addr = unsafe{stream.as_ptr().byte_offset_from(self.stream.as_ptr())};
+		while let Some((ins, next)) = stream.split_first() {
+			*stream = next;
+			let end_addr = unsafe{stream.as_ptr().offset_from(self.stream.as_ptr())};
 			write!(f, " 0x{:08x} ", addr)?;
 			match ins {
 				Op::ReturnVoid => write!(f, "ReturnVoid"),
 				Op::ReturnValue => write!(f, "ReturnValue"),
-				Op::LoadQW {
-					bytes,
-				} => write!(f, "Load {:?}", f64::from_ne_bytes(bytes)),
 				Op::LoadStr {
 					string,
 				} => write!(f, "LoadStr {:?}", string.to_str()),
 				Op::LoadNumber {
-					number: _,
-				} => unreachable!(),
+					number,
+				} => write!(f, "Load {:?}", number),
 				Op::LoadFalse => write!(f, "LoadFalse"),
 				Op::LoadTrue => write!(f, "LoadTrue"),
 				Op::Dup{
@@ -1253,6 +843,9 @@ impl std::fmt::Display for Instructions {
 				Op::JmpIf {
 					offset: _,
 				} => write!(f, "JmpIf L_{}", self.jumps_end.get(self.jumps_start.get(&(end_addr as usize)).unwrap()).unwrap().1),
+				Op::JmpIfNot {
+					offset: _,
+				} => write!(f, "JmpIfNot L_{}", self.jumps_end.get(self.jumps_start.get(&(end_addr as usize)).unwrap()).unwrap().1),
 				Op::LoadLocal {
 					index,
 				} => write!(f, "LoadLocal {}", index),
@@ -1268,7 +861,7 @@ impl std::fmt::Display for Instructions {
 					has_return,
 					args,
 					ptr,
-				} => write!(f, "CallGameFunction {} {} 0x{:016x}", has_return, args, &unsafe{std::mem::transmute::<GameFnPtr, *const ()>(ptr).addr()}),
+				} => write!(f, "CallGameFunction {} {} 0x{:016x}", has_return, args, &unsafe{std::mem::transmute::<GameFnPtr, *const ()>(*ptr).addr()}),
 			}?;
 			addr = end_addr;
 			// print labels: 
@@ -1310,8 +903,9 @@ impl Stack {
 		let start_time = Instant::now();
 		self.stack.resize(self.rbp + locals_size, GrugValue{void: ()});
 		let mut i_count: usize = 0;
-		while let Some(ins) = Op::decode(&mut stream) {
-			match ins {
+		while let Some((ins, next)) = stream.split_first() {
+			stream = next;
+			match *ins {
 				Op::ReturnVoid         => {
 					self.stack.truncate(self.rbp);
 					if let Some((rbp, ip)) = self.stack_frames.pop() {
@@ -1332,9 +926,8 @@ impl Stack {
 						return Some(ret_val);
 					}
 				}
-				Op::LoadQW{bytes}      => self.stack.push(GrugValue::from_bytes(bytes)),
 				Op::LoadStr{string}    => self.stack.push(GrugValue{string}),
-				Op::LoadNumber{..}     => unreachable!(),
+				Op::LoadNumber{number} => self.stack.push(GrugValue{number}),
 				Op::LoadFalse          => self.stack.push(GrugValue{bool: 0}),
 				Op::LoadTrue           => self.stack.push(GrugValue{bool: 1}),
 				Op::Dup{index}         => {
@@ -1438,6 +1031,16 @@ impl Stack {
 						}
 					}
 				}
+				Op::JmpIfNot{offset}      => {
+					if unsafe{self.stack.pop()?.bool} == 0 {
+						stream = unsafe{
+							std::slice::from_raw_parts(
+								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset),
+								(stream.len() as isize - offset) as usize
+							)
+						}
+					}
+				}
 				Op::LoadLocal{index}   => {
 					 let value = *self.stack.get(self.rbp + index)?;
 					 self.stack.push(value);
@@ -1467,16 +1070,16 @@ impl Stack {
 					match (has_return, args) {
 						(false, 0) => unsafe{(ptr.void_argless)(state)},
 						(false, n) => {
-							unsafe{(ptr.void)(state, self.stack.as_ptr().add(self.stack.len() - n))};
-							self.stack.truncate(self.stack.len() - n);
+							unsafe{(ptr.void)(state, self.stack.as_ptr().add(self.stack.len() - n as usize))};
+							self.stack.truncate(self.stack.len() - n as usize);
 						}
 						(true , 0) => {
 							let value = unsafe{(ptr.value_argless)(state)};
 							self.stack.push(value);
 						}
 						(true , n) => {
-							let value = unsafe{(ptr.value)(state, self.stack.as_ptr().add(self.stack.len() - n))};
-							self.stack.truncate(self.stack.len() - n);
+							let value = unsafe{(ptr.value)(state, self.stack.as_ptr().add(self.stack.len() - n as usize))};
+							self.stack.truncate(self.stack.len() - n as usize);
 							self.stack.push(value);
 						}
 					}
@@ -1607,8 +1210,8 @@ helper_fib_naive(n: number) number {
 		unsafe{*arguments}
 	}
 
-	extern "C" fn void_argless(_: &GrugState) {
-	}
+	// extern "C" fn void_argless(_: &GrugState) {
+	// }
 	// extern "C" fn void_arg(_: &GrugState, _arguments: *const GrugValue) {
 	// }
 	// extern "C" fn value_argless(_: &GrugState) -> GrugValue {
@@ -1670,98 +1273,6 @@ helper_fib_naive(n: number) number {
 		}
 	}
 		
-	#[test]
-	fn vm_test_decoding() {
-		let mut stream = Instructions::new();
-		macro_rules! test_op {
-			($op: expr) => {{
-				stream.clear();
-				let op = $op;
-				stream.push_op(op);
-				assert_eq!(Op::decode(&mut &*stream.stream), Some(op));
-			}}
-		}
-		test_op!(Op::ReturnVoid);
-		test_op!(Op::ReturnValue);
-		for i in 0..10_usize {
-			test_op!(Op::LoadQW{bytes: i.to_ne_bytes()});
-			test_op!(Op::LoadNumber{number: i as f64});
-			test_op!(Op::StoreGlobal{index: i});
-			test_op!(Op::LoadGlobal{index: i});
-			test_op!(Op::JmpIf{offset: i as isize});
-			test_op!(Op::JmpIf{offset: -(i as isize)});
-			test_op!(Op::Jmp{offset: i as isize});
-			test_op!(Op::Jmp{offset: -(i as isize)});
-			test_op!(Op::StoreLocal{index: i});
-			test_op!(Op::LoadLocal{index: i});
-			test_op!(Op::Dup{index: i});
-			test_op!(Op::Dup{index: 10 * i});
-		}
-		test_op!(Op::LoadFalse);
-		test_op!(Op::LoadTrue);
-		test_op!(Op::Pop);
-		test_op!(Op::Add);
-		test_op!(Op::Sub);
-		test_op!(Op::Mul);
-		test_op!(Op::Div);
-		test_op!(Op::Rem);
-		test_op!(Op::And);
-		test_op!(Op::Or);
-		test_op!(Op::Not);
-		test_op!(Op::CmpEq);
-		test_op!(Op::CmpNeq);
-		test_op!(Op::StrEq);
-		test_op!(Op::CmpG);
-		test_op!(Op::CmpGe);
-		test_op!(Op::CmpL);
-		test_op!(Op::CmpLe);
-		for i in 0..20 {
-			test_op!(Op::CallGameFunction{
-				has_return: false,
-				args: i,
-				ptr: GameFnPtr{void_argless: void_argless},
-			});
-			for j in 0..45 {
-				test_op!(Op::CallHelperFunction{
-					args: i,
-					locals_size: j,
-					location: j,
-				});
-			}
-		}
-	}
-
-	#[test]
-	fn vm_test_patching() {
-		let mut stream = Instructions::new();
-		for i in 0..20 {
-			stream.push_op(Op::Jmp{offset: 0});
-			unsafe{stream.try_patch(Op::Jmp{offset: i as isize * 10}, 0).unwrap()};
-			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::Jmp{offset: i as isize * 10});
-			stream.clear();
-
-			stream.push_op(Op::Jmp{offset: 0});
-			unsafe{stream.try_patch(Op::Jmp{offset: i as isize * -10}, 0).unwrap()};
-			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::Jmp{offset: i as isize * -10});
-			stream.clear();
-
-			stream.push_op(Op::JmpIf{offset: 0});
-			unsafe{stream.try_patch(Op::JmpIf{offset: i as isize * 10}, 0).unwrap()};
-			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::JmpIf{offset: i as isize * 10});
-			stream.clear();
-
-			stream.push_op(Op::JmpIf{offset: 0});
-			unsafe{stream.try_patch(Op::JmpIf{offset: i as isize * -10}, 0).unwrap()};
-			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::JmpIf{offset: i as isize * -10});
-			stream.clear();
-
-			stream.push_op(Op::JmpIf{offset: 0});
-			unsafe{stream.try_patch(Op::JmpIf{offset: i as isize * -1000}, 0).unwrap()};
-			assert_eq!(Op::decode(&mut &*stream.stream).unwrap(), Op::JmpIf{offset: i as isize * -1000});
-			stream.clear();
-		}
-	}
-
 	#[test]
 	fn vm_test_0() {
 		let state = get_state();
@@ -2020,11 +1531,11 @@ helper_fib_naive(n: number) number {
 			stream.push_op(Op::StoreGlobal{index: 1});
 			stream.push_op(Op::LoadNumber{number: i as f64});
 			stream.push_op(Op::StoreGlobal{index: 2});
-			let cond_start = stream.get_loc() as isize;
+			let cond_start = stream.get_loc();
 			stream.push_op(Op::LoadGlobal{index: 2});
 			stream.push_op(Op::LoadNumber{number: 0.});
 			stream.push_op(Op::CmpLe);
-			let block_begin_jump = stream.get_loc() as isize;
+			let block_begin_jump = stream.get_loc();
 			stream.push_op(Op::JmpIf{offset: 0});
 			stream.push_op(Op::LoadGlobal{index: 1});
 			stream.push_op(Op::LoadGlobal{index: 0});
@@ -2036,14 +1547,14 @@ helper_fib_naive(n: number) number {
 			stream.push_op(Op::LoadNumber{number: 1.});
 			stream.push_op(Op::Sub);
 			stream.push_op(Op::StoreGlobal{index: 2});
-			let block_end_loc = stream.get_loc() as isize;
+			let block_end_loc = stream.get_loc();
 			stream.push_op(Op::Jmp{offset: 0});
-			let block_continue_loc = stream.get_loc() as isize;
+			let block_continue_loc = stream.get_loc();
 			stream.push_op(Op::LoadGlobal{index: 0});
 			stream.push_op(Op::ReturnValue);
 
-			unsafe{stream.try_patch(Op::JmpIf{offset: (block_continue_loc - block_begin_jump - 3)}, block_begin_jump as usize).unwrap()};
-			unsafe{stream.try_patch(Op::Jmp{offset: (cond_start - block_end_loc - 3)}, block_end_loc as usize).unwrap()};
+			stream.try_patch(Op::JmpIf{offset: Op::calc_offset(block_begin_jump, block_continue_loc)}, block_begin_jump).unwrap();
+			stream.try_patch(Op::Jmp{offset: Op::calc_offset(block_end_loc, cond_start)}, block_end_loc).unwrap();
 			let fib = {
 				let mut a = 1.;
 				let mut b = 1.;
@@ -2081,11 +1592,11 @@ helper_fib_naive(n: number) number {
 			stream.push_op(Op::StoreLocal{index: 1});
 			stream.push_op(Op::LoadNumber{number: i as f64});
 			stream.push_op(Op::StoreLocal{index: 2});
-			let cond_start = stream.get_loc() as isize;
+			let cond_start = stream.get_loc();
 			stream.push_op(Op::LoadLocal{index: 2});
 			stream.push_op(Op::LoadNumber{number: 0.});
 			stream.push_op(Op::CmpLe);
-			let block_begin_jump = stream.get_loc() as isize;
+			let block_begin_jump = stream.get_loc();
 			stream.push_op(Op::JmpIf{offset: 0});
 			stream.push_op(Op::LoadLocal{index: 1});
 			stream.push_op(Op::LoadLocal{index: 0});
@@ -2097,14 +1608,14 @@ helper_fib_naive(n: number) number {
 			stream.push_op(Op::LoadNumber{number: 1.});
 			stream.push_op(Op::Sub);
 			stream.push_op(Op::StoreLocal{index: 2});
-			let block_end_loc = stream.get_loc() as isize;
+			let block_end_loc = stream.get_loc();
 			stream.push_op(Op::Jmp{offset: 0});
-			let block_continue_loc = stream.get_loc() as isize;
+			let block_continue_loc = stream.get_loc();
 			stream.push_op(Op::LoadLocal{index: 0});
 			stream.push_op(Op::ReturnValue);
 
-			unsafe{stream.try_patch(Op::JmpIf{offset: (block_continue_loc - block_begin_jump - 3)}, block_begin_jump as usize).unwrap()};
-			unsafe{stream.try_patch(Op::Jmp{offset: (cond_start - block_end_loc - 3)}, block_end_loc as usize).unwrap()};
+			stream.try_patch(Op::JmpIf{offset: Op::calc_offset(block_begin_jump, block_continue_loc)}, block_begin_jump).unwrap();
+			stream.try_patch(Op::Jmp{offset: Op::calc_offset(block_end_loc, cond_start)}, block_end_loc).unwrap();
 			let fib = {
 				let mut a = 1.;
 				let mut b = 1.;
