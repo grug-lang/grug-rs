@@ -40,9 +40,11 @@ pub unsafe trait Backend {
 	/// within self so that it can be used during `destroy_entity_data` to
 	/// check for pointer equality. 
 	/// It is safe to use that pointer as a &GrugEntity in the meantime.
+	///
+	/// Returns false if there was a runtime error during execution
 	// TODO: This should pass in a pinned shared reference to strengthen the guarantee
 	#[must_use]
-	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool;
+	fn init_entity(&self, state: &GrugState, entity: &GrugEntity) -> bool;
 	/// Deinitialize all the data associated with all entities. The pointers
 	/// stored during `init_entity` must be used to get access to the entity data.
 	/// The entities can only be accessed as a &GrugEntity even self is available with an exclusive reference

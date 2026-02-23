@@ -459,7 +459,7 @@ unsafe impl Backend for BytecodeBackend {
 			}
 		}
 	}
-	fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
+	fn init_entity(&self, state: &GrugState, entity: &GrugEntity) -> bool {
 		let file = self.files.get(&entity.file_id)
 			.expect("file already compiled");
 		let globals = unsafe{&*file.data.get_slot().write_slice(file.globals_size, Cell::new(GrugValue{void: ()}))};
