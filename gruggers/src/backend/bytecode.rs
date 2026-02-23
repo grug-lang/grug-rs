@@ -593,6 +593,84 @@ pub enum Op {
 	},
 }
 
+
+#[allow(unused)]
+const DISPATCH_TABLE: [DispatchFn; Op::num_opcodes() as usize] = const {
+	let mut functions = [(|_, _, _, _, _| None) as DispatchFn; Op::num_opcodes() as usize];
+	let mut idx = 0; 
+	while idx < functions.len() {
+		functions[idx] = match idx {
+			0x00 => (|stack: &mut Stack, state, globals, instructions: &Instructions, _| {
+				stack.stack.truncate(stack.rbp);
+				if let Some((rbp, ip)) = stack.stack_frames.pop() {
+					stack.rbp = rbp;
+					let next_ptr = unsafe{instructions.stream.as_ptr().add(ip)};
+					unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
+				} else {
+					return Some(GrugValue{void: ()});
+				}
+			}) as DispatchFn,
+			0x01 => (|stack: &mut Stack, state, globals, instructions: &Instructions, _| {
+				let ret_val = stack.stack.pop()?;
+				stack.stack.truncate(stack.rbp);
+				if let Some((rbp, ip)) = stack.stack_frames.pop() {
+					stack.stack.push(ret_val);
+					stack.rbp = rbp;
+					let next_ptr = unsafe{instructions.stream.as_ptr().add(ip)};
+					unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
+				} else {
+					return Some(ret_val);
+				}
+			}) as DispatchFn,
+			0x02 => (|stack: &mut Stack, state, globals, instructions: &Instructions, ptr| {
+				match unsafe{*ptr} {
+					Op::LoadNumber{number} => stack.stack.push(GrugValue{number}),
+					_ => unsafe{std::hint::unreachable_unchecked()},
+				}
+				let next_ptr = unsafe{ptr.add(1)};
+				unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
+			}) as DispatchFn,
+			0x03 => (|stack: &mut Stack, state, globals, instructions: &Instructions, ptr| {
+				match unsafe{*ptr} {
+					Op::LoadStr{string}    => stack.stack.push(GrugValue{string}),
+					_ => unsafe{std::hint::unreachable_unchecked()},
+				}
+				let next_ptr = unsafe{ptr.add(1)};
+				unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
+			}) as DispatchFn,
+			0x04 => (|stack: &mut Stack, state, globals, instructions: &Instructions, ptr| {
+				match unsafe{*ptr} {
+					Op::LoadFalse          => stack.stack.push(GrugValue{bool: 0}),
+					_ => unsafe{std::hint::unreachable_unchecked()},
+				}
+				let next_ptr = unsafe{ptr.add(1)};
+				unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
+			}) as DispatchFn,
+			0x05 => (|stack: &mut Stack, state, globals, instructions: &Instructions, ptr| {
+				match unsafe{*ptr} {
+					Op::LoadTrue           => stack.stack.push(GrugValue{bool: 1}),
+					_ => unsafe{std::hint::unreachable_unchecked()},
+				}
+				let next_ptr = unsafe{ptr.add(1)};
+				unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
+			}) as DispatchFn,
+			0x06 => (|stack: &mut Stack, state, globals, instructions: &Instructions, ptr| {
+				match unsafe{*ptr} {
+					Op::Dup{index}         => {
+						stack.stack.push(*stack.stack.get(stack.stack.len() - 1 - index)?)
+					}
+					_ => unsafe{std::hint::unreachable_unchecked()},
+				}
+				let next_ptr = unsafe{ptr.add(1)};
+				unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
+			}) as DispatchFn,
+			_ => {idx += 1; continue},
+		};
+		idx += 1;
+	}
+	functions
+};
+
 impl PartialEq for Op {
 	fn eq(&self, other: &Self) -> bool {
 		match (self, other) {
@@ -635,11 +713,25 @@ impl PartialEq for Op {
 	}
 }
 
+type DispatchFn = unsafe fn(&mut Stack, state: &GrugState, globals: &[Cell<GrugValue>], instructions: &Instructions, *const Op) -> Option<GrugValue>;
+
 impl Op {
 	fn calc_offset(from: usize, to: usize) -> isize {
 		let offset_from_start = to as isize - from as isize ;
 		// opcode is 1 byte, offset fits in two bytes
 		offset_from_start - 1
+	}
+
+	const fn num_opcodes() -> u8 {
+		unsafe{*(&Self::CallGameFunction{
+			has_return: false,
+			args: 0,
+			ptr: GameFnPtr{value: std::mem::transmute(std::ptr::null::<()>())},
+		} as *const _ as *const u8)}
+	}
+
+	fn get_dispatch_fn(ptr: *const Self) -> DispatchFn {
+		DISPATCH_TABLE[unsafe{*(ptr as *const u8)} as usize]
 	}
 }
 
@@ -932,8 +1024,8 @@ impl Stack {
 						return Some(ret_val);
 					}
 				}
-				Op::LoadStr{string}    => self.stack.push(GrugValue{string}),
 				Op::LoadNumber{number} => self.stack.push(GrugValue{number}),
+				Op::LoadStr{string}    => self.stack.push(GrugValue{string}),
 				Op::LoadFalse          => self.stack.push(GrugValue{bool: 0}),
 				Op::LoadTrue           => self.stack.push(GrugValue{bool: 1}),
 				Op::Dup{index}         => {
