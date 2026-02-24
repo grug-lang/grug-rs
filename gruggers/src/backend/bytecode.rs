@@ -6,7 +6,6 @@ use crate::ast::{
 	BinaryOperator, GrugType, HelperFunction, UnaryOperator
 };
 use crate::ntstring::{NTStrPtr, NTStr};
-use crate::cachemap::CacheMap;
 use crate::state::GrugState;
 use crate::xar::{ErasedXar, ErasedPtr};
 use crate::error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
@@ -431,14 +430,14 @@ struct CompiledFile {
 }
 
 pub struct BytecodeBackend {
-	files: CacheMap<GrugScriptId, CompiledFile>,
+	files: RefCell<Vec<CompiledFile>>,
 	stacks: RefCell<Vec<Stack>>,
 }
 
 impl BytecodeBackend {
 	pub fn new() -> Self {
 		Self {
-			files: CacheMap::new(),
+			files: RefCell::new(Vec::new()),
 			stacks: RefCell::new(Vec::new()),
 		}
 	}
@@ -447,15 +446,18 @@ impl BytecodeBackend {
 unsafe impl Backend for BytecodeBackend {
 	fn insert_file(&self, id: GrugScriptId, file: GrugAst) {
 		let compiled_file = Compiler::compile(file);
-		match self.files.try_insert(id, compiled_file) {
-			Ok(()) => (),
-			Err((_id, _compiled_file)) => {
-				unimplemented!();
-			}
+		let mut files = self.files.borrow_mut();
+		if files.len() > id.0 as usize {
+			unimplemented!("recompile files");
+		} else if files.len() == id.0 as usize {
+			files.push(compiled_file);
+		} else {
+			unreachable!("GrugScriptIds must be contigious, Expected {}, got {}", files.len(), id.0);
 		}
 	}
 	fn init_entity(&self, state: &GrugState, entity: &GrugEntity) -> bool {
-		let file = self.files.get(&entity.file_id)
+		let files = self.files.borrow();
+		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
 		let globals = unsafe{&*file.data.get_slot().write_slice(file.globals_size, Cell::new(GrugValue{void: ()}))};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
@@ -468,13 +470,14 @@ unsafe impl Backend for BytecodeBackend {
 		ret_val
 	}
 	fn clear_entities(&mut self) {
-		for (_, file) in self.files.iter_mut() {
+		for file in self.files.get_mut().iter_mut() {
 			file.entities.get_mut().clear();
 			file.data.clear();
 		}
 	}
 	fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
-		let file = self.files.get(&entity.file_id)
+		let files = self.files.borrow();
+		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
 		if file.entities.borrow_mut().extract_if(.., |x: &mut NonNull<GrugEntity>| !std::ptr::eq(x.as_ptr().cast_const(), entity))
 			.next().is_some() {
@@ -485,7 +488,8 @@ unsafe impl Backend for BytecodeBackend {
 		}
 	}
 	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
-		let file = self.files.get(&entity.file_id)
+		let files = self.files.borrow();
+		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
 
 		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<GrugValue>>().as_ptr(), file.globals_size)};
@@ -503,7 +507,8 @@ unsafe impl Backend for BytecodeBackend {
 		ret_val
 	}
 	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
-		let file = self.files.get(&entity.file_id)
+		let files = self.files.borrow();
+		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
 
 		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<GrugValue>>().as_ptr(), file.globals_size)};

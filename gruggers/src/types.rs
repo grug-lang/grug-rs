@@ -87,7 +87,8 @@ pub type GameFnPtrValueArgless = extern "C" fn (state: &GrugState) -> GrugValue;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
-pub struct GrugId(u64);
+pub struct GrugId(pub u64);
+
 pub type GrugScriptId = GrugId;
 
 impl std::fmt::Display for GrugId {
