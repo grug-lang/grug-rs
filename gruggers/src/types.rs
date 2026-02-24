@@ -7,25 +7,48 @@ use crate::state::GrugState;
 
 // TODO Unnest some of these enums
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy)]
-pub union GameFnPtr {
-	pub void: GameFnPtrVoid,
-	pub void_argless: GameFnPtrVoidArgless,
-	pub value: GameFnPtrValue,
-	pub value_argless: GameFnPtrValueArgless,
+pub struct GameFnPtr(GameFnPtrVoid);
+
+impl GameFnPtr {
+	pub const unsafe fn void(self) -> GameFnPtrVoid {
+		self.0
+	}
+	pub const unsafe fn void_argless(self) -> GameFnPtrVoidArgless {
+		unsafe{std::mem::transmute(self.0)}
+	}
+	pub const unsafe fn value(self) -> GameFnPtrValue {
+		unsafe{std::mem::transmute(self.0)}
+	}
+	pub const unsafe fn value_argless(self) -> GameFnPtrValueArgless {
+		unsafe{std::mem::transmute(self.0)}
+	}
+
+	pub const fn from_void(value: GameFnPtrVoid) -> Self {
+		Self(value)
+	}
+	pub const fn from_void_argless(value: GameFnPtrVoidArgless) -> Self {
+		Self(unsafe{std::mem::transmute(value)})
+	}
+	pub const fn from_value(value: GameFnPtrValue) -> Self {
+		Self(unsafe{std::mem::transmute(value)})
+	}
+	pub const fn from_value_argless(value: GameFnPtrValueArgless) -> Self {
+		Self(unsafe{std::mem::transmute(value)})
+	}
 }
 
 impl std::fmt::Debug for GameFnPtr {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		unsafe{self.void.fmt(f)}
+		self.0.fmt(f)
 	}
 }
 
 impl PartialEq for GameFnPtr {
 	fn eq(&self, other: &Self) -> bool {
 		const _: () = const{assert!(size_of::<GameFnPtr>() == size_of::<usize>())};
-		unsafe{std::ptr::fn_addr_eq(self.void, other.void)}
+		unsafe{std::ptr::fn_addr_eq(self.0, other.void())}
 		// unsafe{std::mem::transmute::<Self, usize>(*self) == std::mem::transmute::<Self, usize>(*other)}
 	}
 }
@@ -34,33 +57,25 @@ mod from_impls {
 	use super::*;
 	impl From<GameFnPtrVoid> for GameFnPtr {
 		fn from (value: GameFnPtrVoid) -> Self {
-			Self {
-				void: value,
-			}
+			Self(value)
 		}
 	}
 
 	impl From<GameFnPtrVoidArgless> for GameFnPtr {
 		fn from (value: GameFnPtrVoidArgless) -> Self {
-			Self {
-				void_argless: value,
-			}
+			Self(unsafe{std::mem::transmute(value)})
 		}
 	}
 
 	impl From<GameFnPtrValue> for GameFnPtr {
 		fn from (value: GameFnPtrValue) -> Self {
-			Self {
-				value,
-			}
+			Self(unsafe{std::mem::transmute(value)})
 		}
 	}
 
 	impl From<GameFnPtrValueArgless> for GameFnPtr {
 		fn from (value: GameFnPtrValueArgless) -> Self {
-			Self {
-				value_argless: value,
-			}
+			Self(unsafe{std::mem::transmute(value)})
 		}
 	}
 }

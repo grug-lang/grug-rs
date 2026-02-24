@@ -158,7 +158,7 @@ pub enum ExprData<'a> {
 	},
 	Parenthesized(&'a mut Expr<'a>),
 }
-// const _: () = const {assert!(std::mem::size_of::<Option<GameFnPtr>>() == std::mem::size_of::<GameFnPtr>())};
+const _: () = const {assert!(std::mem::size_of::<Option<GameFnPtr>>() == std::mem::size_of::<GameFnPtr>())};
 
 #[derive(Debug)]
 #[repr(C)]

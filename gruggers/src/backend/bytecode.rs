@@ -722,10 +722,13 @@ impl Op {
 	}
 
 	const fn num_opcodes() -> u8 {
+		extern "C" fn simple(_: &GrugState) {
+
+		}
 		unsafe{*(&Self::CallGameFunction{
 			has_return: false,
 			args: 0,
-			ptr: GameFnPtr{value: std::mem::transmute(std::ptr::null::<()>())},
+			ptr: GameFnPtr::from_void_argless(simple),
 		} as *const _ as *const u8)}
 	}
 
@@ -1165,17 +1168,17 @@ impl Stack {
 					ptr,
 				} => {
 					match (has_return, args) {
-						(false, 0) => unsafe{(ptr.void_argless)(state)},
+						(false, 0) => unsafe{(ptr.void_argless())(state)},
 						(false, n) => {
-							unsafe{(ptr.void)(state, self.stack.as_ptr().add(self.stack.len() - n as usize))};
+							unsafe{(ptr.void())(state, self.stack.as_ptr().add(self.stack.len() - n as usize))};
 							self.stack.truncate(self.stack.len() - n as usize);
 						}
 						(true , 0) => {
-							let value = unsafe{(ptr.value_argless)(state)};
+							let value = unsafe{(ptr.value_argless())(state)};
 							self.stack.push(value);
 						}
 						(true , n) => {
-							let value = unsafe{(ptr.value)(state, self.stack.as_ptr().add(self.stack.len() - n as usize))};
+							let value = unsafe{(ptr.value())(state, self.stack.as_ptr().add(self.stack.len() - n as usize))};
 							self.stack.truncate(self.stack.len() - n as usize);
 							self.stack.push(value);
 						}
