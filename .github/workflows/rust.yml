@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "master", "workflow_test" ]
   pull_request:
     branches: [ "master" ]
 
@@ -19,10 +19,15 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - run: cmake -S ./gruggers/src/grug_tests/ -B ./gruggers/src/grug_tests/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-    - run: cmake --build ./gruggers/src/grug_tests/build
-    - run: cmake -S ./gruggers/src/grug_bench/ -B ./gruggers/src/grug_bench/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-    - run: cmake --build ./gruggers/src/grug_bench/build
+    - run: git submodule update --init --force
+    - name: TestConfig
+      run: cmake -S gruggers/src/grug_tests/ -B ./gruggers/src/grug_tests/build/ -G Ninja -DCMAKE_BUILD_TYPE=Release
+    - name: TestBuild
+      run: cmake --build ./gruggers/src/grug_tests/build
+    - name: BenchConfid
+      run: cmake -S gruggers/src/grug_bench/ -B ./gruggers/src/grug_bench/build/ -G Ninja -DCMAKE_BUILD_TYPE=Release
+    - name: BenchBuild
+      run: cmake --build ./gruggers/src/grug_bench/build
     - name: Build
       run: cargo build --verbose
     - name: Run tests
