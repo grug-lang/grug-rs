@@ -1,4 +1,5 @@
 use crate::ntstring::NTStrPtr;
+use crate::types::GameFnPtr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C, u32)]
@@ -153,9 +154,11 @@ pub enum ExprData<'a> {
 	Call {
 		name : NTStrPtr<'a>,
 		args : &'a mut [Expr<'a>],
+		ptr  : Option<GameFnPtr>,
 	},
 	Parenthesized(&'a mut Expr<'a>),
 }
+// const _: () = const {assert!(std::mem::size_of::<Option<GameFnPtr>>() == std::mem::size_of::<GameFnPtr>())};
 
 #[derive(Debug)]
 #[repr(C)]

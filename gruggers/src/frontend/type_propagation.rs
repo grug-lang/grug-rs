@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
+use crate::types::GameFnPtr;
 use crate::ntstring::NTStr;
 use crate::ast::{
 	GrugType, UnaryOperator, BinaryOperator, GlobalStatement,
@@ -18,6 +19,7 @@ use allocator_api2::boxed::Box;
 pub(super) struct TypePropogator<'mod_api, 'arena> {
 	entity: &'mod_api ModApiEntity,
 	game_fns: &'mod_api HashMap<Arc<str>, ModApiGameFn>,
+	game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>,
 	current_mod_name: String,
 	global_variables: HashMap<&'arena str, GrugType<'arena>>,
 	local_variables: Vec<HashMap<&'arena str, GrugType<'arena>>>,
@@ -274,6 +276,9 @@ pub enum TypePropogatorError {
 	OutOfOrderOnFn {
 		entity_name: Arc<str>,
 		on_fn_name: Arc<str>,
+	},
+	GameFunctionNotProvided {
+		fn_name: String,
 	}
 }
 
@@ -451,6 +456,9 @@ impl std::fmt::Display for TypePropogatorError {
 				entity_name,
 				on_fn_name,
 			} => write!(f, "The function '{}' needs to be moved before/after a different on_ function, according to the entity '{}' in mod_api.json", on_fn_name, entity_name),
+			Self::GameFunctionNotProvided {
+				fn_name,
+			} => write!(f, "Game function {} was not registered", fn_name),
 		}
 	}
 }
@@ -638,10 +646,11 @@ impl From<EntityValidationError> for TypePropogatorError {
 }
 
 impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
-	pub fn new (entity: &'mod_api ModApiEntity, game_fns: &'mod_api HashMap<Arc<str>, ModApiGameFn>, mod_name: String) -> Self {
+	pub fn new (entity: &'mod_api ModApiEntity, game_fns: &'mod_api HashMap<Arc<str>, ModApiGameFn>, game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, mod_name: String) -> Self {
 		Self {
 			entity,
 			game_fns,
+			game_fn_ptrs,
 			current_mod_name: mod_name,
 			global_variables: HashMap::new(),
 			local_variables: Vec::new(),
@@ -940,6 +949,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			ExprData::Call{
 				name: fn_name,
 				args,
+				ptr : _,
 			} => {
 				if fn_name.to_str().starts_with("helper_") {
 					Err(TypePropogatorError::GlobalCantCallHelperFn{
@@ -1069,22 +1079,31 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			ExprData::Call{
 				name: fn_name,
 				args,
+				ptr ,
 			} => {
 				// TODO: Move this line to within check_arguments
+				let fn_name = fn_name.to_str();
 				args.iter_mut().map(|argument| self.fill_expr(helper_fns, argument, arena)).collect::<Result<Vec<_>, _>>()?;
-				if let Some((_, (return_ty, sig_arguments))) = helper_fns.iter().find(|(name, _)| *name == fn_name.to_str()) {
-					self.check_arguments(fn_name.to_str(), sig_arguments, args, arena)?;
+				if let Some((_, (return_ty, sig_arguments))) = helper_fns.iter().find(|(name, _)| *name == fn_name) {
+					self.check_arguments(fn_name, sig_arguments, args, arena)?;
 					return_ty.clone()
-				} else if let Some(game_fn) = self.game_fns.get(fn_name.to_str()) {
-					self.check_arguments(fn_name.to_str(), &game_fn.arguments, args, arena)?;
-					game_fn.return_ty
-				} else if fn_name.to_str().starts_with("on_") {
+				} else if let Some(game_fn) = self.game_fns.get(fn_name) {
+					self.check_arguments(fn_name, &game_fn.arguments, args, arena)?;
+					if let Some(game_fn_ptr) = self.game_fn_ptrs.get(fn_name) {
+						*ptr = Some(*game_fn_ptr);
+						game_fn.return_ty
+					} else {
+						return Err(TypePropogatorError::GameFunctionNotProvided{
+							fn_name: String::from(fn_name),
+						});
+					}
+				} else if fn_name.starts_with("on_") {
 					return Err(TypePropogatorError::CallOnFnWithinOnFn {
-						on_fn_name: Arc::from(fn_name.to_str())
+						on_fn_name: Arc::from(fn_name)
 					});
 				} else {
 					return Err(TypePropogatorError::FunctionDoesNotExist {
-						function_name: Arc::from(fn_name.to_str())
+						function_name: Arc::from(fn_name)
 					});
 				}
 			},

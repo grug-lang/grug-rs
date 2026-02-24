@@ -42,7 +42,7 @@ impl<'a> Compiler<'a> {
 		}
 	}
 
-	fn compile(state: &GrugState, ast: GrugAst<'a>) -> CompiledFile {
+	fn compile(ast: GrugAst<'a>) -> CompiledFile {
 		let mut compiler = Compiler::new();
 		let mut instructions = Instructions::new();
 
@@ -52,7 +52,7 @@ impl<'a> Compiler<'a> {
 		let me_location = compiler.insert_global_variable("me");
 		instructions.push_op(Op::StoreGlobal{index: me_location});
 		for global in ast.members.into_iter() {
-			compiler.compile_expr(state, &mut instructions, &global.assignment_expr);
+			compiler.compile_expr(&mut instructions, &global.assignment_expr);
 			let i = compiler.insert_global_variable(global.name.to_str());
 			instructions.push_op(Op::StoreGlobal{index: i});
 		}
@@ -60,11 +60,11 @@ impl<'a> Compiler<'a> {
 
 		for (i, on_function) in ast.on_functions.into_iter().enumerate() {
 			let Some(on_function) = on_function else {continue};
-			compiler.compile_on_fn(state, &mut instructions, *on_function, i + 1);
+			compiler.compile_on_fn(&mut instructions, *on_function, i + 1);
 		}
 
 		for helper_function in ast.helper_functions {
-			compiler.compile_helper_fn(state, &mut instructions, helper_function);
+			compiler.compile_helper_fn(&mut instructions, helper_function);
 		}
 		for (patch_loc, args, name) in compiler.helper_fn_patches {
 			let (location, locals_size) = instructions.get_helper_fn_info(&name)
@@ -82,7 +82,7 @@ impl<'a> Compiler<'a> {
 		}
 	}
 	
-	fn compile_helper_fn(&mut self, state: &GrugState, instructions: &mut Instructions, helper_function: &'a HelperFunction) {
+	fn compile_helper_fn(&mut self, instructions: &mut Instructions, helper_function: &'a HelperFunction) {
 		debug_assert_eq!(self.locals.len(), 0);
 		debug_assert_eq!(self.current_scope_size, 0);
 		debug_assert_eq!(self.locals_size_max, 0);
@@ -93,7 +93,7 @@ impl<'a> Compiler<'a> {
 			self.insert_local_variable(arg.name.to_str());
 		}
 		for statement in &*helper_function.body_statements {
-			self.compile_statement(state, instructions, statement);
+			self.compile_statement(instructions, statement);
 		}
 		instructions.push_op(Op::ReturnVoid);
 		instructions.insert_helper_fn(helper_function.name.to_str(), begin_location, self.locals_size_max);
@@ -101,7 +101,7 @@ impl<'a> Compiler<'a> {
 		self.pop_scope();
 	}
 
-	fn compile_on_fn(&mut self, state: &GrugState, instructions: &mut Instructions, on_function: &'a OnFunction, index: usize) {
+	fn compile_on_fn(&mut self, instructions: &mut Instructions, on_function: &'a OnFunction, index: usize) {
 		debug_assert_eq!(self.locals.len(), 0);
 		debug_assert_eq!(self.current_scope_size, 0);
 		debug_assert_eq!(self.locals_size_max, 0);
@@ -113,7 +113,7 @@ impl<'a> Compiler<'a> {
 			self.insert_local_variable(arg.name.to_str());
 		}
 		for statement in &*on_function.body_statements {
-			self.compile_statement(state, instructions, statement);
+			self.compile_statement(instructions, statement);
 		}
 		instructions.push_op(Op::ReturnVoid);
 		instructions.insert_on_fn(on_function.name.to_str(), index, begin_location, arg_count, self.locals_size_max);
@@ -121,7 +121,7 @@ impl<'a> Compiler<'a> {
 		self.pop_scope();
 	}
 
-	fn compile_statement(&mut self, state: &GrugState, instructions: &mut Instructions, statement: &'a Statement) {
+	fn compile_statement(&mut self, instructions: &mut Instructions, statement: &'a Statement) {
 		match statement {
 			Statement::Variable{
 				name,
@@ -129,7 +129,7 @@ impl<'a> Compiler<'a> {
 				assignment_expr,
 			} => {
 				let name = name.to_str();
-				self.compile_expr(state, instructions, assignment_expr);
+				self.compile_expr(instructions, assignment_expr);
 				if let Some(_) = ty {
 					let loc = self.insert_local_variable(name);
 					instructions.push_op(Op::StoreLocal{index: loc});
@@ -149,7 +149,7 @@ impl<'a> Compiler<'a> {
 				if_block,
 				else_block,
 			} => {
-				self.compile_expr(state, instructions, condition);
+				self.compile_expr(instructions, condition);
 
 				instructions.push_op(Op::Not);
 				let condition_patch_loc = instructions.get_loc();
@@ -157,7 +157,7 @@ impl<'a> Compiler<'a> {
 
 				self.push_scope();
 				for statement in &**if_block {
-					self.compile_statement(state, instructions, statement);
+					self.compile_statement(instructions, statement);
 				}
 				self.pop_scope();
 
@@ -170,12 +170,12 @@ impl<'a> Compiler<'a> {
 						.expect("Could not patch jump because offset is too large");
 					if *is_chained {
 						for statement in &**else_block {
-							self.compile_statement(state, instructions, statement);
+							self.compile_statement(instructions, statement);
 						}
 					} else {
 						self.push_scope();
 						for statement in &**else_block {
-							self.compile_statement(state, instructions, statement);
+							self.compile_statement(instructions, statement);
 						}
 						self.pop_scope();
 					}
@@ -195,7 +195,7 @@ impl<'a> Compiler<'a> {
 				block,
 			} => {
 				let continue_loc = instructions.get_loc();
-				self.compile_expr(state, instructions, condition);
+				self.compile_expr(instructions, condition);
 				instructions.push_op(Op::Not);
 				let break_patch_loc = instructions.get_loc();
 				instructions.push_op(Op::JmpIf{offset: 0});
@@ -203,7 +203,7 @@ impl<'a> Compiler<'a> {
 				self.while_loop_patches.push((continue_loc, Vec::new()));
 				
 				for statement in &**block {
-					self.compile_statement(state, instructions, statement);
+					self.compile_statement(instructions, statement);
 				}
 				let end_loc = instructions.get_loc();
 				instructions.push_op(Op::Jmp{offset: Op::calc_offset(end_loc, continue_loc)});
@@ -214,10 +214,10 @@ impl<'a> Compiler<'a> {
 					instructions.try_patch(Op::Jmp{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc).unwrap();
 				}
 			}
-			Statement::Call(expr) => self.compile_expr(state, instructions, expr),
+			Statement::Call(expr) => self.compile_expr(instructions, expr),
 			Statement::Return{expr} => {
 				if let Some(expr) = expr {
-					self.compile_expr(state, instructions, expr);
+					self.compile_expr(instructions, expr);
 					instructions.push_op(Op::ReturnValue);
 				} else {
 					instructions.push_op(Op::ReturnVoid);
@@ -236,7 +236,7 @@ impl<'a> Compiler<'a> {
 		}
 	}
 
-	fn compile_expr(&mut self, state: &GrugState, instructions: &mut Instructions, expr: &'a Expr) {
+	fn compile_expr(&mut self, instructions: &mut Instructions, expr: &'a Expr) {
 		match &expr.data {
 			ExprData::True  => instructions.push_op(Op::LoadTrue ),
 			ExprData::False => instructions.push_op(Op::LoadFalse),
@@ -272,26 +272,26 @@ impl<'a> Compiler<'a> {
 				right,
 				op,
 			} => {
-				self.compile_expr(state, instructions, left);
+				self.compile_expr(instructions, left);
 				match op {
-					BinaryOperator::Greater       => {self.compile_expr(state, instructions, right); instructions.push_op(Op::CmpG);}
-					BinaryOperator::GreaterEquals => {self.compile_expr(state, instructions, right); instructions.push_op(Op::CmpGe);}
-					BinaryOperator::Less          => {self.compile_expr(state, instructions, right); instructions.push_op(Op::CmpL);}
-					BinaryOperator::LessEquals    => {self.compile_expr(state, instructions, right); instructions.push_op(Op::CmpLe);}
-					BinaryOperator::Plus          => {self.compile_expr(state, instructions, right); instructions.push_op(Op::Add);}
-					BinaryOperator::Minus         => {self.compile_expr(state, instructions, right); instructions.push_op(Op::Sub);}
-					BinaryOperator::Multiply      => {self.compile_expr(state, instructions, right); instructions.push_op(Op::Mul);}
-					BinaryOperator::Division      => {self.compile_expr(state, instructions, right); instructions.push_op(Op::Div);}
-					BinaryOperator::Remainder     => {self.compile_expr(state, instructions, right); instructions.push_op(Op::Rem);}
+					BinaryOperator::Greater       => {self.compile_expr(instructions, right); instructions.push_op(Op::CmpG);}
+					BinaryOperator::GreaterEquals => {self.compile_expr(instructions, right); instructions.push_op(Op::CmpGe);}
+					BinaryOperator::Less          => {self.compile_expr(instructions, right); instructions.push_op(Op::CmpL);}
+					BinaryOperator::LessEquals    => {self.compile_expr(instructions, right); instructions.push_op(Op::CmpLe);}
+					BinaryOperator::Plus          => {self.compile_expr(instructions, right); instructions.push_op(Op::Add);}
+					BinaryOperator::Minus         => {self.compile_expr(instructions, right); instructions.push_op(Op::Sub);}
+					BinaryOperator::Multiply      => {self.compile_expr(instructions, right); instructions.push_op(Op::Mul);}
+					BinaryOperator::Division      => {self.compile_expr(instructions, right); instructions.push_op(Op::Div);}
+					BinaryOperator::Remainder     => {self.compile_expr(instructions, right); instructions.push_op(Op::Rem);}
 					BinaryOperator::DoubleEquals  => {
 						match right.result_type.unwrap() {
 							GrugType::String => {
-								self.compile_expr(state, instructions, right);
+								self.compile_expr(instructions, right);
 								instructions.push_op(Op::StrEq);
 							}
 							GrugType::Void   => unreachable!(),
 							_ => {
-								self.compile_expr(state, instructions, right);
+								self.compile_expr(instructions, right);
 								instructions.push_op(Op::CmpEq);
 							}
 						}
@@ -299,13 +299,13 @@ impl<'a> Compiler<'a> {
 					BinaryOperator::NotEquals     => {
 						match right.result_type.unwrap() {
 							GrugType::String => {
-								self.compile_expr(state, instructions, right);
+								self.compile_expr(instructions, right);
 								instructions.push_op(Op::StrEq);
 								instructions.push_op(Op::Not);
 							}
 							GrugType::Void   => unreachable!(),
 							_ => {
-								self.compile_expr(state, instructions, right);
+								self.compile_expr(instructions, right);
 								instructions.push_op(Op::CmpNeq);
 							}
 						}
@@ -314,7 +314,7 @@ impl<'a> Compiler<'a> {
 						instructions.push_op(Op::Dup{index: 0});
 						let first_patch_loc = instructions.get_loc();
 						instructions.push_op(Op::JmpIf{offset: 0});
-						self.compile_expr(state, instructions, right);
+						self.compile_expr(instructions, right);
 						instructions.try_patch(
 							Op::JmpIf{
 								offset: Op::calc_offset(first_patch_loc, instructions.get_loc()),
@@ -327,7 +327,7 @@ impl<'a> Compiler<'a> {
 						instructions.push_op(Op::Not);
 						let first_patch_loc = instructions.get_loc();
 						instructions.push_op(Op::JmpIf{offset: 0});
-						self.compile_expr(state, instructions, right);
+						self.compile_expr(instructions, right);
 						instructions.try_patch(
 							Op::JmpIf{
 								offset: Op::calc_offset(first_patch_loc, instructions.get_loc()),
@@ -341,7 +341,7 @@ impl<'a> Compiler<'a> {
 				op,
 				expr,
 			} => {
-				self.compile_expr(state, instructions, expr);
+				self.compile_expr(instructions, expr);
 				match op {
 					UnaryOperator::Not   => instructions.push_op(Op::Not),
 					UnaryOperator::Minus => {instructions.push_op(Op::LoadNumber{number: -1.0}); instructions.push_op(Op::Mul);}
@@ -350,13 +350,14 @@ impl<'a> Compiler<'a> {
 			ExprData::Call {
 				name,
 				args,
-			} if name.to_str().starts_with("helper_") => {
+				ptr: None,
+			} => {
 				let args_count = args.len();
 				if args_count > u16::MAX as usize {
 					panic!("cannot have more than {} arguments in a helper functions", u16::MAX);
 				}
 				for argument in &**args {
-					self.compile_expr(state, instructions, argument);
+					self.compile_expr(instructions, argument);
 				}
 
 				let (location, locals_size) = if let Some(info) = instructions.get_helper_fn_info(name.to_str()) {
@@ -368,25 +369,23 @@ impl<'a> Compiler<'a> {
 				instructions.push_op(Op::CallHelperFunction{args: args_count as u16, locals_size, location});
 			},
 			ExprData::Call {
-				name,
+				name: _,
 				args,
+				ptr: Some(ptr)
 			} => {
-				let name = name.to_ntstr();
 				let args_count = args.len();
 				for argument in &**args {
-					self.compile_expr(state, instructions, argument);
+					self.compile_expr(instructions, argument);
 				}
-				let fn_ptr = state.game_functions.get(name.as_str())
-					.expect("Can't find game function");
 				
-				let has_return = state.mod_api.game_functions().get(name.as_str()).unwrap().return_ty != GrugType::Void;
+				let has_return = *expr.result_type.unwrap() != GrugType::Void;
 				instructions.push_op(Op::CallGameFunction {
 					has_return,
 					args: args_count as u32,
-					ptr: *fn_ptr,
+					ptr: *ptr,
 				});
 			}
-			ExprData::Parenthesized(expr) => self.compile_expr(state, instructions, expr),
+			ExprData::Parenthesized(expr) => self.compile_expr(instructions, expr),
 		}
 	}
 
@@ -449,8 +448,8 @@ impl BytecodeBackend {
 }
 
 unsafe impl Backend for BytecodeBackend {
-	fn insert_file(&self, state: &GrugState, id: GrugScriptId, file: GrugAst) {
-		let compiled_file = Compiler::compile(state, file);
+	fn insert_file(&self, id: GrugScriptId, file: GrugAst) {
+		let compiled_file = Compiler::compile(file);
 		match self.files.try_insert(id, compiled_file) {
 			Ok(()) => (),
 			Err((_id, _compiled_file)) => {
@@ -1327,7 +1326,7 @@ helper_fib_naive(n: number) number {
 			BytecodeBackend::new(),
 		).unwrap();
 		state.register_game_fn("identity", identity as GameFnPtrValue).unwrap();
-		assert!(state.all_game_fns_registered());
+		state.all_game_fns_registered().unwrap();
 		state
 	}
 

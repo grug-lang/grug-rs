@@ -940,6 +940,7 @@ impl<'a> AST<'a> {
 								data: ExprData::Call {
 									name: value.as_ntstrptr(),
 									args: Vec::new().leak(),
+									ptr : None,
 								},
 								result_type: None,
 							}
@@ -955,6 +956,7 @@ impl<'a> AST<'a> {
 										data: ExprData::Call {
 											name: value.as_ntstrptr(),
 											args: arguments.leak(),
+											ptr : None,
 										},
 										result_type: None,
 									};

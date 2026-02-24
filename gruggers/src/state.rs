@@ -1,4 +1,4 @@
-use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
+use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text, ModApiError};
 use crate::error::{GrugError, RuntimeError};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
@@ -350,16 +350,15 @@ impl GrugState {
 		Some(string)
 	}
 
-	pub fn all_game_fns_registered(&self) -> bool {
+	pub fn all_game_fns_registered(&self) -> Result<(), ModApiError> {
 		for game_fn_name in self.mod_api.game_functions().keys() {
 			if !self.game_functions.contains_key(&**game_fn_name) {
-				return false;
-				// Err(ModApiError::GameFnNotProvided{
-				// 	game_fn_name: String::from(&**game_fn_name),
-				// })?;
+				Err(ModApiError::GameFnNotProvided{
+					game_fn_name: String::from(&**game_fn_name),
+				})?;
 			}
 		}
-		return true;
+		Ok(())
 	}
 
 	pub(crate) fn get_next_script_id(&self) -> GrugScriptId {
@@ -440,7 +439,6 @@ impl GrugState {
 	}
 }
 
-// should be moved into backend later
 impl GrugState {
 	/// # SAFETY 
 	/// `values` must point to an array of values with length equal to

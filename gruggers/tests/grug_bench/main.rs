@@ -41,7 +41,7 @@ mod test_bindings {
 			.build_state()
 			.unwrap();
 		register_game_functions(&mut state);
-		assert!(state.all_game_fns_registered());
+		state.all_game_fns_registered().unwrap();
 		Box::new(state)
 	}
 

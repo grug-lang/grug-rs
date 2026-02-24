@@ -146,7 +146,7 @@ fn main () {
 		state.register_game_fn("list_number_len",    list_number_len    as for<'a>extern "C" fn(&'a GrugState, _) -> _).unwrap();
 		state.register_game_fn("list_number_get",    list_number_get    as for<'a>extern "C" fn(&'a GrugState, _) -> _).unwrap();
 		state.register_game_fn("list_number_set",    list_number_set    as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
-		assert!(state.all_game_fns_registered());
+		state.all_game_fns_registered().unwrap();
 		STATE.write(state);
 		OBJECTS.write(HashMap::new());
 

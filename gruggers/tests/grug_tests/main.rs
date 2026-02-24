@@ -44,7 +44,7 @@ mod test_bindings {
 		// register_game_functions(&mut state);
 		super::game_fn_bindings::register_game_functions(&mut state);
 		// let game_functions = get_game_functions();
-		assert!(state.all_game_fns_registered());
+		state.all_game_fns_registered().unwrap();
 		Box::new(state)
 	}
 
