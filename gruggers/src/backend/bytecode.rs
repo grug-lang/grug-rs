@@ -151,9 +151,8 @@ impl<'a> Compiler<'a> {
 			} => {
 				self.compile_expr(instructions, condition);
 
-				instructions.push_op(Op::Not);
 				let condition_patch_loc = instructions.get_loc();
-				instructions.push_op(Op::JmpIf{offset: 0});
+				instructions.push_op(Op::JmpIfNot{offset: 0});
 
 				self.push_scope();
 				for statement in &**if_block {
@@ -166,7 +165,7 @@ impl<'a> Compiler<'a> {
 					instructions.push_op(Op::Jmp{offset: 0});
 					let cur_loc = instructions.get_loc();
 					// jump from the false condtion to the start of the else block
-					instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc)
+					instructions.try_patch(Op::JmpIfNot{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc)
 						.expect("Could not patch jump because offset is too large");
 					if *is_chained {
 						for statement in &**else_block {
@@ -186,7 +185,7 @@ impl<'a> Compiler<'a> {
 				} else {
 					let cur_loc = instructions.get_loc();
 					// jump from the false condtion to the end of the if statement
-					instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc)
+					instructions.try_patch(Op::JmpIfNot{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc)
 						.expect("Could not patch jump because offset is too large");
 				}
 			}
@@ -196,9 +195,8 @@ impl<'a> Compiler<'a> {
 			} => {
 				let continue_loc = instructions.get_loc();
 				self.compile_expr(instructions, condition);
-				instructions.push_op(Op::Not);
 				let break_patch_loc = instructions.get_loc();
-				instructions.push_op(Op::JmpIf{offset: 0});
+				instructions.push_op(Op::JmpIfNot{offset: 0});
 
 				self.while_loop_patches.push((continue_loc, Vec::new()));
 				
@@ -208,7 +206,7 @@ impl<'a> Compiler<'a> {
 				let end_loc = instructions.get_loc();
 				instructions.push_op(Op::Jmp{offset: Op::calc_offset(end_loc, continue_loc)});
 				let break_loc = instructions.get_loc();
-				instructions.try_patch(Op::JmpIf{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc).unwrap();
+				instructions.try_patch(Op::JmpIfNot{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc).unwrap();
 
 				for break_patch_loc in self.while_loop_patches.pop().unwrap().1 {
 					instructions.try_patch(Op::Jmp{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc).unwrap();
@@ -324,12 +322,11 @@ impl<'a> Compiler<'a> {
 					}
 					BinaryOperator::And           => {
 						instructions.push_op(Op::Dup{index: 0});
-						instructions.push_op(Op::Not);
 						let first_patch_loc = instructions.get_loc();
-						instructions.push_op(Op::JmpIf{offset: 0});
+						instructions.push_op(Op::JmpIfNot{offset: 0});
 						self.compile_expr(instructions, right);
 						instructions.try_patch(
-							Op::JmpIf{
+							Op::JmpIfNot{
 								offset: Op::calc_offset(first_patch_loc, instructions.get_loc()),
 							},
 							first_patch_loc,
@@ -592,84 +589,6 @@ pub enum Op {
 	},
 }
 
-
-#[allow(unused)]
-const DISPATCH_TABLE: [DispatchFn; Op::num_opcodes() as usize] = const {
-	let mut functions = [(|_, _, _, _, _| None) as DispatchFn; Op::num_opcodes() as usize];
-	let mut idx = 0; 
-	while idx < functions.len() {
-		functions[idx] = match idx {
-			0x00 => (|stack: &mut Stack, state, globals, instructions: &Instructions, _| {
-				stack.stack.truncate(stack.rbp);
-				if let Some((rbp, ip)) = stack.stack_frames.pop() {
-					stack.rbp = rbp;
-					let next_ptr = unsafe{instructions.stream.as_ptr().add(ip)};
-					unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
-				} else {
-					return Some(GrugValue{void: ()});
-				}
-			}) as DispatchFn,
-			0x01 => (|stack: &mut Stack, state, globals, instructions: &Instructions, _| {
-				let ret_val = stack.stack.pop()?;
-				stack.stack.truncate(stack.rbp);
-				if let Some((rbp, ip)) = stack.stack_frames.pop() {
-					stack.stack.push(ret_val);
-					stack.rbp = rbp;
-					let next_ptr = unsafe{instructions.stream.as_ptr().add(ip)};
-					unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
-				} else {
-					return Some(ret_val);
-				}
-			}) as DispatchFn,
-			0x02 => (|stack: &mut Stack, state, globals, instructions: &Instructions, ptr| {
-				match unsafe{*ptr} {
-					Op::LoadNumber{number} => stack.stack.push(GrugValue{number}),
-					_ => unsafe{std::hint::unreachable_unchecked()},
-				}
-				let next_ptr = unsafe{ptr.add(1)};
-				unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
-			}) as DispatchFn,
-			0x03 => (|stack: &mut Stack, state, globals, instructions: &Instructions, ptr| {
-				match unsafe{*ptr} {
-					Op::LoadStr{string}    => stack.stack.push(GrugValue{string}),
-					_ => unsafe{std::hint::unreachable_unchecked()},
-				}
-				let next_ptr = unsafe{ptr.add(1)};
-				unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
-			}) as DispatchFn,
-			0x04 => (|stack: &mut Stack, state, globals, instructions: &Instructions, ptr| {
-				match unsafe{*ptr} {
-					Op::LoadFalse          => stack.stack.push(GrugValue{bool: 0}),
-					_ => unsafe{std::hint::unreachable_unchecked()},
-				}
-				let next_ptr = unsafe{ptr.add(1)};
-				unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
-			}) as DispatchFn,
-			0x05 => (|stack: &mut Stack, state, globals, instructions: &Instructions, ptr| {
-				match unsafe{*ptr} {
-					Op::LoadTrue           => stack.stack.push(GrugValue{bool: 1}),
-					_ => unsafe{std::hint::unreachable_unchecked()},
-				}
-				let next_ptr = unsafe{ptr.add(1)};
-				unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
-			}) as DispatchFn,
-			0x06 => (|stack: &mut Stack, state, globals, instructions: &Instructions, ptr| {
-				match unsafe{*ptr} {
-					Op::Dup{index}         => {
-						stack.stack.push(*stack.stack.get(stack.stack.len() - 1 - index)?)
-					}
-					_ => unsafe{std::hint::unreachable_unchecked()},
-				}
-				let next_ptr = unsafe{ptr.add(1)};
-				unsafe{Op::get_dispatch_fn(next_ptr)(stack, state, globals, instructions, next_ptr)}
-			}) as DispatchFn,
-			_ => {idx += 1; continue},
-		};
-		idx += 1;
-	}
-	functions
-};
-
 impl PartialEq for Op {
 	fn eq(&self, other: &Self) -> bool {
 		match (self, other) {
@@ -712,28 +631,11 @@ impl PartialEq for Op {
 	}
 }
 
-type DispatchFn = unsafe fn(&mut Stack, state: &GrugState, globals: &[Cell<GrugValue>], instructions: &Instructions, *const Op) -> Option<GrugValue>;
-
 impl Op {
 	fn calc_offset(from: usize, to: usize) -> isize {
 		let offset_from_start = to as isize - from as isize ;
 		// opcode is 1 byte, offset fits in two bytes
 		offset_from_start - 1
-	}
-
-	const fn num_opcodes() -> u8 {
-		extern "C" fn simple(_: &GrugState) {
-
-		}
-		unsafe{*(&Self::CallGameFunction{
-			has_return: false,
-			args: 0,
-			ptr: GameFnPtr::from_void_argless(simple),
-		} as *const _ as *const u8)}
-	}
-
-	fn get_dispatch_fn(ptr: *const Self) -> DispatchFn {
-		DISPATCH_TABLE[unsafe{*(ptr as *const u8)} as usize]
 	}
 }
 
@@ -985,8 +887,8 @@ pub struct Stack {
 impl Stack {
 	pub fn new() -> Self {
 		Self {
-			stack: Vec::new(),
-			stack_frames: Vec::new(),
+			stack: Vec::with_capacity(1024),
+			stack_frames: Vec::with_capacity(64),
 			rbp: 0,
 		}
 	}
@@ -1000,7 +902,7 @@ impl Stack {
 
 	pub unsafe fn run(&mut self, state: &GrugState, globals: &[Cell<GrugValue>], instructions: &Instructions, locals_size: u32, start_loc: usize) -> Option<GrugValue> {
 		let mut stream = &instructions.stream[start_loc..];
-		let start_time = Instant::now();
+		let mut start_time: Option<Instant> = None;
 		self.stack.resize(self.rbp + locals_size as usize, GrugValue{void: ()});
 		let mut i_count: usize = 0;
 		while let Some((ins, next)) = stream.split_first() {
@@ -1188,10 +1090,14 @@ impl Stack {
 					}
 				}
 			}
-			if i_count & 0xFFFFF == 0 {
-				if start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
-					state.set_runtime_error(RuntimeError::ExceededTimeLimit);
-					return None;
+			if i_count & 0xFFFFF == 0xFFFFF {
+				if let Some(start_time) = start_time {
+					if start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
+						state.set_runtime_error(RuntimeError::ExceededTimeLimit);
+						return None;
+					}
+				} else {
+					start_time = Some(Instant::now());
 				}
 			}
 			i_count += 1;
