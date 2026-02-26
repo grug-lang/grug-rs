@@ -907,10 +907,11 @@ impl Stack {
 
 	pub unsafe fn run(&mut self, state: &GrugState, globals: &[Cell<GrugValue>], instructions: &Instructions, locals_size: u32, start_loc: usize) -> Option<GrugValue> {
 		let mut stream = &instructions.stream[start_loc..];
-		let mut start_time: Option<Instant> = None;
+		let start_time = Instant::now();
 		self.stack.resize(self.rbp + locals_size as usize, GrugValue{void: ()});
-		let mut i_count: usize = 0;
-		while let Some((ins, next)) = stream.split_first() {
+		let mut i_count: usize = 1;
+		loop {
+			let (ins, next) = unsafe{stream.split_first().unwrap_unchecked()};
 			stream = next;
 			match *ins {
 				Op::ReturnVoid         => {
@@ -1015,10 +1016,10 @@ impl Stack {
 					println!("{}", str);
 				}
 				Op::LoadGlobal{index}  => {
-					self.stack.push(globals.get(index)?.get());
+					self.stack.push(unsafe{globals.get_unchecked(index)}.get());
 				}
 				Op::StoreGlobal{index} => {
-					globals.get(index)?.set(self.stack.pop()?);
+					unsafe{globals.get_unchecked(index)}.set(self.stack.pop()?);
 				}
 				Op::Jmp{offset}        => {
 					stream = unsafe{
@@ -1095,14 +1096,10 @@ impl Stack {
 					}
 				}
 			}
-			if i_count & 0xFFFFF == 0xFFFFF {
-				if let Some(start_time) = start_time {
-					if start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
-						state.set_runtime_error(RuntimeError::ExceededTimeLimit);
-						return None;
-					}
-				} else {
-					start_time = Some(Instant::now());
+			if i_count & 0xFFFFF == 0 {
+				if start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
+					state.set_runtime_error(RuntimeError::ExceededTimeLimit);
+					return None;
 				}
 			}
 			i_count += 1;
@@ -1111,7 +1108,6 @@ impl Stack {
 				return None;
 			}
 		}
-		None
 	}
 }
 

@@ -98,6 +98,7 @@ mod test_bindings {
 			mod_api_path: NTStrPtr<'a>,
 			mods_dir_path: NTStrPtr<'a>,
 			grug_vtable: &'static GrugVTable,
+			headless: bool
 		);
 	}
 }
@@ -116,8 +117,7 @@ mod game_functions {
 		safe fn game_fn_x           <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 		safe fn game_fn_y           <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 		safe fn game_fn_sqrt        <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_set_x       <'a>(state: &'a GrugState, arguments: *const GrugValue);
-		safe fn game_fn_set_y       <'a>(state: &'a GrugState, arguments: *const GrugValue);
+		safe fn game_fn_set_acc     <'a>(state: &'a GrugState, arguments: *const GrugValue);
 	}
 
 	pub fn register_game_functions(state: &mut GrugState) {
@@ -128,8 +128,7 @@ mod game_functions {
 		state.register_game_fn("x"           , game_fn_x            as for<'a> extern "C" fn(&'a _, _) -> _).unwrap();
 		state.register_game_fn("y"           , game_fn_y            as for<'a> extern "C" fn(&'a _, _) -> _).unwrap();
 		state.register_game_fn("sqrt"        , game_fn_sqrt         as for<'a> extern "C" fn(&'a _, _) -> _).unwrap();
-		state.register_game_fn("set_x"       , game_fn_set_x        as for<'a> extern "C" fn(&'a _, _)     ).unwrap();
-		state.register_game_fn("set_y"       , game_fn_set_y        as for<'a> extern "C" fn(&'a _, _)     ).unwrap();
+		state.register_game_fn("set_acc"     , game_fn_set_acc      as for<'a> extern "C" fn(&'a _, _)     ).unwrap();
 	}
 }
 
@@ -147,7 +146,8 @@ fn grug_bench () {
 		grug_bench_run(
 			nt!("src/grug-bench/mod_api.json").as_ntstrptr(),
 			nt!("src/grug-bench/mods").as_ntstrptr(),
-			&GRUG_VTABLE
+			&GRUG_VTABLE,
+			true,
 		);
 	}
 }
