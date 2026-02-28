@@ -34,8 +34,9 @@ impl GrugState {
 		let mod_name = get_mod_name(path)?;
 		let entity_type = get_entity_type(path)?;
 
-		let arena = Arena::new();
-		let id = {
+		let mut arena = self.arenas.borrow_mut().pop().unwrap_or_else(|| Arena::new());
+		// immediately invoked closure so we get try {} finally {}
+		let id = (|| {
 			let tokens = tokenizer::tokenize(file_text, &arena)?;
 
 			let mut ast = parser::parse(&tokens, &arena)?;
@@ -80,10 +81,12 @@ impl GrugState {
 				}
 			};
 			self.backend.insert_file(id, file);
-			id
-		};
-		arena.free();
-		Ok(id)
+			Ok(id)
+		})();
+		arena.clear();
+		self.arenas.borrow_mut().push(arena);
+		
+		id
 	}
 }
 

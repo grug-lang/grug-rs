@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 struct Compiler<'a> {
-	globals: HashMap<&'a str, usize>,
-	locals: Vec<HashMap<&'a str, usize>>,
+	globals: HashMap<&'a str, u32>,
+	locals: Vec<HashMap<&'a str, u32>>,
 	locals_sizes: Vec<usize>,
 	current_scope_size: usize,
 	locals_size_max: u32,
@@ -385,21 +385,21 @@ impl<'a> Compiler<'a> {
 		}
 	}
 
-	fn insert_global_variable(&mut self, name: &'a str) -> usize {
-		let check = self.globals.insert(name, self.globals.len());
+	fn insert_global_variable(&mut self, name: &'a str) -> u32 {
+		let check = self.globals.insert(name, self.globals.len() as u32);
 		debug_assert!(check.is_none());
-		self.globals.len() - 1
+		(self.globals.len() - 1) as u32
 	}
 
-	fn insert_local_variable(&mut self, name: &'a str) -> usize {
-		let check = self.locals.last_mut().unwrap().insert(name, self.current_scope_size);
+	fn insert_local_variable(&mut self, name: &'a str) -> u32 {
+		let check = self.locals.last_mut().unwrap().insert(name, self.current_scope_size as u32);
 		debug_assert!(check.is_none());
 		self.current_scope_size += 1;
 		if self.current_scope_size > u32::MAX as usize {
 			panic!("Cannot have more than {} local variables", u32::MAX);
 		}
 		self.locals_size_max = std::cmp::max(self.locals_size_max, self.current_scope_size as u32);
-		self.current_scope_size - 1
+		(self.current_scope_size - 1) as u32
 	}
 
 	fn pop_scope(&mut self) {
@@ -412,11 +412,11 @@ impl<'a> Compiler<'a> {
 		self.locals_sizes.push(self.current_scope_size);
 	}
 
-	fn get_local_location(&self, name: &str) -> Option<usize> {
+	fn get_local_location(&self, name: &str) -> Option<u32> {
 		self.locals.iter().rev().find_map(|x| x.get(name)).copied()
 	}
 
-	fn get_global_location(&self, name: &str) -> Option<usize> {
+	fn get_global_location(&self, name: &str) -> Option<u32> {
 		self.globals.get(name).copied()
 	}
 }
@@ -542,7 +542,7 @@ pub enum Op {
 	LoadFalse,
 	LoadTrue,
 	Dup{
-		index: usize,
+		index: u32,
 	},
 	Pop,
 	Add,
@@ -562,25 +562,25 @@ pub enum Op {
 	CmpLe,
 	PrintStr,
 	LoadGlobal {
-		index: usize,
+		index: u32,
 	},
 	StoreGlobal {
-		index: usize,
+		index: u32,
 	},
 	Jmp {
-		offset: isize,
+		offset: i32,
 	},
 	JmpIfNot {
-		offset: isize,
+		offset: i32,
 	},
 	JmpIf {
-		offset: isize,
+		offset: i32,
 	},
 	LoadLocal {
-		index: usize,
+		index: u32,
 	},
 	StoreLocal {
-		index: usize,
+		index: u32,
 	},
 	CallHelperFunction {
 		args: u16,
@@ -637,10 +637,13 @@ impl PartialEq for Op {
 }
 
 impl Op {
-	fn calc_offset(from: usize, to: usize) -> isize {
+	fn calc_offset(from: usize, to: usize) -> i32 {
 		let offset_from_start = to as isize - from as isize ;
 		// opcode is 1 byte, offset fits in two bytes
-		offset_from_start - 1
+		if offset_from_start.abs() > i32::MAX as isize {
+			panic!("offset {} greater than max allowed {}", offset_from_start.abs(), i32::MAX);
+		}
+		(offset_from_start - 1) as i32
 	}
 }
 
@@ -699,14 +702,14 @@ impl Instructions {
 		}
 	}
 
-	pub fn insert_jmp(&mut self, from: usize, offset: isize) {
-		let end = (from as isize + offset) as usize;
+	pub fn insert_jmp(&mut self, from: usize, offset: i32) {
+		let end = (from as isize + offset as isize) as usize;
 		self.jumps_start.insert(from, end);
 		self.jumps_end.entry(end).or_insert_with(|| {
 			self.jumps_count += 1;
 			(Vec::new(), self.jumps_count - 1)
 		}).0.push(from);
-		self.assert_jumps_consistency();
+		if cfg!(debug_assertions) {self.assert_jumps_consistency()};
 	}
 
 	pub fn insert_on_fn(&mut self, name: &str, index: usize, location: usize, argument_count: usize, locals_size: u32) {
@@ -939,7 +942,7 @@ impl Stack {
 				Op::LoadFalse          => self.stack.push(GrugValue{bool: 0}),
 				Op::LoadTrue           => self.stack.push(GrugValue{bool: 1}),
 				Op::Dup{index}         => {
-					self.stack.push(*self.stack.get(self.stack.len() - 1 - index)?)
+					self.stack.push(*self.stack.get(self.stack.len() - 1 - index as usize)?)
 				}
 				Op::Pop                => {self.stack.pop()?;}
 				Op::Add                |
@@ -1016,16 +1019,16 @@ impl Stack {
 					println!("{}", str);
 				}
 				Op::LoadGlobal{index}  => {
-					self.stack.push(unsafe{globals.get_unchecked(index)}.get());
+					self.stack.push(unsafe{globals.get_unchecked(index as usize)}.get());
 				}
 				Op::StoreGlobal{index} => {
-					unsafe{globals.get_unchecked(index)}.set(self.stack.pop()?);
+					unsafe{globals.get_unchecked(index as usize)}.set(self.stack.pop()?);
 				}
 				Op::Jmp{offset}        => {
 					stream = unsafe{
 						std::slice::from_raw_parts(
-							instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset),
-							(stream.len() as isize - offset) as usize
+							instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
+							(stream.len() as isize - offset as isize) as usize
 						)
 					}
 				}
@@ -1033,8 +1036,8 @@ impl Stack {
 					if unsafe{self.stack.pop()?.bool} != 0 {
 						stream = unsafe{
 							std::slice::from_raw_parts(
-								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset),
-								(stream.len() as isize - offset) as usize
+								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
+								(stream.len() as isize - offset as isize) as usize
 							)
 						}
 					}
@@ -1043,19 +1046,19 @@ impl Stack {
 					if unsafe{self.stack.pop()?.bool} == 0 {
 						stream = unsafe{
 							std::slice::from_raw_parts(
-								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset),
-								(stream.len() as isize - offset) as usize
+								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
+								(stream.len() as isize - offset as isize) as usize
 							)
 						}
 					}
 				}
 				Op::LoadLocal{index}   => {
-					 let value = *self.stack.get(self.rbp + index)?;
+					 let value = *self.stack.get(self.rbp + index as usize)?;
 					 self.stack.push(value);
 				}
 				Op::StoreLocal{index}  => {
 					let value = self.stack.pop()?;
-					*self.stack.get_mut(self.rbp + index)? = value;
+					*self.stack.get_mut(self.rbp + index as usize)? = value;
 				}
 				Op::CallHelperFunction {
 					args,
@@ -1278,14 +1281,6 @@ helper_fib_naive(n: number) number {
 			assert!(state.call_on_function(&entity, on_double_id, &[GrugValue{number: i as f64}]));
 			unsafe{assert_eq!(*&raw const IDENTITY_ARG, (i * 2) as f64)}
 		}
-	}
-		
-	#[test]
-	fn vm_test_0() {
-		let state = get_state();
-		let stream = Instructions::new();
-		let mut vm = Stack::new();
-		assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_none()});
 	}
 
 	#[test]

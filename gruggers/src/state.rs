@@ -3,6 +3,7 @@ use crate::error::{GrugError, RuntimeError};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
 use crate::xar::Xar;
+use crate::arena::Arena;
 
 use std::marker::PhantomData;
 use std::ptr::NonNull;
@@ -203,6 +204,7 @@ pub struct GrugState {
 	next_script_id: AtomicU64,
 
 	pub(crate) backend: ErasedBackend,
+	pub(crate) arenas : RefCell<Vec<Arena>>,
 	// pub(crate) backend: Interpreter,
 	pub(crate) current_script: Cell<Option<GrugScriptId>>,
 	pub(crate) current_on_fn_id: Cell<Option<GrugOnFnId>>,
@@ -212,44 +214,15 @@ pub struct GrugState {
 impl GrugState {
 	fn new<J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, handler: RuntimeErrorHandler, backend: ErasedBackend) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api(&mod_api_path)?;
-
-		let mut on_fns = Vec::new();
-		let init_globals = Arc::from("init_globals");
-		for (entity_type, entity) in mod_api.entities() {
-			on_fns.push(OnFnEntry {
-				entity_type: Arc::clone(entity_type),
-				on_fn_name : Arc::clone(&init_globals),
-				index      : 0,
-			});
-			for (i, (on_fn_name, _)) in entity.on_fns.iter().enumerate() {
-				on_fns.push(OnFnEntry{
-					entity_type: Arc::clone(entity_type),
-					on_fn_name : Arc::clone(on_fn_name),
-					index      : i,
-				});
-			}
-		}
-
-		Ok(Self {
-			mod_api,
-			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
-			next_entity_id: AtomicU64::new(0),
-			game_functions: HashMap::new(),
-			runtime_error_handler: handler,
-			entities: Xar::new(),
-			on_functions: on_fns,
-			path_to_script_ids: RefCell::new(HashMap::new()),
-			next_script_id: AtomicU64::new(0),
-			backend,
-			current_script: Cell::new(None),
-			current_on_fn_id: Cell::new(None),
-			is_errorring: Cell::new(false),
-		})
+		Self::new_inner(mod_api, mods_dir_path, handler, backend)
 	}
 
 	pub fn new_from_text<D: AsRef<Path>> (mod_api_text: &str, mods_dir_path: D, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend>) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api_from_text(mod_api_text)?;
+		Self::new_inner(mod_api, mods_dir_path, handler, backend)
+	}
 
+	pub fn new_inner<D: AsRef<Path>> (mod_api: ModApi, mods_dir_path: D, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend>) -> Result<Self, GrugError> {
 		let mut on_fns = Vec::new();
 		let init_globals = Arc::from("init_globals");
 		for (entity_type, entity) in mod_api.entities() {
@@ -277,6 +250,7 @@ impl GrugState {
 			on_functions: on_fns,
 			path_to_script_ids: RefCell::new(HashMap::new()),
 			next_script_id: AtomicU64::new(0),
+			arenas: RefCell::new(Vec::new()),
 			backend: backend.into(),
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
