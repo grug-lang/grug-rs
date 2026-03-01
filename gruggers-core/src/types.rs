@@ -3,38 +3,38 @@ use std::cell::Cell;
 use std::ptr::NonNull;
 use crate::xar::XarHandle;
 use crate::ntstring::NTStrPtr;
-use crate::state::GrugState;
+use crate::state::State;
 
 // TODO Unnest some of these enums
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
-pub struct GameFnPtr(GameFnPtrVoid);
+pub struct GameFnPtr(NonNull<()>);
 
 impl GameFnPtr {
-	pub const unsafe fn void(self) -> GameFnPtrVoid {
-		self.0
-	}
-	pub const unsafe fn void_argless(self) -> GameFnPtrVoidArgless {
+	pub const unsafe fn void<GrugState: State>(self) -> GameFnPtrVoid<GrugState> {
 		unsafe{std::mem::transmute(self.0)}
 	}
-	pub const unsafe fn value(self) -> GameFnPtrValue {
+	pub const unsafe fn void_argless<GrugState: State>(self) -> GameFnPtrVoidArgless<GrugState> {
 		unsafe{std::mem::transmute(self.0)}
 	}
-	pub const unsafe fn value_argless(self) -> GameFnPtrValueArgless {
+	pub const unsafe fn value<GrugState: State>(self) -> GameFnPtrValue<GrugState> {
+		unsafe{std::mem::transmute(self.0)}
+	}
+	pub const unsafe fn value_argless<GrugState: State>(self) -> GameFnPtrValueArgless<GrugState> {
 		unsafe{std::mem::transmute(self.0)}
 	}
 
-	pub const fn from_void(value: GameFnPtrVoid) -> Self {
-		Self(value)
-	}
-	pub const fn from_void_argless(value: GameFnPtrVoidArgless) -> Self {
+	pub const fn from_void<GrugState: State>(value: GameFnPtrVoid<GrugState>) -> Self {
 		Self(unsafe{std::mem::transmute(value)})
 	}
-	pub const fn from_value(value: GameFnPtrValue) -> Self {
+	pub const fn from_void_argless<GrugState: State>(value: GameFnPtrVoidArgless<GrugState>) -> Self {
 		Self(unsafe{std::mem::transmute(value)})
 	}
-	pub const fn from_value_argless(value: GameFnPtrValueArgless) -> Self {
+	pub const fn from_value<GrugState: State>(value: GameFnPtrValue<GrugState>) -> Self {
+		Self(unsafe{std::mem::transmute(value)})
+	}
+	pub const fn from_value_argless<GrugState: State>(value: GameFnPtrValueArgless<GrugState>) -> Self {
 		Self(unsafe{std::mem::transmute(value)})
 	}
 }
@@ -48,42 +48,42 @@ impl std::fmt::Debug for GameFnPtr {
 impl PartialEq for GameFnPtr {
 	fn eq(&self, other: &Self) -> bool {
 		const _: () = const{assert!(size_of::<GameFnPtr>() == size_of::<usize>())};
-		unsafe{std::ptr::fn_addr_eq(self.0, other.void())}
+		std::ptr::eq(self.0.as_ptr(), other.0.as_ptr())
 		// unsafe{std::mem::transmute::<Self, usize>(*self) == std::mem::transmute::<Self, usize>(*other)}
 	}
 }
 
 mod from_impls {
 	use super::*;
-	impl From<GameFnPtrVoid> for GameFnPtr {
-		fn from (value: GameFnPtrVoid) -> Self {
-			Self(value)
-		}
-	}
-
-	impl From<GameFnPtrVoidArgless> for GameFnPtr {
-		fn from (value: GameFnPtrVoidArgless) -> Self {
+	impl<GrugState: State> From<GameFnPtrVoid<GrugState>> for GameFnPtr {
+		fn from (value: GameFnPtrVoid<GrugState>) -> Self {
 			Self(unsafe{std::mem::transmute(value)})
 		}
 	}
 
-	impl From<GameFnPtrValue> for GameFnPtr {
-		fn from (value: GameFnPtrValue) -> Self {
+	impl<GrugState: State> From<GameFnPtrVoidArgless<GrugState>> for GameFnPtr {
+		fn from (value: GameFnPtrVoidArgless<GrugState>) -> Self {
 			Self(unsafe{std::mem::transmute(value)})
 		}
 	}
 
-	impl From<GameFnPtrValueArgless> for GameFnPtr {
-		fn from (value: GameFnPtrValueArgless) -> Self {
+	impl<GrugState: State> From<GameFnPtrValue<GrugState>> for GameFnPtr {
+		fn from (value: GameFnPtrValue<GrugState>) -> Self {
+			Self(unsafe{std::mem::transmute(value)})
+		}
+	}
+
+	impl<GrugState: State> From<GameFnPtrValueArgless<GrugState>> for GameFnPtr {
+		fn from (value: GameFnPtrValueArgless<GrugState>) -> Self {
 			Self(unsafe{std::mem::transmute(value)})
 		}
 	}
 }
 
-pub type GameFnPtrVoid = extern "C" fn (state: &GrugState, args: *const GrugValue);
-pub type GameFnPtrVoidArgless = extern "C" fn (state: &GrugState);
-pub type GameFnPtrValue = extern "C" fn (state: &GrugState, args: *const GrugValue) -> GrugValue;
-pub type GameFnPtrValueArgless = extern "C" fn (state: &GrugState) -> GrugValue;
+pub type GameFnPtrVoid<GrugState> = extern "C" fn (state: &GrugState, args: *const GrugValue);
+pub type GameFnPtrVoidArgless<GrugState> = extern "C" fn (state: &GrugState);
+pub type GameFnPtrValue<GrugState> = extern "C" fn (state: &GrugState, args: *const GrugValue) -> GrugValue;
+pub type GameFnPtrValueArgless<GrugState> = extern "C" fn (state: &GrugState) -> GrugValue;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
@@ -143,11 +143,11 @@ pub struct GrugEntityHandle<'a>(XarHandle<'a, GrugEntity>);
 impl<'a> GrugEntityHandle<'a> {
 	/// SAFETY: inner can only be deleted by deleting the returned value
 	/// The returned value is allowed to create a shared reference to the data at any time 
-	pub(crate) unsafe fn new(inner: XarHandle<'a, GrugEntity>) -> Self {
+	pub unsafe fn new(inner: XarHandle<'a, GrugEntity>) -> Self {
 		Self(inner)
 	}
 
-	pub(crate) fn into_inner(self) -> XarHandle<'a, GrugEntity> {
+	pub fn into_inner(self) -> XarHandle<'a, GrugEntity> {
 		self.0
 	}
 }

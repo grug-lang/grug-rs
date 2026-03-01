@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["gruggers"]
+members = ["gruggers", "fuzz", "gruggers-core"]
 
 [profile.release]
 opt-level = 3

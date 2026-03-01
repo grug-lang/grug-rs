@@ -49,7 +49,7 @@ impl<'a> std::fmt::Display for GrugType<'a> {
 }
 
 impl<'a> GrugType<'a> {
-	pub(crate) fn match_non_exact(&self, other: &Self) -> bool {
+	pub fn match_non_exact(&self, other: &Self) -> bool {
 		use GrugType::*;
 		match (self, other) {
 			(Void, Void) => true,

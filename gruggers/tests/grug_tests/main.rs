@@ -4,8 +4,8 @@ use gruggers::ntstring::NTStr;
 use gruggers::nt;
 
 mod test_bindings {
-	use gruggers::state::{GrugInitSettings, GrugState};
-	use gruggers::backend::bytecode::BytecodeBackend;
+	use gruggers::state::{GrugInitSettings, GrugState, State};
+	use gruggers::backend::BytecodeBackend;
 	use gruggers::error::RuntimeError;
 	use gruggers::types::{GrugValue, GrugScriptId, GrugEntityHandle};
 	use gruggers::ntstring::{NTStrPtr, NTStr};

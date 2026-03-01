@@ -5,20 +5,21 @@ pub mod frontend;
 pub mod backend;
 
 pub mod mod_api;
-pub mod types;
 pub mod serde;
 pub mod error;
 pub mod state;
 
 // pub mod capi;
-pub mod xar;
-pub mod ast;
-
 pub mod arena;
 
-pub mod ntstring;
-
 mod cachemap;
+
+pub use gruggers_core::types;
+pub use gruggers_core::ast;
+
+pub use gruggers_core::ntstring;
+pub use gruggers_core::xar;
+pub use gruggers_core::nt;
 
 
 // TODO: update AST to be like new grug-for-c ast

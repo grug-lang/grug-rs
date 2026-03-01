@@ -1,5 +1,6 @@
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text, ModApiError};
-use crate::error::{GrugError, RuntimeError};
+use crate::error::GrugError;
+use gruggers_core::runtime_error::RuntimeError;
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
 use crate::xar::Xar;
@@ -11,6 +12,8 @@ use std::cell::{Cell, RefCell, Ref};
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
+
+pub use gruggers_core::state::State;
 
 #[repr(C)]
 pub struct RuntimeErrorHandler {
@@ -41,7 +44,7 @@ impl RuntimeErrorHandler {
 		if let Some(func) = self.func {
 			func(
 				self.data,
-				kind.into_code(),
+				kind.code(),
 				NonNull::from_ref(message).cast::<u8>(),
 				message.len(),
 				NonNull::from_ref(on_fn_name).cast::<u8>(),
@@ -99,7 +102,7 @@ pub struct GrugInitSettings<'a> {
 	mods_dir_path_len: usize,
 	runtime_error_handler: RuntimeErrorHandler,
 
-	backend: Option<ErasedBackend>,
+	backend: Option<ErasedBackend<GrugState>>,
 
 	// custom allocation support (currently ignored)
 	// TODO: Is this even a good idea
@@ -138,7 +141,7 @@ impl<'a> GrugInitSettings<'a> {
 		self
 	}
 
-	pub fn set_backend<B: Backend>(mut self, backend: B) -> Self {
+	pub fn set_backend<B: Backend<GrugState=GrugState>>(mut self, backend: B) -> Self {
 		self.backend = Some(backend.into());
 		self
 	}
@@ -203,7 +206,7 @@ pub struct GrugState {
 	pub(crate) path_to_script_ids: RefCell<HashMap<String, GrugScriptId>>,
 	next_script_id: AtomicU64,
 
-	pub(crate) backend: ErasedBackend,
+	pub(crate) backend: ErasedBackend<Self>,
 	pub(crate) arenas : RefCell<Vec<Arena>>,
 	// pub(crate) backend: Interpreter,
 	pub(crate) current_script: Cell<Option<GrugScriptId>>,
@@ -211,18 +214,38 @@ pub struct GrugState {
 	pub(crate) is_errorring: Cell<bool>,
 }
 
+impl State for GrugState {
+	fn set_runtime_error(&self, error: RuntimeError) {
+		self.is_errorring.set(true);
+		let Some(current_script) = self.current_script.get() else {
+			return
+		};
+		let Some(current_on_fn_id) = self.current_on_fn_id.get() else {
+			return
+		};
+		let current_on_fn_name = self.get_on_fn_name(current_on_fn_id).unwrap();
+		let message = format!("{}", error);
+		self.runtime_error_handler.handle_error(
+			error, 
+			&message,
+			current_on_fn_name,
+			self.get_script_path(current_script).unwrap(),
+		);
+	}
+}
+
 impl GrugState {
-	fn new<J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, handler: RuntimeErrorHandler, backend: ErasedBackend) -> Result<Self, GrugError> {
+	fn new<J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api(&mod_api_path)?;
 		Self::new_inner(mod_api, mods_dir_path, handler, backend)
 	}
 
-	pub fn new_from_text<D: AsRef<Path>> (mod_api_text: &str, mods_dir_path: D, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend>) -> Result<Self, GrugError> {
+	pub fn new_from_text<D: AsRef<Path>> (mod_api_text: &str, mods_dir_path: D, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api_from_text(mod_api_text)?;
-		Self::new_inner(mod_api, mods_dir_path, handler, backend)
+		Self::new_inner(mod_api, mods_dir_path, handler, backend.into())
 	}
 
-	pub fn new_inner<D: AsRef<Path>> (mod_api: ModApi, mods_dir_path: D, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend>) -> Result<Self, GrugError> {
+	fn new_inner<D: AsRef<Path>> (mod_api: ModApi, mods_dir_path: D, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
 		let mut on_fns = Vec::new();
 		let init_globals = Arc::from("init_globals");
 		for (entity_type, entity) in mod_api.entities() {
@@ -379,24 +402,6 @@ impl GrugState {
 			// function. GrugEntityHandle contains the only other handle to the entity storage
 			unsafe{self.entities.delete(entity.into_inner())};
 		}
-	}
-
-	pub fn set_runtime_error(&self, error: RuntimeError) {
-		self.is_errorring.set(true);
-		let Some(current_script) = self.current_script.get() else {
-			return
-		};
-		let Some(current_on_fn_id) = self.current_on_fn_id.get() else {
-			return
-		};
-		let current_on_fn_name = self.get_on_fn_name(current_on_fn_id).unwrap();
-		let message = format!("{}", error);
-		self.runtime_error_handler.handle_error(
-			error, 
-			&message,
-			current_on_fn_name,
-			self.get_script_path(current_script).unwrap(),
-		);
 	}
 
 	pub fn clear_entities(&mut self) {
