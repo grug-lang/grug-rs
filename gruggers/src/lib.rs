@@ -9,7 +9,7 @@ pub mod serde;
 pub mod error;
 pub mod state;
 
-// pub mod capi;
+pub mod capi;
 pub mod arena;
 
 mod cachemap;

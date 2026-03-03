@@ -31,6 +31,10 @@ pub struct RuntimeErrorHandler {
 	)>,
 }
 
+const _: () = const {
+	assert!(std::mem::size_of::<RuntimeErrorHandler>() == std::mem::size_of::<Option<RuntimeErrorHandler>>());
+};
+
 impl RuntimeErrorHandler {
 	pub const fn new_default () -> Self {
 		Self {
@@ -100,21 +104,14 @@ pub struct GrugInitSettings<'a> {
 	mod_api_path_len: usize,
 	mods_dir_path: Option<NonNull<u8>>,
 	mods_dir_path_len: usize,
-	runtime_error_handler: RuntimeErrorHandler,
+	runtime_error_handler: Option<RuntimeErrorHandler>,
 
 	backend: Option<ErasedBackend<GrugState>>,
-
-	// custom allocation support (currently ignored)
-	// TODO: Is this even a good idea
-	// This allocator has to be a malloc/free style allocator (no arenas, only
-	// page allocators and default c style allocators)
-	// Might as well use those directly.
-	//
-	// But then again, if the game knows all memory is allocated by this
-	// allocator, it can deallocate memory allocated by grug
-	//
-	// alloc_data: Option<GrugAllocator>,
 }
+
+const _: () = const {
+	unsafe{std::mem::forget(std::mem::MaybeUninit::<GrugInitSettings<'static>>::zeroed().assume_init())};
+};
 
 impl<'a> GrugInitSettings<'a> {
 	pub const fn new() -> Self {
@@ -124,7 +121,7 @@ impl<'a> GrugInitSettings<'a> {
 			mod_api_path_len: 0,
 			mods_dir_path: None,
 			mods_dir_path_len: 0,
-			runtime_error_handler: RuntimeErrorHandler::new_default(),
+			runtime_error_handler: None,
 			backend: None,
 		}
 	}
@@ -141,13 +138,13 @@ impl<'a> GrugInitSettings<'a> {
 		self
 	}
 
-	pub fn set_backend<B: Backend<GrugState=GrugState>>(mut self, backend: B) -> Self {
+	pub fn set_backend<B: Backend>(mut self, backend: B) -> Self {
 		self.backend = Some(backend.into());
 		self
 	}
 
 	pub fn set_runtime_error_handler<F: for<'b> Fn(u32, &'b str, &'b str, &'b str)> (mut self, f: F) -> Self {
-		self.runtime_error_handler = f.into();
+		self.runtime_error_handler = Some(f.into());
 		self
 	}
 
@@ -157,7 +154,7 @@ impl<'a> GrugInitSettings<'a> {
 		let mods_dir_path = unsafe{Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)}
 			.unwrap_or("./mods");
 
-		GrugState::new(mod_api_path, mods_dir_path, self.runtime_error_handler, self.backend.unwrap_or_else(|| BytecodeBackend::new().into()))
+		GrugState::new(mod_api_path, mods_dir_path, self.runtime_error_handler.unwrap_or_else(|| RuntimeErrorHandler::new_default()), self.backend.unwrap_or_else(|| BytecodeBackend::new().into()))
 	}
 
 	unsafe fn maybe_nt_or_length(ptr: Option<NonNull<u8>>, len: usize) -> Option<&'a str> {
@@ -231,6 +228,10 @@ impl State for GrugState {
 			current_on_fn_name,
 			self.get_script_path(current_script).unwrap(),
 		);
+	}
+
+	fn is_errorring(&self) -> bool {
+		self.is_errorring.get()
 	}
 }
 

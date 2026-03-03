@@ -1,4 +1,4 @@
-#[deny(warnings)]
+#![deny(warnings)]
 pub mod types;
 pub mod ast;
 pub mod backend;

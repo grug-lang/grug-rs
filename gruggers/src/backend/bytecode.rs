@@ -6,10 +6,10 @@ use crate::ast::{
 	BinaryOperator, GrugType, HelperFunction, UnaryOperator
 };
 use crate::ntstring::{NTStrPtr, NTStr};
-use crate::state::GrugState;
 use crate::xar::{ErasedXar, ErasedPtr};
 use gruggers_core::runtime_error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
 use gruggers_core::state::State;
+use gruggers_core::export_backend;
 use crate::backend::Backend;
 use crate::ast::GrugAst;
 
@@ -446,7 +446,6 @@ impl BytecodeBackend {
 }
 
 unsafe impl Backend for BytecodeBackend {
-	type GrugState = GrugState;
 	fn insert_file(&self, id: GrugScriptId, file: GrugAst) {
 		let compiled_file = Compiler::compile(file);
 		let mut files = self.files.borrow_mut();
@@ -458,7 +457,7 @@ unsafe impl Backend for BytecodeBackend {
 			unreachable!("GrugScriptIds must be contigious, Expected {}, got {}", files.len(), id.0);
 		}
 	}
-	fn init_entity(&self, state: &GrugState, entity: &GrugEntity) -> bool {
+	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity) -> bool {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
@@ -490,7 +489,7 @@ unsafe impl Backend for BytecodeBackend {
 			false
 		}
 	}
-	unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
+	unsafe fn call_on_function_raw<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
@@ -509,7 +508,7 @@ unsafe impl Backend for BytecodeBackend {
 		self.stacks.borrow_mut().push(stack);
 		ret_val
 	}
-	fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
+	fn call_on_function<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
@@ -912,7 +911,7 @@ impl Stack {
 		self
 	}
 
-	unsafe fn run(&mut self, state: &GrugState, globals: &[Cell<GrugValue>], instructions: &Instructions, locals_size: u32, start_loc: usize) -> Option<GrugValue> {
+	unsafe fn run<GrugState: State>(&mut self, state: &GrugState, globals: &[Cell<GrugValue>], instructions: &Instructions, locals_size: u32, start_loc: usize) -> Option<GrugValue> {
 		let mut stream = &instructions.stream[start_loc..];
 		let start_time = Instant::now();
 		self.stack.resize(self.rbp + locals_size as usize, GrugValue{void: ()});
@@ -1098,7 +1097,7 @@ impl Stack {
 							self.stack.push(value);
 						}
 					}
-					if state.is_errorring.get() {
+					if state.is_errorring() {
 						return None
 					}
 				}
@@ -1117,6 +1116,8 @@ impl Stack {
 		}
 	}
 }
+
+export_backend!{BytecodeBackend::new()}
 
 #[cfg(test)]
 mod test {

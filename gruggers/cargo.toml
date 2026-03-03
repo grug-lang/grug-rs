@@ -7,6 +7,9 @@ description = "rust implementation of the grug language"
 repository = "https://github.com/grug-lang/grug-rs"
 license = "MIT"
 
+[lib] 
+crate-type = ["cdylib", "rlib", "staticlib"]
+
 [dependencies]
 json = "0.12.4"
 allocator-api2 = "0.4.0"
