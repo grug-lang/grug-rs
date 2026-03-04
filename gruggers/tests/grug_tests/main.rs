@@ -10,7 +10,7 @@ mod test_bindings {
 	use gruggers::types::{GrugValue, GrugScriptId, GrugEntityHandle};
 	use gruggers::ntstring::{NTStrPtr, NTStr};
 	use gruggers::serde;
-	use std::path::PathBuf;
+	use std::path::Path;
 	use gruggers::nt;
 
 	pub static mut CURRENT_GRUG_ENTITY: Option<GrugEntityHandle<'static>> = None;
@@ -85,7 +85,7 @@ mod test_bindings {
 	pub extern "C" fn on_fn_dispatcher<'a> (state: &GrugState, fn_name: NTStrPtr<'a>, values: *const GrugValue) {
 		unsafe {
 			let fn_name = fn_name.to_ntstr();
-			let entity_type = PathBuf::from(CURRENT_PATH.unwrap().as_str());
+			let entity_type: &Path = AsRef::as_ref(CURRENT_PATH.unwrap().as_str());
 			let entity_type = entity_type
 				.file_prefix().unwrap()
 				.to_str().unwrap()

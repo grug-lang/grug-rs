@@ -2,22 +2,23 @@ use crate::error::GrugError;
 use crate::frontend::*;
 use crate::arena::Arena;
 
+use allocator_api2::vec::Vec;
+
 pub fn dump_file_to_json (grug_path: &str, output_path: &str) -> Result<(), GrugError> {
-	let file_text = std::fs::read_to_string(grug_path).unwrap();
-
 	let arena = Arena::new();
+	let mut file_text = Vec::new_in(&arena);
+	let mut file = std::fs::File::open(grug_path).unwrap();
+	std::io::copy(&mut file, &mut file_text).unwrap();
+	
+	let file_text = std::str::from_utf8(&file_text).unwrap();
 
-	let tokens = tokenizer::tokenize(&file_text, &arena)?;
+	let tokens = tokenizer::tokenize(file_text, &arena)?;
 
 	let ast = parser::parse(&tokens, &arena)?;
 	
 	let string = ast_to_json(&ast.global_statements);
 
 	std::fs::write(output_path, &string).unwrap();
-
-	drop(ast);
-	drop(tokens);
-	arena.free();
 	Ok(())
 }
 

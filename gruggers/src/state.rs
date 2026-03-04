@@ -154,7 +154,12 @@ impl<'a> GrugInitSettings<'a> {
 		let mods_dir_path = unsafe{Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)}
 			.unwrap_or("./mods");
 
-		GrugState::new(mod_api_path, mods_dir_path, self.runtime_error_handler.unwrap_or_else(|| RuntimeErrorHandler::new_default()), self.backend.unwrap_or_else(|| BytecodeBackend::new().into()))
+		GrugState::new(
+			mod_api_path, 
+			mods_dir_path, 
+			self.runtime_error_handler.unwrap_or_else(|| RuntimeErrorHandler::new_default()), 
+			self.backend.unwrap_or_else(|| BytecodeBackend::new().into())
+		)
 	}
 
 	unsafe fn maybe_nt_or_length(ptr: Option<NonNull<u8>>, len: usize) -> Option<&'a str> {
