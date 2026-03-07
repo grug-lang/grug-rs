@@ -431,7 +431,6 @@ mod arena {
 		/// Does not free all memory requested from OS, the largest block will still be held.
 		///
 		/// use `Self::free` to free all held memory
-		/// SAFETY: All pointers into this arena will be invalidated
 		pub fn clear(&mut self) {
 			if let Some(first_block) = self.current_block() {
 				// SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
@@ -452,8 +451,11 @@ mod arena {
 		}
 
 		/// Deallocates all memory held by this arena
-		/// SAFETY: Same as `Self::clear` 
-		pub fn free(self) {
+		pub fn free(self) { }
+	}
+
+	impl Drop for Arena {
+		fn drop (&mut self) {
 			// SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
 			let mut current = self.current.get();
 			self.current.set(std::ptr::null_mut());

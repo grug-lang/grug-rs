@@ -312,7 +312,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 		// Words
 		if (file_text[i] as char).is_ascii_alphabetic() || file_text[i] == b'_' {
 			let start = i;
-			while i < file_text.len() && (file_text[i] as char).is_ascii_alphanumeric() || file_text[i] == b'_'{
+			while i < file_text.len() && ((file_text[i] as char).is_ascii_alphanumeric() || file_text[i] == b'_'){
 				i += 1
 			}
 			// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
@@ -330,7 +330,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 			let start = i;
 			let mut seen_period = false;
 			i += 1;
-			while i < file_text.len() && (file_text[i] as char).is_ascii_digit() || file_text[i] == b'.' {
+			while i < file_text.len() && ((file_text[i] as char).is_ascii_digit() || file_text[i] == b'.') {
 				if file_text[i] == b'.'{
 					if seen_period {
 						return Err(TokenizerError::MultiplePeriodsInNumber{

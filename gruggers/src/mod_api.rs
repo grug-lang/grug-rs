@@ -4,51 +4,51 @@ use std::sync::Arc;
 
 use crate::ntstring::NTStr;
 use crate::ast::{Argument, GrugType};
+use crate::arena::Arena;
 
-use allocator_api2::alloc::Global;
 use allocator_api2::boxed::Box;
 
-#[derive(Debug)]
 pub struct ModApi {
-	entities: HashMap<Arc<str>, ModApiEntity>,
-	game_functions: HashMap<Arc<str>, ModApiGameFn>,
+	entities: HashMap<Arc<str>, ModApiEntity<'static>>,
+	game_functions: HashMap<Arc<str>, ModApiGameFn<'static>>,
+	_arena: Arena,
 }
 
 impl ModApi {
-	pub fn entities(&self) -> &HashMap<Arc<str>, ModApiEntity> {
+	pub fn entities<'a>(&'a self) -> &'a HashMap<Arc<str>, ModApiEntity<'a>> {
 		&self.entities
 	}
-	pub fn game_functions(&self) -> &HashMap<Arc<str>, ModApiGameFn> {
+	pub fn game_functions<'a>(&'a self) -> &'a HashMap<Arc<str>, ModApiGameFn<'a>> {
 		&self.game_functions
 	}
 }
 
 #[derive(Debug)]
-pub struct ModApiEntity {
+pub struct ModApiEntity<'a> {
 	#[allow(dead_code)]
 	pub(crate) description: Option<String>,
-	pub(crate) on_fns: Vec<(Arc<str>, ModApiOnFn)>,
+	pub(crate) on_fns: Vec<(Arc<str>, ModApiOnFn<'a>)>,
 }
 
-impl ModApiEntity {
-	pub fn get_on_fn(&self, name: &str) -> Option<(usize, &ModApiOnFn)> {
+impl<'a> ModApiEntity<'a> {
+	pub fn get_on_fn(&self, name: &str) -> Option<(usize, &ModApiOnFn<'_>)> {
 		self.on_fns.iter().enumerate().find_map(|(i, (fn_name, func))| (name == &**fn_name).then_some((i, func)))
 	}
 }
 
 #[derive(Debug)]
-pub struct ModApiOnFn {
+pub struct ModApiOnFn<'a> {
 	#[allow(dead_code)]
 	pub(super) description: Option<String>,
-	pub(super) arguments: Vec<Argument<'static>>,
+	pub(super) arguments: Vec<Argument<'a>>,
 }
 
 #[derive(Debug)]
-pub struct ModApiGameFn {
+pub struct ModApiGameFn<'a> {
 	#[allow(dead_code)]
 	pub(super) description: Option<String>,
-	pub(super) return_ty: GrugType<'static>,
-	pub(super) arguments: Vec<Argument<'static>>,
+	pub(super) return_ty: GrugType<'a>,
+	pub(super) arguments: Vec<Argument<'a>>,
 }
 
 // TODO: Add Display impl for all variants
@@ -139,6 +139,7 @@ pub fn get_mod_api<P: AsRef<Path>>(mod_api_path: P) -> Result<ModApi, ModApiErro
 }
 
 pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> {
+	let arena = Arena::new();
 	let mod_api_json = json::parse(mod_api_text)?;
 	// "entities" object
 	let entities = &mod_api_json["entities"];
@@ -175,7 +176,7 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 					entity_name: entity_name.to_string(),
 					on_fn_name: fn_name.to_string(),
 				})?;
-				let argument_name = Box::leak(NTStr::box_from_str_in(argument_name, Global));
+				let argument_name = Box::leak(NTStr::box_from_str_in(argument_name, &arena));
 				// "type" string
 				let ty = argument_values["type"].as_str().ok_or(ModApiError::OnFnArgumentMissingType{
 					entity_name: entity_name.to_string(),
@@ -203,14 +204,14 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 						argument_name: argument_name.to_string(),
 					})?,
 					type_name => {
-						let extra_value = Box::leak(NTStr::box_from_str_in(type_name, Global));
+						let extra_value = Box::leak(NTStr::box_from_str_in(type_name, &arena));
 						GrugType::Id {
 							custom_name: Some(extra_value.as_ntstrptr()),
 						}
 					}
 				};
 				Ok(Argument{
-					name: argument_name.as_ntstrptr(),
+					name: unsafe{argument_name.as_ntstrptr().detach_lifetime()},
 					ty,
 				})
 			}).collect::<Result<Vec<_>, ModApiError>>()?;
@@ -248,7 +249,7 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 			let argument_name = argument_values["name"].as_str().ok_or(ModApiError::GameFnArgumentMissingName{
 				game_fn_name: fn_name.to_string(),
 			})?;
-			let argument_name = Box::leak(NTStr::box_from_str_in(argument_name, Global));
+			let argument_name = Box::leak(NTStr::box_from_str_in(argument_name, &arena));
 			// "type" string
 			let ty = argument_values["type"].as_str().ok_or(ModApiError::GameFnArgumentMissingType{
 				game_fn_name: fn_name.to_string(),
@@ -271,7 +272,7 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 					})?;
 					GrugType::Entity {
 						entity_type: (!entity_type.is_empty()).then(|| {
-							let entity_type = Box::leak(NTStr::box_from_str_in(entity_type, Global));
+							let entity_type = Box::leak(NTStr::box_from_str_in(entity_type, &arena));
 							entity_type.as_ntstrptr()
 						})
 					}
@@ -281,20 +282,20 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 						game_fn_name: fn_name.to_string(),
 						argument_name: argument_name.to_string(),
 					})?;
-					let extension = Box::leak(NTStr::box_from_str_in(extension, Global)).as_ntstrptr();
+					let extension = Box::leak(NTStr::box_from_str_in(extension, &arena)).as_ntstrptr();
 					GrugType::Resource {
 						extension
 					}
 				}
 				type_name => {
-					let extra_value = Box::leak(NTStr::box_from_str_in(type_name, Global)).as_ntstrptr();
+					let extra_value = Box::leak(NTStr::box_from_str_in(type_name, &arena)).as_ntstrptr();
 					GrugType::Id {
 						custom_name: Some(extra_value),
 					}
 				}
 			};
 			Ok(Argument{
-				name: argument_name.as_ntstrptr(),
+				name: unsafe{argument_name.as_ntstrptr().detach_lifetime()},
 				ty,
 			})
 		}).collect::<Result<Vec<_>, ModApiError>>()?;
@@ -314,7 +315,7 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 				game_fn_name: fn_name.to_string(),
 			})?,
 			type_name => {
-				let extra_value = Box::leak(NTStr::box_from_str_in(type_name, Global)).as_ntstrptr();
+				let extra_value = Box::leak(NTStr::box_from_str_in(type_name, &arena)).as_ntstrptr();
 				GrugType::Id {
 					custom_name: Some(extra_value),
 				}
@@ -329,7 +330,8 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 	}).collect::<Result<HashMap<_, _>, ModApiError>>()?;
 
 	Ok(ModApi{
-		entities,
-		game_functions
+		entities: unsafe{std::mem::transmute::<HashMap<Arc<str>, ModApiEntity<'_>>, _>(entities)},
+		game_functions: unsafe{std::mem::transmute::<HashMap<Arc<str>, ModApiGameFn<'_>>, _>(game_functions)},
+		_arena: arena,
 	})
 }

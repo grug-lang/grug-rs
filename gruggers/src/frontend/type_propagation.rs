@@ -17,8 +17,8 @@ use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
 
 pub(super) struct TypePropogator<'mod_api, 'arena> {
-	entity: &'mod_api ModApiEntity,
-	game_fns: &'mod_api HashMap<Arc<str>, ModApiGameFn>,
+	entity: &'mod_api ModApiEntity<'mod_api>,
+	game_fns: &'mod_api HashMap<Arc<str>, ModApiGameFn<'mod_api>>,
 	game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>,
 	current_mod_name: String,
 	global_variables: HashMap<&'arena str, GrugType<'arena>>,

@@ -506,7 +506,7 @@ impl<'a> AST<'a> {
 		let args = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
 			self.parse_arguments(tokens, arena)?
 		} else {
-			Vec::new().leak()
+			Vec::new_in(arena).leak()
 		};
 		consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 
@@ -558,7 +558,7 @@ impl<'a> AST<'a> {
 		let args = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
 			self.parse_arguments(tokens, arena)?
 		} else {
-			Vec::new().leak()
+			Vec::new_in(arena).leak()
 		};
 		consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 		
@@ -811,6 +811,7 @@ impl<'a> AST<'a> {
 				line,
 				col
 			},
+			ParserError::OutOfTokensError => ParserError::OutOfTokensError,
 			_ => unreachable!(),
 		})?;
 
@@ -973,7 +974,7 @@ impl<'a> AST<'a> {
 				TokenType::Int32 => {
 					Expr{
 						data: ExprData::Number(
-							value.parse::<i64>().unwrap() as f64,
+							value.parse::<i64>().unwrap_or(f64::MAX as i64) as f64,
 							Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
 						),
 						result_type: None,
@@ -1224,6 +1225,7 @@ fn peek_next_tokens<'a, const N: usize> (tokens: &std::slice::Iter<'a, Token<'a>
 fn consume_space<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
 	Ok(&consume_next_token_types(tokens, &[TokenType::Space]).map_err(|err| match err {
 		ParserError::GotWrongToken{got, line, col, ..} => ParserError::ExpectedSpace{got, line, col},
+		ParserError::OutOfTokensError => ParserError::OutOfTokensError,
 		_ => unreachable!(),
 	})?[0])
 }
