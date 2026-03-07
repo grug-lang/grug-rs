@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "gruggers-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "allocator-api2",
 ]

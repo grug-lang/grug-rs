@@ -44,7 +44,7 @@ pub extern "C" fn grug_create_entity(state: &GrugState, file_id: GrugScriptId) -
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_destroy_entity(state: &GrugState, handle: GrugEntityHandle<'_>) {
+pub extern "C" fn grug_deinit_entity(state: &GrugState, handle: GrugEntityHandle<'_>) {
 	state.destroy_entity(handle)
 }
 
@@ -58,4 +58,9 @@ pub extern "C" fn grug_get_on_fn_id(state: &GrugState, entity_type: NTStrPtr<'_>
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_call_on_function(state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue, values_len: usize) -> bool {
 	unsafe{state.call_on_function(entity, on_fn_id, std::slice::from_raw_parts(values, values_len))}
+}
+
+#[unsafe(no_mangle)]
+pub fn grug_all_game_fns_registered(state: &GrugState) -> bool {
+	state.all_game_fns_registered().is_ok()
 }

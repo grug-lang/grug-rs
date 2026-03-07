@@ -22,7 +22,6 @@ pub use gruggers_core::xar;
 pub use gruggers_core::nt;
 
 
-// TODO: update AST to be like new grug-for-c ast
 // TODO: Debug info to backends
 // TODO: Better Error handling
 // TODO: ModsDir struct 

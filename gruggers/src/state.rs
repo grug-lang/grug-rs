@@ -402,6 +402,7 @@ impl GrugState {
 	}
 
 	pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) {
+		// TODO: Implement Xar::contained_within and perform this check yourself
 		if self.backend.destroy_entity_data(&*entity) {
 			// SAFETY: an entity stored within self.files must have come from
 			// this same state because of the return value of the above

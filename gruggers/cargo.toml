@@ -13,4 +13,4 @@ crate-type = ["cdylib", "lib", "staticlib"]
 [dependencies]
 json = "0.12.4"
 allocator-api2 = "0.4.0"
-gruggers-core = {version = "0.1.0", path = "../gruggers-core"}
+gruggers-core = {version = "0.2.0", path = "../gruggers-core"}

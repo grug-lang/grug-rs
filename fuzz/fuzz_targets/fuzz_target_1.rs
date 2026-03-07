@@ -7,7 +7,9 @@ use gruggers::backend::BytecodeBackend;
 const MOD_API: &str = r#"{
 	"entities": {
 		"A": {
-			
+			"on_functions": {
+				
+			}
 		}
 	},
 	"game_functions": {
