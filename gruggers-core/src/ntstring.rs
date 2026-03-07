@@ -1,3 +1,25 @@
+//! This module exports the `NTStr` and `NTStrPtr` types which are safe
+//! wrappers around null terminated utf8 strings. 
+//!
+//! This is allow simpler interfacing with c apis. `NTStrPtr` can be used in
+//! FFI in place of a non-null `const char*` c string. It is also
+//! `#[repr(transparent)]`, so `Option<NTStrPtr>` can be used in place of a
+//! `const char*` c string. 
+//!
+//! ## Why not just use `CStr`?
+//! 
+//! `CStr` is a wide pointer so it cannot be used directly in FFI and it requires
+//! unsafe parsing at the boundary. It also cannot be easily displayed without
+//! converting into a string
+//!
+//! ## Won't that cause UB if you are given a string that's not null terminated.
+//! Yeah, it will. Don't do that. On the other hand, there's no way to verify
+//! that at runtime, so parsing into a CStr will also cause UB
+//!
+//! On the other hand, it is also UB if the `NTStrPtr` points to non-utf8 data.
+//! CStr will catch this when converting into a str. This is something to be
+//! aware of.
+
 use std::sync::Arc;
 use std::ops::Deref;
 use std::ffi::{CStr, c_char};
@@ -7,11 +29,13 @@ use std::marker::PhantomData;
 use allocator_api2::alloc::Allocator;
 use allocator_api2::boxed::Box;
 
+
 /// represents a utf-8 string with a single null byte at the end.
 #[repr(transparent)]
 pub struct NTStr(str);
 
 impl NTStr {
+	/// Copy `value` into a `Arc<NTStr>`
 	pub fn arc_from_str (value: &str) -> Arc<Self> {
 		let arc = Arc::into_raw(Arc::<[u8]>::new_uninit_slice(value.len() + 1));
 
@@ -22,6 +46,7 @@ impl NTStr {
 		}
 	}
 
+	/// Copy `value` into a `Box<NTStr>` in allocator `a`.
 	pub fn box_from_str_in<A: Allocator>(value: &str, a: A) -> Box<Self, A> {
 		let ptr = Box::into_raw(Box::<[u8]>::new_uninit_slice(value.len() + 1));
 
@@ -46,6 +71,8 @@ impl NTStr {
 		&self.0
 	}
 
+	/// # SAFETY
+	///
 	/// The last byte of `value` MUST be a null byte and there must be no other null byte in between
 	pub unsafe fn from_str_unchecked(value: &str) -> &Self {
 		unsafe {std::mem::transmute::<&str, &NTStr>(value)}
@@ -149,10 +176,12 @@ pub struct NTStrPtr<'a>(NonNull<c_char>, PhantomData<&'a ()>);
 const _: () = const {assert!(std::mem::size_of::<NTStrPtr>() ==  std::mem::size_of::<Option<NTStrPtr>>())};
 
 impl<'a> NTStrPtr<'a> {
+	/// Returns a raw pointer to the string
 	pub fn as_ptr(self) -> *const u8 {
 		self.0.cast::<u8>().as_ptr().cast_const()
 	}
 
+	/// returns true if the first byte is null (indicating that there is no data behind the string)
 	pub fn is_empty(self) -> bool {
 		// SAFETY: NTStrPtr is guaranteed to point to allocated memory that ends in a null byte
 		unsafe{self.0.cast::<u8>().read() == b'\0'}
@@ -162,10 +191,12 @@ impl<'a> NTStrPtr<'a> {
 		Self(ptr, PhantomData)
 	}
 
+	/// Returns a `&CStr` to the string
 	pub fn to_cstr(self) -> &'a CStr {
 		unsafe{CStr::from_ptr(self.0.as_ptr().cast_const())}
 	}
 
+	/// Returns a `&NTStr` to the string excluding the null byte
 	pub fn to_ntstr(self) -> &'a NTStr {
 		let mut i = 0;
 		loop {
@@ -182,11 +213,14 @@ impl<'a> NTStrPtr<'a> {
 		}
 	}
 
+	/// Returns a `&str` to the string excluding the null byte
 	pub fn to_str(self) -> &'a str {
 		self.to_ntstr().as_str()
 	}
 	
-	/// SAFETY: There must be at least one null byte within the str
+	/// # SAFETY 
+	///
+	/// There must be at least one null byte within the str
 	pub unsafe fn from_str_unchecked(value: &'a str) -> Self {
 		unsafe{Self::from_ptr(NonNull::from_ref(value).cast::<c_char>())}
 	}
@@ -197,8 +231,12 @@ impl<'a> NTStrPtr<'a> {
 		Some(NTStr::from_str(value)?.as_ntstrptr())
 	}
 	
-	/// returns a pointer with a static lifetime. 
-	/// it is UB to use the returned pointer after the 'a would have ended
+	/// Returns a pointer with a static lifetime. 
+	///
+	/// # SAFETY
+	///
+	/// It is UB to use the returned pointer after the backing memory is
+	/// deallocated or borrowed mutably
 	pub unsafe fn detach_lifetime(self) -> NTStrPtr<'static> {
 		unsafe{std::mem::transmute::<Self, NTStrPtr<'static>>(self)}
 	}

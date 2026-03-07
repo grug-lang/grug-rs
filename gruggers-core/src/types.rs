@@ -1,7 +1,6 @@
 use std::ffi::c_double;
 use std::cell::Cell;
 use std::ptr::NonNull;
-use crate::xar::XarHandle;
 use crate::ntstring::NTStrPtr;
 use crate::state::State;
 
@@ -134,36 +133,6 @@ impl GrugValue {
 /// This is just a pointer to a null terminated c string, which is thread safe
 unsafe impl Send for GrugValue {}
 unsafe impl Sync for GrugValue {}
-
-/// A pointer to a grug entity. Only allows shared access to the data and does
-/// not allow copying or cloning. Lifetime of shared borrows are limited to the lifetime of self
-#[repr(transparent)]
-pub struct GrugEntityHandle<'a>(XarHandle<'a, GrugEntity>);
-
-impl<'a> GrugEntityHandle<'a> {
-	/// SAFETY: inner can only be deleted by deleting the returned value
-	/// The returned value is allowed to create a shared reference to the data at any time 
-	pub unsafe fn new(inner: XarHandle<'a, GrugEntity>) -> Self {
-		Self(inner)
-	}
-
-	pub fn into_inner(self) -> XarHandle<'a, GrugEntity> {
-		self.0
-	}
-}
-
-impl<'a> AsRef<GrugEntity> for GrugEntityHandle<'a> {
-	fn as_ref(&self) -> &GrugEntity {
-		unsafe{self.0.get_ref()}
-	}
-}
-
-impl<'a> std::ops::Deref for GrugEntityHandle<'a> {
-	type Target = GrugEntity;
-	fn deref(&self) -> &Self::Target {
-		unsafe{self.0.get_ref()}
-	}
-}
 
 #[derive(Debug)]
 pub struct GrugEntity {

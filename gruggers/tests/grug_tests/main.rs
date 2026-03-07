@@ -4,10 +4,10 @@ use gruggers::ntstring::NTStr;
 use gruggers::nt;
 
 mod test_bindings {
-	use gruggers::state::{GrugInitSettings, GrugState, State};
+	use gruggers::state::{GrugInitSettings, GrugState, State, GrugEntityHandle};
 	use gruggers::backend::BytecodeBackend;
 	use gruggers::error::RuntimeError;
-	use gruggers::types::{GrugValue, GrugScriptId, GrugEntityHandle};
+	use gruggers::types::{GrugValue, GrugScriptId};
 	use gruggers::ntstring::{NTStrPtr, NTStr};
 	use gruggers::serde;
 	use std::path::Path;

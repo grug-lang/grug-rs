@@ -75,7 +75,6 @@ impl<'a> Compiler<'a> {
 		// panic!("{}", instructions);
 		CompiledFile {
 			instructions,
-			entities: RefCell::new(Vec::new()),
 			globals_size,
 			data: ErasedXar::new(Layout::array::<GrugValue>(globals_size)
 				 .expect("invalid layout")
@@ -426,7 +425,6 @@ impl<'a> Compiler<'a> {
 #[derive(Debug)]
 struct CompiledFile {
 	instructions: Instructions,
-	entities: RefCell<Vec<NonNull<GrugEntity>>>,
 	globals_size: usize,
 	data: ErasedXar,
 }
@@ -445,7 +443,7 @@ impl BytecodeBackend {
 	}
 }
 
-unsafe impl Backend for BytecodeBackend {
+impl Backend for BytecodeBackend {
 	fn insert_file(&self, id: GrugScriptId, file: GrugAst) {
 		let compiled_file = Compiler::compile(file);
 		let mut files = self.files.borrow_mut();
@@ -473,21 +471,14 @@ unsafe impl Backend for BytecodeBackend {
 	}
 	fn clear_entities(&mut self) {
 		for file in self.files.get_mut().iter_mut() {
-			file.entities.get_mut().clear();
 			file.data.clear();
 		}
 	}
-	fn destroy_entity_data(&self, entity: &GrugEntity) -> bool {
+	fn destroy_entity_data(&self, entity: &GrugEntity) {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
-		if file.entities.borrow_mut().extract_if(.., |x: &mut NonNull<GrugEntity>| !std::ptr::eq(x.as_ptr().cast_const(), entity))
-			.next().is_some() {
-			unsafe{file.data.delete(ErasedPtr::from_ptr(entity.members.get()))};
-			true
-		} else {
-			false
-		}
+		unsafe{file.data.delete(ErasedPtr::from_ptr(entity.members.get()))};
 	}
 	unsafe fn call_on_function_raw<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 		let files = self.files.borrow();

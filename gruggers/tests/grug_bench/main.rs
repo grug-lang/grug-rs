@@ -2,9 +2,9 @@
 #![allow(improper_ctypes)]
 mod test_bindings {
 	use gruggers::ntstring::{NTStrPtr, NTStr};
-	use gruggers::state::{GrugState, GrugInitSettings};
+	use gruggers::state::{GrugState, GrugInitSettings, GrugEntityHandle};
 	use gruggers::backend::BytecodeBackend;
-	use gruggers::types::{GrugEntityHandle, GrugEntity, GrugScriptId, GrugOnFnId, GrugValue};
+	use gruggers::types::{GrugEntity, GrugScriptId, GrugOnFnId, GrugValue};
 
 	use super::game_functions::*;
 	

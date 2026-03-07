@@ -1,10 +1,13 @@
+use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text, ModApiError};
 use crate::error::GrugError;
-use gruggers_core::runtime_error::RuntimeError;
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GrugEntityHandle};
+use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity};
 use crate::xar::Xar;
 use crate::arena::Arena;
+
+use gruggers_core::runtime_error::RuntimeError;
+pub use gruggers_core::state::State;
 
 use std::marker::PhantomData;
 use std::ptr::NonNull;
@@ -12,8 +15,6 @@ use std::cell::{Cell, RefCell, Ref};
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
-
-pub use gruggers_core::state::State;
 
 #[repr(C)]
 pub struct RuntimeErrorHandler {
@@ -403,10 +404,9 @@ impl GrugState {
 
 	pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) {
 		// TODO: Implement Xar::contained_within and perform this check yourself
-		if self.backend.destroy_entity_data(&*entity) {
-			// SAFETY: an entity stored within self.files must have come from
-			// this same state because of the return value of the above
-			// function. GrugEntityHandle contains the only other handle to the entity storage
+		if self.entities.is_contained_within(entity.0) {
+			self.backend.destroy_entity_data(&*entity);
+			// `self.entities.contained_within` returns true so this entity must exist within self
 			unsafe{self.entities.delete(entity.into_inner())};
 		}
 	}
@@ -504,4 +504,34 @@ pub struct OnFnEntry {
 	pub entity_type: Arc<str>,
 	pub on_fn_name : Arc<str>,
 	pub index      : usize,
+}
+
+/// A pointer to a grug entity. Only allows shared access to the data and does
+/// not allow copying or cloning. Lifetime of shared borrows are limited to the lifetime of self
+#[repr(transparent)]
+pub struct GrugEntityHandle<'a>(XarHandle<'a, GrugEntity>);
+
+impl<'a> GrugEntityHandle<'a> {
+	/// SAFETY: inner can only be deleted by deleting the returned value
+	/// The returned value is allowed to create a shared reference to the data at any time 
+	pub unsafe fn new(inner: XarHandle<'a, GrugEntity>) -> Self {
+		Self(inner)
+	}
+
+	pub fn into_inner(self) -> XarHandle<'a, GrugEntity> {
+		self.0
+	}
+}
+
+impl<'a> AsRef<GrugEntity> for GrugEntityHandle<'a> {
+	fn as_ref(&self) -> &GrugEntity {
+		unsafe{self.0.get_ref()}
+	}
+}
+
+impl<'a> std::ops::Deref for GrugEntityHandle<'a> {
+	type Target = GrugEntity;
+	fn deref(&self) -> &Self::Target {
+		unsafe{self.0.get_ref()}
+	}
 }

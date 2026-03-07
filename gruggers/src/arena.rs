@@ -42,11 +42,11 @@ mod page_alloc {
 		const MEM_COMMIT: DWORD = 0x00001000;
 		const MEM_RESERVE: DWORD = 0x00002000;
 
-		const MEM_DECOMMIT: DWORD = 0x00004000;
+		// const MEM_DECOMMIT: DWORD = 0x00004000;
 		const MEM_RELEASE: DWORD = 0x00008000;
 
 		const PAGE_READ_WRITE: DWORD = 0x04;
-		const PAGE_NO_ACCESS: DWORD = 0x01;
+		// const PAGE_NO_ACCESS: DWORD = 0x01;
 
 		pub static PAGE_SIZE: std::sync::LazyLock<u32> = std::sync::LazyLock::new(|| PageAllocator::page_size());
 
@@ -81,6 +81,7 @@ mod page_alloc {
 					sys_info.assume_init().dwPageSize
 				}
 			}
+
 			pub fn alloc_pages(num_pages: usize) -> Result<NonNull<[u8]>, AllocError> {
 				let ptr = unsafe {
 					VirtualAllocEx(
@@ -100,40 +101,42 @@ mod page_alloc {
 					}
 				}
 			}
-			pub fn reserve_pages(num_pages: usize) -> Result<NonNull<[u8]>, AllocError> {
-				let ptr = unsafe {
-					VirtualAllocEx(
-						GetCurrentProcess(),
-						std::ptr::null_mut(),
-						num_pages * (*PAGE_SIZE as usize),
-						MEM_RESERVE,
-						PAGE_NO_ACCESS,
-					)
-				};
-				if ptr.is_null() {
-					Err(AllocError)
-				} else {
-					unsafe {
-						Ok(NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(ptr.cast(), num_pages * (*PAGE_SIZE as usize))))
-					}
-				}
-			}
-			pub unsafe fn commit_pages(start_ptr: NonNull<u8>, num_pages: usize) -> Result<(), AllocError> {
-				let ptr = unsafe {
-					VirtualAllocEx(
-						GetCurrentProcess(),
-						start_ptr.as_ptr().cast(),
-						num_pages * (*PAGE_SIZE as usize),
-						MEM_COMMIT,
-						PAGE_READ_WRITE,
-					)
-				};
-				if ptr.is_null() {
-					Err(AllocError)
-				} else {
-					Ok(())
-				}
-			}
+
+			// pub fn reserve_pages(num_pages: usize) -> Result<NonNull<[u8]>, AllocError> {
+			// 	let ptr = unsafe {
+			// 		VirtualAllocEx(
+			// 			GetCurrentProcess(),
+			// 			std::ptr::null_mut(),
+			// 			num_pages * (*PAGE_SIZE as usize),
+			// 			MEM_RESERVE,
+			// 			PAGE_NO_ACCESS,
+			// 		)
+			// 	};
+			// 	if ptr.is_null() {
+			// 		Err(AllocError)
+			// 	} else {
+			// 		unsafe {
+			// 			Ok(NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(ptr.cast(), num_pages * (*PAGE_SIZE as usize))))
+			// 		}
+			// 	}
+			// }
+			// pub unsafe fn commit_pages(start_ptr: NonNull<u8>, num_pages: usize) -> Result<(), AllocError> {
+			// 	let ptr = unsafe {
+			// 		VirtualAllocEx(
+			// 			GetCurrentProcess(),
+			// 			start_ptr.as_ptr().cast(),
+			// 			num_pages * (*PAGE_SIZE as usize),
+			// 			MEM_COMMIT,
+			// 			PAGE_READ_WRITE,
+			// 		)
+			// 	};
+			// 	if ptr.is_null() {
+			// 		Err(AllocError)
+			// 	} else {
+			// 		Ok(())
+			// 	}
+			// }
+
 			pub unsafe fn free_pages(start_ptr: NonNull<u8>, _num_pages: usize) -> Result<(), AllocError>{
 				if unsafe {
 					VirtualFreeEx (
@@ -148,20 +151,21 @@ mod page_alloc {
 					Ok(())
 				}
 			}
-			pub unsafe fn decommit_pages(start_ptr: NonNull<u8>, num_pages: usize) -> Result<(), AllocError>{
-				if unsafe {
-					VirtualFreeEx (
-						GetCurrentProcess(),
-						start_ptr.as_ptr().cast(),
-						(num_pages as u32) * *PAGE_SIZE,
-						MEM_DECOMMIT,
-					)
-				} == 0 {
-					Err(AllocError)
-				} else {
-					Ok(())
-				}
-			}
+			
+			// pub unsafe fn decommit_pages(start_ptr: NonNull<u8>, num_pages: usize) -> Result<(), AllocError>{
+			// 	if unsafe {
+			// 		VirtualFreeEx (
+			// 			GetCurrentProcess(),
+			// 			start_ptr.as_ptr().cast(),
+			// 			(num_pages as u32) * *PAGE_SIZE,
+			// 			MEM_DECOMMIT,
+			// 		)
+			// 	} == 0 {
+			// 		Err(AllocError)
+			// 	} else {
+			// 		Ok(())
+			// 	}
+			// }
 		}
 
 		#[cfg(test)]
@@ -173,17 +177,8 @@ mod page_alloc {
 				unsafe {
 					let ptr_1 = PageAllocator::alloc_pages(2)
 						.expect("Allocating Pages Failed");
-					PageAllocator::decommit_pages(ptr_1.cast(), 2)
-						.expect("Decommitting Pages Failed");
 					PageAllocator::free_pages(ptr_1.cast(), 2)
 						.expect("Freeing Pages Failed");
-
-					let ptr_2 = PageAllocator::reserve_pages(2)
-						.expect("Reserving pages failed");
-					PageAllocator::free_pages(ptr_2.cast(), 2)
-						.expect("Freeing Pages Failed");
-					PageAllocator::commit_pages(ptr_2.cast(), 2)
-						.expect_err("");
 				}
 			}
 		}
@@ -524,5 +519,4 @@ mod arena {
 	}
 }
 
-pub use page_alloc::PageAllocator;
 pub use arena::Arena;

@@ -1,7 +1,7 @@
 #![allow(improper_ctypes_definitions)]
-use crate::state::{GrugInitSettings, GrugState};
+use crate::state::{GrugInitSettings, GrugState, GrugEntityHandle};
 use crate::ntstring::NTStrPtr;
-use crate::types::{GameFnPtrVoidArgless, GameFnPtrVoid, GameFnPtrValue, GameFnPtrValueArgless, GrugScriptId, GrugEntityHandle, GrugOnFnId, GrugEntity, GrugValue};
+use crate::types::{GameFnPtrVoidArgless, GameFnPtrVoid, GameFnPtrValue, GameFnPtrValueArgless, GrugScriptId, GrugOnFnId, GrugEntity, GrugValue};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_init(settings: GrugInitSettings) -> Option<Box<GrugState>> {

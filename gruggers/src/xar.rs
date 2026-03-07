@@ -117,6 +117,23 @@ mod xar {
 			}
 		}
 
+		/// Checks if the handle is actually from within self
+		pub fn is_contained_within(&self, handle: XarHandle<T>) -> bool {
+			if size_of::<T>() == 0 {
+				return true;
+			}
+			let inner = unsafe{&*self.inner.as_ptr()};
+			let mut current_bucket_size = Self::FIRST_SIZE;
+			for bucket in &inner.chunks {
+				let Some(bucket) = bucket.get() else {return false};
+				if (handle.0.as_ptr().addr()).wrapping_sub(bucket.as_ptr().addr()) < current_bucket_size {
+					return true;
+				}
+				current_bucket_size *= 2;
+			}
+			return false;
+		}
+
 		/// # SAFETY
 		/// handle must be from the current Xar
 		pub unsafe fn delete(&self, handle: XarHandle<T>) {
@@ -309,16 +326,16 @@ pub use xar::*;
 
 mod erased_xar {
 	use super::*;
-	/// A growable exponential array 
+	/// A growable exponential array where the size of the allocations are determined at runtime.
 	/// Insertion returns a pinned pointer to a value.
-	/// The values inside the Xar are not dropped unless delete is called with a pointer to the item
-	/// This also includes the destructor. 
-	/// The destructor simply deallocates the memory and does not drop the values in it.
+	/// The values inside the Xar are not dropped unless delete is called with a pointer to the item.
+	/// The destructor simply deallocates the memory and does not drop any values.
 	pub struct ErasedXar {
 		committed: Cell<usize>,
 		inner: NonNull<XarInner>,
 	}
 
+	/// Pointer to a value inside an ErasedXar.
 	#[repr(transparent)]
 	#[derive(Clone, Copy)]
 	pub struct ErasedPtr<'a>(NonNull<()>, PhantomData<&'a ()>);
@@ -329,17 +346,18 @@ mod erased_xar {
 			Self(ptr, PhantomData)
 		}
 
+		#[allow(unused)]
 		pub unsafe fn as_ref<T>(self) -> &'a T {
 			unsafe{&*self.0.cast::<T>().as_ptr()}
 		}
 
-		/// ErasedPtr must be valid to write for bytes.len bytes
-		pub unsafe fn write_bytes(self, bytes: &[u8]) {
-			unsafe{self.0.as_ptr().cast::<u8>().copy_from(bytes.as_ptr(), bytes.len())}
-		}
+		// ErasedPtr must be valid to write for bytes.len bytes
+		// pub unsafe fn write_bytes(self, bytes: &[u8]) {
+		// 	unsafe{self.0.as_ptr().cast::<u8>().copy_from(bytes.as_ptr(), bytes.len())}
+		// }
 		
-		/// ErasedPtr must be aligned to T and must have atleast enough space
-		/// for a [T] with `len` elements
+		/// ErasedPtr must be aligned to `T` and must have atleast enough space
+		/// for a `[T]` with `len` elements
 		pub unsafe fn write_slice<T: Clone>(self, len: usize, value: T) -> *mut [T] {
 			for i in 1..len {
 				unsafe{self.0.cast::<T>().add(i).write(value.clone())};
@@ -369,14 +387,14 @@ mod erased_xar {
 			unsafe{Self(self.0.byte_add(bytes), PhantomData)}
 		}
 
-		/// Drops the value at the pointee
-		pub unsafe fn drop_in_place<T>(self) {
-			unsafe{self.0.as_ptr().cast::<T>().drop_in_place()}
-		}
+		// Drops the value at the pointee
+		// pub unsafe fn drop_in_place<T>(self) {
+		// 	unsafe{self.0.as_ptr().cast::<T>().drop_in_place()}
+		// }
 
-		pub fn as_ptr(self) -> NonNull<()> {
-			self.0
-		}
+		// pub fn as_ptr(self) -> NonNull<()> {
+		// 	self.0
+		// }
 	}
 
 	struct XarInner {
@@ -395,13 +413,13 @@ mod erased_xar {
 			}
 		}
 
-		/// SAFETY: Layout of T must match the layout used to create the ErasedXar
-		pub unsafe fn insert<T>(&self, value: T) -> ErasedPtr<'_> {
-			debug_assert!(Layout::new::<T>() == unsafe{(*self.inner.as_ptr()).item_layout});
-			let ret_val = self.get_slot();
-			unsafe{ret_val.write_value(value)};
-			ret_val
-		}
+		// /// SAFETY: Layout of T must match the layout used to create the ErasedXar
+		// pub unsafe fn insert<T>(&self, value: T) -> ErasedPtr<'_> {
+		// 	debug_assert!(Layout::new::<T>() == unsafe{(*self.inner.as_ptr()).item_layout});
+		// 	let ret_val = self.get_slot();
+		// 	unsafe{ret_val.write_value(value)};
+		// 	ret_val
+		// }
 
 		pub fn get_slot(&self) -> ErasedPtr<'_> {
 			if self.item_size() == 0 {

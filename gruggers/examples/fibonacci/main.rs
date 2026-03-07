@@ -132,8 +132,8 @@ impl<T> std::ops::DerefMut for UnsafeStatic<T> {
 fn main () {
 	unsafe {
 		let mut state = GrugInitSettings::new()
-			.set_mod_api_path("examples/fibonacci/mod_api.json")
-			.set_mods_dir("examples/fibonacci/mods")
+			.set_mod_api_path("gruggers/examples/fibonacci/mod_api.json")
+			.set_mods_dir("gruggers/examples/fibonacci/mods")
 			.build_state().unwrap();
 		state.register_game_fn("print_string",       print_string       as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
 		state.register_game_fn("print_number",       print_number       as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();

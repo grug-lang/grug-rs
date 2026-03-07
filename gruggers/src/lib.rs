@@ -10,7 +10,8 @@ pub mod error;
 pub mod state;
 
 pub mod capi;
-pub mod arena;
+mod xar;
+mod arena;
 
 mod cachemap;
 
@@ -18,7 +19,6 @@ pub use gruggers_core::types;
 pub use gruggers_core::ast;
 
 pub use gruggers_core::ntstring;
-pub use gruggers_core::xar;
 pub use gruggers_core::nt;
 
 

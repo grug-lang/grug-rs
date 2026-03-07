@@ -1,0 +1,44 @@
+I've noticed that there are three categories of errors that need to be handled somewhat differently
+
+- Errors during initialization
+	- Bad paths
+	- Error in mod_api
+	- Game function registration
+	
+- Compilation errors
+- Runtime errors
+
+Initialization errors can't really be handled. They happen at startup and they
+need to be resolved manually for most games. 
+
+Compile time errors can be provided entirely by the grug_state, and it will
+happen in the regular course of the game. The errors need to be communicated to
+the user. We need lots of extra context and diagnostics and maybe suggestions too.
+
+Right now, we handle runtime errors with runtime_error_handler. We don't get
+much information about the error except the script and which on_ function was
+last called. Right now we don't pass debug info in the ast, so we can't get much info back
+
+Each of these three should probably be handled separately. 
+
+- Initialization errors probably only need an error code and message (maybe mod_api errors need more?)
+
+- Compile errors should have the error code, message, surrounding context, diagnostics, and suggestions
+struct grug_compile_error {
+	void* allocator;
+	enum grug_compile_error_kind kind;
+	// one line error string. This can be printed to the console.
+	char* error_string;
+	// Use these for more structured error reporting
+	char* file_path;
+	char* err_code;
+	struct grug_span err_span;
+	char* file_text;
+	// Extra information to make debugging easier
+	struct grug_compile_error_help* help;
+	size_t help_len;
+}
+
+- Runtime errors should ideally have span information from the location of the error
+
+
