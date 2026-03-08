@@ -2,7 +2,7 @@ use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text, ModApiError};
 use crate::error::GrugError;
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity};
+use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GameFnPtrState};
 use crate::xar::Xar;
 use crate::arena::Arena;
 
@@ -326,7 +326,7 @@ impl GrugState {
 		Ok(&self.on_functions[start..end])
 	}
 
-	pub fn register_game_fn<F: Into<GameFnPtr>>(&mut self, name: &'static str, ptr: F) -> Result<(), StateError> {
+	pub fn register_game_fn(&mut self, name: &'static str, ptr: GameFnPtrState<Self>) -> Result<(), StateError> {
 		if !self.mod_api.game_functions().contains_key(name) {
 			Err(StateError::UnknownGameFunction{
 				game_function_name: name,
@@ -337,7 +337,7 @@ impl GrugState {
 					game_function_name: name,
 				}),
 				Entry::Vacant(x) => {
-					x.insert(ptr.into());
+					x.insert(GameFnPtr::from_ptr(ptr));
 					Ok(())
 				}
 			}

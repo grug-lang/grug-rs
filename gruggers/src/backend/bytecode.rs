@@ -1072,21 +1072,9 @@ impl Stack {
 					args,
 					ptr,
 				} => {
-					match (has_return, args) {
-						(false, 0) => unsafe{(ptr.void_argless())(state)},
-						(false, n) => {
-							unsafe{(ptr.void())(state, self.stack.as_ptr().add(self.stack.len() - n as usize))};
-							self.stack.truncate(self.stack.len() - n as usize);
-						}
-						(true , 0) => {
-							let value = unsafe{(ptr.value_argless())(state)};
-							self.stack.push(value);
-						}
-						(true , n) => {
-							let value = unsafe{(ptr.value())(state, self.stack.as_ptr().add(self.stack.len() - n as usize))};
-							self.stack.truncate(self.stack.len() - n as usize);
-							self.stack.push(value);
-						}
+					let value = unsafe{(ptr.as_ptr())(state, self.stack.as_ptr().add(self.stack.len() - args as usize))};
+					if has_return {
+						self.stack.push(value);
 					}
 					if state.is_errorring() {
 						return None

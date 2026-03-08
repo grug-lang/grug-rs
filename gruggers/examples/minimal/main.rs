@@ -7,11 +7,12 @@ use std::time::Duration;
 
 mod game_fns {
 	use super::*;
-	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) {
+	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
 		unsafe {
 			let string = (*arguments).string.to_str();
 			println!("{}", string);
 		}
+		GrugValue{void: ()}
 	}
 }
 use game_fns::*;
@@ -21,7 +22,7 @@ fn main () {
 		.set_mods_dir("gruggers/examples/minimal/mods")
 		.set_mod_api_path("gruggers/examples/minimal/mod_api.json")
 		.build_state().unwrap();
-	state.register_game_fn("print_string", print_string as for<'a> extern "C" fn(&'a GrugState, _)).unwrap();
+	state.register_game_fn("print_string", print_string).unwrap();
 	state.all_game_fns_registered().unwrap();
 
 	let id = state.compile_grug_file("goldie/first-Dog.grug").unwrap();

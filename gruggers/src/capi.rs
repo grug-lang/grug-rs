@@ -1,7 +1,7 @@
 #![allow(improper_ctypes_definitions)]
 use crate::state::{GrugInitSettings, GrugState, GrugEntityHandle};
 use crate::ntstring::NTStrPtr;
-use crate::types::{GameFnPtrVoidArgless, GameFnPtrVoid, GameFnPtrValue, GameFnPtrValueArgless, GrugScriptId, GrugOnFnId, GrugEntity, GrugValue};
+use crate::types::{GrugScriptId, GrugOnFnId, GrugEntity, GrugValue, GameFnPtrState};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_init(settings: GrugInitSettings) -> Option<Box<GrugState>> {
@@ -12,22 +12,7 @@ pub extern "C" fn grug_init(settings: GrugInitSettings) -> Option<Box<GrugState>
 pub extern "C" fn grug_deinit(_: Option<Box<GrugState>>) {}
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_register_game_fn_void_argless(state: &mut GrugState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrVoidArgless<GrugState>) -> bool {
-	state.register_game_fn(game_fn_name.to_str(), func).is_ok()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn grug_register_game_fn_void(state: &mut GrugState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrVoid<GrugState>) -> bool {
-	state.register_game_fn(game_fn_name.to_str(), func).is_ok()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn grug_register_game_fn_value_argless(state: &mut GrugState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrValueArgless<GrugState>) -> bool {
-	state.register_game_fn(game_fn_name.to_str(), func).is_ok()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn grug_register_game_fn_value(state: &mut GrugState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrValue<GrugState>) -> bool {
+pub extern "C" fn grug_register_game_fn(state: &mut GrugState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrState<GrugState>) -> bool {
 	state.register_game_fn(game_fn_name.to_str(), func).is_ok()
 }
 

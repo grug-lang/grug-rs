@@ -8,41 +8,20 @@ use crate::state::State;
 // TODO: Remove the "Grug" prefix from these types
 
 /// A function pointer to a game function
-/// Game functions have one of the following 4 signatures
+/// Game functions have one the following signature
 /// ```
-/// extern "C" fn (&GrugState);
-/// extern "C" fn (&GrugState, *const GrugValue);
-/// extern "C" fn (&GrugState) -> GrugValue;
 /// extern "C" fn (&GrugState, *const GrugValue) -> GrugValue;
 /// ```
-#[repr(transparent)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct GameFnPtr(NonNull<()>);
+pub type GameFnPtrState<GrugState> = extern "C" fn (&GrugState, *const GrugValue) -> GrugValue;
 
 impl GameFnPtr {
-	pub const unsafe fn void<GrugState: State>(self) -> GameFnPtrVoid<GrugState> {
-		unsafe{std::mem::transmute(self.0)}
-	}
-	pub const unsafe fn void_argless<GrugState: State>(self) -> GameFnPtrVoidArgless<GrugState> {
-		unsafe{std::mem::transmute(self.0)}
-	}
-	pub const unsafe fn value<GrugState: State>(self) -> GameFnPtrValue<GrugState> {
-		unsafe{std::mem::transmute(self.0)}
-	}
-	pub const unsafe fn value_argless<GrugState: State>(self) -> GameFnPtrValueArgless<GrugState> {
+	pub const unsafe fn as_ptr<GrugState: State>(self) -> GameFnPtrState<GrugState> {
 		unsafe{std::mem::transmute(self.0)}
 	}
 
-	pub const fn from_void<GrugState: State>(value: GameFnPtrVoid<GrugState>) -> Self {
-		Self(unsafe{std::mem::transmute(value)})
-	}
-	pub const fn from_void_argless<GrugState: State>(value: GameFnPtrVoidArgless<GrugState>) -> Self {
-		Self(unsafe{std::mem::transmute(value)})
-	}
-	pub const fn from_value<GrugState: State>(value: GameFnPtrValue<GrugState>) -> Self {
-		Self(unsafe{std::mem::transmute(value)})
-	}
-	pub const fn from_value_argless<GrugState: State>(value: GameFnPtrValueArgless<GrugState>) -> Self {
+	pub const fn from_ptr<GrugState: State>(value: GameFnPtrState<GrugState>) -> Self {
 		Self(unsafe{std::mem::transmute(value)})
 	}
 }
@@ -52,50 +31,6 @@ impl std::fmt::Debug for GameFnPtr {
 		self.0.fmt(f)
 	}
 }
-
-impl PartialEq for GameFnPtr {
-	fn eq(&self, other: &Self) -> bool {
-		const _: () = const{assert!(size_of::<GameFnPtr>() == size_of::<usize>())};
-		std::ptr::eq(self.0.as_ptr(), other.0.as_ptr())
-		// unsafe{std::mem::transmute::<Self, usize>(*self) == std::mem::transmute::<Self, usize>(*other)}
-	}
-}
-
-mod from_impls {
-	use super::*;
-	impl<GrugState: State> From<GameFnPtrVoid<GrugState>> for GameFnPtr {
-		fn from (value: GameFnPtrVoid<GrugState>) -> Self {
-			Self(unsafe{std::mem::transmute(value)})
-		}
-	}
-
-	impl<GrugState: State> From<GameFnPtrVoidArgless<GrugState>> for GameFnPtr {
-		fn from (value: GameFnPtrVoidArgless<GrugState>) -> Self {
-			Self(unsafe{std::mem::transmute(value)})
-		}
-	}
-
-	impl<GrugState: State> From<GameFnPtrValue<GrugState>> for GameFnPtr {
-		fn from (value: GameFnPtrValue<GrugState>) -> Self {
-			Self(unsafe{std::mem::transmute(value)})
-		}
-	}
-
-	impl<GrugState: State> From<GameFnPtrValueArgless<GrugState>> for GameFnPtr {
-		fn from (value: GameFnPtrValueArgless<GrugState>) -> Self {
-			Self(unsafe{std::mem::transmute(value)})
-		}
-	}
-}
-
-/// Alias for `extern "C" fn (&GrugState, *const GrugValue)`
-pub type GameFnPtrVoid<GrugState> = extern "C" fn (state: &GrugState, args: *const GrugValue);
-/// Alias for `extern "C" fn (&GrugState)`
-pub type GameFnPtrVoidArgless<GrugState> = extern "C" fn (state: &GrugState);
-/// Alias for `extern "C" fn (&GrugState, *const GrugValue) -> GrugValue`
-pub type GameFnPtrValue<GrugState> = extern "C" fn (state: &GrugState, args: *const GrugValue) -> GrugValue;
-/// Alias for `extern "C" fn (&GrugState) -> GrugValue`
-pub type GameFnPtrValueArgless<GrugState> = extern "C" fn (state: &GrugState) -> GrugValue;
 
 /// Represents a handle to an object owned by grug
 /// Can refer to grug entities, grug files, on functions, or game objects

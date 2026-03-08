@@ -149,7 +149,7 @@ impl std::fmt::Display for TokenizerError {
 			Self::CommentTrailingWhitespace {
 				line,
 				col: _,
-			} => write!(f, "A comment has trailing whitespace on line {}", line),
+			} => write!(f, "Expected the comment to contain some text on line {}", line),
 			Self::UnclosedString {
 				start_line,
 				start_col: _,
@@ -386,6 +386,8 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 			}
 			i += 1;
 			let start = i;
+			// SAFETY: The last character checked was ' ', which is valid utf8
+			let str = unsafe{str::from_utf8_unchecked(&file_text[i..])};
 			while i < file_text.len() && file_text[i] != b'\r' && file_text[i] != b'\n' {
 				i += 1;
 			}
