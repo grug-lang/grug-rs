@@ -34,6 +34,15 @@ use allocator_api2::boxed::Box;
 #[repr(transparent)]
 pub struct NTStr(str);
 
+/// # SAFETY
+///
+/// Same as str
+unsafe impl Send for NTStr {}
+/// # SAFETY
+///
+/// Same as str
+unsafe impl Sync for NTStr {}
+
 impl NTStr {
 	/// Copy `value` into a `Arc<NTStr>`
 	pub fn arc_from_str (value: &str) -> Arc<Self> {
@@ -174,6 +183,15 @@ mod test {
 #[derive(Clone, Copy)]
 pub struct NTStrPtr<'a>(NonNull<c_char>, PhantomData<&'a ()>);
 const _: () = const {assert!(std::mem::size_of::<NTStrPtr>() ==  std::mem::size_of::<Option<NTStrPtr>>())};
+
+/// # SAFETY
+///
+/// Same as str
+unsafe impl Send for NTStrPtr<'_> {}
+/// # SAFETY
+///
+/// Same as str
+unsafe impl Sync for NTStrPtr<'_> {}
 
 impl<'a> NTStrPtr<'a> {
 	/// Returns a raw pointer to the string

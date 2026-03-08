@@ -1,11 +1,20 @@
+//! Defines the types shared by all implementations of grug.h
 use std::ffi::c_double;
 use std::cell::Cell;
 use std::ptr::NonNull;
 use crate::ntstring::NTStrPtr;
 use crate::state::State;
 
-// TODO Unnest some of these enums
+// TODO: Remove the "Grug" prefix from these types
 
+/// A function pointer to a game function
+/// Game functions have one of the following 4 signatures
+/// ```
+/// extern "C" fn (&GrugState);
+/// extern "C" fn (&GrugState, *const GrugValue);
+/// extern "C" fn (&GrugState) -> GrugValue;
+/// extern "C" fn (&GrugState, *const GrugValue) -> GrugValue;
+/// ```
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct GameFnPtr(NonNull<()>);
@@ -79,15 +88,23 @@ mod from_impls {
 	}
 }
 
+/// Alias for `extern "C" fn (&GrugState, *const GrugValue)`
 pub type GameFnPtrVoid<GrugState> = extern "C" fn (state: &GrugState, args: *const GrugValue);
+/// Alias for `extern "C" fn (&GrugState)`
 pub type GameFnPtrVoidArgless<GrugState> = extern "C" fn (state: &GrugState);
+/// Alias for `extern "C" fn (&GrugState, *const GrugValue) -> GrugValue`
 pub type GameFnPtrValue<GrugState> = extern "C" fn (state: &GrugState, args: *const GrugValue) -> GrugValue;
+/// Alias for `extern "C" fn (&GrugState) -> GrugValue`
 pub type GameFnPtrValueArgless<GrugState> = extern "C" fn (state: &GrugState) -> GrugValue;
 
+/// Represents a handle to an object owned by grug
+/// Can refer to grug entities, grug files, on functions, or game objects
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub struct GrugId(pub u64);
 
+// TODO: Rename this to GrugFileId
+/// An id that uniquely refers to a script path. 
 pub type GrugScriptId = GrugId;
 
 impl std::fmt::Display for GrugId {
@@ -106,8 +123,16 @@ impl GrugId {
 	}
 }
 
+/// Uniquely refers to a particular on function from a particular entity from
+/// the mod_api. 
+/// Two different entities will have unique OnFnIds for all their on functions
 pub type GrugOnFnId = u64;
 
+// TODO: Provide the ability to disable some of these fields and change the size of the fields
+// TODO: Should this be parametrised by the lifetime?. This could be useful for
+// game functions to make sure they don't store the string in a static without copying it out.
+/// In memory representation of a grug value. This is untagged because the
+/// typechecker ensures all types are valid.
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub union GrugValue {
@@ -129,21 +154,22 @@ impl GrugValue {
 	}
 }
 
-/// SAFETY: GrugValue is !Send and !Sync because of the *mut c_char within it
-/// This is just a pointer to a null terminated c string, which is thread safe
-unsafe impl Send for GrugValue {}
-unsafe impl Sync for GrugValue {}
-
+/// Entity data owned by the state. Entity members are stored by the backend
+/// and a pointer to it is stored in `members`
 #[derive(Debug)]
 pub struct GrugEntity {
+	/// id of the `me` member variable in a grug_script
 	pub id: GrugId,
+	/// File id of file this entity is created from 
 	pub file_id: GrugScriptId,
+	/// Pointer to the entity's members stored by the backend
 	pub members: Cell<NonNull<()>>,
 }
 
 impl GrugEntity {
-	/// SAFETY: The members of the returned entity are uninitialized
-	/// This data must be initialized before it is actually used as an entity
+	/// SAFETY: The `members` field of the returned entity are uninitialized
+	/// This data must be initialized by the backend before it is actually used
+	/// as an entity
 	pub unsafe fn new_uninit(id: GrugId, file_id: GrugScriptId) -> Self {
 		Self {
 			id,

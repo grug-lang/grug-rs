@@ -135,17 +135,19 @@ fn main () {
 			.set_mod_api_path("gruggers/examples/fibonacci/mod_api.json")
 			.set_mods_dir("gruggers/examples/fibonacci/mods")
 			.build_state().unwrap();
-		state.register_game_fn("print_string",       print_string       as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
-		state.register_game_fn("print_number",       print_number       as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
-		state.register_game_fn("list_number",        list_number        as for<'a>extern "C" fn(&'a GrugState, ) -> _).unwrap();
-		state.register_game_fn("print_list_number",  print_list_number  as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
-		state.register_game_fn("list_number_insert", list_number_insert as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
+
+		state.register_game_fn("print_string",       print_string       as for<'a>extern "C" fn(&'a GrugState, _)     ).unwrap();
+		state.register_game_fn("print_number",       print_number       as for<'a>extern "C" fn(&'a GrugState, _)     ).unwrap();
+		state.register_game_fn("list_number",        list_number        as for<'a>extern "C" fn(&'a GrugState,  ) -> _).unwrap();
+		state.register_game_fn("print_list_number",  print_list_number  as for<'a>extern "C" fn(&'a GrugState, _)     ).unwrap();
+		state.register_game_fn("list_number_insert", list_number_insert as for<'a>extern "C" fn(&'a GrugState, _)     ).unwrap();
 		state.register_game_fn("list_number_remove", list_number_remove as for<'a>extern "C" fn(&'a GrugState, _) -> _).unwrap();
-		state.register_game_fn("list_number_push",   list_number_push   as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
+		state.register_game_fn("list_number_push",   list_number_push   as for<'a>extern "C" fn(&'a GrugState, _)     ).unwrap();
 		state.register_game_fn("list_number_pop",    list_number_pop    as for<'a>extern "C" fn(&'a GrugState, _) -> _).unwrap();
 		state.register_game_fn("list_number_len",    list_number_len    as for<'a>extern "C" fn(&'a GrugState, _) -> _).unwrap();
 		state.register_game_fn("list_number_get",    list_number_get    as for<'a>extern "C" fn(&'a GrugState, _) -> _).unwrap();
-		state.register_game_fn("list_number_set",    list_number_set    as for<'a>extern "C" fn(&'a GrugState, _)).unwrap();
+		state.register_game_fn("list_number_set",    list_number_set    as for<'a>extern "C" fn(&'a GrugState, _)     ).unwrap();
+		
 		state.all_game_fns_registered().unwrap();
 		STATE.write(state);
 		OBJECTS.write(HashMap::new());
