@@ -1,6 +1,6 @@
 [package]
 name = "gruggers"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 authors = ["Nikhil Nathanael Ilango"]
 description = "rust implementation of the grug language"
@@ -13,4 +13,4 @@ crate-type = ["cdylib", "lib", "staticlib"]
 [dependencies]
 json = "0.12.4"
 allocator-api2 = "0.4.0"
-gruggers-core = {version = "0.3.1", path = "../gruggers-core"}
+gruggers-core = {version = "0.3.2", path = "../gruggers-core"}
