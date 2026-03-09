@@ -1,3 +1,4 @@
+//! Defines the [`State`] trait
 use crate::runtime_error::RuntimeError;
 
 pub(crate) struct DummyState;

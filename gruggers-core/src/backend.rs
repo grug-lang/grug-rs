@@ -1,3 +1,4 @@
+//! Defines traits and types for working with backends from a state
 use crate::types::{GrugScriptId, GrugEntity, GrugValue};
 use crate::ast::GrugAst;
 use crate::state::{State, DummyState};
@@ -6,9 +7,7 @@ use crate::ntstring::{NTStrPtr, NTStr};
 
 use std::ptr::NonNull;
 
-// pub mod interpreter;
-// pub use interpreter::Interpreter;
-
+/// Interface of backends
 pub trait Backend {
 	/// The AST of a typechecked grug file is provided to let the backend do
 	/// further transforms and lower to bytecode or even machine code
@@ -58,42 +57,59 @@ pub trait Backend {
 const _: () = unsafe{const {std::mem::forget(std::mem::MaybeUninit::<Option<ErasedBackend<DummyState>>>::zeroed().assume_init())}};
 const _: () = const {assert!(std::mem::size_of::<Option<ErasedBackend<DummyState>>>() == std::mem::size_of::<ErasedBackend<DummyState>>())};
 
+/// C-api compatible version of `&dyn [Backend]`
 #[repr(C)]
 pub struct ErasedBackend<GrugState: State + 'static> {
 	pub data: NonNull<()>,
 	pub vtable: &'static BackendVTable<GrugState>,
 }
 
+/// C-api compatible version of the vtable of [`&dyn Backend`]
 #[repr(C)]
 pub struct BackendVTable<GrugState: State> {
 	#[allow(improper_ctypes_definitions)]
+	/// See [`Backend::insert_file`]
 	pub(crate) insert_file         : extern "C" fn(data: NonNull<()>, id: GrugScriptId, file: GrugAst<'_>),
+	/// See [`Backend::init_entity`]
 	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
+	/// See [`Backend::clear_entities`]
 	pub(crate) clear_entities      : extern "C" fn(data: NonNull<()>),
+	/// See [`Backend::destroy_entity_data`]
 	pub(crate) destroy_entity_data : extern "C" fn(data: NonNull<()>, entity: &GrugEntity),
-	/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
+	/// See [`Backend::call_on_function_raw`]
+	///
+	/// SAFETY: `values` must point to a buffer of at least as many values as `on_fn_index` expects
 	pub(crate) call_on_function_raw: for<'a> unsafe extern "C" fn(data: NonNull<()>, state: &'a GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool,
+	/// See [`Backend::call_on_function`]
 	pub(crate) call_on_function    : for<'a> fn(data: NonNull<()>, state: &'a GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool,
-	// destroys the resources owned by the backend
+	/// destroys the resources owned by the backend
 	pub(crate) drop                : extern "C" fn(data: NonNull<()>),
 }
 
 impl<GrugState: State> ErasedBackend<GrugState> {
+	/// See [`Backend::insert_file`]
 	pub fn insert_file(&self, id: GrugScriptId, file: GrugAst<'_>) {
 		(self.vtable.insert_file)(self.data, id, file)
 	}
+	/// See [`Backend::init_entity`]
 	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: &GrugEntity) -> bool {
 		(self.vtable.init_entity)(self.data, state, entity)
 	}
+	/// See [`Backend::clear_entities`]
 	pub fn clear_entities(&mut self) {
 		(self.vtable.clear_entities)(self.data)
 	}
+	/// See [`Backend::destroy_entity_data`]
 	pub fn destroy_entity_data(&self, entity: &GrugEntity) {
 		(self.vtable.destroy_entity_data)(self.data, entity)
 	}
+	/// See [`Backend::call_on_function_raw`]
+	///
+	/// SAFETY: `values` must point to a buffer of at least as many values as `on_fn_index` expects
 	pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 		unsafe{(self.vtable.call_on_function_raw)(self.data, state, entity, on_fn_index, values)}
 	}
+	/// See [`Backend::call_on_function`]
 	pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
 		(self.vtable.call_on_function)(self.data, state, entity, on_fn_index, values)
 	}
@@ -314,6 +330,9 @@ pub fn erased_c_backend<B: Backend>(
 	})
 }
 
+/// Exports an extern "C" function to create a backend.
+///
+/// This can be used to create a dll to replace the backend from a game that uses grug
 #[macro_export]
 macro_rules! export_backend {
 	($backend: expr) => {

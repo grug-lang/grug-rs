@@ -1,3 +1,5 @@
+//! Defines types necessary for handling runtime errors
+
 /// Enum that represents all possible runtime errors
 #[derive(Debug, Clone, Copy)]
 #[repr(u32)]

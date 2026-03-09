@@ -12,15 +12,52 @@
 use crate::ntstring::NTStrPtr;
 use crate::types::GameFnPtr;
 
+/// Represents the type of a value in grug
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C, u32)]
 pub enum GrugType<'a> {
+	/// Return type of a function with no return value
+	///
+	/// An expression can only have a value of type Void if it is the top level
+	/// of a [`Call`](Statement::Call) statement.
+	///
+	/// It cannot be stored in a variable or be the result of an intermediate
+	/// expression
 	Void = 0,
+	/// Type of a boolean value
+	///
+	/// ```
+	/// x_0: bool = true
+	/// x_1: bool = false
+	/// x_2: bool = x_0 and x_1
+	/// x_3: bool = x_0 or x_1
+	/// ```
 	Bool,
+	/// Type of a number
+	///
+	/// ```
+	/// x: number = 25
+	/// ```
 	Number,
+	/// Type of a string
+	///
+	/// ```
+	/// x: string = "Hello world"
+	/// ```
 	String,
+	/// TODO: Explain usage of ID types in grug
 	Id{custom_name: Option<NTStrPtr<'a>>},
+	/// Type of a resource string
+	///
+	/// TODO: Explain what resources can be used for with examples
+	///
+	/// This can only be used as the type of an argument of a game function
 	Resource{extension: NTStrPtr<'a>},
+	/// Type of an entity string
+	///
+	/// TODO: Explain what entity strings can be used for with examples
+	///
+	/// This can only be used as the type of an argument of a game function
 	Entity{entity_type: Option<NTStrPtr<'a>>},
 }
 
@@ -60,6 +97,8 @@ impl<'a> std::fmt::Display for GrugType<'a> {
 }
 
 impl<'a> GrugType<'a> {
+	/// Checks if two types are the same. Considers a custom id type and a
+	/// generic id type to be the same type.
 	pub fn match_non_exact(&self, other: &Self) -> bool {
 		use GrugType::*;
 		match (self, other) {
@@ -89,10 +128,31 @@ impl<'a> GrugType<'a> {
 	}
 }
 
+/// Represents a unary operator
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum UnaryOperator {
+	/// Logical `not` operator.
+	///
+	/// The inner expression must have an output type of [`GrugType::Bool`].
+	///
+	/// The output type of the expression is [`GrugType::Bool`]
+	///
+	/// ```text
+	/// x: bool = not true
+	///           ^^^ - `Not`
+	/// ```
 	Not = 0,
+	/// Unary `Negate` operator.
+	///
+	/// The inner expression must have an output type of [`GrugType::Number`].
+	///
+	/// The output type of the expression is [`GrugType::Number`]
+	///
+	/// ```text
+	/// x: number = -25
+	///             ^ - `Minus`
+	/// ```
 	Minus, 
 }
 
@@ -105,21 +165,163 @@ impl std::fmt::Display for UnaryOperator {
 	}
 }
 
+/// Represents a binary operator
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum BinaryOperator {
+	/// Logical `or` operator.
+	///
+	/// Both sides of the expression must have an output type of [`GrugType::Bool`].
+	///
+	/// The output type of the expression is [`GrugType::Bool`]
+	///
+	/// ```text
+	/// x: bool = true or false
+	///                ^^ - `Or`
+	/// ```
 	Or = 0,
+	/// Logical `and` operator
+	///
+	/// Both sides of the expression must have an output type of [`GrugType::Bool`]
+	///
+	/// The output type of the expression is [`GrugType::Bool`]
+	///
+	/// ```text
+	/// x: bool = true and false
+	///                ^^^ - `And`
+	/// ```
 	And, 
+	/// Equality Operator
+	///
+	/// Both sides of the expression must have the same output type
+	///
+	/// The output type of the expression is [`GrugType::Bool`]
+	///
+	/// ```text
+	/// x: number = 25
+	/// y: bool = x == 25
+	///             ^^ - `DoubleEquals`
+	/// ```
 	DoubleEquals,
+	/// Equality Operator
+	///
+	/// Both sides of the expression must have the same output type
+	///
+	/// The output type of the expression is [`GrugType::Bool`]
+	///
+	/// ```text
+	/// x: number = 25
+	/// y: bool = x != 25
+	///             ^^ - `NotEquals`
+	/// ```
 	NotEquals,
+	/// `Greater than` operator
+	///
+	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	///
+	/// The output type of the expression is [`GrugType::Bool`]
+	///
+	/// ```text
+	/// x: number = 25
+	/// y: bool = x > 25
+	///             ^ - `Greater`
+	/// ```
 	Greater,
+	/// `Greater than or equal to` operator
+	///
+	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	///
+	/// The output type of the expression is [`GrugType::Bool`]
+	///
+	/// ```text
+	/// x: number = 25
+	/// y: bool = x >= 25
+	///             ^^ - `GreaterEquals`
+	/// ```
 	GreaterEquals,
+	/// `Less than` operator
+	///
+	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	///
+	/// The output type of the expression is [`GrugType::Bool`]
+	///
+	/// ```text
+	/// x: number = 25
+	/// y: bool = x < 25
+	///             ^ - `Less`
+	/// ```
 	Less,
+	/// `Less than or equal to` operator
+	///
+	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	///
+	/// The output type of the expression is [`GrugType::Bool`]
+	///
+	/// ```text
+	/// x: number = 25
+	/// y: bool = x <= 25
+	///             ^^ - `LessEquals`
+	/// ```
 	LessEquals,
+	/// Addition operator
+	///
+	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	///
+	/// The output type of the expression is [`GrugType::Number`]
+	///
+	/// ```text
+	/// x: number = 25
+	/// y: number = x + 25
+	///               ^ - `Plus`
+	/// ```
 	Plus,
+	/// Subtraction operator
+	///
+	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	///
+	/// The output type of the expression is [`GrugType::Number`]
+	///
+	/// ```text
+	/// x: number = 25
+	/// y: number = x - 25
+	///               ^ - `Minus`
+	/// ```
 	Minus,
+	/// Multiplication operator
+	///
+	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	///
+	/// The output type of the expression is [`GrugType::Number`]
+	///
+	/// ```text
+	/// x: number = 25
+	/// y: number = x * 25
+	///               ^ - `Multiply`
+	/// ```
 	Multiply,
+	/// Division operator
+	///
+	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	///
+	/// The output type of the expression is [`GrugType::Number`]
+	///
+	/// ```text
+	/// x: number = 25
+	/// y: number = x / 25
+	///               ^ - `Division`
+	/// ```
 	Division,
+	/// Remainder operator
+	///
+	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	///
+	/// The output type of the expression is [`GrugType::Number`]
+	///
+	/// ```text
+	/// x: number = 25
+	/// y: number = x % 25
+	///               ^ - `Remainder`
+	/// ```
 	Remainder,
 }
 
@@ -143,38 +345,105 @@ impl std::fmt::Display for BinaryOperator {
 	}
 }
 
+/// Actual data needed to represent the expression
 #[derive(Debug)]
 #[repr(C, u32)]
 pub enum ExprData<'a> {
+	/// Represents a literal Boolean `true`
 	True,
+	/// Represents a literal Boolean `false`
 	False,
+	/// Represents a string literal
+	///
+	/// ```text
+	/// x: number = "Hello world"
+	///             ^^^^^^^^^^^^^ - `string literal`
+	/// ```
+	/// 
+	/// Before type propagation, resource and entities are treated as normal strings
 	String(NTStrPtr<'a>),
+	/// Represents a resource string literal
+	///
+	/// The frontend ensures that the resource actually exists within the mod
 	Resource(NTStrPtr<'a>),
+	/// Represents an entity string literal
+	///
+	/// The frontend ensures that the entity actually exists within the indicated mod
 	Entity(NTStrPtr<'a>),
+	/// Represents an expression that evaluates to the value of a variable at this moment
 	Identifier(NTStrPtr<'a>),
+	/// Represents a number literal
 	Number(f64, NTStrPtr<'a>),
+	/// Represents a unary expression
+	///
+	/// ```text
+	/// x: bool = !true
+	///           ^^^^^ - `expr`
+	///           |
+	///           + - `op`
+	/// ```
 	Unary {
+		/// Operator
 		op   : UnaryOperator,
+		/// Inner expression
 		expr : &'a mut Expr<'a>,
 	},
+	/// Represents a binary expression
+	///
+	/// ```text
+	/// x: number = 20 + 30
+	///             ^^ ^ ^^ - `right`
+	///             |  | 
+	///             |  + - `op`
+	///             |
+	///             + - `left`
+	/// ```
 	Binary {
+		/// Operator
 		op    : BinaryOperator,
+		/// Left hand side of the expression
 		left  : &'a mut Expr<'a>,
+		/// Right hand side of the expression
 		right : &'a mut Expr<'a>,
 	},
+	/// Represents a function call.
+	///
+	/// Can either be a helper function call or a game function call.
+	/// Represents a game function call if the `ptr` field is not [`None`]
+	///
+	/// ```text
+	/// x: number = helper_max(25 + 32, 03 + 28)
+	///    `name` - ^^^^^^^^^^ ^^^^^^^  ^^^^^^^ - `args[1]`
+	///                        |
+	///                        + - `args[0]`
+	/// ```
 	Call {
+		/// Name of the function
 		name : NTStrPtr<'a>,
+		/// Expressions for each of the arguments of the function call
 		args : &'a mut [Expr<'a>],
+		/// Pointer to the game function if this expression is a game function call
 		ptr  : Option<GameFnPtr>,
 	},
+	/// Represents a parenthesized expression
+	///
+	/// ```
+	/// x: number = (25 + 32)
+	///              ^^^^^^^ - inner expression
+	/// ```
 	Parenthesized(&'a mut Expr<'a>),
 }
 const _: () = const {assert!(std::mem::size_of::<Option<GameFnPtr>>() == std::mem::size_of::<GameFnPtr>())};
 
+/// Represents a complete expression. Can contain nested expressions
 #[derive(Debug)]
 #[repr(C)]
 pub struct Expr<'a> {
+	/// Output type of the expression.
+	/// This is filled in during typechecking. 
+	/// Backends will never see the [`None`] value of this field.
 	pub result_type : Option<&'a GrugType<'a>>,
+	/// Actual data needed to represent the expression
 	pub data        : ExprData<'a>,
 }
 

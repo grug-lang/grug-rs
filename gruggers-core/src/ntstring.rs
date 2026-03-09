@@ -1,24 +1,24 @@
-//! This module exports the `NTStr` and `NTStrPtr` types which are safe
-//! wrappers around null terminated utf8 strings. 
+//! This module exports the [`NTStr`] and [`NTStrPtr`] types which represent
+//! null terminated utf8 strings. 
 //!
-//! This is allow simpler interfacing with c apis. `NTStrPtr` can be used in
+//! This is allow simpler interfacing with c apis. [`NTStrPtr`] can be used in
 //! FFI in place of a non-null `const char*` c string. It is also
-//! `#[repr(transparent)]`, so `Option<NTStrPtr>` can be used in place of a
+//! `#[repr(transparent)]`, so [`Option<NTStrPtr>`] can be used in place of a
 //! `const char*` c string. 
 //!
-//! ## Why not just use `CStr`?
+//! ## Why not just use [`CStr`]?
 //! 
-//! `CStr` is a wide pointer so it cannot be used directly in FFI and it requires
+//! [`CStr`] is a wide pointer so it cannot be used directly in FFI and it requires
 //! unsafe parsing at the boundary. It also cannot be easily displayed without
 //! converting into a string
 //!
 //! ## Won't that cause UB if you are given a string that's not null terminated.
-//! Yeah, it will. Don't do that. On the other hand, there's no way to verify
-//! that at runtime, so parsing into a CStr will also cause UB
+//! Yeah, it will. Don't do that. But because there's no way to verify
+//! that at runtime, parsing into a [`CStr`] will also cause UB
 //!
-//! On the other hand, it is also UB if the `NTStrPtr` points to non-utf8 data.
-//! CStr will catch this when converting into a str. This is something to be
-//! aware of.
+//! On the other hand, it is also UB if the [`NTStrPtr`] points to non-utf8 data.
+//! [`CStr`] will catch this when converting into a [`str`]. This is a
+//! limitation of these types to be aware of.
 
 use std::sync::Arc;
 use std::ops::Deref;
@@ -30,7 +30,7 @@ use allocator_api2::alloc::Allocator;
 use allocator_api2::boxed::Box;
 
 
-/// represents a utf-8 string with a single null byte at the end.
+/// Represents a utf-8 string with a single null byte at the end.
 #[repr(transparent)]
 pub struct NTStr(str);
 
@@ -299,6 +299,7 @@ impl<'a> std::fmt::Debug for NTStrPtr<'a> {
 	}
 }
 
+/// Creates an NTStr from a literal
 #[macro_export]
 macro_rules! nt {
 	($lit: literal) => {
