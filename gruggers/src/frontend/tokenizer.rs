@@ -131,6 +131,10 @@ pub enum TokenizerError{
 	CommentTrailingWhitespace {
 		line: usize,
 		col: usize,
+	},
+	EmptyComment {
+		line: usize,
+		col: usize,
 	}
 }
 
@@ -149,12 +153,30 @@ impl std::fmt::Display for TokenizerError {
 			Self::CommentTrailingWhitespace {
 				line,
 				col: _,
-			} => write!(f, "Expected the comment to contain some text on line {}", line),
+			} => write!(f, "A comment has trailing whitespace on line {}", line),
 			Self::UnclosedString {
 				start_line,
 				start_col: _,
 			} => write!(f, "Unclosed \" on line {}", start_line),
-			err => write!(f, "{:?}", err),
+			Self::MultiplePeriodsInNumber {
+				line,
+				col: _,
+			} => write!(f, "Encountered two '.' periods in a number on line {}", line),
+			Self::SpacesPerIndentError {
+				actual_spaces,
+				spaces_per_indent,
+				line_num,
+				col_num: _,
+			} => write!(f, "Encountered {} spaces, while indentation expects multiples of {} spaces, on line {}", actual_spaces, spaces_per_indent, line_num),
+			Self::EmptyComment {
+				line,
+				col: _
+			} => write!(f, "Expected the comment to contain some text on line {}", line),
+			Self::UnrecognizedCharacter {
+				ch,
+				line,
+				col: _
+			} => write!(f, "Unrecognized character '{}' on line {}", ch, line),
 		}
 	}
 }
@@ -389,7 +411,13 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 			while i < file_text.len() && file_text[i] != b'\r' && file_text[i] != b'\n' {
 				i += 1;
 			}
-			if (file_text[i - 1] as char).is_ascii_whitespace() {
+			
+			if (i - start) == 0 {
+				return Err(TokenizerError::EmptyComment{
+					line: cur_line,
+					col: i - last_new_line,
+				});
+			} else if (file_text[i - 1] as char).is_ascii_whitespace() {
 				return Err(TokenizerError::CommentTrailingWhitespace{
 					line: cur_line,
 					col: i - last_new_line,

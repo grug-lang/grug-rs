@@ -1073,6 +1073,7 @@ impl Stack {
 					ptr,
 				} => {
 					let value = unsafe{(ptr.as_ptr())(state, self.stack.as_ptr().add(self.stack.len() - args as usize))};
+					self.stack.truncate(self.stack.len() - args as usize);
 					if has_return {
 						self.stack.push(value);
 					}

@@ -264,14 +264,11 @@ fn grug_tests () {
 	let mut args = std::env::args().collect::<Vec<_>>();
 
 	let mut whitelisted_test = None;
-	if args.len() == 3 {
-		let mut test = args.pop().unwrap();
+	if args.len() >= 3 {
+		let mut test = args.remove(2);
 		test.push('\0');
 		whitelisted_test = unsafe{Some(NTStr::from_str_unchecked(String::leak(test)).as_ntstrptr())};
-	} else if args.len() > 3 {
-		eprintln!("usage: cargo test -- grug_tests <whitelisted_test>");
-		std::process::exit(2);
-	}
+	};
 
 	let grug_tests_path = nt!("src/grug-tests/tests");
 	let mod_api_path = nt!("src/grug-tests/mod_api.json");
