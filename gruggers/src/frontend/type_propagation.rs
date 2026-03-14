@@ -18,7 +18,7 @@ use allocator_api2::boxed::Box;
 
 pub(super) struct TypePropogator<'mod_api, 'arena> {
 	entity: &'mod_api ModApiEntity<'mod_api>,
-	game_fns: &'mod_api HashMap<Arc<str>, ModApiGameFn<'mod_api>>,
+	game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiGameFn<'mod_api>>,
 	game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>,
 	current_mod_name: String,
 	global_variables: HashMap<&'arena str, GrugType<'arena>>,
@@ -646,7 +646,7 @@ impl From<EntityValidationError> for TypePropogatorError {
 }
 
 impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
-	pub fn new (entity: &'mod_api ModApiEntity, game_fns: &'mod_api HashMap<Arc<str>, ModApiGameFn>, game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, mod_name: String) -> Self {
+	pub fn new (entity: &'mod_api ModApiEntity, game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiGameFn>, game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, mod_name: String) -> Self {
 		Self {
 			entity,
 			game_fns,
@@ -695,7 +695,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		{
 			let Some((current_index, current_on_fn)) = 
 				on_functions.iter_mut().enumerate()
-				.find(|(_, on_fn)| on_fn.name.to_str() == &**on_fn_name) else 
+				.find(|(_, on_fn)| on_fn.name.to_ntstr() == &**on_fn_name) else 
 			{
 				continue;
 			};
@@ -755,7 +755,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		}
 		let entity_on_functions = &self.entity.on_fns;
 		for on_fn in on_functions {
-			if !entity_on_functions.iter().any(|(name, _)| **name == *on_fn.name.to_str()) {
+			if !entity_on_functions.iter().any(|(name, _)| **name == *on_fn.name.to_ntstr()) {
 				return Err(TypePropogatorError::OnFnDoesNotExist {
 					function_name: Arc::from(on_fn.name.to_str()),
 					entity_name: Arc::from(entity_name),

@@ -9,7 +9,7 @@ use crate::state::State;
 
 /// A function pointer to a game function
 /// Game functions have one the following signature
-/// ```
+/// ```text
 /// extern "C" fn (&GrugState, *const GrugValue) -> GrugValue;
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq)]

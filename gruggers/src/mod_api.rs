@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::ntstring::NTStr;
 use crate::ast::{Argument, GrugType};
@@ -8,47 +7,49 @@ use crate::arena::Arena;
 
 use allocator_api2::boxed::Box;
 
-pub struct ModApi {
-	entities: HashMap<Arc<str>, ModApiEntity<'static>>,
-	game_functions: HashMap<Arc<str>, ModApiGameFn<'static>>,
+// the 'static fields within `ModApi` are allocated within `_arena`. Any
+// reference to them must have a 'self lifetime
+pub(crate) struct ModApi {
+	entities: HashMap<&'static NTStr, ModApiEntity<'static>>,
+	game_functions: HashMap<&'static NTStr, ModApiGameFn<'static>>,
 	_arena: Arena,
 }
 
 impl ModApi {
-	pub fn entities<'a>(&'a self) -> &'a HashMap<Arc<str>, ModApiEntity<'a>> {
+	pub fn entities<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiEntity<'a>> {
 		&self.entities
 	}
-	pub fn game_functions<'a>(&'a self) -> &'a HashMap<Arc<str>, ModApiGameFn<'a>> {
+	pub fn game_functions<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiGameFn<'a>> {
 		&self.game_functions
 	}
 }
 
 #[derive(Debug)]
-pub struct ModApiEntity<'a> {
+pub(crate) struct ModApiEntity<'a> {
 	#[allow(dead_code)]
 	pub(crate) description: Option<String>,
-	pub(crate) on_fns: Vec<(Arc<str>, ModApiOnFn<'a>)>,
+	pub(crate) on_fns: Vec<(&'a NTStr, ModApiOnFn<'a>)>,
 }
 
 impl<'a> ModApiEntity<'a> {
-	pub fn get_on_fn(&self, name: &str) -> Option<(usize, &ModApiOnFn<'_>)> {
-		self.on_fns.iter().enumerate().find_map(|(i, (fn_name, func))| (name == &**fn_name).then_some((i, func)))
+	pub(crate) fn get_on_fn(&self, name: &str) -> Option<(usize, &ModApiOnFn<'_>)> {
+		self.on_fns.iter().enumerate().find_map(|(i, (fn_name, func))| (name == fn_name.as_str()).then_some((i, func)))
 	}
 }
 
 #[derive(Debug)]
-pub struct ModApiOnFn<'a> {
+pub(crate) struct ModApiOnFn<'a> {
 	#[allow(dead_code)]
 	pub(super) description: Option<String>,
 	pub(super) arguments: Vec<Argument<'a>>,
 }
 
 #[derive(Debug)]
-pub struct ModApiGameFn<'a> {
+pub(crate) struct ModApiGameFn<'a> {
 	#[allow(dead_code)]
-	pub(super) description: Option<String>,
-	pub(super) return_ty: GrugType<'a>,
-	pub(super) arguments: Vec<Argument<'a>>,
+	pub(crate) description: Option<String>,
+	pub(crate) return_ty: GrugType<'a>,
+	pub(crate) arguments: Vec<Argument<'a>>,
 }
 
 // TODO: Add Display impl for all variants
@@ -133,12 +134,12 @@ impl From<std::io::Error> for ModApiError {
 	}
 }
 
-pub fn get_mod_api<P: AsRef<Path>>(mod_api_path: P) -> Result<ModApi, ModApiError> {
+pub(crate) fn get_mod_api<P: AsRef<Path>>(mod_api_path: P) -> Result<ModApi, ModApiError> {
 	let mod_api_text = std::fs::read_to_string(mod_api_path)?;
 	get_mod_api_from_text(&mod_api_text)
 }
 
-pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> {
+pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> {
 	let arena = Arena::new();
 	let mod_api_json = json::parse(mod_api_text)?;
 	// "entities" object
@@ -215,13 +216,23 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 					ty,
 				})
 			}).collect::<Result<Vec<_>, ModApiError>>()?;
-			let fn_name = Arc::from(fn_name);
-			Ok((Arc::clone(&fn_name), ModApiOnFn{
+			// SAFETY: we don't give out a 'static refernce to this string
+			let fn_name = unsafe{
+				std::mem::transmute::<&NTStr, &'static NTStr>(
+					Box::leak(NTStr::box_from_str_in(fn_name, &arena))
+				)
+			};
+			Ok((fn_name, ModApiOnFn{
 				description,
 				arguments,
 			}))
 		}).collect::<Result<Vec<_>, _>>()?;
-		Ok((Arc::from(entity_name), ModApiEntity{
+		let entity_name = unsafe{
+			std::mem::transmute::<&NTStr, &'static NTStr>(
+				Box::leak(NTStr::box_from_str_in(entity_name, &arena))
+			)
+		};
+		Ok((entity_name, ModApiEntity{
 			description,
 			on_fns
 		}))
@@ -321,8 +332,13 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 				}
 			}
 		};
-		let fn_name = Arc::from(fn_name);
-		Ok((Arc::clone(&fn_name), ModApiGameFn{
+		// SAFETY: we don't give out a 'static refernce to this string
+		let fn_name = unsafe{
+			std::mem::transmute::<&NTStr, &'static NTStr>(
+				Box::leak(NTStr::box_from_str_in(fn_name, &arena))
+			)
+		};
+		Ok((fn_name, ModApiGameFn{
 			return_ty,
 			description,
 			arguments
@@ -330,8 +346,8 @@ pub fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> 
 	}).collect::<Result<HashMap<_, _>, ModApiError>>()?;
 
 	Ok(ModApi{
-		entities: unsafe{std::mem::transmute::<HashMap<Arc<str>, ModApiEntity<'_>>, _>(entities)},
-		game_functions: unsafe{std::mem::transmute::<HashMap<Arc<str>, ModApiGameFn<'_>>, _>(game_functions)},
+		entities: unsafe{std::mem::transmute::<HashMap<&'_ NTStr, ModApiEntity<'_>>, HashMap<&'static NTStr, ModApiEntity<'static>>>(entities)},
+		game_functions: unsafe{std::mem::transmute::<HashMap<&'_ NTStr, ModApiGameFn<'_>>, HashMap<&'static NTStr, ModApiGameFn<'static>>>(game_functions)},
 		_arena: arena,
 	})
 }

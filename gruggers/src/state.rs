@@ -4,7 +4,9 @@ use crate::error::GrugError;
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GameFnPtrState};
 use crate::xar::Xar;
+use crate::ntstring::NTStrPtr;
 use crate::arena::Arena;
+use crate::nt;
 
 use gruggers_core::runtime_error::RuntimeError;
 pub use gruggers_core::state::State;
@@ -14,7 +16,7 @@ use std::ptr::NonNull;
 use std::cell::{Cell, RefCell, Ref};
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, hash_map::Entry};
-use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[repr(C)]
 pub struct RuntimeErrorHandler {
@@ -205,7 +207,12 @@ pub struct GrugState {
 
 	pub(crate) entities: Xar<GrugEntity>,
 	
-	pub(crate) on_functions: Vec<OnFnEntry>,
+	// SAFETY: The strings within the `on_functions` field is allocated within
+	// `mod_api`. So any reference given out to this field must have the 'self
+	// lifetime
+	// If a later change makes mod_api mutable, these need to be allocated separately
+	// TODO: rename this to `event_functions`
+	on_functions: Vec<EventFnEntry<'static>>,
 	pub(crate) path_to_script_ids: RefCell<HashMap<String, GrugScriptId>>,
 	next_script_id: AtomicU64,
 
@@ -254,18 +261,24 @@ impl GrugState {
 
 	fn new_inner<D: AsRef<Path>> (mod_api: ModApi, mods_dir_path: D, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
 		let mut on_fns = Vec::new();
-		let init_globals = Arc::from("init_globals");
+		let init_globals = nt!("init_globals");
 		for (entity_type, entity) in mod_api.entities() {
-			on_fns.push(OnFnEntry {
-				entity_type: Arc::clone(entity_type),
-				on_fn_name : Arc::clone(&init_globals),
+			on_fns.push(EventFnEntry {
+				// SAFETY: All EventFnEntries we give out have a 'self
+				// lifetime, which is the same as the 'mod_api lifetime they
+				// actually have
+				entity_type   : unsafe{entity_type.as_ntstrptr().detach_lifetime()},
+				event_fn_name : unsafe{init_globals.as_ntstrptr().detach_lifetime()},
 				index      : 0,
 			});
-			for (i, (on_fn_name, _)) in entity.on_fns.iter().enumerate() {
-				on_fns.push(OnFnEntry{
-					entity_type: Arc::clone(entity_type),
-					on_fn_name : Arc::clone(on_fn_name),
-					index      : i,
+			for (i, (event_fn_name, _)) in entity.on_fns.iter().enumerate() {
+				on_fns.push(EventFnEntry{
+					// SAFETY: All EventFnEntries we give out have a 'self
+					// lifetime, which is the same as the 'mod_api lifetime they
+					// actually have
+					entity_type   : unsafe{entity_type.as_ntstrptr().detach_lifetime()},
+					event_fn_name : unsafe{event_fn_name.as_ntstrptr().detach_lifetime()},
+					index         : i,
 				});
 			}
 		}
@@ -295,7 +308,7 @@ impl GrugState {
 			});
 		}
 		for (i, on_fn_entry) in self.on_functions.iter().enumerate() {
-			if &*on_fn_entry.entity_type == entity_type && &*on_fn_entry.on_fn_name == on_fn_name {
+			if on_fn_entry.entity_type() == entity_type && on_fn_entry.event_fn_name() == on_fn_name {
 				return Ok(i as u64)
 			}
 		}
@@ -306,21 +319,25 @@ impl GrugState {
 	}
 	
 	pub fn get_on_fn_name(&self, on_fn_id: GrugOnFnId) -> Option<&str> {
-		return self.on_functions.get(on_fn_id as usize).map(|entry| &*entry.on_fn_name)
+		return self.on_functions.get(on_fn_id as usize).map(|entry| entry.event_fn_name())
 	}
 
-	pub fn get_entity_on_functions(&self, entity_type: &str) -> Result<&[OnFnEntry], StateError> {
+	pub fn get_on_functions(&self) -> &[EventFnEntry<'_>] {
+		&self.on_functions
+	}
+
+	pub fn get_entity_on_functions(&self, entity_type: &str) -> Result<&[EventFnEntry<'_>], StateError> {
 		if !self.mod_api.entities().contains_key(entity_type) {
 			return Err(StateError::UnknownEntityType{
 				entity_type: String::from(entity_type),
 			});
 		}
 		let mut start = 0;
-		while start != self.on_functions.len() && &*self.on_functions[start].entity_type != entity_type {
+		while start != self.on_functions.len() && self.on_functions[start].entity_type() != entity_type {
 			start += 1;
 		}
 		let mut end = start;
-		while end != self.on_functions.len() && &*self.on_functions[end].entity_type == entity_type {
+		while end != self.on_functions.len() && self.on_functions[end].entity_type() == entity_type {
 			end += 1;
 		}
 		Ok(&self.on_functions[start..end])
@@ -356,7 +373,7 @@ impl GrugState {
 
 	pub fn all_game_fns_registered(&self) -> Result<(), ModApiError> {
 		for game_fn_name in self.mod_api.game_functions().keys() {
-			if !self.game_functions.contains_key(&**game_fn_name) {
+			if !self.game_functions.contains_key(game_fn_name.as_str()) {
 				Err(ModApiError::GameFnNotProvided{
 					game_fn_name: String::from(&**game_fn_name),
 				})?;
@@ -500,11 +517,37 @@ impl std::fmt::Display for StateError {
 	}
 }
 
-pub struct OnFnEntry {
-	pub entity_type: Arc<str>,
-	pub on_fn_name : Arc<str>,
+pub struct EventFnEntry<'a> {
+	entity_type   : NTStrPtr<'a>,
+	event_fn_name : NTStrPtr<'a>,
 	pub index      : usize,
 }
+
+impl<'a> EventFnEntry<'a> {
+	/// Turns the null terminated string representing the entity name into a [`&str`]
+	pub fn entity_type(&self) -> &str {
+		self.entity_type.to_str()
+	}
+	/// Turns the null terminated string representing the event function name into a [`&str`]
+	pub fn event_fn_name(&self) -> &str {
+		self.event_fn_name.to_str()
+	}
+}
+
+const _: () = const{
+	// The C interop with Rust assumes that slice pointers have a layout like this
+	// #[repr(C)]
+	// struct Slice<T> {
+	// 		data: NonNull<T>,
+	// 		len : usize,
+	// }
+	// 
+	// The rust compiler currently does not guarantee the layout of slice pointer.
+	// These assertions ensure that if the assumption is broken, we get a
+	// compile error instead of random crashes
+	let x: &[EventFnEntry] = &[];
+	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
+};
 
 /// A pointer to a grug entity. Only allows shared access to the data and does
 /// not allow copying or cloning. Lifetime of shared borrows are limited to the lifetime of self
@@ -535,3 +578,4 @@ impl<'a> std::ops::Deref for GrugEntityHandle<'a> {
 		unsafe{self.0.get_ref()}
 	}
 }
+

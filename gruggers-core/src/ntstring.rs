@@ -25,6 +25,7 @@ use std::ops::Deref;
 use std::ffi::{CStr, c_char};
 use std::ptr::NonNull;
 use std::marker::PhantomData;
+use std::borrow::Borrow;
 
 use allocator_api2::alloc::Allocator;
 use allocator_api2::boxed::Box;
@@ -160,6 +161,12 @@ impl Eq for NTStr {}
 impl<'a> From<&'a NTStr> for String {
 	fn from(other: &'a NTStr) -> String {
 		String::from(other.as_str_with_null())
+	}
+}
+
+impl Borrow<str> for &NTStr {
+	fn borrow(&self) -> &str {
+		self.as_str()
 	}
 }
 

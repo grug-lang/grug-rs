@@ -41,7 +41,7 @@ impl GrugState {
 
 			let mut ast = parser::parse(&tokens, &arena)?;
 
-			let entity = self.mod_api.entities().get(&*entity_type).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
+			let entity = self.mod_api.entities().get(entity_type).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
 				entity_name: Arc::from(entity_type),
 			})?;
 			let game_functions = self.mod_api.game_functions();

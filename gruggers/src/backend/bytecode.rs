@@ -886,6 +886,7 @@ pub struct Stack {
 	stack_frames: Vec<(/* rbp */ usize, /* ip */ usize)>,
 	rbp: usize,
 }
+
 impl Stack {
 	pub fn new() -> Self {
 		Self {

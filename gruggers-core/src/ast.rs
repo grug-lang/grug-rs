@@ -26,7 +26,7 @@ pub enum GrugType<'a> {
 	Void = 0,
 	/// Type of a boolean value
 	///
-	/// ```
+	/// ```text
 	/// x_0: bool = true
 	/// x_1: bool = false
 	/// x_2: bool = x_0 and x_1
@@ -35,13 +35,13 @@ pub enum GrugType<'a> {
 	Bool,
 	/// Type of a number
 	///
-	/// ```
+	/// ```text
 	/// x: number = 25
 	/// ```
 	Number,
 	/// Type of a string
 	///
-	/// ```
+	/// ```text
 	/// x: string = "Hello world"
 	/// ```
 	String,
@@ -427,7 +427,7 @@ pub enum ExprData<'a> {
 	},
 	/// Represents a parenthesized expression
 	///
-	/// ```
+	/// ```text
 	/// x: number = (25 + 32)
 	///              ^^^^^^^ - inner expression
 	/// ```
@@ -449,7 +449,7 @@ pub struct Expr<'a> {
 
 /// Represents a single member variable declaration within a file
 ///
-/// ```
+/// ```text
 /// x: number = 25
 /// ```
 ///
@@ -498,7 +498,7 @@ pub enum Statement<'a> {
 	},
 	/// A statement that only consists of a single function call.
 	///
-	/// ```
+	/// ```text
 	/// my_position: number = 0
 	/// on_tick() {
 	/// 	my_position = my_position + 2
@@ -510,7 +510,7 @@ pub enum Statement<'a> {
 	Call(Expr<'a>),
 	/// An if statement
 	///
-	/// ```
+	/// ```text
 	/// helper_fib(n: number) number {
 	/// 	if n <= 0 {
 	/// 		return 0
@@ -539,7 +539,7 @@ pub enum Statement<'a> {
 	},
 	/// A while loop
 	///
-	/// ```
+	/// ```text
 	/// helper_fib(n: number) number {
 	/// 	result: number = 0
 	/// 	if number < 0 {
@@ -571,7 +571,7 @@ pub enum Statement<'a> {
 		block: &'a mut [Statement<'a>],
 	},
 	/// Returns a value from the current function
-	/// ```
+	/// ```text
 	/// result: number = 25
 	/// return result
 	/// ```
@@ -582,7 +582,7 @@ pub enum Statement<'a> {
 	Comment(NTStrPtr<'a>),
 	/// A break statement.
 	///
-	/// ```
+	/// ```text
 	/// helper_foo() number {
 	///		i: number = 0
 	///		while i < 30000 {
@@ -599,7 +599,7 @@ pub enum Statement<'a> {
 	Break,
 	/// A continue statement.
 	///
-	/// ```
+	/// ```text
 	/// helper_foo() number {
 	///		i: number = 0
 	///		while i < 30000 {
@@ -639,7 +639,7 @@ pub struct Argument<'a> {
 
 /// Represents a single on function declaration
 ///
-/// ```
+/// ```text
 /// on_init(id: number) {
 ///     set_max_health(50)
 ///     set_unarmed_damage(2)
@@ -661,7 +661,7 @@ pub struct OnFunction<'a> {
 
 /// Represents a single helper function declaration
 ///
-/// ```
+/// ```text
 /// helper_color(n: number) Color {
 ///     if n == 0 {
 ///         return color("blue")
@@ -706,7 +706,7 @@ pub enum GlobalStatement<'a> {
 	/// `x: number = 25`
 	Variable(MemberVariable<'a>),
 	/// An on function declaration
-	/// ```
+	/// ```text
 	/// on_init(id: number) {
 	///     set_max_health(50)
 	///     set_unarmed_damage(2)
@@ -715,7 +715,7 @@ pub enum GlobalStatement<'a> {
 	/// ```
 	OnFunction(OnFunction<'a>),
 	/// A helper function declaration
-	/// ```
+	/// ```text
 	/// helper_color(n: number) Color {
 	///     if n == 0 {
 	///         return color("blue")
@@ -733,7 +733,7 @@ pub enum GlobalStatement<'a> {
 	/// ```
 	HelperFunction(HelperFunction<'a>),
 	/// A comment at the top level of a file
-	/// ```
+	/// ```text
 	/// ## This is a global comment
 	/// shared_number: number = 0
 	/// ```
@@ -751,7 +751,7 @@ pub enum GlobalStatement<'a> {
 pub struct GrugAst<'a> {
 	/// Represents the member functions declared at the top of the functions
 	///
-	/// ```
+	/// ```text
 	/// x: number = 25
 	/// ```
 	///
@@ -759,7 +759,7 @@ pub struct GrugAst<'a> {
 	pub members: &'a [MemberVariable<'a>],
 	/// Represents all the on function declarations in the file
 	///
-	/// ```
+	/// ```text
 	/// on_init(id: number) {
 	///     set_max_health(50)
 	///     set_unarmed_damage(2)
@@ -776,7 +776,7 @@ pub struct GrugAst<'a> {
 	pub on_functions: &'a [Option<&'a OnFunction<'a>>],
 	/// Represents all the helper function declarations in the file
 	///
-	/// ```
+	/// ```text
 	/// helper_color(n: number) Color {
 	///     if n == 0 {
 	///         return color("blue")

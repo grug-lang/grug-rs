@@ -338,7 +338,7 @@ mod arena {
 	}
 
 	impl Arena {
-		pub fn new () -> Self {
+		pub const fn new () -> Self {
 			Self {
 				current: Cell::new(std::ptr::null_mut()),
 			}
