@@ -29,6 +29,14 @@ mod page_alloc {
 				flProtect : DWORD,
 			) -> *mut c_void;
 
+			fn VirtualProtectEx (
+				process: HANDLE,
+				Address: LPVOID,
+				Size: DWORD,
+				newProtect: DWORD,
+				oldProtect: &mut DWORD,
+			) -> BOOL;
+
 			fn VirtualFreeEx (
 				process: HANDLE,
 				Address: LPVOID,
@@ -46,7 +54,7 @@ mod page_alloc {
 		const MEM_RELEASE: DWORD = 0x00008000;
 
 		const PAGE_READ_WRITE: DWORD = 0x04;
-		// const PAGE_NO_ACCESS: DWORD = 0x01;
+		const PAGE_NOACCESS: DWORD = 0x01;
 
 		pub static PAGE_SIZE: std::sync::LazyLock<u32> = std::sync::LazyLock::new(|| PageAllocator::page_size());
 
@@ -137,6 +145,7 @@ mod page_alloc {
 			// 	}
 			// }
 
+			#[allow(dead_code)]
 			pub unsafe fn free_pages(start_ptr: NonNull<u8>, _num_pages: usize) -> Result<(), AllocError>{
 				if unsafe {
 					VirtualFreeEx (
@@ -152,20 +161,22 @@ mod page_alloc {
 				}
 			}
 			
-			// pub unsafe fn decommit_pages(start_ptr: NonNull<u8>, num_pages: usize) -> Result<(), AllocError>{
-			// 	if unsafe {
-			// 		VirtualFreeEx (
-			// 			GetCurrentProcess(),
-			// 			start_ptr.as_ptr().cast(),
-			// 			(num_pages as u32) * *PAGE_SIZE,
-			// 			MEM_DECOMMIT,
-			// 		)
-			// 	} == 0 {
-			// 		Err(AllocError)
-			// 	} else {
-			// 		Ok(())
-			// 	}
-			// }
+			#[allow(dead_code)]
+			pub unsafe fn decommit_pages(start_ptr: NonNull<u8>, num_pages: usize) -> Result<(), AllocError>{
+				if unsafe {
+					VirtualProtectEx (
+						GetCurrentProcess(),
+						start_ptr.as_ptr().cast(),
+						(num_pages as u32) * *PAGE_SIZE,
+						PAGE_NOACCESS,
+						&mut 0,
+					)
+				} == 0 {
+					Err(AllocError)
+				} else {
+					Ok(())
+				}
+			}
 		}
 
 		#[cfg(test)]
@@ -332,6 +343,7 @@ mod arena {
 			// free_pages which means it must be non-null
 			let result = unsafe {
 				PageAllocator::free_pages(NonNull::new_unchecked(ptr.cast()), (&*ptr).cur_block_size()).is_ok()
+				// PageAllocator::decommit_pages(NonNull::new_unchecked(ptr.cast()), (&*ptr).cur_block_size()).is_ok()
 			};
 			debug_assert!(result);
 		}
@@ -453,7 +465,6 @@ mod arena {
 		fn drop (&mut self) {
 			// SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
 			let mut current = self.current.get();
-			self.current.set(std::ptr::null_mut());
 			while !current.is_null() {
 				// SAFETY: dereferencing current is safe because if it is non-null, it is initialized
 				let prev = unsafe {(*current).prev};

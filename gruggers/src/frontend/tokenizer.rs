@@ -135,6 +135,14 @@ pub enum TokenizerError{
 	EmptyComment {
 		line: usize,
 		col: usize,
+	},
+	LineBreakInString {
+		line: usize,
+		col: usize,
+	},
+	NullByte {
+		line: usize,
+		col: usize,
 	}
 }
 
@@ -177,6 +185,14 @@ impl std::fmt::Display for TokenizerError {
 				line,
 				col: _
 			} => write!(f, "Unrecognized character '{}' on line {}", ch, line),
+			Self::LineBreakInString {
+				line,
+				col: _
+			} => write!(f, "Unexpected line break in string on line {}", line),
+			Self::NullByte {
+				line,
+				col: _
+			} => write!(f, "Unexpected null byte on line {}", line),
 		}
 	}
 }
@@ -306,10 +322,16 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 
 			// TODO: Handle Escaped strings
 			// This requires changing Token::value to Cow<'_, str>
+			// Just allocate a new string
 			while i < file_text.len() && file_text[i] != b'"' {
-				if file_text[i] == b'\n' {
-					cur_line += 1;
-					last_new_line = i + 1;
+				if file_text[i] == b'\0' {
+					return Err(TokenizerError::NullByte {line: cur_line, col: i - last_new_line});
+				}
+				if i + 2 < file_text.len() && (&file_text[i..=(i+1)] == &[b'\\', b'\r'] || &file_text[i..=(i+1)] == &[b'\\', b'\n']) {
+					return Err(TokenizerError::LineBreakInString{
+						line: cur_line,
+						col: i - last_new_line,
+					});
 				}
 				i += 1;
 			}
@@ -409,6 +431,9 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 			i += 1;
 			let start = i;
 			while i < file_text.len() && file_text[i] != b'\r' && file_text[i] != b'\n' {
+				if file_text[i] == b'\0' {
+					return Err(TokenizerError::NullByte {line: cur_line, col: i - last_new_line});
+				}
 				i += 1;
 			}
 			

@@ -860,19 +860,36 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				}
 				Statement::If {
 					condition,
-					is_chained: _,
+					is_chained,
 					if_block,
 					else_block,
 				} => {
-					let cond_type = self.fill_expr(helper_fns, condition, arena)?;
-					if cond_type != GrugType::Bool {
-						return Err(TypePropogatorError::IfConditionTypeMismatch {
-							got_type: cond_type.into()
-						});
-					}
-					self.fill_statements(helper_fns, if_block, expected_return_type, arena)?;
-					if !else_block.is_empty() {
-						self.fill_statements(helper_fns, else_block, expected_return_type, arena)?;
+					let mut condition = condition;
+					let mut is_chained = is_chained;
+					let mut if_block = if_block;
+					let mut else_block = else_block;
+					loop {
+						let cond_type = self.fill_expr(helper_fns, condition, arena)?;
+						if cond_type != GrugType::Bool {
+							return Err(TypePropogatorError::IfConditionTypeMismatch {
+								got_type: cond_type.into()
+							});
+						}
+						self.fill_statements(helper_fns, if_block, expected_return_type, arena)?;
+						if !else_block.is_empty() {
+							if *is_chained {
+								debug_assert!(else_block.len() == 1);
+								let [statement] = else_block else {unreachable!()};
+								(condition, is_chained, if_block, else_block) = match statement {
+									Statement::If{condition, is_chained, if_block, else_block} => (condition, is_chained, if_block, else_block),
+									_ => unreachable!(),
+								};
+								continue;
+							} else {
+								self.fill_statements(helper_fns, else_block, expected_return_type, arena)?;
+							}
+						}
+						break;
 					}
 					// TODO: Maybe this should be looked at again
 					// [https://github.com/grug-lang/grug/issues/116]

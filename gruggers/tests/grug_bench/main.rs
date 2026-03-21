@@ -48,6 +48,7 @@ mod test_bindings {
 	extern "C" fn destroy_grug_state(_: Box<GrugState>) {}
 
 	extern "C" fn compile_grug_file(state: &GrugState, script_path: NTStrPtr<'_>) -> GrugScriptId {
+		println!("{}", script_path);
 		state.compile_grug_file(script_path.to_str()).unwrap()
 	}
 
@@ -111,6 +112,7 @@ mod game_functions {
 	#[link(name = "bench", kind="dylib")]
 	unsafe extern "C" {
 		safe fn game_fn_print_number<'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_print_bool  <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 		safe fn game_fn_get_1       <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 		safe fn game_fn_get_mass    <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 		safe fn game_fn_get_number  <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
@@ -122,6 +124,7 @@ mod game_functions {
 
 	pub fn register_game_functions(state: &mut GrugState) {
 		state.register_game_fn("print_number", game_fn_print_number).unwrap();
+		state.register_game_fn("print_bool"  , game_fn_print_bool  ).unwrap();
 		state.register_game_fn("get_1"       , game_fn_get_1       ).unwrap();
 		state.register_game_fn("get_mass"    , game_fn_get_mass    ).unwrap();
 		state.register_game_fn("get_number"  , game_fn_get_number  ).unwrap();

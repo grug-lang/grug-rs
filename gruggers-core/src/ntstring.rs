@@ -58,7 +58,7 @@ impl NTStr {
 
 	/// Copy `value` into a `Box<NTStr>` in allocator `a`.
 	pub fn box_from_str_in<A: Allocator>(value: &str, a: A) -> Box<Self, A> {
-		let ptr = Box::into_raw(Box::<[u8]>::new_uninit_slice(value.len() + 1));
+		let (ptr, a) = Box::into_raw_with_allocator(Box::<[u8], _>::new_uninit_slice_in(value.len() + 1, a));
 
 		unsafe{
 			std::ptr::copy(value.as_ptr(), ptr.cast(), value.len());

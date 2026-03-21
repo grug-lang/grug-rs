@@ -4,18 +4,15 @@ use gruggers::ntstring::NTStr;
 use gruggers::nt;
 
 mod test_bindings {
-	use gruggers::state::{GrugInitSettings, GrugState, State, GrugEntityHandle};
+	use gruggers::state::{GrugInitSettings, GrugState, State};
 	use gruggers::backend::BytecodeBackend;
 	use gruggers::error::RuntimeError;
 	use gruggers::types::{GrugValue, GrugScriptId};
 	use gruggers::ntstring::{NTStrPtr, NTStr};
 	use gruggers::serde;
-	use std::path::Path;
 	use gruggers::nt;
 
-	pub static mut CURRENT_GRUG_ENTITY: Option<GrugEntityHandle<'static>> = None;
-	pub static mut CURRENT_SCRIPT_ID: Option<GrugScriptId> = None;
-	pub static mut CURRENT_PATH: Option<&NTStr> = None;
+	use std::path::Path;
 
 	pub extern "C" fn create_grug_state<'a>(_mod_api_path: NTStrPtr<'a>, _mods_dir_path: NTStrPtr<'a>) -> Box<GrugState> {
 		let mods_dir_path = nt!("src/grug-tests/tests");
@@ -50,53 +47,57 @@ mod test_bindings {
 
 	pub extern "C" fn destroy_grug_state<'a>(_state: Box<GrugState>) { }
 
-	pub extern "C" fn compile_grug_file(state: &mut GrugState, path: NTStrPtr<'static>) -> Option<NTStrPtr<'static>> {
-		unsafe {
-			state.clear_entities();
-			let path = path.to_ntstr();
-			CURRENT_PATH = Some(path);
-			match state.compile_grug_file(path) {
-				Ok(id) => {
-					CURRENT_SCRIPT_ID = Some(id);
-					None
-				},
-				Err(err) => {
-					let mut string = format!("{}", err);
-					string.push('\0');
-					Some(NTStr::from_str(String::leak(string)).unwrap().into())
-				}
+	pub extern "C" fn compile_grug_file(state: &mut GrugState, path: NTStrPtr<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugScriptId {
+		state.clear_entities();
+		let path = path.to_ntstr();
+		let id = match state.compile_grug_file(path) {
+			Ok(id) => {
+				*err_out = None;
+				Some(id)
+			},
+			Err(err) => {
+				let mut string = format!("{}", err);
+				string.push('\0');
+				*err_out = Some(NTStr::from_str(String::leak(string)).unwrap().as_ntstrptr());
+				None
 			}
-		}
+		};
+		id.unwrap_or(GrugScriptId::new(u64::MAX))
 	}
 
-	pub extern "C" fn init_globals_fn_dispatcher (state: &'static GrugState, ) {
-		unsafe {
-			state.clear_error();
-			state.set_next_entity_id(42);
-			CURRENT_GRUG_ENTITY = Some(
-				state
-					.create_entity(CURRENT_SCRIPT_ID.unwrap())
-					.expect("runtime error")
-			)
-		}
+	pub extern "C" fn init_globals (state: &'_ GrugState, file_id: GrugScriptId) {
+		unsafe{state.set_next_entity_id(42)};
+		let entity = state.
+			create_entity(file_id)
+			.expect("runtime_error");
+
+		state.destroy_entity(entity);
 	}
 
 	#[allow(unused_variables)]
-	pub extern "C" fn on_fn_dispatcher<'a> (state: &GrugState, fn_name: NTStrPtr<'a>, values: *const GrugValue) {
-		unsafe {
-			let fn_name = fn_name.to_ntstr();
-			let entity_type: &Path = AsRef::as_ref(CURRENT_PATH.unwrap().as_str());
-			let entity_type = entity_type
-				.file_prefix().unwrap()
-				.to_str().unwrap()
-				.split_once("-").unwrap()
-				.1;
-			let fn_id = state.get_on_fn_id(entity_type, fn_name).unwrap();
-			
-			_ = state
-				.call_on_function_raw(&CURRENT_GRUG_ENTITY.as_ref().unwrap(), fn_id, values);
-		}
+	pub extern "C" fn call_file_event_fn<'a> (state: &GrugState, file_id: GrugScriptId, fn_name: NTStrPtr<'a>, args: *const GrugValue, args_count: usize) {
+		state.clear_error();
+		static mut ENTITY_ID: u64 = 42;
+		unsafe{state.set_next_entity_id(ENTITY_ID)};
+		unsafe{ENTITY_ID += 1;}
+		let fn_name = fn_name.to_ntstr();
+		let entity_type = Path::new(state.get_script_path(file_id)
+			.expect("input file_id is invalid"))
+			.file_prefix().unwrap()
+			.to_str().unwrap()
+			.split_once("-").unwrap()
+			.1;
+
+		let fn_id = state.get_on_fn_id(entity_type, fn_name).unwrap();
+		let entity = state.create_entity(file_id)
+			.expect("runtime_error");
+		let args = if args_count == 0 {&[]} else {unsafe{std::slice::from_raw_parts(args, args_count)}};
+		_ = state
+			.call_on_function(&*entity, fn_id, args);
+		state.destroy_entity(entity);
+		unsafe{ENTITY_ID -= 1;}
 	}
+
 	#[allow(unused_variables)]
 	pub extern "C" fn dump_file_to_json<'a> (_state: &GrugState, input_grug_path: NTStrPtr<'a>, output_json_path: NTStrPtr<'a>) -> i32 {
 		let grug_path = input_grug_path.to_ntstr();
@@ -135,17 +136,40 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	pub type destroy_grug_state_t = extern "C" fn(Box<GrugState>);
 	#[allow(non_camel_case_types)]
-	pub type compile_grug_file_t = extern "C" fn(&mut GrugState, NTStrPtr<'static>) -> Option<NTStrPtr<'static>>;
+	pub type compile_grug_file_t = extern "C" fn(&mut GrugState, NTStrPtr<'static>, &mut Option<NTStrPtr<'static>>) -> GrugScriptId;
 	#[allow(non_camel_case_types)]
-	pub type init_globals_fn_dispatcher_t = extern "C" fn (&'static GrugState);
+	pub type init_globals_t = extern "C" fn (&'_ GrugState, GrugScriptId);
 	#[allow(non_camel_case_types)]
-	pub type on_fn_dispatcher_t = for<'a> extern "C" fn (&GrugState, NTStrPtr<'a>, *const GrugValue);
+	pub type call_file_event_fn_t = for<'a> extern "C" fn (&GrugState, GrugScriptId, NTStrPtr<'a>, *const GrugValue, usize);
 	#[allow(non_camel_case_types)]
 	pub type dump_file_to_json_t = for<'a> extern "C" fn (&GrugState, NTStrPtr<'a>, NTStrPtr<'a>) -> i32;
 	#[allow(non_camel_case_types)]
 	pub type generate_file_from_json_t = for<'a> extern "C" fn (&GrugState, NTStrPtr<'a>, NTStrPtr<'a>) -> i32;
 	#[allow(non_camel_case_types)]
 	pub type game_fn_error_t = extern "C" fn (&GrugState, NTStrPtr<'static>);
+
+	#[repr(C)]
+	pub struct GrugStateVTable {
+		create_grug_state: create_grug_state_t,
+		destroy_grug_state: destroy_grug_state_t,
+		compile_grug_file: compile_grug_file_t,
+		init_globals: init_globals_t,
+		call_file_event_fn: call_file_event_fn_t,
+		dump_file_to_json: dump_file_to_json_t,
+		generate_file_from_json: generate_file_from_json_t,
+		game_fn_error: game_fn_error_t,
+	}
+
+	pub const STATE_VTABLE: GrugStateVTable = GrugStateVTable {
+		create_grug_state,
+		destroy_grug_state,
+		compile_grug_file,
+		init_globals,
+		call_file_event_fn,
+		dump_file_to_json,
+		generate_file_from_json,
+		game_fn_error,
+	};
 
 	#[link(name="tests", kind="dylib")]
 	unsafe extern "C" {
@@ -159,14 +183,7 @@ mod test_bindings {
 		pub fn grug_tests_run(
 			tests_dir_path_: NTStrPtr<'static>, 
 			mod_api_path: NTStrPtr<'static>, 
-			create_grug_state: create_grug_state_t,
-			destroy_grug_state: destroy_grug_state_t,
-			compile_grug_file: compile_grug_file_t,
-			init_globals_fn_dispatcher_: init_globals_fn_dispatcher_t,
-			on_fn_dispatcher_: on_fn_dispatcher_t,
-			dump_file_to_json_: dump_file_to_json_t,
-			generate_file_from_json_: generate_file_from_json_t,
-			game_fn_error_: game_fn_error_t,
+			vtable: GrugStateVTable,
 			whitelisted_test_: Option<NTStrPtr<'static>>
 		);
 	}
@@ -266,8 +283,10 @@ fn grug_tests () {
 	let mut whitelisted_test = None;
 	if args.len() >= 3 {
 		let mut test = args.remove(2);
-		test.push('\0');
-		whitelisted_test = unsafe{Some(NTStr::from_str_unchecked(String::leak(test)).as_ntstrptr())};
+		if !test.starts_with("--") {
+			test.push('\0');
+			whitelisted_test = unsafe{Some(NTStr::from_str_unchecked(String::leak(test)).as_ntstrptr())};
+		}
 	};
 
 	let grug_tests_path = nt!("src/grug-tests/tests");
@@ -283,14 +302,7 @@ fn grug_tests () {
 		grug_tests_run(
 			grug_tests_path.as_ntstrptr(),
 			mod_api_path.as_ntstrptr(),
-			create_grug_state,
-			destroy_grug_state,
-			compile_grug_file,
-			init_globals_fn_dispatcher,
-			on_fn_dispatcher,
-			dump_file_to_json,
-			generate_file_from_json,
-			game_fn_error,
+			STATE_VTABLE,
 			whitelisted_test,
 		)
 	}

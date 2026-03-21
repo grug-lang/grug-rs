@@ -693,35 +693,64 @@ impl<'a> AST<'a> {
 			}
 			TokenType::If => {
 				// if condition and block
-				consume_next_token_types(tokens, &[TokenType::If, TokenType::Space])?;
+				let mut ifs = Vec::new();
+				loop {
+					consume_next_token_types(tokens, &[TokenType::If, TokenType::Space])?;
 
-				let condition = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
-				let if_block = self.parse_statements(tokens, parsing_depth + 1, indentation + 1, arena)?;
+					let condition = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
+					let if_block = self.parse_statements(tokens, parsing_depth + 1, indentation + 1, arena)?;
 
-				// else block 
-				
-				let is_chained;
-				let else_block;
+					// else block 
+					
+					let is_chained;
+					let else_block;
 
-				if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]).is_ok() {
-					let [space_token, if_token] = peek_next_tokens(tokens)?;
-					if TokenType::Space == space_token.ty && TokenType::If == if_token.ty {
-						is_chained = true;
-						consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
-						else_block = std::slice::from_mut(Box::leak(Box::new_in(self.parse_statement(tokens, parsing_depth + 1, indentation, arena)?.into(), arena)));
+					if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]).is_ok() {
+						let [space_token, if_token] = peek_next_tokens(tokens)?;
+						if TokenType::Space == space_token.ty && TokenType::If == if_token.ty {
+							is_chained = true;
+							consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
+							ifs.push((
+								condition,
+								is_chained,
+								if_block,
+								&mut [] as &mut [Statement],
+							));
+							continue;
+						} else {
+							is_chained = false;
+							else_block = self.parse_statements(tokens, parsing_depth, indentation + 1, arena)?;
+						}
 					} else {
 						is_chained = false;
-						else_block = self.parse_statements(tokens, parsing_depth, indentation + 1, arena)?;
+						else_block = Vec::new().leak();
 					}
-				} else {
-					is_chained = false;
-					else_block = Vec::new().leak();
+					ifs.push((
+						condition,
+						is_chained,
+						if_block,
+						else_block,
+					));
+					break;
+				}
+				let mut current = ifs.pop().expect("We have parsed at least a single if statement");
+				for statement in ifs.into_iter().rev() {
+					let else_block = std::slice::from_mut(Box::leak(Box::new_in(
+						Statement::If{
+							condition: current.0,
+							is_chained: current.1,
+							if_block: current.2,
+							else_block: current.3,
+						}, arena,
+					)));
+					current = statement;
+					current.3 = else_block;
 				}
 				Ok(Statement::If{
-					condition, 
-					is_chained,
-					if_block,
-					else_block,
+					condition: current.0,
+					is_chained: current.1,
+					if_block: current.2,
+					else_block: current.3,
 				})
 			}
 			TokenType::Return => {

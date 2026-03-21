@@ -1,5 +1,5 @@
 #![allow(improper_ctypes_definitions)]
-use crate::state::{GrugInitSettings, GrugState, GrugEntityHandle};
+use crate::state::{GrugInitSettings, GrugState, GrugEntityHandle, EventFnEntry};
 use crate::ntstring::NTStrPtr;
 use crate::types::{GrugScriptId, GrugOnFnId, GrugEntity, GrugValue, GameFnPtrState};
 
@@ -34,6 +34,11 @@ pub extern "C" fn grug_deinit_entity(state: &GrugState, handle: GrugEntityHandle
 }
 
 const INVALID_GRUG_ON_FN_ID: GrugOnFnId = u64::MAX;
+
+#[unsafe(no_mangle)]
+pub extern "C" fn grug_get_on_fn_ids(state: &GrugState) -> &[EventFnEntry<'_>] {
+	state.get_on_functions()
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_get_on_fn_id(state: &GrugState, entity_type: NTStrPtr<'_>, on_fn_name: NTStrPtr<'_>) -> GrugOnFnId {

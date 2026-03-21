@@ -517,6 +517,7 @@ impl std::fmt::Display for StateError {
 	}
 }
 
+// TODO: This should be moved to gruggers-core
 pub struct EventFnEntry<'a> {
 	entity_type   : NTStrPtr<'a>,
 	event_fn_name : NTStrPtr<'a>,

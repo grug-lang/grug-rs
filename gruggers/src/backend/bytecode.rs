@@ -149,43 +149,62 @@ impl<'a> Compiler<'a> {
 				if_block,
 				else_block,
 			} => {
-				self.compile_expr(instructions, condition);
+				let mut condition = condition;
+				let mut is_chained = is_chained;
+				let mut if_block = if_block;
+				let mut else_block = else_block;
+				let mut end_patches = Vec::new();
+				
+				loop {
+					self.compile_expr(instructions, condition);
 
-				let condition_patch_loc = instructions.get_loc();
-				instructions.push_op(Op::JmpIfNot{offset: 0});
+					let condition_patch_loc = instructions.get_loc();
+					instructions.push_op(Op::JmpIfNot{offset: 0});
 
-				self.push_scope();
-				for statement in &**if_block {
-					self.compile_statement(instructions, statement);
-				}
-				self.pop_scope();
+					self.push_scope();
+					for statement in &**if_block {
+						self.compile_statement(instructions, statement);
+					}
+					self.pop_scope();
 
-				if !else_block.is_empty() {
-					let end_patch_loc = instructions.get_loc();
-					instructions.push_op(Op::Jmp{offset: 0});
-					let cur_loc = instructions.get_loc();
-					// jump from the false condtion to the start of the else block
-					instructions.try_patch(Op::JmpIfNot{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc)
-						.expect("Could not patch jump because offset is too large");
-					if *is_chained {
-						for statement in &**else_block {
-							self.compile_statement(instructions, statement);
+					if !else_block.is_empty() {
+						// Save the patch location from the end of this if
+						// block to the end of the else block or the end of the
+						// last if block
+						end_patches.push(instructions.get_loc());
+						instructions.push_op(Op::Jmp{offset: 0});
+
+						let cur_loc = instructions.get_loc();
+						// jump from the false condtion to the start of the else block
+						instructions.try_patch(Op::JmpIfNot{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc)
+							.expect("Could not patch jump because offset is too large");
+						if *is_chained {
+							debug_assert!(else_block.len() == 1);
+							let [statement] = else_block else {unreachable!()};
+							(condition, is_chained, if_block, else_block) = match statement {
+								Statement::If{condition, is_chained, if_block, else_block} => (condition, is_chained, if_block, else_block),
+								_ => unreachable!(),
+							};
+							continue;
+						} else {
+							self.push_scope();
+							for statement in &**else_block {
+								self.compile_statement(instructions, statement);
+							}
+							self.pop_scope();
 						}
 					} else {
-						self.push_scope();
-						for statement in &**else_block {
-							self.compile_statement(instructions, statement);
-						}
-						self.pop_scope();
+						let cur_loc = instructions.get_loc();
+						// jump from the false condtion to the end of the if statement
+						instructions.try_patch(Op::JmpIfNot{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc)
+							.expect("Could not patch jump because offset is too large");
 					}
-					let end_loc = instructions.get_loc();
-					// jump from the end of the previous block to the end of the else block
+					break;
+				}
+				let end_loc = instructions.get_loc();
+				for end_patch_loc in end_patches {
+					// jump from the end of the each if block to the end of the else block
 					instructions.try_patch(Op::Jmp{offset: Op::calc_offset(end_patch_loc, end_loc)}, end_patch_loc)
-						.expect("Could not patch jump because offset is too large");
-				} else {
-					let cur_loc = instructions.get_loc();
-					// jump from the false condtion to the end of the if statement
-					instructions.try_patch(Op::JmpIfNot{offset: Op::calc_offset(condition_patch_loc, cur_loc)}, condition_patch_loc)
 						.expect("Could not patch jump because offset is too large");
 				}
 			}
@@ -243,10 +262,11 @@ impl<'a> Compiler<'a> {
 			ExprData::Entity(value)   => {
 				match instructions.strings.get(value.to_ntstr()) {
 					None => {
-						instructions.strings.insert(NTStr::arc_from_str(value.to_ntstr()));
+						let value = NTStr::arc_from_str(value.to_ntstr());
 						// SAFETY: This returned instruction stream is only valid as long as this list of strings is available
-						let string = unsafe{value.detach_lifetime()};
-						instructions.push_op(Op::LoadStr{string})
+						let string = unsafe{value.as_ntstrptr().detach_lifetime()};
+						instructions.push_op(Op::LoadStr{string});
+						instructions.strings.insert(value);
 					}
 					Some(value) => {
 						let string = unsafe{value.as_ntstrptr().detach_lifetime()};
@@ -775,7 +795,6 @@ impl Instructions {
 		self.jumps_end.get_mut(&old_end).unwrap().0.extract_if(.., |start| *start == old_start).count();
 
 		self.insert_jmp(old_start, new_offset);
-		self.assert_jumps_consistency();
 		Some(())
 	}
 }

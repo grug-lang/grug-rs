@@ -25,7 +25,15 @@ pub trait Backend {
 	/// must not be deinitialized. The GrugScriptId to be used is obtained from
 	/// the file_id member of `entity`. 
 	///
+	/// `entity` is pinned until it is deinitialized by a call to
+	/// `destroy_entity_data` or `insert_file` with the same path as its
+	/// current GrugScriptId. The reference must be stored as a raw pointer
+	/// within self so that it can be used during `destroy_entity_data` to
+	/// check for pointer equality. 
+	/// It is safe to use that pointer as a &GrugEntity in the meantime.
+	///
 	/// Returns false if there was a runtime error during execution
+	/// TODO: `entity` should be pinned
 	#[must_use]
 	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity) -> bool;
 	/// Deinitialize all the data associated with all entities. The pointers
