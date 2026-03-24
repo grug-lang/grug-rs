@@ -8,7 +8,7 @@ repository = "https://github.com/grug-lang/grug-rs"
 license = "MIT"
 
 [lib] 
-crate-type = ["cdylib", "lib", "staticlib"]
+# crate-type = ["cdylib", "lib", "staticlib"]
 
 [dependencies]
 json = "0.12.4"
