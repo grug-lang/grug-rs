@@ -1,5 +1,5 @@
 use crate::types::{
-	GrugValue, GrugScriptId, GrugEntity, GameFnPtr,
+	GrugValue, GrugFileId, GrugEntity, GameFnPtr,
 };
 use crate::ast::{
 	Expr, ExprData, OnFunction, Statement,
@@ -464,7 +464,7 @@ impl BytecodeBackend {
 }
 
 impl Backend for BytecodeBackend {
-	fn insert_file(&self, id: GrugScriptId, file: GrugAst) {
+	fn insert_file(&self, id: GrugFileId, file: GrugAst) {
 		let compiled_file = Compiler::compile(file);
 		let mut files = self.files.borrow_mut();
 		if files.len() > id.0 as usize {

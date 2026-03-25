@@ -1,5 +1,5 @@
 //! Defines traits and types for working with backends from a state
-use crate::types::{GrugScriptId, GrugEntity, GrugValue};
+use crate::types::{GrugFileId, GrugEntity, GrugValue};
 use crate::ast::GrugAst;
 use crate::state::{State, DummyState};
 use crate::runtime_error::RuntimeError;
@@ -19,15 +19,15 @@ pub trait Backend {
 	///
 	/// The entity data of all entities created from the old script should be
 	/// regenerated
-	fn insert_file(&self, id: GrugScriptId, file: GrugAst<'_>);
+	fn insert_file(&self, id: GrugFileId, file: GrugAst<'_>);
 	/// Initialize the member data of the newly created entity. When this
 	/// function is called, the member field of `entity` points to garbage and
-	/// must not be deinitialized. The GrugScriptId to be used is obtained from
+	/// must not be deinitialized. The GrugFileId to be used is obtained from
 	/// the file_id member of `entity`. 
 	///
 	/// `entity` is pinned until it is deinitialized by a call to
 	/// `destroy_entity_data` or `insert_file` with the same path as its
-	/// current GrugScriptId. The reference must be stored as a raw pointer
+	/// current GrugFileId. The reference must be stored as a raw pointer
 	/// within self so that it can be used during `destroy_entity_data` to
 	/// check for pointer equality. 
 	/// It is safe to use that pointer as a &GrugEntity in the meantime.
@@ -77,7 +77,7 @@ pub struct ErasedBackend<GrugState: State + 'static> {
 pub struct BackendVTable<GrugState: State> {
 	#[allow(improper_ctypes_definitions)]
 	/// See [`Backend::insert_file`]
-	pub(crate) insert_file         : extern "C" fn(data: NonNull<()>, id: GrugScriptId, file: GrugAst<'_>),
+	pub(crate) insert_file         : extern "C" fn(data: NonNull<()>, id: GrugFileId, file: GrugAst<'_>),
 	/// See [`Backend::init_entity`]
 	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
 	/// See [`Backend::clear_entities`]
@@ -96,7 +96,7 @@ pub struct BackendVTable<GrugState: State> {
 
 impl<GrugState: State> ErasedBackend<GrugState> {
 	/// See [`Backend::insert_file`]
-	pub fn insert_file(&self, id: GrugScriptId, file: GrugAst<'_>) {
+	pub fn insert_file(&self, id: GrugFileId, file: GrugAst<'_>) {
 		(self.vtable.insert_file)(self.data, id, file)
 	}
 	/// See [`Backend::init_entity`]
@@ -132,7 +132,7 @@ impl<GrugState: State> Drop for ErasedBackend<GrugState> {
 impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 	fn from(other: T) -> Self {
 		#[allow(improper_ctypes_definitions)]
-		extern "C" fn insert_file<T: Backend, GrugState: State>(data: NonNull<()>, id: GrugScriptId, file: GrugAst<'_>) {
+		extern "C" fn insert_file<T: Backend, GrugState: State>(data: NonNull<()>, id: GrugFileId, file: GrugAst<'_>) {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
 				id,
@@ -247,7 +247,7 @@ pub struct CBackend<B: Backend> {
 impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 	fn from(other: CBackend<B>) -> Self {
 		#[allow(improper_ctypes_definitions)]
-		extern "C" fn insert_file<B: Backend>(data: NonNull<()>, id: GrugScriptId, file: GrugAst<'_>) {
+		extern "C" fn insert_file<B: Backend>(data: NonNull<()>, id: GrugFileId, file: GrugAst<'_>) {
 			B::insert_file(
 				unsafe{&data.cast::<CBackend<B>>().as_ref().backend},
 				id,

@@ -2,7 +2,7 @@ use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text, ModApiError};
 use crate::error::GrugError;
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugScriptId, GrugEntity, GameFnPtrState};
+use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, GameFnPtrState};
 use crate::xar::Xar;
 use crate::ntstring::NTStrPtr;
 use crate::arena::Arena;
@@ -213,13 +213,13 @@ pub struct GrugState {
 	// If a later change makes mod_api mutable, these need to be allocated separately
 	// TODO: rename this to `event_functions`
 	on_functions: Vec<EventFnEntry<'static>>,
-	pub(crate) path_to_script_ids: RefCell<HashMap<String, GrugScriptId>>,
+	pub(crate) path_to_script_ids: RefCell<HashMap<String, GrugFileId>>,
 	next_script_id: AtomicU64,
 
 	pub(crate) backend: ErasedBackend<Self>,
 	pub(crate) arenas : RefCell<Vec<Arena>>,
 	// pub(crate) backend: Interpreter,
-	pub(crate) current_script: Cell<Option<GrugScriptId>>,
+	pub(crate) current_script: Cell<Option<GrugFileId>>,
 	pub(crate) current_on_fn_id: Cell<Option<GrugOnFnId>>,
 	pub(crate) is_errorring: Cell<bool>,
 }
@@ -362,7 +362,7 @@ impl GrugState {
 	}
 	
 	// This should only happen during an error so its okay if its slow
-	pub fn get_script_path(&self, script_id: GrugScriptId) -> Option<&str> {
+	pub fn get_script_path(&self, script_id: GrugFileId) -> Option<&str> {
 		let string = Ref::filter_map(self.path_to_script_ids.borrow(), |inner|
 			inner.iter().find(|(_, v)| **v == script_id).map(|x| x.0)
 		).ok()?;
@@ -382,7 +382,7 @@ impl GrugState {
 		Ok(())
 	}
 
-	pub(crate) fn get_next_script_id(&self) -> GrugScriptId {
+	pub(crate) fn get_next_script_id(&self) -> GrugFileId {
 		GrugId::new(self.next_script_id.fetch_add(1, Ordering::Relaxed))
 	}
 
@@ -398,7 +398,7 @@ impl GrugState {
 		self.next_entity_id.store(next_id, Ordering::Relaxed);
 	}
 
-	pub fn create_entity(&self, file_id: GrugScriptId) -> Option<GrugEntityHandle<'_>> {
+	pub fn create_entity(&self, file_id: GrugFileId) -> Option<GrugEntityHandle<'_>> {
 		let old_script   = self.current_script  .get();
 		let old_on_fn_id = self.current_on_fn_id.get();
 		self.current_script  .set(Some(file_id));

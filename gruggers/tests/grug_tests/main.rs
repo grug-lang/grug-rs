@@ -7,7 +7,7 @@ mod test_bindings {
 	use gruggers::state::{GrugInitSettings, GrugState, State, GrugEntityHandle};
 	use gruggers::backend::BytecodeBackend;
 	use gruggers::error::RuntimeError;
-	use gruggers::types::{GrugValue, GrugScriptId};
+	use gruggers::types::{GrugValue, GrugFileId};
 	use gruggers::ntstring::{NTStrPtr, NTStr};
 	use gruggers::serde;
 	use gruggers::nt;
@@ -49,7 +49,7 @@ mod test_bindings {
 
 	pub extern "C" fn destroy_grug_state<'a>(_state: Box<GrugState>) { }
 
-	pub extern "C" fn compile_grug_file(state: &mut GrugState, path: NTStrPtr<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugScriptId {
+	pub extern "C" fn compile_grug_file(state: &mut GrugState, path: NTStrPtr<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugFileId {
 		state.clear_entities();
 		let path = path.to_ntstr();
 		let id = match state.compile_grug_file(path) {
@@ -64,10 +64,10 @@ mod test_bindings {
 				None
 			}
 		};
-		id.unwrap_or(GrugScriptId::new(u64::MAX))
+		id.unwrap_or(GrugFileId::new(u64::MAX))
 	}
 
-	pub extern "C" fn init_globals (state: &'_ GrugState, file_id: GrugScriptId) {
+	pub extern "C" fn init_globals (state: &'_ GrugState, file_id: GrugFileId) {
 		unsafe{state.set_next_entity_id(42)};
 		unsafe{&mut * &raw mut CURRENT_ENTITY}.take().map(|entity| state.destroy_entity(entity));
 		unsafe{CURRENT_ENTITY = Some(std::mem::transmute::<GrugEntityHandle<'_>, GrugEntityHandle<'static>>(state.
@@ -76,7 +76,7 @@ mod test_bindings {
 	}
 
 	#[allow(unused_variables)]
-	pub extern "C" fn call_export_fn<'a> (state: &GrugState, file_id: GrugScriptId, fn_name: NTStrPtr<'a>, args: *const GrugValue, args_count: usize) {
+	pub extern "C" fn call_export_fn<'a> (state: &GrugState, file_id: GrugFileId, fn_name: NTStrPtr<'a>, args: *const GrugValue, args_count: usize) {
 		state.clear_error();
 		unsafe{state.set_next_entity_id(42)};
 
@@ -134,11 +134,11 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	pub type destroy_grug_state_t = extern "C" fn(Box<GrugState>);
 	#[allow(non_camel_case_types)]
-	pub type compile_grug_file_t = extern "C" fn(&mut GrugState, NTStrPtr<'static>, &mut Option<NTStrPtr<'static>>) -> GrugScriptId;
+	pub type compile_grug_file_t = extern "C" fn(&mut GrugState, NTStrPtr<'static>, &mut Option<NTStrPtr<'static>>) -> GrugFileId;
 	#[allow(non_camel_case_types)]
-	pub type init_globals_t = extern "C" fn (&'_ GrugState, GrugScriptId);
+	pub type init_globals_t = extern "C" fn (&'_ GrugState, GrugFileId);
 	#[allow(non_camel_case_types)]
-	pub type call_export_fn_t = for<'a> extern "C" fn (&GrugState, GrugScriptId, NTStrPtr<'a>, *const GrugValue, usize);
+	pub type call_export_fn_t = for<'a> extern "C" fn (&GrugState, GrugFileId, NTStrPtr<'a>, *const GrugValue, usize);
 	#[allow(non_camel_case_types)]
 	pub type dump_file_to_json_t = for<'a> extern "C" fn (&GrugState, NTStrPtr<'a>, NTStrPtr<'a>) -> i32;
 	#[allow(non_camel_case_types)]

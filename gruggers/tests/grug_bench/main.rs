@@ -4,7 +4,7 @@ mod test_bindings {
 	use gruggers::ntstring::{NTStrPtr, NTStr};
 	use gruggers::state::{GrugState, GrugInitSettings, GrugEntityHandle};
 	use gruggers::backend::BytecodeBackend;
-	use gruggers::types::{GrugEntity, GrugScriptId, GrugOnFnId, GrugValue};
+	use gruggers::types::{GrugEntity, GrugFileId, GrugOnFnId, GrugValue};
 
 	use super::game_functions::*;
 	
@@ -13,8 +13,8 @@ mod test_bindings {
 		create_grug_state: extern "C" fn(NTStrPtr<'_>, NTStrPtr<'_>) -> Box<GrugState>,
 		destroy_grug_state: extern "C" fn(Box<GrugState>),
 
-		compile_grug_file: extern "C" fn(&GrugState, NTStrPtr<'_>) -> GrugScriptId,
-		create_entity: for<'a> extern "C" fn(&'a GrugState, GrugScriptId) -> GrugEntityHandle<'a>,
+		compile_grug_file: extern "C" fn(&GrugState, NTStrPtr<'_>) -> GrugFileId,
+		create_entity: for<'a> extern "C" fn(&'a GrugState, GrugFileId) -> GrugEntityHandle<'a>,
 		get_on_fn_id: extern "C" fn(&GrugState, NTStrPtr<'_>, NTStrPtr<'_>) -> GrugOnFnId,
 		call_entity_on_fn: extern "C" fn(&GrugState, &GrugEntity, GrugOnFnId, *const GrugValue, usize),
 		destroy_entity: for<'a> extern "C" fn(&'a GrugState, GrugEntityHandle<'a>),
@@ -47,7 +47,7 @@ mod test_bindings {
 
 	extern "C" fn destroy_grug_state(_: Box<GrugState>) {}
 
-	extern "C" fn compile_grug_file(state: &GrugState, script_path: NTStrPtr<'_>) -> GrugScriptId {
+	extern "C" fn compile_grug_file(state: &GrugState, script_path: NTStrPtr<'_>) -> GrugFileId {
 		println!("{}", script_path);
 		state.compile_grug_file(script_path.to_str()).unwrap()
 	}
@@ -57,7 +57,7 @@ mod test_bindings {
 			.unwrap()
 	}
 
-	extern "C" fn create_entity(state: &GrugState, script_id: GrugScriptId) -> GrugEntityHandle<'_> {
+	extern "C" fn create_entity(state: &GrugState, script_id: GrugFileId) -> GrugEntityHandle<'_> {
 		state.create_entity(script_id).unwrap()
 	}
 

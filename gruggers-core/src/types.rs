@@ -40,7 +40,7 @@ pub struct GrugId(pub u64);
 
 // TODO: Rename this to GrugFileId
 /// An id that uniquely refers to a script path. 
-pub type GrugScriptId = GrugId;
+pub type GrugFileId = GrugId;
 
 impl std::fmt::Display for GrugId {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -96,7 +96,7 @@ pub struct GrugEntity {
 	/// id of the `me` member variable in a grug_script
 	pub id: GrugId,
 	/// File id of file this entity is created from 
-	pub file_id: GrugScriptId,
+	pub file_id: GrugFileId,
 	/// Pointer to the entity's members stored by the backend
 	pub members: Cell<NonNull<()>>,
 }
@@ -105,7 +105,7 @@ impl GrugEntity {
 	/// SAFETY: The `members` field of the returned entity are uninitialized
 	/// This data must be initialized by the backend before it is actually used
 	/// as an entity
-	pub unsafe fn new_uninit(id: GrugId, file_id: GrugScriptId) -> Self {
+	pub unsafe fn new_uninit(id: GrugId, file_id: GrugFileId) -> Self {
 		Self {
 			id,
 			file_id,
