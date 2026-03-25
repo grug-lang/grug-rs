@@ -69,7 +69,7 @@ impl NTStr {
 	}
 
 	// Does not include the null byte
-	pub fn len(&self) -> usize {
+	pub const fn len(&self) -> usize {
 		self.0.len() - 1
 	}
 
@@ -77,19 +77,19 @@ impl NTStr {
 		&self.0[..(self.0.len() - 1)]
 	}
 
-	pub fn as_str_with_null(&self) -> &str {
+	pub const fn as_str_with_null(&self) -> &str {
 		&self.0
 	}
 
 	/// # SAFETY
 	///
 	/// The last byte of `value` MUST be a null byte and there must be no other null byte in between
-	pub unsafe fn from_str_unchecked(value: &str) -> &Self {
+	pub const unsafe fn from_str_unchecked(value: &str) -> &Self {
 		unsafe {std::mem::transmute::<&str, &NTStr>(value)}
 	}
 	
 	pub fn from_str(value: &str) -> Option<&NTStr> {
-		if *value.as_bytes().last()? == b'\0' {
+		if let Some(last) = value.as_bytes().last() && *last == b'\0' {
 			for byte in &value.as_bytes()[0..value.len()-1] {
 				if *byte == b'\0' {return None}
 			}
@@ -100,7 +100,7 @@ impl NTStr {
 		}
 	}
 
-	pub fn as_ntstrptr(&self) -> NTStrPtr<'_> {
+	pub const fn as_ntstrptr(&self) -> NTStrPtr<'_> {
 		// SAFETY There is a null byte at the self.len()
 		unsafe{NTStrPtr::from_ptr(NonNull::from_ref(&self.0).cast::<i8>())}
 	}
@@ -212,7 +212,7 @@ impl<'a> NTStrPtr<'a> {
 		unsafe{self.0.cast::<u8>().read() == b'\0'}
 	}
 
-	pub unsafe fn from_ptr (ptr: NonNull<c_char>) -> Self {
+	pub const unsafe fn from_ptr (ptr: NonNull<c_char>) -> Self {
 		Self(ptr, PhantomData)
 	}
 
