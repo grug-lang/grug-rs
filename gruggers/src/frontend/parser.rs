@@ -724,7 +724,7 @@ impl<'a> AST<'a> {
 						}
 					} else {
 						is_chained = false;
-						else_block = Vec::new().leak();
+						else_block = &mut [];
 					}
 					ifs.push((
 						condition,

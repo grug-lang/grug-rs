@@ -468,7 +468,8 @@ impl Backend for BytecodeBackend {
 		let compiled_file = Compiler::compile(file);
 		let mut files = self.files.borrow_mut();
 		if files.len() > id.0 as usize {
-			unimplemented!("recompile files");
+			return;
+			// unimplemented!("recompile files");
 		} else if files.len() == id.0 as usize {
 			files.push(compiled_file);
 		} else {

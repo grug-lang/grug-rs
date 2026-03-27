@@ -236,6 +236,10 @@ mod xar {
 			Self(ptr.cast(), PhantomData)
 		}
 
+		pub fn as_ptr(self) -> NonNull<T> {
+			self.0.cast()
+		}
+
 		pub unsafe fn get_ref(self) -> &'a T {
 			unsafe{& (*self.0.as_ptr()).value}
 		}
