@@ -33,6 +33,7 @@ pub fn generate_file_from_json (json_path: &str, output_path: &str) -> Result<()
 
 mod ser {
 	use crate::ast::*;
+	use crate::frontend::GlobalStatement;
 	use json::{JsonValue, object};
 	pub(super) fn ast_to_json(ast: &[GlobalStatement<'_>]) -> String {
 		// let mut json_ast = Vec::new();

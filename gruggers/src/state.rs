@@ -14,7 +14,6 @@ pub use gruggers_core::state::State;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::cell::{Cell, RefCell, Ref};
-use std::path::{Path, PathBuf};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -130,14 +129,24 @@ impl<'a> GrugInitSettings<'a> {
 	}
 
 	pub fn set_mods_dir(mut self, dir: &'a str) -> Self {
-		self.mods_dir_path = Some(NonNull::from_ref(dir).cast::<u8>());
-		self.mods_dir_path_len = dir.len();
+		if dir.len() == 0 {
+			self.mods_dir_path = None;
+			self.mods_dir_path_len = 0;
+		} else {
+			self.mods_dir_path = Some(NonNull::from_ref(dir).cast::<u8>());
+			self.mods_dir_path_len = dir.len();
+		}
 		self
 	}
 
 	pub fn set_mod_api_path(mut self, mod_api: &'a str) -> Self {
-		self.mod_api_path = Some(NonNull::from_ref(mod_api).cast::<u8>());
-		self.mod_api_path_len = mod_api.len();
+		if mod_api.len() == 0 {
+			self.mod_api_path = None;
+			self.mod_api_path_len = 0;
+		} else {
+			self.mod_api_path = Some(NonNull::from_ref(mod_api).cast::<u8>());
+			self.mod_api_path_len = mod_api.len();
+		}
 		self
 	}
 
@@ -200,7 +209,7 @@ pub fn default_runtime_error_handler(_err_kind: u32, reason: &str, on_fn_name: &
 
 pub struct GrugState {
 	pub(crate) mod_api: ModApi,
-	pub(crate) mods_dir_path: PathBuf,
+	pub(crate) mods_dir_path: String,
 	next_entity_id: AtomicU64,
 	pub(crate) game_functions: HashMap<&'static str, GameFnPtr>,
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
@@ -249,17 +258,17 @@ impl State for GrugState {
 }
 
 impl GrugState {
-	fn new<J: AsRef<Path>, D: AsRef<Path>> (mod_api_path: J, mods_dir_path: D, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
+	fn new (mod_api_path: &str, mods_dir_path: &str, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api(&mod_api_path)?;
 		Self::new_inner(mod_api, mods_dir_path, handler, backend)
 	}
 
-	pub fn new_from_text<D: AsRef<Path>> (mod_api_text: &str, mods_dir_path: D, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, GrugError> {
+	pub fn new_from_text (mod_api_text: &str, mods_dir_path: &str, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api_from_text(mod_api_text)?;
 		Self::new_inner(mod_api, mods_dir_path, handler, backend.into())
 	}
 
-	fn new_inner<D: AsRef<Path>> (mod_api: ModApi, mods_dir_path: D, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
+	fn new_inner (mod_api: ModApi, mods_dir_path: &str, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
 		let mut on_fns = Vec::new();
 		let init_globals = nt!("init_globals");
 		for (entity_type, entity) in mod_api.entities() {
@@ -285,7 +294,7 @@ impl GrugState {
 
 		Ok(Self {
 			mod_api,
-			mods_dir_path: PathBuf::from(mods_dir_path.as_ref()),
+			mods_dir_path: String::from(mods_dir_path),
 			next_entity_id: AtomicU64::new(0),
 			game_functions: HashMap::new(),
 			runtime_error_handler: handler,

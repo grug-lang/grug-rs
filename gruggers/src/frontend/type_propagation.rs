@@ -4,10 +4,11 @@ use std::sync::Arc;
 use crate::types::GameFnPtr;
 use crate::ntstring::NTStr;
 use crate::ast::{
-	GrugType, UnaryOperator, BinaryOperator, GlobalStatement,
+	GrugType, UnaryOperator, BinaryOperator,
 	ExprData, HelperFunction, Statement, Expr,
 	Argument,
 };
+use crate::frontend::GlobalStatement;
 use crate::nt;
 use crate::arena::Arena;
 use crate::frontend::parser::AST;

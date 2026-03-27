@@ -1,0 +1,10 @@
+[package]
+name = "cli_compiler"
+version = "0.1.0"
+edition = "2024"
+default-run = "cli_compiler"
+
+[dependencies]
+allocator-api2 = "0.4.0"
+gruggers      = {version = "0.3.2", path = "../gruggers"}
+gruggers-core = {version = "0.3.2", path = "../gruggers-core"}

@@ -9,11 +9,14 @@ use crate::state::GrugState;
 use crate::types::GrugFileId;
 use crate::ast::*;
 use crate::arena::Arena;
+use crate::ntstring::NTStrPtr;
 
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
 
 use std::sync::Arc;
+// use std::path::Path;
+
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 pub(crate) const SPACES_PER_INDENT: usize = 4;
 
@@ -22,14 +25,19 @@ pub mod tokenizer;
 pub mod parser;
 
 impl GrugState {
+	// Path is relative to mods directory
 	pub fn compile_grug_file(&self, path: &str) -> Result<GrugFileId, GrugError> {
 		let mut path_buf = self.mods_dir_path.clone();
-		path_buf.push(path);
+
+		path_buf.push('\\');
+
+		path_buf.push_str(path);
 		let file_text = std::fs::read_to_string(path_buf).unwrap();
 
 		self.compile_grug_file_from_str(path, &file_text)
 	}
 
+	// Path is relative to mods directory or an absolute path
 	pub fn compile_grug_file_from_str(&self, path: &str, file_text: &str) -> Result<GrugFileId, GrugError> {
 		let mod_name = get_mod_name(path)?;
 		let entity_type = get_entity_type(path)?;
@@ -88,6 +96,55 @@ impl GrugState {
 		
 		id
 	}
+}
+
+// TODO: This should not be defined here, it should be defined within gruggers
+/// A top level statement in a grug file.
+///
+/// This is not passed through [`GrugAst`] but is instead supposed to be used
+/// internally by a grug state implementation
+#[derive(Debug)]
+pub(crate) enum GlobalStatement<'a> {
+	/// A member variable
+	/// `x: number = 25`
+	Variable(MemberVariable<'a>),
+	/// An on function declaration
+	/// ```text
+	/// on_init(id: number) {
+	///     set_max_health(50)
+	///     set_unarmed_damage(2)
+	///     set_weapon("sword.json")
+	/// }
+	/// ```
+	OnFunction(OnFunction<'a>),
+	/// A helper function declaration
+	/// ```text
+	/// helper_color(n: number) Color {
+	///     if n == 0 {
+	///         return color("blue")
+	///     } else if n == 1 {
+	///         return color("red")
+	///     } else if n == 2 {
+	///         return color("green")
+	///     } else if n == 3 {
+	///         return color("yellow")
+	///     } else if n == 3 {
+	///         return color("black")
+	///     } 
+	///     return game_fn_error("invalid color id")
+	/// }
+	/// ```
+	HelperFunction(HelperFunction<'a>),
+	/// A comment at the top level of a file
+	/// ```text
+	/// ## This is a global comment
+	/// shared_number: number = 0
+	/// ```
+	Comment{
+		value: NTStrPtr<'a>,
+	},
+	/// An Empty line at the top level of a script
+	EmptyLine,
 }
 
 fn get_mod_name (path: &str) -> Result<&str, GrugError> {

@@ -1,9 +1,10 @@
 use super::tokenizer::{Token, TokenType};
 use crate::ast::{
-	GlobalStatement, GrugType, HelperFunction, Statement, OnFunction, Argument,
+	GrugType, HelperFunction, Statement, OnFunction, Argument,
 	MemberVariable, Expr, ExprData, UnaryOperator,
 	BinaryOperator, 
 };
+use super::GlobalStatement;
 use crate::ntstring::NTStr;
 use crate::arena::Arena;
 use std::sync::Arc;
