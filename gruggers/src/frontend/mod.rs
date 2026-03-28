@@ -88,7 +88,7 @@ impl GrugState {
 					id
 				}
 			};
-			self.backend.insert_file(id, file);
+			self.backend.insert_file(self, id, file);
 			Ok(id)
 		})();
 		arena.clear();

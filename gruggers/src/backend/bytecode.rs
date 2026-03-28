@@ -464,12 +464,11 @@ impl BytecodeBackend {
 }
 
 impl Backend for BytecodeBackend {
-	fn insert_file(&self, id: GrugFileId, file: GrugAst) {
+	fn insert_file<GrugState: State>(&self, _state: &GrugState, id: GrugFileId, file: GrugAst) {
 		let compiled_file = Compiler::compile(file);
 		let mut files = self.files.borrow_mut();
 		if files.len() > id.0 as usize {
-			return;
-			// unimplemented!("recompile files");
+			unimplemented!("recompile files");
 		} else if files.len() == id.0 as usize {
 			files.push(compiled_file);
 		} else {
@@ -480,6 +479,7 @@ impl Backend for BytecodeBackend {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
+		
 		let globals = unsafe{&*file.data.get_slot().write_slice(file.globals_size, Cell::new(GrugValue{void: ()}))};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
 		stack.stack.push(GrugValue{id: entity.id});

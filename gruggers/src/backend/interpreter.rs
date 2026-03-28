@@ -585,11 +585,22 @@ impl Interpreter {
 }
 
 impl Backend for Interpreter {
-	fn insert_file(&self, id: GrugFileId, file: GrugAst) {
+	fn insert_file<GrugState: State>(&self, state: &GrugState, id: GrugFileId, file: GrugAst) {
 		let compiled_file = CompiledFile::new(file);
 		let mut files = self.files.borrow_mut();
-		if files.len() > id.0 as usize {
-			unimplemented!("recompile files");
+		if let Some(old_file) = files.get(id.0 as usize) {
+			let mut old_entities = std::mem::replace(&mut *old_file.entities.borrow_mut(), std::vec::Vec::new());
+			old_entities.extract_if(.., |old_entity| {
+				let mut data = GrugEntityData {
+					global_variables: HashMap::from([("me", Cell::new(GrugValue{id:unsafe{(*old_entity.as_ptr()).id}}))]),
+				};
+				if self.init_global_variables(state, &compiled_file, &mut data).is_none() {
+					return true;
+				}
+				let data = compiled_file.data.insert(data);
+				unsafe{(*old_entity.as_ptr()).members.set(data.as_ptr().cast())};
+				false
+			}).for_each(drop);
 		} else if files.len() == id.0 as usize {
 			files.push(compiled_file);
 		} else {

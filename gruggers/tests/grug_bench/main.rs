@@ -3,7 +3,7 @@
 mod test_bindings {
 	use gruggers::ntstring::{NTStrPtr, NTStr};
 	use gruggers::state::{GrugState, GrugInitSettings, GrugEntityHandle};
-	use gruggers::backend::BytecodeBackend;
+	use gruggers::backend::Interpreter;
 	use gruggers::types::{GrugEntity, GrugFileId, GrugOnFnId, GrugValue};
 
 	use super::game_functions::*;
@@ -24,7 +24,7 @@ mod test_bindings {
 		let mut state = GrugInitSettings::new()
 			.set_mods_dir(mods_dir_path.to_str())
 			.set_mod_api_path(mod_api_path.to_str())
-			.set_backend(BytecodeBackend::new())
+			.set_backend(Interpreter::new())
 			.set_runtime_error_handler(|code, reason, fn_name, script_path| {
 				let reason      = NTStr::arc_from_str(reason);
 				let fn_name     = NTStr::arc_from_str(fn_name);
