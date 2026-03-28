@@ -13,6 +13,7 @@ pub use gruggers_core::state::State;
 
 use std::marker::PhantomData;
 use std::ptr::NonNull;
+use std::pin::Pin;
 use std::cell::{Cell, RefCell, Ref};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -415,7 +416,8 @@ impl GrugState {
 
 		let entity = self.entities.insert(unsafe{GrugEntity::new_uninit(self.get_next_entity_id(), file_id)});
 		let entity = unsafe{GrugEntityHandle::new(entity)};
-		let success = self.backend.init_entity(self, &entity);
+		// SAFETY: Entity is created inside a Xar which does not move elements around. 
+		let success = self.backend.init_entity(self, unsafe{Pin::new_unchecked(&entity)});
 
 		self.current_script  .set(old_script);
 		self.current_on_fn_id.set(old_on_fn_id);

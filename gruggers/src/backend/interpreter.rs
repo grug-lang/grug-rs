@@ -12,6 +12,7 @@ use gruggers_core::runtime_error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION
 use gruggers_core::state::State;
 
 use std::ptr::NonNull;
+use std::pin::Pin;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::time::{Instant, Duration};
@@ -608,7 +609,7 @@ impl Backend for Interpreter {
 		}
 	}
 
-	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity) -> bool {
+	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: Pin<&GrugEntity>) -> bool {
 		let file = self.files.borrow();
 		let file = file.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
@@ -621,7 +622,7 @@ impl Backend for Interpreter {
 		}
 
 		let data = file.data.insert(data);
-		file.entities.borrow_mut().push(NonNull::from_ref(entity));
+		file.entities.borrow_mut().push(NonNull::from_ref(Pin::get_ref(entity)));
 		entity.members.set(data.as_ptr().cast());
 
 		true

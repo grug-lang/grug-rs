@@ -15,6 +15,7 @@ use crate::ast::GrugAst;
 
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
+use std::pin::Pin;
 use std::cell::{Cell, RefCell};
 use std::alloc::Layout;
 use std::sync::Arc;
@@ -475,7 +476,7 @@ impl Backend for BytecodeBackend {
 			unreachable!("GrugScriptIds must be contigious, Expected {}, got {}", files.len(), id.0);
 		}
 	}
-	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity) -> bool {
+	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: Pin<&GrugEntity>) -> bool {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
@@ -1575,7 +1576,6 @@ helper_fib_naive(n: number) number {
 		let mut vm = Stack::new();
 
 		for i in 0..10 {
-
 			stream.push_op(Op::LoadNumber{number: i as f64});
 			stream.push_op(Op::LoadNumber{number: i as f64 - 1.});
 			stream.push_op(Op::Dup{index: 1});
@@ -1583,6 +1583,7 @@ helper_fib_naive(n: number) number {
 			stream.push_op(Op::Add);
 			stream.push_op(Op::ReturnValue);
 			assert!(unsafe{vm.run(&state, &globals, &stream, 0, 0).is_some_and(|x| {assert_eq!(x.number, 3. * i as f64 - 1.); true})});
+			println!("{}", stream);
 			stream.clear();
 		}
 	}
