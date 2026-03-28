@@ -52,13 +52,13 @@ impl<'a> Compiler<'a> {
 
 		instructions.insert_on_fn("init_globals", 0, 0, 1, 0);
 		let me_location = compiler.insert_global_variable("me");
-		instructions.push_op(Op::StoreGlobal{index: me_location});
+		instructions.stream.push(Op::StoreGlobal{index: me_location});
 		for global in ast.members.into_iter() {
 			compiler.compile_expr(&mut instructions, &global.assignment_expr);
 			let i = compiler.insert_global_variable(global.name.to_str());
-			instructions.push_op(Op::StoreGlobal{index: i});
+			instructions.stream.push(Op::StoreGlobal{index: i});
 		}
-		instructions.push_op(Op::ReturnVoid);
+		instructions.stream.push(Op::ReturnVoid);
 
 		for (i, on_function) in ast.on_functions.into_iter().enumerate() {
 			let Some(on_function) = on_function else {continue};
@@ -77,6 +77,7 @@ impl<'a> Compiler<'a> {
 		CompiledFile {
 			instructions,
 			globals_size,
+			entities: RefCell::new(Vec::new()),
 			data: ErasedXar::new(Layout::array::<GrugValue>(globals_size)
 				 .expect("invalid layout")
 			),
@@ -96,7 +97,7 @@ impl<'a> Compiler<'a> {
 		for statement in &*helper_function.body_statements {
 			self.compile_statement(instructions, statement);
 		}
-		instructions.push_op(Op::ReturnVoid);
+		instructions.stream.push(Op::ReturnVoid);
 		instructions.insert_helper_fn(helper_function.name.to_str(), begin_location, self.locals_size_max);
 		self.locals_size_max = 0;
 		self.pop_scope();
@@ -116,7 +117,7 @@ impl<'a> Compiler<'a> {
 		for statement in &*on_function.body_statements {
 			self.compile_statement(instructions, statement);
 		}
-		instructions.push_op(Op::ReturnVoid);
+		instructions.stream.push(Op::ReturnVoid);
 		instructions.insert_on_fn(on_function.name.to_str(), index, begin_location, arg_count, self.locals_size_max);
 		self.locals_size_max = 0;
 		self.pop_scope();
@@ -133,12 +134,12 @@ impl<'a> Compiler<'a> {
 				self.compile_expr(instructions, assignment_expr);
 				if let Some(_) = ty {
 					let loc = self.insert_local_variable(name);
-					instructions.push_op(Op::StoreLocal{index: loc});
+					instructions.stream.push(Op::StoreLocal{index: loc});
 				} else {
 					if let Some(loc) = self.get_local_location(name) {
-						instructions.push_op(Op::StoreLocal{index: loc});
+						instructions.stream.push(Op::StoreLocal{index: loc});
 					} else if let Some(loc) = self.get_global_location(name) {
-						instructions.push_op(Op::StoreGlobal{index: loc});
+						instructions.stream.push(Op::StoreGlobal{index: loc});
 					} else {
 						unreachable!();
 					}
@@ -160,7 +161,7 @@ impl<'a> Compiler<'a> {
 					self.compile_expr(instructions, condition);
 
 					let condition_patch_loc = instructions.get_loc();
-					instructions.push_op(Op::JmpIfNot{offset: 0});
+					instructions.stream.push(Op::JmpIfNot{offset: 0});
 
 					self.push_scope();
 					for statement in &**if_block {
@@ -173,7 +174,7 @@ impl<'a> Compiler<'a> {
 						// block to the end of the else block or the end of the
 						// last if block
 						end_patches.push(instructions.get_loc());
-						instructions.push_op(Op::Jmp{offset: 0});
+						instructions.stream.push(Op::Jmp{offset: 0});
 
 						let cur_loc = instructions.get_loc();
 						// jump from the false condtion to the start of the else block
@@ -216,7 +217,7 @@ impl<'a> Compiler<'a> {
 				let continue_loc = instructions.get_loc();
 				self.compile_expr(instructions, condition);
 				let break_patch_loc = instructions.get_loc();
-				instructions.push_op(Op::JmpIfNot{offset: 0});
+				instructions.stream.push(Op::JmpIfNot{offset: 0});
 
 				self.while_loop_patches.push((continue_loc, Vec::new()));
 				
@@ -224,7 +225,7 @@ impl<'a> Compiler<'a> {
 					self.compile_statement(instructions, statement);
 				}
 				let end_loc = instructions.get_loc();
-				instructions.push_op(Op::Jmp{offset: Op::calc_offset(end_loc, continue_loc)});
+				instructions.stream.push(Op::Jmp{offset: Op::calc_offset(end_loc, continue_loc)});
 				let break_loc = instructions.get_loc();
 				instructions.try_patch(Op::JmpIfNot{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc).unwrap();
 
@@ -236,18 +237,18 @@ impl<'a> Compiler<'a> {
 			Statement::Return{expr} => {
 				if let Some(expr) = expr {
 					self.compile_expr(instructions, expr);
-					instructions.push_op(Op::ReturnValue);
+					instructions.stream.push(Op::ReturnValue);
 				} else {
-					instructions.push_op(Op::ReturnVoid);
+					instructions.stream.push(Op::ReturnVoid);
 				}
 			}
 			Statement::Break => {
 				self.while_loop_patches.last_mut().unwrap().1.push(instructions.get_loc());
-				instructions.push_op(Op::Jmp{offset: 0});
+				instructions.stream.push(Op::Jmp{offset: 0});
 			}
 			Statement::Continue => {
 				let continue_loc = self.while_loop_patches.last().unwrap().0;
-				instructions.push_op(Op::Jmp{offset: Op::calc_offset(instructions.get_loc(), continue_loc)});
+				instructions.stream.push(Op::Jmp{offset: Op::calc_offset(instructions.get_loc(), continue_loc)});
 			}
 			Statement::EmptyLine => {},
 			Statement::Comment{..}        => {},
@@ -256,8 +257,8 @@ impl<'a> Compiler<'a> {
 
 	fn compile_expr(&mut self, instructions: &mut Instructions, expr: &'a Expr) {
 		match &expr.data {
-			ExprData::True  => instructions.push_op(Op::LoadTrue ),
-			ExprData::False => instructions.push_op(Op::LoadFalse),
+			ExprData::True  => instructions.stream.push(Op::LoadTrue ),
+			ExprData::False => instructions.stream.push(Op::LoadFalse),
 			ExprData::String(value)   |
 			ExprData::Resource(value) |
 			ExprData::Entity(value)   => {
@@ -266,22 +267,22 @@ impl<'a> Compiler<'a> {
 						let value = NTStr::arc_from_str(value.to_ntstr());
 						// SAFETY: This returned instruction stream is only valid as long as this list of strings is available
 						let string = unsafe{value.as_ntstrptr().detach_lifetime()};
-						instructions.push_op(Op::LoadStr{string});
+						instructions.stream.push(Op::LoadStr{string});
 						instructions.strings.insert(value);
 					}
 					Some(value) => {
 						let string = unsafe{value.as_ntstrptr().detach_lifetime()};
-						instructions.push_op(Op::LoadStr{string})
+						instructions.stream.push(Op::LoadStr{string})
 					}
 				}
 			}
-			ExprData::Number (value, _) => instructions.push_op(Op::LoadNumber{number: *value}),
+			ExprData::Number (value, _) => instructions.stream.push(Op::LoadNumber{number: *value}),
 			ExprData::Identifier(name) => {
 				let name = name.to_str();
 				if let Some(loc) = self.get_local_location(name) {
-					instructions.push_op(Op::LoadLocal{index: loc});
+					instructions.stream.push(Op::LoadLocal{index: loc});
 				} else if let Some(loc) = self.get_global_location(name) {
-					instructions.push_op(Op::LoadGlobal{index: loc});
+					instructions.stream.push(Op::LoadGlobal{index: loc});
 				} else {
 					unreachable!();
 				}
@@ -293,25 +294,25 @@ impl<'a> Compiler<'a> {
 			} => {
 				self.compile_expr(instructions, left);
 				match op {
-					BinaryOperator::Greater       => {self.compile_expr(instructions, right); instructions.push_op(Op::CmpG);}
-					BinaryOperator::GreaterEquals => {self.compile_expr(instructions, right); instructions.push_op(Op::CmpGe);}
-					BinaryOperator::Less          => {self.compile_expr(instructions, right); instructions.push_op(Op::CmpL);}
-					BinaryOperator::LessEquals    => {self.compile_expr(instructions, right); instructions.push_op(Op::CmpLe);}
-					BinaryOperator::Plus          => {self.compile_expr(instructions, right); instructions.push_op(Op::Add);}
-					BinaryOperator::Minus         => {self.compile_expr(instructions, right); instructions.push_op(Op::Sub);}
-					BinaryOperator::Multiply      => {self.compile_expr(instructions, right); instructions.push_op(Op::Mul);}
-					BinaryOperator::Division      => {self.compile_expr(instructions, right); instructions.push_op(Op::Div);}
-					BinaryOperator::Remainder     => {self.compile_expr(instructions, right); instructions.push_op(Op::Rem);}
+					BinaryOperator::Greater       => {self.compile_expr(instructions, right); instructions.stream.push(Op::CmpG);}
+					BinaryOperator::GreaterEquals => {self.compile_expr(instructions, right); instructions.stream.push(Op::CmpGe);}
+					BinaryOperator::Less          => {self.compile_expr(instructions, right); instructions.stream.push(Op::CmpL);}
+					BinaryOperator::LessEquals    => {self.compile_expr(instructions, right); instructions.stream.push(Op::CmpLe);}
+					BinaryOperator::Plus          => {self.compile_expr(instructions, right); instructions.stream.push(Op::Add);}
+					BinaryOperator::Minus         => {self.compile_expr(instructions, right); instructions.stream.push(Op::Sub);}
+					BinaryOperator::Multiply      => {self.compile_expr(instructions, right); instructions.stream.push(Op::Mul);}
+					BinaryOperator::Division      => {self.compile_expr(instructions, right); instructions.stream.push(Op::Div);}
+					BinaryOperator::Remainder     => {self.compile_expr(instructions, right); instructions.stream.push(Op::Rem);}
 					BinaryOperator::DoubleEquals  => {
 						match right.result_type.unwrap() {
 							GrugType::String => {
 								self.compile_expr(instructions, right);
-								instructions.push_op(Op::StrEq);
+								instructions.stream.push(Op::StrEq);
 							}
 							GrugType::Void   => unreachable!(),
 							_ => {
 								self.compile_expr(instructions, right);
-								instructions.push_op(Op::CmpEq);
+								instructions.stream.push(Op::CmpEq);
 							}
 						}
 					}
@@ -319,20 +320,20 @@ impl<'a> Compiler<'a> {
 						match right.result_type.unwrap() {
 							GrugType::String => {
 								self.compile_expr(instructions, right);
-								instructions.push_op(Op::StrEq);
-								instructions.push_op(Op::Not);
+								instructions.stream.push(Op::StrEq);
+								instructions.stream.push(Op::Not);
 							}
 							GrugType::Void   => unreachable!(),
 							_ => {
 								self.compile_expr(instructions, right);
-								instructions.push_op(Op::CmpNeq);
+								instructions.stream.push(Op::CmpNeq);
 							}
 						}
 					}
 					BinaryOperator::Or            => {
-						instructions.push_op(Op::Dup{index: 0});
+						instructions.stream.push(Op::Dup{index: 0});
 						let first_patch_loc = instructions.get_loc();
-						instructions.push_op(Op::JmpIf{offset: 0});
+						instructions.stream.push(Op::JmpIf{offset: 0});
 						self.compile_expr(instructions, right);
 						instructions.try_patch(
 							Op::JmpIf{
@@ -342,9 +343,9 @@ impl<'a> Compiler<'a> {
 						).unwrap();
 					}
 					BinaryOperator::And           => {
-						instructions.push_op(Op::Dup{index: 0});
+						instructions.stream.push(Op::Dup{index: 0});
 						let first_patch_loc = instructions.get_loc();
-						instructions.push_op(Op::JmpIfNot{offset: 0});
+						instructions.stream.push(Op::JmpIfNot{offset: 0});
 						self.compile_expr(instructions, right);
 						instructions.try_patch(
 							Op::JmpIfNot{
@@ -361,8 +362,8 @@ impl<'a> Compiler<'a> {
 			} => {
 				self.compile_expr(instructions, expr);
 				match op {
-					UnaryOperator::Not   => instructions.push_op(Op::Not),
-					UnaryOperator::Minus => {instructions.push_op(Op::LoadNumber{number: -1.0}); instructions.push_op(Op::Mul);}
+					UnaryOperator::Not   => instructions.stream.push(Op::Not),
+					UnaryOperator::Minus => {instructions.stream.push(Op::LoadNumber{number: -1.0}); instructions.stream.push(Op::Mul);}
 				}
 			}
 			ExprData::Call {
@@ -384,7 +385,7 @@ impl<'a> Compiler<'a> {
 					self.helper_fn_patches.push((instructions.get_loc(), args_count as u16, name.to_str()));
 					(0, 0)
 				};
-				instructions.push_op(Op::CallHelperFunction{args: args_count as u16, locals_size, location});
+				instructions.stream.push(Op::CallHelperFunction{args: args_count as u16, locals_size, location});
 			},
 			ExprData::Call {
 				name: _,
@@ -397,7 +398,7 @@ impl<'a> Compiler<'a> {
 				}
 				
 				let has_return = *expr.result_type.unwrap() != GrugType::Void;
-				instructions.push_op(Op::CallGameFunction {
+				instructions.stream.push(Op::CallGameFunction {
 					has_return,
 					args: args_count as u32,
 					ptr: *ptr,
@@ -447,6 +448,7 @@ impl<'a> Compiler<'a> {
 struct CompiledFile {
 	instructions: Instructions,
 	globals_size: usize,
+	entities: RefCell<Vec<NonNull<GrugEntity>>>,
 	data: ErasedXar,
 }
 
@@ -465,11 +467,27 @@ impl BytecodeBackend {
 }
 
 impl Backend for BytecodeBackend {
-	fn insert_file<GrugState: State>(&self, _state: &GrugState, id: GrugFileId, file: GrugAst) {
-		let compiled_file = Compiler::compile(file);
+	fn insert_file<GrugState: State>(&self, state: &GrugState, id: GrugFileId, file: GrugAst) {
+		let mut compiled_file = Compiler::compile(file);
 		let mut files = self.files.borrow_mut();
-		if files.len() > id.0 as usize {
-			unimplemented!("recompile files");
+		if let Some(old_file) = files.get_mut(id.0 as usize) {
+			let mut old_entities = std::mem::replace(&mut *old_file.entities.borrow_mut(), std::vec::Vec::new());
+			
+			old_entities.extract_if(.., |old_entity| {
+				debug_assert!(id == unsafe{(*old_entity.as_ptr()).file_id});
+				let globals = unsafe{&*compiled_file.data.get_slot().write_slice(compiled_file.globals_size, Cell::new(GrugValue{void: ()}))};
+				let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
+
+				stack.stack.push(GrugValue{id: unsafe{(*old_entity.as_ptr()).id}});
+				let ret_val = unsafe{stack.run(state, globals, &compiled_file.instructions, 1, 0)}.is_some();
+				unsafe{(*old_entity.as_ptr()).members.set(NonNull::from_ref(globals).cast::<()>())};
+
+				self.stacks.borrow_mut().push(stack);
+
+				!ret_val
+			}).for_each(drop);
+			*compiled_file.entities.get_mut() = old_entities;
+			*old_file = compiled_file;
 		} else if files.len() == id.0 as usize {
 			files.push(compiled_file);
 		} else {
@@ -487,6 +505,8 @@ impl Backend for BytecodeBackend {
 		let ret_val = unsafe{stack.run(state, globals, &file.instructions, 1, 0)}.is_some();
 		entity.members.set(NonNull::from_ref(globals).cast::<()>());
 
+		file.entities.borrow_mut().push(NonNull::from_ref(Pin::get_ref(entity)));
+
 		stack = stack.reset();
 		self.stacks.borrow_mut().push(stack);
 		ret_val
@@ -494,6 +514,7 @@ impl Backend for BytecodeBackend {
 	fn clear_entities(&mut self) {
 		for file in self.files.get_mut().iter_mut() {
 			file.data.clear();
+			file.entities.borrow_mut().clear();
 		}
 	}
 	fn destroy_entity_data(&self, entity: &GrugEntity) {
@@ -501,6 +522,7 @@ impl Backend for BytecodeBackend {
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
 		unsafe{file.data.delete(ErasedPtr::from_ptr(entity.members.get()))};
+		file.entities.borrow_mut().extract_if(.., |en| std::ptr::eq(en.as_ptr().cast_const(), entity)).for_each(|_| {});
 	}
 	unsafe fn call_on_function_raw<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 		let files = self.files.borrow();
@@ -677,9 +699,9 @@ struct Instructions{
 	helper_fn_locations: HashMap<Arc<str>, (/* location */ usize, /* locals_size */ u32)>,
 	fn_labels: HashMap<usize, Arc<str>>,
 	strings: HashSet<Arc<NTStr>>,
-	jumps_count: usize,
-	jumps_end: HashMap</* to */ usize, (/* from */ Vec<usize>, /* label */ usize)>,
-	jumps_start: HashMap</* from */ usize, /* to */ usize>,
+	// jumps_count: usize,
+	// jumps_end: HashMap</* to */ usize, (/* from */ Vec<usize>, /* label */ usize)>,
+	// jumps_start: HashMap</* from */ usize, /* to */ usize>,
 }
 
 impl Instructions {
@@ -690,9 +712,9 @@ impl Instructions {
 			helper_fn_locations: HashMap::new(),
 			fn_labels: HashMap::new(),
 			strings: HashSet::new(),
-			jumps_count: 0,
-			jumps_start: HashMap::new(),
-			jumps_end: HashMap::new(),
+			// jumps_count: 0,
+			// jumps_start: HashMap::new(),
+			// jumps_end: HashMap::new(),
 		}
 	}
 
@@ -703,29 +725,29 @@ impl Instructions {
 		self.helper_fn_locations.clear();
 		self.fn_labels.clear();
 		self.strings.clear();
-		self.jumps_count = 0;
-		self.jumps_end.clear();
-		self.jumps_start.clear();
+		// self.jumps_count = 0;
+		// self.jumps_end.clear();
+		// self.jumps_start.clear();
 	}
 
-	pub fn push_op(&mut self, op: Op) {
-		self.stream.push(op);
-		match op {
-			Op::Jmp{offset} | Op::JmpIf{offset} | Op::JmpIfNot{offset} => {
-				self.insert_jmp(self.stream.len(), offset);
+	pub fn get_jump_ends(&self) -> HashMap<usize, usize> {
+		let mut jumps = HashMap::new();
+		for ins in &self.stream {
+			// address of ins is within self.stream
+			let addr = unsafe{(ins as *const Op).offset_from(self.stream.as_ptr())};
+			match ins {
+				Op::Jmp{offset} | 
+				Op::JmpIf{offset} | 
+				Op::JmpIfNot{offset} => {
+					// This will never underflow for a well formed program
+					debug_assert!(addr + 1 + *offset as isize >= 0);
+					let cur_len = jumps.len();
+					jumps.entry((addr + 1 + *offset as isize) as usize).or_insert(cur_len);
+				}
+				_ => (),
 			}
-			_ => (),
 		}
-	}
-
-	pub fn insert_jmp(&mut self, from: usize, offset: i32) {
-		let end = (from as isize + offset as isize) as usize;
-		self.jumps_start.insert(from, end);
-		self.jumps_end.entry(end).or_insert_with(|| {
-			self.jumps_count += 1;
-			(Vec::new(), self.jumps_count - 1)
-		}).0.push(from);
-		if cfg!(debug_assertions) {self.assert_jumps_consistency()};
+		jumps
 	}
 
 	pub fn insert_on_fn(&mut self, name: &str, index: usize, location: usize, argument_count: usize, locals_size: u32) {
@@ -745,15 +767,6 @@ impl Instructions {
 		let name = Arc::from(name);
 		self.helper_fn_locations.insert(Arc::clone(&name), (location, locals_size));
 		self.fn_labels.insert(location, name);
-	}
-
-	pub fn assert_jumps_consistency(&self) {
-		for (end, starts) in &self.jumps_end {
-			for start in &starts.0 {
-				let left = self.jumps_start.get(start).unwrap();
-				assert_eq!(left, end);
-			}
-		}
 	}
 
 	/// SAFETY:
@@ -776,28 +789,22 @@ impl Instructions {
 	}
 
 	pub fn try_patch(&mut self, op: Op, location: usize) -> Option<()> {
-		let (old_start, new_offset)  = match (self.stream.get_mut(location)?, op) {
+		match (self.stream.get_mut(location)?, op) {
 			(Op::Jmp{offset: patch}, Op::Jmp{offset}) | 
 			(Op::JmpIf{offset: patch}, Op::JmpIf{offset}) |
 			(Op::JmpIfNot{offset: patch}, Op::JmpIfNot{offset}) => {
 				*patch = offset;
-				(location + 1, offset)
+				Some(())
 			}
 			(Op::CallHelperFunction{args: patch_args, locals_size: patch_locals_size, location: patch_location}, 
 			 Op::CallHelperFunction{args, locals_size, location}) => {
 				*patch_args = args;
 				*patch_locals_size = locals_size;
 				*patch_location = location;
-				return Some(());
+				Some(())
 			}
-			_ => return None,
-		};
-		
-		let old_end = self.jumps_start.remove(&old_start).unwrap();
-		self.jumps_end.get_mut(&old_end).unwrap().0.extract_if(.., |start| *start == old_start).count();
-
-		self.insert_jmp(old_start, new_offset);
-		Some(())
+			_ => None,
+		}
 	}
 }
 
@@ -814,14 +821,16 @@ impl std::fmt::Debug for Instructions {
 impl std::fmt::Display for Instructions {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		let stream = &mut &*self.stream;
-		let mut addr = unsafe{stream.as_ptr().offset_from(self.stream.as_ptr())};
-		if let Some(name) = self.fn_labels.get(&(addr as usize)) {
-			writeln!(f, "{}:", name)?;
-		}
-		if let Some((froms, label)) = self.jumps_end.get(&(addr as usize)) && !froms.is_empty() {
-			writeln!(f, "L_{}: ", label)?;
-		}
+		let jumps_end = self.get_jump_ends();
 		while let Some((ins, next)) = stream.split_first() {
+			let addr = unsafe{(ins as *const Op).offset_from(self.stream.as_ptr())};
+			if let Some(name) = self.fn_labels.get(&(addr as usize)) {
+				writeln!(f, "{}:", name)?;
+			}
+			if let Some(label) = jumps_end.get(&(addr as usize)) {
+				writeln!(f, "L_{}: ", label)?;
+			}
+
 			*stream = next;
 			let end_addr = unsafe{stream.as_ptr().offset_from(self.stream.as_ptr())};
 			write!(f, " 0x{:08x} ", addr)?;
@@ -863,14 +872,14 @@ impl std::fmt::Display for Instructions {
 					index,
 				} => write!(f, "StoreGlobal {}", index),
 				Op::Jmp {
-					offset: _,
-				} => write!(f, "Jmp L_{}", self.jumps_end.get(self.jumps_start.get(&(end_addr as usize)).unwrap()).unwrap().1),
+					offset,
+				} => write!(f, "Jmp L_{}", jumps_end.get(&((end_addr + *offset as isize) as usize)).unwrap()),
 				Op::JmpIf {
-					offset: _,
-				} => write!(f, "JmpIf L_{}", self.jumps_end.get(self.jumps_start.get(&(end_addr as usize)).unwrap()).unwrap().1),
+					offset,
+				} => write!(f, "JmpIf L_{}", jumps_end.get(&((end_addr + *offset as isize) as usize)).unwrap()),
 				Op::JmpIfNot {
-					offset: _,
-				} => write!(f, "JmpIfNot L_{}", self.jumps_end.get(self.jumps_start.get(&(end_addr as usize)).unwrap()).unwrap().1),
+					offset,
+				} => write!(f, "JmpIfNot L_{}", jumps_end.get(&((end_addr + *offset as isize) as usize)).unwrap()),
 				Op::LoadLocal {
 					index,
 				} => write!(f, "LoadLocal {}", index),
@@ -888,15 +897,8 @@ impl std::fmt::Display for Instructions {
 					ptr,
 				} => write!(f, "CallGameFunction {} {} 0x{:016x}", has_return, args, &unsafe{std::mem::transmute::<GameFnPtr, *const ()>(*ptr).addr()}),
 			}?;
-			addr = end_addr;
 			// print labels: 
 			write!(f, "\n")?;
-			if let Some(name) = self.fn_labels.get(&(addr as usize)) {
-				writeln!(f, "{}:", name)?;
-			}
-			if let Some((froms, label)) = self.jumps_end.get(&(addr as usize)) && !froms.is_empty() {
-				writeln!(f, "L_{}: ", label)?;
-			}
 		}
 		Ok(())
 	}
@@ -1292,7 +1294,7 @@ helper_fib_naive(n: number) number {
 	fn vm_test_1() {
 		let state = get_state();
 		let mut stream = Instructions::new();
-		stream.push_op(Op::ReturnVoid);
+		stream.stream.push(Op::ReturnVoid);
 		let mut vm = Stack::new();
 		assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some()});
 	}
@@ -1301,8 +1303,8 @@ helper_fib_naive(n: number) number {
 	fn vm_test_2() {
 		let state = get_state();
 		let mut stream = Instructions::new();
-		stream.push_op(Op::LoadNumber{number:25.});
-		stream.push_op(Op::ReturnValue);
+		stream.stream.push(Op::LoadNumber{number:25.});
+		stream.stream.push(Op::ReturnValue);
 		let mut vm = Stack::new();
 		assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == 25.)});
 	}
@@ -1317,38 +1319,38 @@ helper_fib_naive(n: number) number {
 			for j in 1..5 {
 				let i = i as f64;
 				let j = j as f64;
-				stream.push_op(Op::LoadNumber{number:i});
-				stream.push_op(Op::LoadNumber{number:j});
-				stream.push_op(Op::Add);
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber{number:i});
+				stream.stream.push(Op::LoadNumber{number:j});
+				stream.stream.push(Op::Add);
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == i + j)});
 				stream.clear();
 
-				stream.push_op(Op::LoadNumber{number:i});
-				stream.push_op(Op::LoadNumber{number:j});
-				stream.push_op(Op::Sub);
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber{number:i});
+				stream.stream.push(Op::LoadNumber{number:j});
+				stream.stream.push(Op::Sub);
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == i - j)});
 				stream.clear();
 
-				stream.push_op(Op::LoadNumber{number:i});
-				stream.push_op(Op::LoadNumber{number:j});
-				stream.push_op(Op::Mul);
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber{number:i});
+				stream.stream.push(Op::LoadNumber{number:j});
+				stream.stream.push(Op::Mul);
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == i * j)});
 				stream.clear();
 
-				stream.push_op(Op::LoadNumber{number:i});
-				stream.push_op(Op::LoadNumber{number:j});
-				stream.push_op(Op::Div);
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber{number:i});
+				stream.stream.push(Op::LoadNumber{number:j});
+				stream.stream.push(Op::Div);
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == i / j)});
 				stream.clear();
 
-				stream.push_op(Op::LoadNumber{number:i});
-				stream.push_op(Op::LoadNumber{number:j});
-				stream.push_op(Op::Rem);
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber{number:i});
+				stream.stream.push(Op::LoadNumber{number:j});
+				stream.stream.push(Op::Rem);
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == i % j)});
 				stream.clear();
 			}
@@ -1365,45 +1367,45 @@ helper_fib_naive(n: number) number {
 			for j in 0..10 {
 				let i = i as f64;
 				let j = j as f64;
-				stream.push_op(Op::LoadNumber{number:i});
-				stream.push_op(Op::LoadNumber{number:j});
-				stream.push_op(Op::CmpEq);
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber{number:i});
+				stream.stream.push(Op::LoadNumber{number:j});
+				stream.stream.push(Op::CmpEq);
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i == j) as u8)});
 				stream.clear();
 
-				stream.push_op(Op::LoadNumber{number:i});
-				stream.push_op(Op::LoadNumber{number:j});
-				stream.push_op(Op::CmpNeq);
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber{number:i});
+				stream.stream.push(Op::LoadNumber{number:j});
+				stream.stream.push(Op::CmpNeq);
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i != j) as u8)});
 				stream.clear();
 
-				stream.push_op(Op::LoadNumber{number:i});
-				stream.push_op(Op::LoadNumber{number:j});
-				stream.push_op(Op::CmpG);
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber{number:i});
+				stream.stream.push(Op::LoadNumber{number:j});
+				stream.stream.push(Op::CmpG);
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i > j) as u8)});
 				stream.clear();
 
-				stream.push_op(Op::LoadNumber{number:i});
-				stream.push_op(Op::LoadNumber{number:j});
-				stream.push_op(Op::CmpGe);
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber{number:i});
+				stream.stream.push(Op::LoadNumber{number:j});
+				stream.stream.push(Op::CmpGe);
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i >= j) as u8)});
 				stream.clear();
 
-				stream.push_op(Op::LoadNumber{number:i});
-				stream.push_op(Op::LoadNumber{number:j});
-				stream.push_op(Op::CmpL);
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber{number:i});
+				stream.stream.push(Op::LoadNumber{number:j});
+				stream.stream.push(Op::CmpL);
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i < j) as u8)});
 				stream.clear();
 
-				stream.push_op(Op::LoadNumber{number:i});
-				stream.push_op(Op::LoadNumber{number:j});
-				stream.push_op(Op::CmpLe);
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber{number:i});
+				stream.stream.push(Op::LoadNumber{number:j});
+				stream.stream.push(Op::CmpLe);
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i <= j) as u8)});
 				stream.clear();
 			}
@@ -1421,25 +1423,25 @@ helper_fib_naive(n: number) number {
 			for j in 0..10 {
 				let i = i as f64;
 				let j = j as f64;
-				stream.push_op(Op::LoadNumber {number: i});
-				stream.push_op(Op::StoreGlobal{index: 0});
-				stream.push_op(Op::LoadNumber {number: j});
-				stream.push_op(Op::StoreGlobal{index: 1});
-				stream.push_op(Op::LoadGlobal {index: 0});
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber {number: i});
+				stream.stream.push(Op::StoreGlobal{index: 0});
+				stream.stream.push(Op::LoadNumber {number: j});
+				stream.stream.push(Op::StoreGlobal{index: 1});
+				stream.stream.push(Op::LoadGlobal {index: 0});
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &globals, &stream, 0, 0).is_some_and(|x| x.number == i)});
 				stream.clear();
 
-				stream.push_op(Op::LoadNumber {number: i});
-				stream.push_op(Op::StoreGlobal{index: 0});
-				stream.push_op(Op::LoadNumber {number: j});
-				stream.push_op(Op::StoreGlobal{index: 1});
-				stream.push_op(Op::LoadGlobal {index: 0});
-				stream.push_op(Op::LoadGlobal {index: 1});
-				stream.push_op(Op::Add);
-				stream.push_op(Op::StoreGlobal{index: 2});
-				stream.push_op(Op::LoadGlobal {index: 2});
-				stream.push_op(Op::ReturnValue);
+				stream.stream.push(Op::LoadNumber {number: i});
+				stream.stream.push(Op::StoreGlobal{index: 0});
+				stream.stream.push(Op::LoadNumber {number: j});
+				stream.stream.push(Op::StoreGlobal{index: 1});
+				stream.stream.push(Op::LoadGlobal {index: 0});
+				stream.stream.push(Op::LoadGlobal {index: 1});
+				stream.stream.push(Op::Add);
+				stream.stream.push(Op::StoreGlobal{index: 2});
+				stream.stream.push(Op::LoadGlobal {index: 2});
+				stream.stream.push(Op::ReturnValue);
 				assert!(unsafe{vm.run(&state, &globals, &stream, 0, 0).is_some_and(|x| x.number == i + j)});
 				stream.clear();
 			}
@@ -1454,33 +1456,33 @@ helper_fib_naive(n: number) number {
 		let mut vm = Stack::new();
 
 		for i in 0..10 {
-			stream.push_op(Op::LoadNumber{number: 1.});
-			stream.push_op(Op::StoreGlobal{index: 0});
-			stream.push_op(Op::LoadNumber{number: 1.});
-			stream.push_op(Op::StoreGlobal{index: 1});
-			stream.push_op(Op::LoadNumber{number: i as f64});
-			stream.push_op(Op::StoreGlobal{index: 2});
+			stream.stream.push(Op::LoadNumber{number: 1.});
+			stream.stream.push(Op::StoreGlobal{index: 0});
+			stream.stream.push(Op::LoadNumber{number: 1.});
+			stream.stream.push(Op::StoreGlobal{index: 1});
+			stream.stream.push(Op::LoadNumber{number: i as f64});
+			stream.stream.push(Op::StoreGlobal{index: 2});
 			let cond_start = stream.get_loc();
-			stream.push_op(Op::LoadGlobal{index: 2});
-			stream.push_op(Op::LoadNumber{number: 0.});
-			stream.push_op(Op::CmpLe);
+			stream.stream.push(Op::LoadGlobal{index: 2});
+			stream.stream.push(Op::LoadNumber{number: 0.});
+			stream.stream.push(Op::CmpLe);
 			let block_begin_jump = stream.get_loc();
-			stream.push_op(Op::JmpIf{offset: 0});
-			stream.push_op(Op::LoadGlobal{index: 1});
-			stream.push_op(Op::LoadGlobal{index: 0});
-			stream.push_op(Op::LoadGlobal{index: 0});
-			stream.push_op(Op::StoreGlobal{index: 1});
-			stream.push_op(Op::Add);
-			stream.push_op(Op::StoreGlobal{index: 0});
-			stream.push_op(Op::LoadGlobal{index: 2});
-			stream.push_op(Op::LoadNumber{number: 1.});
-			stream.push_op(Op::Sub);
-			stream.push_op(Op::StoreGlobal{index: 2});
+			stream.stream.push(Op::JmpIf{offset: 0});
+			stream.stream.push(Op::LoadGlobal{index: 1});
+			stream.stream.push(Op::LoadGlobal{index: 0});
+			stream.stream.push(Op::LoadGlobal{index: 0});
+			stream.stream.push(Op::StoreGlobal{index: 1});
+			stream.stream.push(Op::Add);
+			stream.stream.push(Op::StoreGlobal{index: 0});
+			stream.stream.push(Op::LoadGlobal{index: 2});
+			stream.stream.push(Op::LoadNumber{number: 1.});
+			stream.stream.push(Op::Sub);
+			stream.stream.push(Op::StoreGlobal{index: 2});
 			let block_end_loc = stream.get_loc();
-			stream.push_op(Op::Jmp{offset: 0});
+			stream.stream.push(Op::Jmp{offset: 0});
 			let block_continue_loc = stream.get_loc();
-			stream.push_op(Op::LoadGlobal{index: 0});
-			stream.push_op(Op::ReturnValue);
+			stream.stream.push(Op::LoadGlobal{index: 0});
+			stream.stream.push(Op::ReturnValue);
 
 			stream.try_patch(Op::JmpIf{offset: Op::calc_offset(block_begin_jump, block_continue_loc)}, block_begin_jump).unwrap();
 			stream.try_patch(Op::Jmp{offset: Op::calc_offset(block_end_loc, cond_start)}, block_end_loc).unwrap();
@@ -1515,33 +1517,34 @@ helper_fib_naive(n: number) number {
 		let mut vm = Stack::new();
 
 		for i in 0..10 {
-			stream.push_op(Op::LoadNumber{number: 1.});
-			stream.push_op(Op::StoreLocal{index: 0});
-			stream.push_op(Op::LoadNumber{number: 1.});
-			stream.push_op(Op::StoreLocal{index: 1});
-			stream.push_op(Op::LoadNumber{number: i as f64});
-			stream.push_op(Op::StoreLocal{index: 2});
+			stream.clear();
+			stream.stream.push(Op::LoadNumber{number: 1.});
+			stream.stream.push(Op::StoreLocal{index: 0});
+			stream.stream.push(Op::LoadNumber{number: 1.});
+			stream.stream.push(Op::StoreLocal{index: 1});
+			stream.stream.push(Op::LoadNumber{number: i as f64});
+			stream.stream.push(Op::StoreLocal{index: 2});
 			let cond_start = stream.get_loc();
-			stream.push_op(Op::LoadLocal{index: 2});
-			stream.push_op(Op::LoadNumber{number: 0.});
-			stream.push_op(Op::CmpLe);
+			stream.stream.push(Op::LoadLocal{index: 2});
+			stream.stream.push(Op::LoadNumber{number: 0.});
+			stream.stream.push(Op::CmpLe);
 			let block_begin_jump = stream.get_loc();
-			stream.push_op(Op::JmpIf{offset: 0});
-			stream.push_op(Op::LoadLocal{index: 1});
-			stream.push_op(Op::LoadLocal{index: 0});
-			stream.push_op(Op::LoadLocal{index: 0});
-			stream.push_op(Op::StoreLocal{index: 1});
-			stream.push_op(Op::Add);
-			stream.push_op(Op::StoreLocal{index: 0});
-			stream.push_op(Op::LoadLocal{index: 2});
-			stream.push_op(Op::LoadNumber{number: 1.});
-			stream.push_op(Op::Sub);
-			stream.push_op(Op::StoreLocal{index: 2});
+			stream.stream.push(Op::JmpIf{offset: 0});
+			stream.stream.push(Op::LoadLocal{index: 1});
+			stream.stream.push(Op::LoadLocal{index: 0});
+			stream.stream.push(Op::LoadLocal{index: 0});
+			stream.stream.push(Op::StoreLocal{index: 1});
+			stream.stream.push(Op::Add);
+			stream.stream.push(Op::StoreLocal{index: 0});
+			stream.stream.push(Op::LoadLocal{index: 2});
+			stream.stream.push(Op::LoadNumber{number: 1.});
+			stream.stream.push(Op::Sub);
+			stream.stream.push(Op::StoreLocal{index: 2});
 			let block_end_loc = stream.get_loc();
-			stream.push_op(Op::Jmp{offset: 0});
+			stream.stream.push(Op::Jmp{offset: 0});
 			let block_continue_loc = stream.get_loc();
-			stream.push_op(Op::LoadLocal{index: 0});
-			stream.push_op(Op::ReturnValue);
+			stream.stream.push(Op::LoadLocal{index: 0});
+			stream.stream.push(Op::ReturnValue);
 
 			stream.try_patch(Op::JmpIf{offset: Op::calc_offset(block_begin_jump, block_continue_loc)}, block_begin_jump).unwrap();
 			stream.try_patch(Op::Jmp{offset: Op::calc_offset(block_end_loc, cond_start)}, block_end_loc).unwrap();
@@ -1563,9 +1566,8 @@ helper_fib_naive(n: number) number {
 				a
 			};
 			assert!(unsafe{vm.run(&state, &globals, &stream, 3, 0).is_some_and(|x| {assert_eq!(x.number, fib); true})});
-			// panic!("{}", stream);
-			stream.clear();
 		}
+		println!("{}", stream);
 	}
 
 	#[test]
@@ -1576,14 +1578,13 @@ helper_fib_naive(n: number) number {
 		let mut vm = Stack::new();
 
 		for i in 0..10 {
-			stream.push_op(Op::LoadNumber{number: i as f64});
-			stream.push_op(Op::LoadNumber{number: i as f64 - 1.});
-			stream.push_op(Op::Dup{index: 1});
-			stream.push_op(Op::Add);
-			stream.push_op(Op::Add);
-			stream.push_op(Op::ReturnValue);
+			stream.stream.push(Op::LoadNumber{number: i as f64});
+			stream.stream.push(Op::LoadNumber{number: i as f64 - 1.});
+			stream.stream.push(Op::Dup{index: 1});
+			stream.stream.push(Op::Add);
+			stream.stream.push(Op::Add);
+			stream.stream.push(Op::ReturnValue);
 			assert!(unsafe{vm.run(&state, &globals, &stream, 0, 0).is_some_and(|x| {assert_eq!(x.number, 3. * i as f64 - 1.); true})});
-			println!("{}", stream);
 			stream.clear();
 		}
 	}

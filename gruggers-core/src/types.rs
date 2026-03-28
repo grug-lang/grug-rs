@@ -2,6 +2,7 @@
 use std::ffi::c_double;
 use std::cell::Cell;
 use std::ptr::NonNull;
+use std::marker::PhantomPinned;
 use crate::ntstring::NTStrPtr;
 use crate::state::State;
 
@@ -99,6 +100,7 @@ pub struct GrugEntity {
 	pub file_id: GrugFileId,
 	/// Pointer to the entity's members stored by the backend
 	pub members: Cell<NonNull<()>>,
+	pub _marker: PhantomPinned,
 }
 
 impl GrugEntity {
@@ -109,7 +111,8 @@ impl GrugEntity {
 		Self {
 			id,
 			file_id,
-			members: Cell::new(NonNull::dangling())
+			members: Cell::new(NonNull::dangling()),
+			_marker: PhantomPinned,
 		}
 	}
 }

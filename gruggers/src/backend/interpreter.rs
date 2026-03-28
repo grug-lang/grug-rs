@@ -382,29 +382,42 @@ impl Interpreter {
 				},
 				Statement::If{
 					condition,
-					is_chained: _,
+					is_chained,
 					if_block,
 					else_block,
 				} => {
-					let condition = unsafe{self.run_expr(call_stack, state, file, entity, condition)?.bool} != 0;
-					// if statement
-					if condition {
-						let control_flow = self.run_statements(call_stack, state, file, entity, if_block)?;
-						if let GrugControlFlow::None = control_flow {
-							continue;
+					let mut condition = condition;
+					let mut is_chained = is_chained;
+					let mut if_block = if_block;
+					let mut else_block = else_block;
+					loop {
+						// if block
+						if unsafe{self.run_expr(call_stack, state, file, entity, condition)?.bool} != 0 {
+							let control_flow = self.run_statements(call_stack, state, file, entity, if_block)?;
+							if let GrugControlFlow::None = control_flow {
+								break;
+							} else {
+								ret_val = control_flow;
+								break 'outer;
+							} 
 						} else {
-							ret_val = control_flow;
-							break 'outer;
-						} 
-					} else {
-						// else statements
-						let control_flow = self.run_statements(call_stack, state, file, entity, else_block)?;
-						if let GrugControlFlow::None = control_flow {
-							continue;
-						} else {
-							ret_val = control_flow;
-							break 'outer;
-						} 
+							// else block
+							if *is_chained {
+								(condition, is_chained, if_block, else_block) = match else_block {
+									[Statement::If{condition, is_chained, if_block, else_block}] => (condition, is_chained, if_block, else_block),
+									_ => panic!("invalid ast"),
+								};
+								continue;
+							} else {
+								let control_flow = self.run_statements(call_stack, state, file, entity, else_block)?;
+								if let GrugControlFlow::None = control_flow {
+									break;
+								} else {
+									ret_val = control_flow;
+									break 'outer;
+								} 
+							}
+						}
 					}
 				},
 				Statement::Return{
@@ -587,9 +600,9 @@ impl Interpreter {
 
 impl Backend for Interpreter {
 	fn insert_file<GrugState: State>(&self, state: &GrugState, id: GrugFileId, file: GrugAst) {
-		let compiled_file = CompiledFile::new(file);
+		let mut compiled_file = CompiledFile::new(file);
 		let mut files = self.files.borrow_mut();
-		if let Some(old_file) = files.get(id.0 as usize) {
+		if let Some(old_file) = files.get_mut(id.0 as usize) {
 			let mut old_entities = std::mem::replace(&mut *old_file.entities.borrow_mut(), std::vec::Vec::new());
 			old_entities.extract_if(.., |old_entity| {
 				let mut data = GrugEntityData {
@@ -602,6 +615,8 @@ impl Backend for Interpreter {
 				unsafe{(*old_entity.as_ptr()).members.set(data.as_ptr().cast())};
 				false
 			}).for_each(drop);
+			*compiled_file.entities.get_mut() = old_entities;
+			*old_file = compiled_file;
 		} else if files.len() == id.0 as usize {
 			files.push(compiled_file);
 		} else {
