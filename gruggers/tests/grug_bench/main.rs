@@ -122,7 +122,7 @@ mod game_functions {
 		safe fn game_fn_set_acc     <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 	}
 
-	pub fn register_game_functions(state: &mut GrugState) {
+	pub fn register_game_functions(state: &mut GrugState) { unsafe {
 		state.register_game_fn("print_number", game_fn_print_number).unwrap();
 		state.register_game_fn("print_bool"  , game_fn_print_bool  ).unwrap();
 		state.register_game_fn("get_1"       , game_fn_get_1       ).unwrap();
@@ -132,7 +132,7 @@ mod game_functions {
 		state.register_game_fn("y"           , game_fn_y           ).unwrap();
 		state.register_game_fn("sqrt"        , game_fn_sqrt        ).unwrap();
 		state.register_game_fn("set_acc"     , game_fn_set_acc     ).unwrap();
-	}
+	}}
 }
 
 use gruggers::nt;

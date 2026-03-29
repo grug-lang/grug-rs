@@ -6,9 +6,14 @@ authors = ["Nikhil Nathanael Ilango"]
 description = "rust implementation of the grug language"
 repository = "https://github.com/grug-lang/grug-rs"
 license = "MIT"
+default-run = "grugc"
 
 [lib] 
 crate-type = ["cdylib", "lib", "staticlib"]
+
+[[bin]]
+name = "grugc"
+path = "src/main.rs"
 
 [dependencies]
 json = "0.12.4"

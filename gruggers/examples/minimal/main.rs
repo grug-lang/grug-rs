@@ -22,7 +22,7 @@ fn main () {
 		.set_mods_dir("gruggers/examples/minimal/mods")
 		.set_mod_api_path("gruggers/examples/minimal/mod_api.json")
 		.build_state().unwrap();
-	state.register_game_fn("print_string", print_string).unwrap();
+	unsafe{state.register_game_fn("print_string", print_string).unwrap()};
 	state.all_game_fns_registered().unwrap();
 
 	let id = state.compile_grug_file("goldie/first-Dog.grug").unwrap();

@@ -353,7 +353,7 @@ impl GrugState {
 		Ok(&self.on_functions[start..end])
 	}
 
-	pub fn register_game_fn(&mut self, name: &'static str, ptr: GameFnPtrState<Self>) -> Result<(), StateError> {
+	pub unsafe fn register_game_fn(&mut self, name: &'static str, ptr: GameFnPtrState<Self>) -> Result<(), StateError> {
 		if !self.mod_api.game_functions().contains_key(name) {
 			Err(StateError::UnknownGameFunction{
 				game_function_name: name,
@@ -368,6 +368,21 @@ impl GrugState {
 					Ok(())
 				}
 			}
+		}
+	}
+
+	// Register a dummy function for each game function defined in the mod_api
+	// NOTE: This function only exists to allow the cli compiler to function.
+	// It is immediate UB to run any grug script created with this grug_state afterwards.
+	//
+	// You are only allowed to compile scripts from this state.
+	pub unsafe fn register_dummies(&mut self) {
+		extern "C" fn dummy_host_fn(_state: &GrugState, _arguments: *const GrugValue) -> GrugValue {
+			GrugValue{void: ()}
+		}
+
+		for (name, _) in self.mod_api.game_functions() {
+			self.game_functions.entry(Box::leak(Box::from(name.as_str()))).or_insert(GameFnPtr::from_ptr(dummy_host_fn));
 		}
 	}
 	

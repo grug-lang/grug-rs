@@ -12,8 +12,9 @@ pub extern "C" fn grug_init(settings: GrugInitSettings) -> Option<Box<GrugState>
 pub extern "C" fn grug_deinit(_: Option<Box<GrugState>>) {}
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_register_game_fn(state: &mut GrugState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrState<GrugState>) -> bool {
-	state.register_game_fn(game_fn_name.to_str(), func).is_ok()
+pub unsafe extern "C" fn grug_register_game_fn(state: &mut GrugState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrState<GrugState>) -> bool {
+	// SAFETY: This function is exposed to C and is inherently unsafe
+	unsafe{state.register_game_fn(game_fn_name.to_str(), func).is_ok()}
 }
 
 const INVALID_GRUG_SCRIPT_ID: GrugFileId = GrugFileId::new(u64::MAX);

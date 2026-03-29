@@ -931,6 +931,7 @@ impl Stack {
 		let start_time = Instant::now();
 		self.stack.resize(self.rbp + locals_size as usize, GrugValue{void: ()});
 		let mut i_count: usize = 1;
+		// println!("{}", instructions);
 		loop {
 			let (ins, next) = unsafe{stream.split_first().unwrap_unchecked()};
 			stream = next;
@@ -1245,7 +1246,7 @@ helper_fib_naive(n: number) number {
 			Default::default(),
 			BytecodeBackend::new(),
 		).unwrap();
-		state.register_game_fn("identity", identity as for<'a> extern "C" fn (&'a _, _) -> _).unwrap();
+		unsafe{state.register_game_fn("identity", identity as for<'a> extern "C" fn (&'a _, _) -> _).unwrap()};
 		state.all_game_fns_registered().unwrap();
 		state
 	}

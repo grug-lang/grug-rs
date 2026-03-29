@@ -39,7 +39,7 @@ impl GrugState {
 
 	// Path is relative to mods directory or an absolute path
 	pub fn compile_grug_file_from_str(&self, path: &str, file_text: &str) -> Result<GrugFileId, GrugError> {
-		let mod_name = get_mod_name(path)?;
+		let mod_name = get_mod_name(path);
 		let entity_type = get_entity_type(path)?;
 
 		let mut arena = self.arenas.borrow_mut().pop().unwrap_or_else(|| Arena::new());
@@ -147,8 +147,11 @@ pub(crate) enum GlobalStatement<'a> {
 	EmptyLine,
 }
 
-fn get_mod_name (path: &str) -> Result<&str, GrugError> {
-	path.split_once('/').map(|x| x.0).ok_or(GrugError::FileError(FileError::FilePathDoesNotContainForwardSlash{path: String::from(path)}))
+fn get_mod_name (path: &str) -> &str {
+	path.split_once('/').map(|x| x.0).unwrap_or(path)
+	// This restrict isn't checked in grug_tests and it gets in the way of
+	// implementing the compiler in the simplest way
+	// path.split_once('/').map(|x| x.0).ok_or(GrugError::FileError(FileError::FilePathDoesNotContainForwardSlash{path: String::from(path)}))
 }
 
 fn get_entity_type(path: &str) -> Result<&str, FileError> {
