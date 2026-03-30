@@ -4,6 +4,7 @@ use gruggers::state::{GrugInitSettings, GrugState};
 use gruggers::backend::StubBackend;
 
 const BIN_NAME: &'static str = "grugc";
+// '
 
 type Result<T> = core::result::Result<T, Error>;
 type Error = Box<dyn std::error::Error>;
@@ -14,13 +15,13 @@ struct CliArgs {
 	mod_api_path: Option<String>,
 }
 
-fn main() -> Result<()>{
+fn main() -> Result<()> {
 	let args = match parse_args() {
 		Ok(args) => args,
 		Err(err) => {
 			println!("{}", err);
 			print_basic_usage();
-			std::process::exit(1);
+			return Err(Box::from("")).into();
 		}
 	};
 
@@ -38,11 +39,16 @@ fn main() -> Result<()>{
 	// SAFETY: We never call a script created from this compiler
 	unsafe{grug_state.register_dummies()}
 
+	let mut has_error = false;
+
 	for file_to_compile in args.files_to_compile {
-		compile_files(&grug_state, &file_to_compile)?;
-		println!("No errors in {}", file_to_compile);
+		if compile_files(&grug_state, &file_to_compile).is_err() {has_error = true;};
 	}
 	
+	if has_error {
+		return Err(Box::from("Compilation failed")).into();
+	}
+	println!("No Errors found in input paths");
 	Ok(())
 }
 
@@ -52,6 +58,7 @@ fn compile_files<P: AsRef<Path>>(state: &GrugState, path: P) -> Result<()> {
 		std::process::exit(2);
 	};
 	
+	let mut has_error = false;
 	if metadata.is_dir() {
 		for dir_entry in std::fs::read_dir(path)? {
 			compile_files(state, &dir_entry?.path())?;
@@ -62,10 +69,15 @@ fn compile_files<P: AsRef<Path>>(state: &GrugState, path: P) -> Result<()> {
 			Ok(_) => (),
 			Err(err) => {
 				println!("Error in {}: {}", path.as_ref().display(), err);
+				has_error = true;
 			}
 		}
 	}
-	Ok(())
+	if has_error {
+		Err(Box::from("err")).into()
+	} else {
+		Ok(())
+	}
 }
 
 fn search_mod_api_path() -> Result<String> {
@@ -87,6 +99,10 @@ fn parse_args() -> Result<CliArgs> {
 	let mut mod_api_path = None;
 	
 	while let Some(next_arg) = args.next() {
+		if next_arg == "-h" || next_arg == "--help" {
+			print_help();
+			std::process::exit(0);
+		}
 		if next_arg == "-m" {
 			if mod_api_path.is_some() {
 				Err("Mod api path can only appear once in the arguments")?;
@@ -117,4 +133,13 @@ fn parse_args() -> Result<CliArgs> {
 
 fn print_basic_usage() {
 	println!("Usage: {BIN_NAME} ([-i] <path-to-grug-file>)* [-m <path-to-mod-api-json>]");
+}
+
+fn print_help() {
+	println!("Help: {BIN_NAME} ([-i] <path-to-grug-file>)* [-m <path-to-mod-api-json>]");
+	println!(" -i:  input path. Can be a directory or a file");
+	println!("      Can provide as many input paths as you want");
+	println!(" -m:  path to mod_api.json");
+	println!("      Can be provided at most once");
+	println!("      If `-m` is not present, it will search parent directories until a 'mod_api.json' is found");
 }
