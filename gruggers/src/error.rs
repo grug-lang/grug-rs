@@ -22,6 +22,8 @@ pub enum GrugError {
 	TypePropogatorError(TypePropogatorError),
 }
 
+impl std::error::Error for GrugError { }
+
 impl From<FileError> for GrugError {
 	fn from (from: FileError) -> Self {
 		// this extra single quote is needed to prevent a vim plugin from
