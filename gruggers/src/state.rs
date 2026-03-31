@@ -17,6 +17,7 @@ use std::pin::Pin;
 use std::cell::{Cell, RefCell, Ref};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::ffi::{OsString, OsStr};
 
 #[repr(C)]
 pub struct RuntimeErrorHandler {
@@ -47,7 +48,7 @@ impl RuntimeErrorHandler {
 		}
 	}
 
-	fn handle_error(&self, kind: RuntimeError, message: &str, on_fn_name: &str, script_path: &str) {
+	fn handle_error(&self, kind: RuntimeError, message: &str, on_fn_name: &str, script_path: &OsStr) {
 		if let Some(func) = self.func {
 			func(
 				self.data,
@@ -168,8 +169,8 @@ impl<'a> GrugInitSettings<'a> {
 			.unwrap_or("./mods");
 
 		GrugState::new(
-			mod_api_path, 
-			mods_dir_path, 
+			mod_api_path,
+			mods_dir_path,
 			self.runtime_error_handler.unwrap_or_else(|| RuntimeErrorHandler::new_default()), 
 			self.backend.unwrap_or_else(|| BytecodeBackend::new().into())
 		)
@@ -210,7 +211,7 @@ pub fn default_runtime_error_handler(_err_kind: u32, reason: &str, on_fn_name: &
 
 pub struct GrugState {
 	pub(crate) mod_api: ModApi,
-	pub(crate) mods_dir_path: String,
+	pub(crate) mods_dir_path: OsString,
 	next_entity_id: AtomicU64,
 	pub(crate) game_functions: HashMap<&'static str, GameFnPtr>,
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
@@ -223,7 +224,7 @@ pub struct GrugState {
 	// If a later change makes mod_api mutable, these need to be allocated separately
 	// TODO: rename this to `event_functions`
 	on_functions: Vec<EventFnEntry<'static>>,
-	pub(crate) path_to_script_ids: RefCell<HashMap<String, GrugFileId>>,
+	pub(crate) path_to_script_ids: RefCell<HashMap<OsString, GrugFileId>>,
 	next_script_id: AtomicU64,
 
 	pub(crate) backend: ErasedBackend<Self>,
@@ -259,17 +260,17 @@ impl State for GrugState {
 }
 
 impl GrugState {
-	fn new (mod_api_path: &str, mods_dir_path: &str, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
-		let mod_api = get_mod_api(&mod_api_path)?;
+	fn new (mod_api_path: impl AsRef<OsStr>, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
+		let mod_api = get_mod_api(mod_api_path.as_ref())?;
 		Self::new_inner(mod_api, mods_dir_path, handler, backend)
 	}
 
-	pub fn new_from_text (mod_api_text: &str, mods_dir_path: &str, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, GrugError> {
+	pub fn new_from_text (mod_api_text: &str, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, GrugError> {
 		let mod_api = get_mod_api_from_text(mod_api_text)?;
 		Self::new_inner(mod_api, mods_dir_path, handler, backend.into())
 	}
 
-	fn new_inner (mod_api: ModApi, mods_dir_path: &str, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
+	fn new_inner (mod_api: ModApi, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
 		let mut on_fns = Vec::new();
 		let init_globals = nt!("init_globals");
 		for (entity_type, entity) in mod_api.entities() {
@@ -295,7 +296,7 @@ impl GrugState {
 
 		Ok(Self {
 			mod_api,
-			mods_dir_path: String::from(mods_dir_path),
+			mods_dir_path: OsString::from(mods_dir_path.as_ref()),
 			next_entity_id: AtomicU64::new(0),
 			game_functions: HashMap::new(),
 			runtime_error_handler: handler,
@@ -387,12 +388,12 @@ impl GrugState {
 	}
 	
 	// This should only happen during an error so its okay if its slow
-	pub fn get_script_path(&self, script_id: GrugFileId) -> Option<&str> {
+	pub fn get_script_path(&self, script_id: GrugFileId) -> Option<&OsStr> {
 		let string = Ref::filter_map(self.path_to_script_ids.borrow(), |inner|
 			inner.iter().find(|(_, v)| **v == script_id).map(|x| x.0)
 		).ok()?;
 		// SAFETY: a path is never replaced once it is inserted into the map;
-		let string: &str = unsafe{&*(&**string as *const str)};
+		let string: &OsStr = unsafe{&*(&**string as *const OsStr)};
 		Some(string)
 	}
 

@@ -52,7 +52,7 @@ mod test_bindings {
 	pub extern "C" fn compile_grug_file(state: &mut GrugState, path: NTStrPtr<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugFileId {
 		state.clear_entities();
 		let path = path.to_ntstr();
-		let id = match state.compile_grug_file(path) {
+		let id = match state.compile_grug_file(path.as_str()) {
 			Ok(id) => {
 				*err_out = None;
 				Some(id)

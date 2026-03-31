@@ -65,7 +65,7 @@ fn compile_files<P: AsRef<Path>>(state: &GrugState, path: P) -> Result<()> {
 		}
 	} else if let Some(extension) = path.as_ref().extension() && extension == "grug" {
 		let file_text = std::fs::read_to_string(&path)?;
-		match state.compile_grug_file_from_str(&path.as_ref().to_string_lossy(), &file_text) {
+		match state.compile_grug_file_from_str(path.as_ref(), &file_text) {
 			Ok(_) => (),
 			Err(err) => {
 				println!("Error in {}: {}", path.as_ref().display(), err);

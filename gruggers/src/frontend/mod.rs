@@ -14,6 +14,7 @@ use crate::ntstring::NTStrPtr;
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
 
+use std::ffi::{OsStr, OsString};
 use std::sync::Arc;
 // use std::path::Path;
 
@@ -26,19 +27,19 @@ pub mod parser;
 
 impl GrugState {
 	// Path is relative to mods directory
-	pub fn compile_grug_file(&self, path: &str) -> Result<GrugFileId, GrugError> {
+	pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<GrugFileId, GrugError> {
 		let mut path_buf = self.mods_dir_path.clone();
-
-		path_buf.push('\\');
-
-		path_buf.push_str(path);
+		path_buf.push("\\");
+		path_buf.push(path.as_ref());
 		let file_text = std::fs::read_to_string(path_buf).unwrap();
 
 		self.compile_grug_file_from_str(path, &file_text)
 	}
 
 	// Path is relative to mods directory or an absolute path
-	pub fn compile_grug_file_from_str(&self, path: &str, file_text: &str) -> Result<GrugFileId, GrugError> {
+	pub fn compile_grug_file_from_str(&self, path: impl AsRef<OsStr>, file_text: &str) -> Result<GrugFileId, GrugError> {
+		let path = path.as_ref();
+
 		let mod_name = get_mod_name(path);
 		let entity_type = get_entity_type(path)?;
 
@@ -84,7 +85,7 @@ impl GrugState {
 				Some(id) => *id,
 				None => {
 					let id = self.get_next_script_id();
-					assert!(path_to_script_ids.insert(String::from(path), id).is_none());
+					assert!(path_to_script_ids.insert(OsString::from(path), id).is_none());
 					id
 				}
 			};
@@ -147,30 +148,49 @@ pub(crate) enum GlobalStatement<'a> {
 	EmptyLine,
 }
 
-fn get_mod_name (path: &str) -> &str {
-	path.split_once('/').map(|x| x.0).unwrap_or(path)
+fn get_mod_name (path: &OsStr) -> &OsStr {
+	let path = path.as_encoded_bytes();
+	let mut slash_len = 0;
+	for (i, ch) in path.iter().enumerate() {
+		if *ch == b'/' {slash_len = i; break;}
+	}
+	// SAFETY: Next byte is b'/' which is valid utf8 or the length is 0.
+	return unsafe{OsStr::from_encoded_bytes_unchecked(&path[..slash_len])};
+	
 	// This restrict isn't checked in grug_tests and it gets in the way of
 	// implementing the compiler in the simplest way
 	// path.split_once('/').map(|x| x.0).ok_or(GrugError::FileError(FileError::FilePathDoesNotContainForwardSlash{path: String::from(path)}))
 }
 
-fn get_entity_type(path: &str) -> Result<&str, FileError> {
-	let (_, entity_type) = path.rsplit_once("-").ok_or(
-			FileError::EntityMissing{path: String::from(path)}
-		)?;
-	let (entity_type, _) = entity_type.rsplit_once(".").ok_or(
-			FileError::MissingPeriodInFileName{path: String::from(path)}
-		)?;
+fn get_entity_type(path: &OsStr) -> Result<&str, FileError> {
+	let mut dot_pos = None;
+	let mut dash_pos = None;
+	let path_bytes = path.as_encoded_bytes();
+	for (i, ch) in path_bytes.iter().enumerate().rev() {
+		match (ch, dot_pos, dash_pos) {
+			(b'.', None, None) => dot_pos = Some(i),
+			(b'-', None, None) => Err(FileError::MissingPeriodInFileName{path: OsString::from(path)})?,
+			(b'-', Some(_), None) => {dash_pos = Some(i); break;},
+			_ => (),
+		}
+	}
+	let (Some(dot_pos), Some(dash_pos)) = (dot_pos, dash_pos) else {
+		Err(FileError::EntityMissing{path: OsString::from(path)})?
+	};
+	// SAFETY: dash_pos is b'-' which is valid utf8, and dot_pos is b'.' which
+	// is also utf8 so (dash_pos+1)..dot_pos will not truncate a utf8 codepoint
+	let entity_type = unsafe{OsStr::from_encoded_bytes_unchecked(&path_bytes[(dash_pos + 1)..dot_pos])};
 	if entity_type.len() > MAX_FILE_ENTITY_TYPE_LENGTH {
-		return Err(FileError::EntityLenExceedsMaxLen{path: String::from(path), entity_len: entity_type.len()});
+		return Err(FileError::EntityLenExceedsMaxLen{path: OsString::from(path), entity_len: entity_type.len()});
 	}
 	if entity_type.is_empty() {
-		return Err(FileError::EntityMissing{path: String::from(path)});
+		return Err(FileError::EntityMissing{path: OsString::from(path)});
 	}
 	check_custom_id_is_pascal(entity_type)
 }
 
-fn check_custom_id_is_pascal(entity_type: &str) -> Result<&str, FileError> {
+fn check_custom_id_is_pascal(entity_type: &OsStr) -> Result<&str, FileError> {
+	let entity_type = entity_type.to_str().ok_or_else(|| FileError::EntityNotUtf8{entity_type: OsString::from(entity_type)})?;
 	let mut chars = entity_type.chars();
 	let Some(_) = chars.next() else {
 		return Err(FileError::EntityNotPascalCase1{entity_type: String::from(entity_type)});
@@ -189,14 +209,17 @@ pub enum FileError {
 		path: String
 	},
 	MissingPeriodInFileName {
-		path: String
+		path: OsString,
 	},
 	EntityLenExceedsMaxLen {
-		path: String,
+		path: OsString,
 		entity_len: usize,
 	},
 	EntityMissing {
-		path: String
+		path: OsString,
+	},
+	EntityNotUtf8 {
+		entity_type: OsString,
 	},
 	EntityNotPascalCase1 {
 		entity_type: String,
@@ -215,21 +238,25 @@ impl std::fmt::Display for FileError {
 			} => write!(f, "The grug file path {}, does not contain a '/' character", path),
 			Self::MissingPeriodInFileName {
 				path
-			} => write!(f, "'{}' is missing a period in its filename", path),
+			} => write!(f, "'{}' is missing a period in its filename", path.display()),
 			Self::EntityLenExceedsMaxLen {
 				path,
 				entity_len: _,
 			} => write!(f, 
 				"There are more than {MAX_FILE_ENTITY_TYPE_LENGTH} characters \n\
-				in the entity type of '{path}', exceeding MAX_FILE_ENTITY_TYPE_LENGTH"
+				in the entity type of '{}', exceeding MAX_FILE_ENTITY_TYPE_LENGTH",
+				path.display()
 			),
 			Self::EntityMissing {
 				path
 			} => write!(f, 
 				"'{}' is missing an entity type in its name;\n\
 				use a dash to specify it, like 'ak47-gun.grug'",
-				path
+				path.display()
 			),
+			Self::EntityNotUtf8 {
+				entity_type
+			} => write!(f, "'{}' is not valid utf8", entity_type.display()),
 			Self::EntityNotPascalCase1 {
 				entity_type,
 			} => write!(f, "'{entity_type}' seems like a custom ID type, but isn't in PascalCase"),

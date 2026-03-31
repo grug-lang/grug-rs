@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
+use std::ffi::OsStr;
+
 use crate::types::GameFnPtr;
 use crate::ntstring::NTStr;
 use crate::ast::{
@@ -21,7 +23,7 @@ pub(super) struct TypePropogator<'mod_api, 'arena> {
 	entity: &'mod_api ModApiEntity<'mod_api>,
 	game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiGameFn<'mod_api>>,
 	game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>,
-	current_mod_name: String,
+	current_mod_name: &'arena OsStr,
 	global_variables: HashMap<&'arena str, GrugType<'arena>>,
 	local_variables: Vec<HashMap<&'arena str, GrugType<'arena>>>,
 	num_while_loops_deep: usize,
@@ -647,7 +649,7 @@ impl From<EntityValidationError> for TypePropogatorError {
 }
 
 impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
-	pub fn new (entity: &'mod_api ModApiEntity, game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiGameFn>, game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, mod_name: String) -> Self {
+	pub fn new (entity: &'mod_api ModApiEntity, game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiGameFn>, game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, mod_name: &'arena OsStr) -> Self {
 		Self {
 			entity,
 			game_fns,
@@ -1228,7 +1230,10 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 
 	fn fix_resource_string(&mut self, value: &NTStr, arena: &'arena Arena) -> &'arena NTStr {
-		Box::leak(NTStr::box_from_str_in(&format!("{}/{}", self.current_mod_name, value), arena))
+		// TODO: If the mod name is non utf8, this may cause problems
+		// Because cross mod resources are not supported, we should probably
+		// just not even fix the resource string anymore
+		Box::leak(NTStr::box_from_str_in(&format!("{}/{}", self.current_mod_name.display(), value), arena))
 	}
 
 	fn validate_entity_string(&mut self, entity_string: &str) -> Result<(), EntityValidationError> {
@@ -1277,8 +1282,10 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 
 	fn fix_entity_string(&mut self, value: &NTStr, arena: &'arena Arena) -> Option<&'arena NTStr> {
+		// TODO: If the mod name is non utf8, this may cause problems
+		// Cross mod entities are supported, so we actually need to handle this properly
 		if value.split_once(":").is_none() {
-			Some(Box::leak(NTStr::box_from_str_in(&format!("{}:{}", self.current_mod_name, value), arena)))
+			Some(Box::leak(NTStr::box_from_str_in(&format!("{}:{}", self.current_mod_name.display(), value), arena)))
 		} else {
 			None
 		}
