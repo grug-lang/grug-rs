@@ -4,7 +4,7 @@
 #![deny(unused_mut)]
 // #![deny(warnings)]
 use crate::error::GrugError;
-use crate::state::GrugState;
+use crate::state::{GrugState, FileInfo};
 // use crate::backend::GrugAst;
 use crate::types::GrugFileId;
 use crate::ast::*;
@@ -12,9 +12,10 @@ use crate::arena::Arena;
 use crate::ntstring::NTStrPtr;
 
 use allocator_api2::vec::Vec;
-use allocator_api2::boxed::Box;
+use allocator_api2::boxed::Box as Box2;
 
 use std::ffi::{OsStr, OsString};
+use std::path::Path;
 use std::sync::Arc;
 // use std::path::Path;
 
@@ -68,7 +69,7 @@ impl GrugState {
 					GlobalStatement::Variable(st@MemberVariable      {..}) => member_variables.push(st.into()),
 					GlobalStatement::OnFunction(st@OnFunction        {..}) => {
 						let (i, _) = entity.get_on_fn(st.name.to_str()).unwrap();
-						on_functions[i] = Some(&*Box::leak(Box::new_in(st.into(), &arena)));
+						on_functions[i] = Some(&*Box2::leak(Box2::new_in(st.into(), &arena)));
 					}
 					GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st.into()),
 					_ => (),
@@ -97,9 +98,53 @@ impl GrugState {
 		
 		id
 	}
+	
+	pub fn compile_all_files(&self) -> std::vec::Vec<FileInfo> {
+		let mut files = std::vec::Vec::new();
+		for mod_dir in std::fs::read_dir(&self.mods_dir_path).expect("Could not read mods directory") {
+			let Ok(mod_dir) = mod_dir else {
+				panic!("unable to read directory: {:?}", mod_dir);
+			};
+			let mod_dir_path = mod_dir.path();
+			let mut entries_to_check = std::vec::Vec::from([mod_dir]);
+
+			while let Some(next_entry) = entries_to_check.pop() {
+				if next_entry.metadata().expect("could not read metadata").is_dir() {
+					let next_entry_path = next_entry.path();
+					for entry in std::fs::read_dir(&next_entry_path).expect("Could not read mods directory") {
+						let Ok(entry) = entry else {
+							panic!("unable to read entry: {:?}", entry);
+						};
+						entries_to_check.push(entry);
+					}
+				} else {
+					// I fucking hate this
+					let mut entry_path = next_entry.path();
+					let entry_path = entry_path.as_mut_os_str();
+					let rel_path = unsafe{std::mem::transmute::<&mut OsStr, &mut [u8]>(entry_path)};
+					let rel_path = &mut rel_path[self.mods_dir_path.len()..];
+					rel_path.iter_mut().for_each(|byte| if *byte == b'\\' {*byte = b'/';});
+					let rel_path = <OsStr as AsRef<Path>>::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)});
+
+					if let Some(extension) = Path::extension(rel_path.as_ref()) && extension == "grug" {
+						let result = self.compile_grug_file(rel_path);
+						let info = FileInfo {
+							path: Box::from(rel_path),
+							file_name: Box::from(rel_path.file_name().unwrap()),
+							mod_name: Box::from(mod_dir_path.as_os_str()),
+							entity_type: Box::from(get_entity_type(rel_path.as_os_str()).unwrap_or("")),
+							entity_name: Box::from(rel_path.file_prefix().unwrap()),
+							result
+						};
+						files.push(info);
+					};
+				}
+			}
+		}
+		files
+	}
 }
 
-// TODO: This should not be defined here, it should be defined within gruggers
 /// A top level statement in a grug file.
 ///
 /// This is not passed through [`GrugAst`] but is instead supposed to be used
@@ -152,7 +197,7 @@ fn get_mod_name (path: &OsStr) -> &OsStr {
 	let path = path.as_encoded_bytes();
 	let mut slash_len = 0;
 	for (i, ch) in path.iter().enumerate() {
-		if *ch == b'/' {slash_len = i; break;}
+		if *ch == b'/' || *ch == b'\\' {slash_len = i; break;}
 	}
 	// SAFETY: Next byte is b'/' which is valid utf8 or the length is 0.
 	return unsafe{OsStr::from_encoded_bytes_unchecked(&path[..slash_len])};
@@ -273,4 +318,3 @@ impl std::fmt::Display for FileError {
 
 pub mod type_propagation;
 use type_propagation::*;
-

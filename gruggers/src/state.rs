@@ -18,6 +18,7 @@ use std::cell::{Cell, RefCell, Ref};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::ffi::{OsString, OsStr};
+use std::path::Path;
 
 #[repr(C)]
 pub struct RuntimeErrorHandler {
@@ -607,3 +608,12 @@ impl<'a> std::ops::Deref for GrugEntityHandle<'a> {
 	}
 }
 
+#[derive(Debug)]
+pub struct FileInfo {
+	pub path: Box<Path>,
+	pub file_name: Box<OsStr>,
+	pub mod_name: Box<OsStr>,
+	pub entity_type: Box<str>,
+	pub entity_name: Box<OsStr>,
+	pub result: Result<GrugFileId, GrugError>,
+}

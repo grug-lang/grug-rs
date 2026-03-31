@@ -1254,12 +1254,12 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				});
 			}
 			if mod_name == self.current_mod_name {
+				// grug_assert(!streq(mod_name, mod), "Entity '%s' its mod name '%s' is invalid, since the file it is in refers to its own mod; just change it to '%s'", string, mod_name, entity_name);
 				return Err(EntityValidationError::ModNameIsCurrentMod {
 					full_entity_string: Arc::from(entity_string),
 					mod_name: String::from(mod_name),
 					entity_name: String::from(entity_name),
 				});
-				// grug_assert(!streq(mod_name, mod), "Entity '%s' its mod name '%s' is invalid, since the file it is in refers to its own mod; just change it to '%s'", string, mod_name, entity_name);
 			}
 			(mod_name, entity_name)
 		} else {
