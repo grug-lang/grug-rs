@@ -118,12 +118,10 @@ impl GrugState {
 						entries_to_check.push(entry);
 					}
 				} else {
-					// I fucking hate this
-					let mut entry_path = next_entry.path();
-					let entry_path = entry_path.as_mut_os_str();
-					let rel_path = unsafe{std::mem::transmute::<&mut OsStr, &mut [u8]>(entry_path)};
-					let rel_path = &mut rel_path[self.mods_dir_path.len()..];
-					rel_path.iter_mut().for_each(|byte| if *byte == b'\\' {*byte = b'/';});
+					let entry_path = next_entry.path();
+					let entry_path = entry_path.as_os_str();
+					let rel_path = entry_path.as_encoded_bytes();
+					let rel_path = &rel_path[self.mods_dir_path.len()..];
 					let rel_path = <OsStr as AsRef<Path>>::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)});
 
 					if let Some(extension) = Path::extension(rel_path.as_ref()) && extension == "grug" {

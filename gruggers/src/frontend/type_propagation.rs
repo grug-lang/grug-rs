@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::ffi::OsStr;
+use std::path::PathBuf;
 
 use crate::types::GameFnPtr;
 use crate::ntstring::NTStr;
@@ -1233,7 +1234,9 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		// TODO: If the mod name is non utf8, this may cause problems
 		// Because cross mod resources are not supported, we should probably
 		// just not even fix the resource string anymore
-		Box::leak(NTStr::box_from_str_in(&format!("{}/{}", self.current_mod_name.display(), value), arena))
+		let mut string = PathBuf::from(self.current_mod_name);
+		string.push(value.as_str());
+		Box::leak(NTStr::box_from_str_in(&format!("{}", string.display()), arena))
 	}
 
 	fn validate_entity_string(&mut self, entity_string: &str) -> Result<(), EntityValidationError> {
