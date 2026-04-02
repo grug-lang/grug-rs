@@ -32,3 +32,4 @@ fuzz_target!(|data: &str| {
 		_ = state.compile_grug_file_from_str("test/test-A.grug", data);
 	});
 });
+

@@ -9,13 +9,20 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-
-[dependencies.gruggers]
-path = "../gruggers/"
+gruggers = {path = "../gruggers"}
+gruggers-core = {path = "../gruggers-core"}
+allocator-api2 = "0.4.0"
 
 [[bin]]
 name = "fuzz_target_1"
 path = "fuzz_targets/fuzz_target_1.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_target_2"
+path = "fuzz_targets/fuzz_target_2.rs"
 test = false
 doc = false
 bench = false

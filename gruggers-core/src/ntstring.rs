@@ -206,6 +206,83 @@ impl<'a> NTStrPtr<'a> {
 		self.0.cast::<u8>().as_ptr().cast_const()
 	}
 
+	pub const fn const_len(self) -> usize {
+		let mut len = 0;
+		while unsafe{self.0.add(len).read() as u8} != b'\0' {len += 1;}
+		return len;
+	}
+
+	// This causes asan errors
+	pub fn len(self) -> usize {
+		fn len_default(val: NTStrPtr) -> usize {
+			let mut len = 0;
+			while unsafe{val.0.add(len).read() as u8} != b'\0' {len += 1;}
+			return len;
+		}
+		#[cfg(target_arch="x86_64")]
+		{
+			#[target_feature(enable = "sse2")]
+			fn len_sse(val: NTStrPtr) -> usize {
+				use std::arch::x86_64::*;
+				use std::mem::{align_of, size_of};
+
+				let ptr = val.0.cast::<u8>().as_ptr();
+				const _: () = const {assert!(size_of::<__m128i>() == align_of::<__m128i>());};
+				let diff = size_of::<__m128i>() - ptr.align_offset(align_of::<__m128i>());
+				let ptr = ptr.wrapping_sub(diff).cast::<__m128i>();
+
+				let zeros: __m128i = _mm_set1_epi8(0);
+				
+				let movemask = _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe{ptr.read()})) >> diff;
+				if movemask != 0 {return movemask.trailing_zeros() as usize};
+
+				let mut offset = 0;
+
+				loop {
+					offset += 1;
+					let movemask = _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe{ptr.add(offset).read()}));
+					if movemask != 0 {return offset * size_of::<__m128i>() + movemask.trailing_zeros() as usize - diff};
+				}
+			}
+
+			#[target_feature(enable = "avx2")]
+			fn len_avx2(val: NTStrPtr) -> usize {
+				use std::arch::x86_64::*;
+				use std::mem::{align_of, size_of};
+
+				let ptr = val.0.cast::<u8>().as_ptr();
+				const _: () = const {assert!(size_of::<__m256i>() == align_of::<__m256i>());};
+				let diff = (ptr.addr() as usize) & (size_of::<__m256i>() - 1);
+				let ptr = ptr.wrapping_sub(diff).cast::<__m256i>();
+
+				let zeros: __m256i = _mm256_set1_epi8(0);
+				
+				let movemask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(zeros, unsafe{ptr.read()})) >> diff;
+				if movemask != 0 {return movemask.trailing_zeros() as usize};
+
+				let mut offset = 0;
+
+				loop {
+					offset += 1;
+					let movemask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(zeros, unsafe{ptr.add(offset).read()}));
+					if movemask != 0 {return offset * size_of::<__m256i>() + movemask.trailing_zeros() as usize - diff};
+				}
+			}
+			// SAFETY: We choose whichever one is available
+			if std::arch::is_x86_feature_detected!("avx2") {
+				unsafe{len_avx2(self)}
+			} else if std::arch::is_x86_feature_detected!("sse2") {
+				unsafe{len_sse(self)}
+			} else {
+				len_default(self)
+			}
+		}
+		#[cfg(not(target_arch="x86_64"))]
+		{
+			len_default(self)
+		}
+	}
+
 	/// returns true if the first byte is null (indicating that there is no data behind the string)
 	pub fn is_empty(self) -> bool {
 		// SAFETY: NTStrPtr is guaranteed to point to allocated memory that ends in a null byte
@@ -223,19 +300,13 @@ impl<'a> NTStrPtr<'a> {
 
 	/// Returns a `&NTStr` to the string excluding the null byte
 	pub fn to_ntstr(self) -> &'a NTStr {
-		let mut i = 0;
-		loop {
-			// SAFETY: buffer is okay to read upto the next null byte
-			if unsafe{self.0.cast::<u8>().add(i).read()} == b'\0' {
-				// buffer is okay to read upto len = i
-				let slice = unsafe{std::slice::from_raw_parts(self.0.cast::<u8>().as_ptr(), i + 1)};
-				// SAFETY: NTStrPtr points to a utf8 encoded buffer
-				let slice = unsafe{std::str::from_utf8_unchecked(slice)};
-				// SAFETY: Last byte is null
-				return unsafe{NTStr::from_str_unchecked(slice)};
-			}
-			i += 1;
-		}
+		let len = self.len();
+		// buffer is okay to read upto len = i
+		let slice = unsafe{std::slice::from_raw_parts(self.0.cast::<u8>().as_ptr(), len + 1)};
+		// SAFETY: NTStrPtr points to a utf8 encoded buffer
+		let slice = unsafe{std::str::from_utf8_unchecked(slice)};
+		// SAFETY: Last byte is null
+		return unsafe{NTStr::from_str_unchecked(slice)};
 	}
 
 	/// Returns a `&str` to the string excluding the null byte

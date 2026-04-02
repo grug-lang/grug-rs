@@ -70,7 +70,9 @@ dependencies = [
 name = "gruggers-fuzz"
 version = "0.0.0"
 dependencies = [
+ "allocator-api2",
  "gruggers",
+ "gruggers-core",
  "libfuzzer-sys",
 ]
 

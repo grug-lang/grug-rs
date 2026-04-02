@@ -9,7 +9,7 @@ license = "MIT"
 default-run = "grugc"
 
 [lib] 
-crate-type = ["cdylib", "lib", "staticlib"]
+# crate-type = ["cdylib", "lib", "staticlib"]
 
 [[bin]]
 name = "grugc"
