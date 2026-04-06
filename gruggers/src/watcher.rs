@@ -4,7 +4,7 @@ pub use watcher::*;
 mod watcher {
 	#![allow(unused)]
 	#![allow(non_camel_case_types)]
-	use std::ffi::{c_void, c_int};
+	use std::ffi::{c_void, c_int, OsStr};
 	use std::mem::MaybeUninit;
 	use crate::ntstring::{NTStr, NTStrPtr};
 	use allocator_api2::alloc::Global;
@@ -181,7 +181,7 @@ mod watcher {
 	#[link(name = "kernel32", kind="dylib")]
 	unsafe extern "C" {
 		fn CreateFileA(
-			file_name: NTStrPtr,
+			file_name: *const u8,
 			desired_access: DWORD,
 			share_mode: DWORD,
 			security_attributes: Option<&mut ()>,
@@ -204,10 +204,11 @@ mod watcher {
 		) -> BOOL;
 	}
 
-	fn open_dir (path: &NTStr) -> Result<OwnedHandle, std::io::Error> {
+	/// SAFETY: path should be null terminated
+	unsafe fn open_dir (path: &[u8]) -> Result<OwnedHandle, std::io::Error> {
 		let handle = unsafe {
 			CreateFileA(
-				path.as_ntstrptr(),
+				path.as_ptr(),
 				AccessMask::GENERIC_READ,
 				ShareMode::FILE_SHARE_READ,
 				None,
@@ -252,9 +253,10 @@ mod watcher {
 		}
 	}
 
-	pub fn watch_changes(path: &str, mut f: impl FnMut(Result<DirChanges, std::io::Error>) + Send + 'static) -> Result<(), std::io::Error>{
-		let path = NTStr::box_from_str_in(path, Global);
-		let handle = open_dir(&path)?;
+	pub fn watch_changes(path: impl AsRef<OsStr>, mut f: impl FnMut(Result<DirChanges, std::io::Error>) + Send + 'static) -> Result<(), std::io::Error>{
+		let mut path = Vec::from(path.as_ref().as_encoded_bytes());
+		path.push(b'\0');
+		let handle = unsafe{open_dir(&path)?};
 		std::thread::spawn(move || {
 			loop {
 				f(read_changes(&handle))
