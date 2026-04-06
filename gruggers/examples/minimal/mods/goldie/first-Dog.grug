@@ -1,6 +1,5 @@
 on_bark(message: string) {
     print_string(message)
-    print_string("WOOOOOO")
     if message == "arf" {
         print_string(message)
     }

@@ -26,7 +26,6 @@ fn main () {
 	state.all_game_fns_registered().unwrap();
 
 	let files = state.compile_all_files();
-	println!("{:?}", files);
 	let id = *files[0].result.as_ref().unwrap();
 	let dog = state.create_entity(id).unwrap();
 	let on_bark_id = state.get_on_fn_id("Dog", "on_bark").unwrap();
