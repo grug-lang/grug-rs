@@ -931,7 +931,6 @@ impl Stack {
 		let start_time = Instant::now();
 		self.stack.resize(self.rbp + locals_size as usize, GrugValue{void: ()});
 		let mut i_count: usize = 1;
-		// println!("{}", instructions);
 		loop {
 			let (ins, next) = unsafe{stream.split_first().unwrap_unchecked()};
 			stream = next;
@@ -1568,7 +1567,6 @@ helper_fib_naive(n: number) number {
 			};
 			assert!(unsafe{vm.run(&state, &globals, &stream, 3, 0).is_some_and(|x| {assert_eq!(x.number, fib); true})});
 		}
-		println!("{}", stream);
 	}
 
 	#[test]

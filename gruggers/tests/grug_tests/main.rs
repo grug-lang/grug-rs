@@ -60,7 +60,6 @@ mod test_bindings {
 		let path = path.to_str();
 
 		for file in files {
-			println!("{}", file.path.as_os_str().display());
 			if &*file.path == <str as AsRef<OsStr>>::as_ref(path) {
 				match &file.result {
 					Ok(id) => {
@@ -224,6 +223,7 @@ mod game_fn_bindings {
         safe fn game_fn_draw                 <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_blocked_alrm         <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_spawn                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_spawn_d              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_has_resource         <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_has_entity           <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_has_string           <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
@@ -244,6 +244,7 @@ mod game_fn_bindings {
         safe fn game_fn_store                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_retrieve             <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_box_number           <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_print_csv            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
 	}
 	pub fn register_game_functions(state: &mut GrugState) { unsafe {
 		state.register_game_fn("nothing",              game_fn_nothing             ).unwrap(); 
@@ -263,6 +264,7 @@ mod game_fn_bindings {
 		state.register_game_fn("draw",                 game_fn_draw                ).unwrap(); 
 		state.register_game_fn("blocked_alrm",         game_fn_blocked_alrm        ).unwrap(); 
 		state.register_game_fn("spawn",                game_fn_spawn               ).unwrap(); 
+		state.register_game_fn("spawn_d",              game_fn_spawn_d             ).unwrap(); 
 		state.register_game_fn("has_resource",         game_fn_has_resource        ).unwrap(); 
 		state.register_game_fn("has_entity",           game_fn_has_entity          ).unwrap(); 
 		state.register_game_fn("has_string",           game_fn_has_string          ).unwrap(); 
@@ -283,6 +285,7 @@ mod game_fn_bindings {
 		state.register_game_fn("store",                game_fn_store               ).unwrap(); 
 		state.register_game_fn("retrieve",             game_fn_retrieve            ).unwrap(); 
 		state.register_game_fn("box_number",           game_fn_box_number          ).unwrap(); 
+		state.register_game_fn("print_csv",            game_fn_print_csv           ).unwrap(); 
 	}}
 }
 use std::io::Write;

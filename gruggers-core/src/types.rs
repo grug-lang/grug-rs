@@ -13,15 +13,30 @@ use crate::state::State;
 /// ```text
 /// extern "C" fn (&GrugState, *const GrugValue) -> GrugValue;
 /// ```
+///
+/// This is the type erased version of [`GameFnPtrState`] for use in the AST.
+/// 
+/// Conversion to and from [`GameFnPtrState`] is done using [`Self::as_ptr`] and [`Self::from_ptr`]
+/// 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct GameFnPtr(NonNull<()>);
+/// A Game fn pointer for a specific kind of state. Each implementor of
+/// [`State`] should register its own version of [`GameFnPtrState`].
+///
+/// [`GameFnPtr`] can be cast to use any state but it is UB to cast to any
+/// state other than the current state the pointer was recieved from.
+/// 
+/// When Backends are running an export function, [`GameFnPtrState`] should be
+/// cast to the same kind of state used in `call_on_function`.
 pub type GameFnPtrState<GrugState> = extern "C" fn (&GrugState, *const GrugValue) -> GrugValue;
 
 impl GameFnPtr {
+	/// Casts `self` to a [`GameFnPtrState`] for the input state
 	pub const unsafe fn as_ptr<GrugState: State>(self) -> GameFnPtrState<GrugState> {
 		unsafe{std::mem::transmute(self.0)}
 	}
 
+	/// Type erases a [`GameFnPtrState`]
 	pub const fn from_ptr<GrugState: State>(value: GameFnPtrState<GrugState>) -> Self {
 		Self(unsafe{std::mem::transmute(value)})
 	}

@@ -22,6 +22,7 @@ use std::ffi::{OsString, OsStr};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, channel};
 
+// /// Called by the 
 #[repr(C)]
 pub struct RuntimeErrorHandler {
 	data: NonNull<()>,

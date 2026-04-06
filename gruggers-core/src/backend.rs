@@ -200,8 +200,10 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 	}
 }
 
+/// A representation of a [`State`] provided by c when a backend is used in a c library.
+/// This is the pointer that is passed in to any function exported by the backend. 
 #[repr(transparent)]
-pub struct CState(NonNull<()>);
+pub struct CState(());
 impl State for CState {
 	fn set_runtime_error(&self, _error: RuntimeError) {
 		panic!("This is an error within gruggers_core");
@@ -239,6 +241,10 @@ impl State for CStateWithHandler {
 	}
 }
 
+/// An version of a backend that is exported to a c function. The
+/// `set_runtime_error` and `is_errorring` functions provided by c are not API
+/// compatible with the ones expected by [`State`], so these functions have to be
+/// adapted for use by rust backends
 pub struct CBackend<B: Backend> {
 	set_runtime_error: for<'a> extern "C" fn (NonNull<CState>, u32, Option<NTStrPtr<'a>>),
 	is_errorring: extern "C" fn (NonNull<CState>) -> bool,
@@ -328,6 +334,8 @@ impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 	}
 }
 
+/// Create an ErasedBackend for use from c from an input backend. 
+/// This function is intended to be used in an exported `create_backend` function.
 pub fn erased_c_backend<B: Backend>(
 	backend: B, 
 	set_runtime_error: extern "C" fn (NonNull<CState>, u32, Option<NTStrPtr<'_>>),

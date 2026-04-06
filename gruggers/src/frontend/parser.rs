@@ -1020,6 +1020,10 @@ impl<'a> AST<'a> {
 						return Err(ParserError::FloatTooSmall{
 							value: String::from(*value),
 						});
+					} else if number == 0. && value.contains(['1', '2', '3', '4', '5', '6', '7', '8', '9']) {
+						return Err(ParserError::FloatTooSmall{
+							value: String::from(*value),
+						});
 					}
 
 					Expr{

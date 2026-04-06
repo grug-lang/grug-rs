@@ -48,7 +48,6 @@ mod test_bindings {
 	extern "C" fn destroy_grug_state(_: Box<GrugState>) {}
 
 	extern "C" fn compile_grug_file(state: &GrugState, script_path: NTStrPtr<'_>) -> GrugFileId {
-		println!("{}", script_path);
 		state.compile_grug_file(script_path.to_str()).unwrap()
 	}
 

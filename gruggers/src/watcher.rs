@@ -1,6 +1,6 @@
 pub use watcher::*;
 
-#[cfg(windows)]
+#[cfg(target_os="windows")]
 mod watcher {
 	#![allow(unused)]
 	#![allow(non_camel_case_types)]
@@ -263,5 +263,103 @@ mod watcher {
 			}
 		});
 		Ok(())
+	}
+}
+
+#[cfg(target_os="linux")]
+mod watcher {
+	#![allow(unused)]
+	use std::mem::MaybeUninit;
+	use std::ffi::OsStr;
+	type DWORD = u32;
+	#[repr(u32)]
+	#[derive(Debug)]
+	pub enum FileAction {
+		Added = 0x1,
+		Removed = 0x2,
+		Modified = 0x3,
+		RenamedOldName = 0x4,
+		RenamedNewName = 0x5,
+	}
+
+	#[repr(C)]
+	pub struct FileNotifyInformation {
+		next_entry_offset: DWORD,
+		pub action: FileAction,
+		file_name_len: DWORD,
+		file_name: [u16],
+	}
+
+	impl std::fmt::Debug for FileNotifyInformation {
+		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+			f.debug_struct("FileNotifyInformation")
+				.field("action", &self.action)
+				.field("file_name", &self.file_name())
+				.finish()
+		}
+	}
+
+	impl FileNotifyInformation {
+		pub fn file_name(&self) -> String {
+			String::from_utf16(&self.file_name).unwrap()
+		}
+	}
+
+	pub struct DirChanges {
+		buffer: Box<[MaybeUninit<DWORD>]>,
+	}
+	unsafe impl Send for DirChanges {}
+	unsafe impl Sync for DirChanges {}
+
+	impl DirChanges {
+		/// SAFETY: buffer must be initialized with a call to ReadDirectoryChangesW
+		unsafe fn new(buffer: Box<[MaybeUninit<u32>]>) -> Self {
+			Self {buffer}
+		}
+	}
+
+	impl<'a> IntoIterator for &'a DirChanges {
+		type IntoIter = DirChangesIter<'a>;
+		type Item = &'a FileNotifyInformation;
+		fn into_iter(self) -> Self::IntoIter {
+			DirChangesIter {
+				_buffer: &self.buffer,
+				current: self.buffer.as_ptr().cast::<u32>(),
+			}
+		}
+	}
+
+	pub struct DirChangesIter<'a> {
+		_buffer: &'a [MaybeUninit<DWORD>],
+		current: *const DWORD,
+	}
+
+	impl<'a> Iterator for DirChangesIter<'a> {
+		type Item = &'a FileNotifyInformation;
+		fn next(&mut self) -> Option<Self::Item> {
+			use std::ptr;
+			use std::mem::transmute;
+			if self.current.is_null() {return None;}
+
+			// SAFETY: 
+			// 	alignment: FileNotifyInformation is 4 byte aligned and
+			// 	ReadDirectoryChangesW guarantees FileNotifyInformation is aligned
+			// 	to 4 bytes
+			// 	len: len of 0 is always valid for slices
+			let current = unsafe{transmute::<*const [DWORD], &FileNotifyInformation>(ptr::slice_from_raw_parts(self.current, 0))};
+			let next_offset = current.next_entry_offset as usize;
+			// SAFETY: 
+			// 	alignment: FileNotifyInformation is 4 byte aligned and
+			// 	ReadDirectoryChangesW guarantees FileNotifyInformation is aligned
+			// 	to 4 bytes
+			// 	len: len is guaranteed by ReadDirectoryChangesW
+			let current = unsafe{transmute::<*const [DWORD], &FileNotifyInformation>(ptr::slice_from_raw_parts(self.current, current.file_name_len as usize / 2))};
+
+			self.current = if next_offset == 0 {std::ptr::null()} else {unsafe{self.current.byte_add(next_offset)}};
+			Some(current)
+		}
+	}
+	pub fn watch_changes(path: impl AsRef<OsStr>, f: impl FnMut(Result<DirChanges, std::io::Error>) + Send + 'static) -> Result<(), std::io::Error>{
+		unimplemented!();
 	}
 }
