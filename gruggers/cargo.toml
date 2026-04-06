@@ -1,6 +1,6 @@
 [package]
 name = "gruggers"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 authors = ["Nikhil Nathanael Ilango"]
 description = "rust implementation of the grug language"
@@ -18,4 +18,4 @@ path = "src/main.rs"
 [dependencies]
 json = "0.12.4"
 allocator-api2 = "0.4.0"
-gruggers-core = {version = "0.4.0", path = "../gruggers-core"}
+gruggers-core = {version = "0.5.0", path = "../gruggers-core"}

@@ -1242,7 +1242,7 @@ helper_fib_naive(n: number) number {
 	fn get_state() -> GrugState {
 		let mut state = GrugState::new_from_text(
 			MOD_API,
-			"doesn't matter",
+			"./",
 			Default::default(),
 			BytecodeBackend::new(),
 		).unwrap();

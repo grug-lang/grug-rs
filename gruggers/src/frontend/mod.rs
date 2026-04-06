@@ -102,6 +102,7 @@ impl GrugState {
 	
 	pub fn compile_all_files(&self) -> std::vec::Vec<FileInfo> {
 		let mut files = std::vec::Vec::new();
+		#[expect(irrefutable_let_patterns)]
 		let mods_dir_len = if let x = *self.mods_dir_path.as_encoded_bytes().last().unwrap_or(&b'\0') && (x != b'\\' && x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
 		for mod_dir in std::fs::read_dir(&self.mods_dir_path).expect("Could not read mods directory") {
 			let Ok(mod_dir) = mod_dir else {
