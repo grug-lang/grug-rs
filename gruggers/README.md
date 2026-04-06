@@ -6,9 +6,9 @@ Grug is a minimal strongly typed, embeddable, designed for long term compatibili
 It is hot reloadable with extremely fast compile times and allows users to
 fully override backends even in closed source applications. You can read more
 about grug
-(here)[https://mynameistrez.github.io/blog/creating-the-perfect-modding-language]
+[here](https://mynameistrez.github.io/blog/creating-the-perfect-modding-language)
 or watch the video about it
-(here)[https://www.youtube.com/watch?v=4oUToVXR2Vo].
+[here](https://www.youtube.com/watch?v=4oUToVXR2Vo).
 
 Gruggers provides an implementation of the grug language in rust. It comes with
 rust bindings, the frontend, two different backends, and even c bindings.
