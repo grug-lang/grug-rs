@@ -25,11 +25,14 @@ fn main () {
 	unsafe{state.register_game_fn("print_string", print_string).unwrap()};
 	state.all_game_fns_registered().unwrap();
 
-	let id = state.compile_grug_file("goldie/first-Dog.grug").unwrap();
+	let files = state.compile_all_files();
+	println!("{:?}", files);
+	let id = *files[0].result.as_ref().unwrap();
 	let dog = state.create_entity(id).unwrap();
 	let on_bark_id = state.get_on_fn_id("Dog", "on_bark").unwrap();
 
 	loop {
+		_ = state.update_files();
 		if !state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: nt!("woof").as_ntstrptr()}]) {panic!()};
 		if !state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: nt!("arf").as_ntstrptr()}]) {panic!()};
 		std::thread::sleep(Duration::from_secs(1));

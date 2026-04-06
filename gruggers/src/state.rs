@@ -7,6 +7,7 @@ use crate::xar::Xar;
 use crate::ntstring::NTStrPtr;
 use crate::arena::Arena;
 use crate::nt;
+use crate::watcher::{watch_changes, DirChanges};
 
 use gruggers_core::runtime_error::RuntimeError;
 pub use gruggers_core::state::State;
@@ -19,6 +20,7 @@ use std::collections::{HashMap, hash_map::Entry};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::ffi::{OsString, OsStr};
 use std::path::Path;
+use std::sync::mpsc::{Receiver, channel};
 
 #[repr(C)]
 pub struct RuntimeErrorHandler {
@@ -234,6 +236,8 @@ pub struct GrugState {
 	pub(crate) current_script: Cell<Option<GrugFileId>>,
 	pub(crate) current_on_fn_id: Cell<Option<GrugOnFnId>>,
 	pub(crate) is_errorring: Cell<bool>,
+
+	pub(crate) changes: Receiver<Result<DirChanges, std::io::Error>>,
 }
 
 impl State for GrugState {
@@ -295,6 +299,9 @@ impl GrugState {
 			}
 		}
 
+		let (sender, reciever) = channel();
+		watch_changes(mods_dir_path.as_ref().to_str().unwrap(), move |changes| sender.send(changes).unwrap()).unwrap();
+
 		Ok(Self {
 			mod_api,
 			mods_dir_path: OsString::from(mods_dir_path.as_ref()),
@@ -310,6 +317,7 @@ impl GrugState {
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
 			is_errorring: Cell::new(false),
+			changes: reciever,
 		})
 	}
 

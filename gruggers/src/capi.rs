@@ -1,5 +1,5 @@
 #![allow(improper_ctypes_definitions)]
-use crate::state::{GrugInitSettings, GrugState, GrugEntityHandle, EventFnEntry};
+use crate::state::{EventFnEntry, FileInfo, GrugEntityHandle, GrugInitSettings, GrugState};
 use crate::ntstring::NTStrPtr;
 use crate::types::{GrugFileId, GrugOnFnId, GrugEntity, GrugValue, GameFnPtrState};
 
@@ -18,6 +18,16 @@ pub unsafe extern "C" fn grug_register_game_fn(state: &mut GrugState, game_fn_na
 }
 
 const INVALID_GRUG_SCRIPT_ID: GrugFileId = GrugFileId::new(u64::MAX);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn grug_compile_all_files(state: &GrugState) -> &[FileInfo] {
+	state.compile_all_files().leak()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn grug_update(state: &GrugState) -> &[FileInfo] {
+	state.update_files().leak()
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_compile_file(state: &GrugState, file_path: NTStrPtr<'_>) -> GrugFileId {

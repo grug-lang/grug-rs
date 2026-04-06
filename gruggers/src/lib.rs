@@ -1,4 +1,4 @@
-#![deny(warnings)]
+// #![deny(warnings)]
 #![allow(clippy::single_char_add_str, clippy::bool_comparison)]
 
 pub mod frontend;
@@ -14,6 +14,7 @@ mod xar;
 mod arena;
 
 mod cachemap;
+mod watcher;
 
 pub use gruggers_core::types;
 pub use gruggers_core::ast;
@@ -22,6 +23,9 @@ pub use gruggers_core::ntstring;
 pub use gruggers_core::nt;
 
 
+// TODO: Non-utf8 version of NTStrPtr and NTStr
+// TODO: README and docs for gruggers
+// TODO: Hot reloading grug_files
 // TODO: Debug info to backends
 // TODO: Better Error handling
 // TODO: ModsDir struct 

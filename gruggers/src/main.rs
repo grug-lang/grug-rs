@@ -1,3 +1,4 @@
+
 use std::path::Path;
 
 use gruggers::state::{GrugInitSettings, GrugState};
@@ -13,6 +14,7 @@ type Error = Box<dyn std::error::Error>;
 struct CliArgs {
 	files_to_compile: Vec<String>,
 	mod_api_path: Option<String>,
+	mods_dir: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -30,9 +32,11 @@ fn main() -> Result<()> {
 		None => search_mod_api_path()?,
 	};
 
+	let mods_dir = args.mods_dir.as_ref().map(AsRef::as_ref).unwrap_or("");
+
 	let mut grug_state = GrugInitSettings::new()
 		.set_mod_api_path(&mod_api_path)
-		.set_mods_dir("")
+		.set_mods_dir(mods_dir)
 		.set_backend(StubBackend)
 		.build_state().unwrap();
 
@@ -97,6 +101,7 @@ fn parse_args() -> Result<CliArgs> {
 
 	let mut files_to_compile = Vec::new();
 	let mut mod_api_path = None;
+	let mut mods_dir = None;
 	
 	while let Some(next_arg) = args.next() {
 		if next_arg == "-h" || next_arg == "--help" {
@@ -116,6 +121,11 @@ fn parse_args() -> Result<CliArgs> {
 				return Err(Box::from("Expected path to file after '-i'")).into();
 			};
 			files_to_compile.push(String::from(actual_path));
+		} else if next_arg == "-d" {
+			let Some(actual_path) = args.next() else {
+				return Err(Box::from("Expected mods directory after '-d'")).into();
+			};
+			mods_dir = Some(actual_path);
 		} else if next_arg.starts_with("-") {
 			return Err(Box::from("Unexpected switch in arguments")).into();
 		} else {
@@ -128,6 +138,7 @@ fn parse_args() -> Result<CliArgs> {
 	Ok(CliArgs {
 		files_to_compile,
 		mod_api_path,
+		mods_dir,
 	})
 }
 

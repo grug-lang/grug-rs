@@ -10,6 +10,7 @@ use crate::types::GrugFileId;
 use crate::ast::*;
 use crate::arena::Arena;
 use crate::ntstring::NTStrPtr;
+use crate::watcher::FileAction;
 
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box as Box2;
@@ -101,11 +102,13 @@ impl GrugState {
 	
 	pub fn compile_all_files(&self) -> std::vec::Vec<FileInfo> {
 		let mut files = std::vec::Vec::new();
+		let mods_dir_len = if let x = *self.mods_dir_path.as_encoded_bytes().last().unwrap_or(&b'\0') && (x != b'\\' && x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
 		for mod_dir in std::fs::read_dir(&self.mods_dir_path).expect("Could not read mods directory") {
 			let Ok(mod_dir) = mod_dir else {
 				panic!("unable to read directory: {:?}", mod_dir);
 			};
 			let mod_dir_path = mod_dir.path();
+			let mod_dir_path = unsafe{OsStr::from_encoded_bytes_unchecked(&mod_dir_path.as_os_str().as_encoded_bytes()[mods_dir_len..])};
 			let mut entries_to_check = std::vec::Vec::from([mod_dir]);
 
 			while let Some(next_entry) = entries_to_check.pop() {
@@ -121,7 +124,7 @@ impl GrugState {
 					let entry_path = next_entry.path();
 					let entry_path = entry_path.as_os_str();
 					let rel_path = entry_path.as_encoded_bytes();
-					let rel_path = &rel_path[self.mods_dir_path.len()..];
+					let rel_path = &rel_path[mods_dir_len..];
 					let rel_path = <OsStr as AsRef<Path>>::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)});
 
 					if let Some(extension) = Path::extension(rel_path.as_ref()) && extension == "grug" {
@@ -129,13 +132,44 @@ impl GrugState {
 						let info = FileInfo {
 							path: Box::from(rel_path),
 							file_name: Box::from(rel_path.file_name().unwrap()),
-							mod_name: Box::from(mod_dir_path.as_os_str()),
+							mod_name: Box::from(mod_dir_path),
 							entity_type: Box::from(get_entity_type(rel_path.as_os_str()).unwrap_or("")),
 							entity_name: Box::from(rel_path.file_prefix().unwrap()),
 							result
 						};
 						files.push(info);
 					};
+				}
+			}
+		}
+		files
+	}
+	
+	pub fn update_files(&self) -> std::vec::Vec<FileInfo> {
+		let mut files = std::vec::Vec::new();
+		for changes in self.changes.try_iter() {
+			let changes = changes.expect("File IO error");
+			for change in &changes {
+				match change.action {
+					FileAction::Added | FileAction::Modified | FileAction::RenamedNewName => {
+						let file_name = change.file_name();
+						let file_name: &Path = file_name.as_ref();
+						if let Some(extension) = Path::extension(file_name.as_ref()) && extension == "grug" {
+							let mod_dir_path = file_name.parent().expect("mod must have parent for successful compilation");
+							let result = self.compile_grug_file(file_name);
+							let info = FileInfo {
+								path: Box::from(file_name),
+								file_name: Box::from(file_name.file_name().unwrap()),
+								mod_name: Box::from(mod_dir_path.as_os_str()),
+								entity_type: Box::from(get_entity_type(file_name.as_os_str()).unwrap_or("")),
+								entity_name: Box::from(file_name.file_prefix().unwrap()),
+								result
+							};
+							files.push(info);
+						};
+						
+					}
+					_ => (),
 				}
 			}
 		}
