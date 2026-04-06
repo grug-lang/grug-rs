@@ -1,6 +1,6 @@
 [package]
 name = "gruggers"
-version = "0.5.0"
+version = "0.5.q"
 edition = "2024"
 authors = ["Nikhil Nathanael Ilango"]
 description = "rust implementation of the grug language"
