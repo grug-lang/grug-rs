@@ -233,16 +233,17 @@ fn get_entity_type(path: &OsStr) -> Result<&str, FileError> {
 	let mut dot_pos = None;
 	let mut dash_pos = None;
 	let path_bytes = path.as_encoded_bytes();
+	let file_name = <OsStr as AsRef<Path>>::as_ref(path).file_name().unwrap_or("".as_ref());
 	for (i, ch) in path_bytes.iter().enumerate().rev() {
 		match (ch, dot_pos, dash_pos) {
 			(b'.', None, None) => dot_pos = Some(i),
-			(b'-', None, None) => Err(FileError::MissingPeriodInFileName{path: OsString::from(path)})?,
+			(b'-', None, None) => Err(FileError::MissingPeriodInFileName{file_name: OsString::from(file_name)})?,
 			(b'-', Some(_), None) => {dash_pos = Some(i); break;},
 			_ => (),
 		}
 	}
 	let (Some(dot_pos), Some(dash_pos)) = (dot_pos, dash_pos) else {
-		Err(FileError::EntityMissing{path: OsString::from(path)})?
+		Err(FileError::EntityMissing{file_name: OsString::from(file_name)})?
 	};
 	// SAFETY: dash_pos is b'-' which is valid utf8, and dot_pos is b'.' which
 	// is also utf8 so (dash_pos+1)..dot_pos will not truncate a utf8 codepoint
@@ -251,7 +252,7 @@ fn get_entity_type(path: &OsStr) -> Result<&str, FileError> {
 		return Err(FileError::EntityLenExceedsMaxLen{path: OsString::from(path), entity_len: entity_type.len()});
 	}
 	if entity_type.is_empty() {
-		return Err(FileError::EntityMissing{path: OsString::from(path)});
+		return Err(FileError::EntityMissing{file_name: OsString::from(file_name)});
 	}
 	check_custom_id_is_pascal(entity_type)
 }
@@ -276,14 +277,14 @@ pub enum FileError {
 		path: String
 	},
 	MissingPeriodInFileName {
-		path: OsString,
+		file_name: OsString,
 	},
 	EntityLenExceedsMaxLen {
 		path: OsString,
 		entity_len: usize,
 	},
 	EntityMissing {
-		path: OsString,
+		file_name: OsString,
 	},
 	EntityNotUtf8 {
 		entity_type: OsString,
@@ -304,8 +305,8 @@ impl std::fmt::Display for FileError {
 				path
 			} => write!(f, "The grug file path {}, does not contain a '/' character", path),
 			Self::MissingPeriodInFileName {
-				path
-			} => write!(f, "'{}' is missing a period in its filename", path.display()),
+				file_name
+			} => write!(f, "'{}' is missing a period in its filename", file_name.display()),
 			Self::EntityLenExceedsMaxLen {
 				path,
 				entity_len: _,
@@ -315,11 +316,10 @@ impl std::fmt::Display for FileError {
 				path.display()
 			),
 			Self::EntityMissing {
-				path
+				file_name
 			} => write!(f, 
-				"'{}' is missing an entity type in its name;\n\
-				use a dash to specify it, like 'ak47-gun.grug'",
-				path.display()
+				"'{}' is missing an entity type in its name",
+				file_name.display()
 			),
 			Self::EntityNotUtf8 {
 				entity_type
@@ -331,8 +331,7 @@ impl std::fmt::Display for FileError {
 				entity_type,
 				wrong_char,
 			} => write!(f,
-				"'{entity_type}' seems like a custom ID type, but it contains '{wrong_char}', \n\
-				which isn't uppercase/lowercase/a digit"
+				"'{entity_type}' seems like a custom ID type, but it contains '{wrong_char}', which isn't uppercase/lowercase/a digit"
 			),
 		}
 	}

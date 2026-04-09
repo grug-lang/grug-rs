@@ -291,10 +291,10 @@ impl std::fmt::Display for TypePropogatorError {
 		match self {
 			Self::EntityDoesNotExist{
 				entity_name,
-			} => write!(f, "The entity '{}' was not declared by mod_api.json", entity_name),
+			} => write!(f, "'{}' seems like a custom ID type, but it doesn't start in Uppercase", entity_name),
 			Self::GlobalVariableShadowed {
 				name,
-			} => write!(f, "The global variable '{}' shadows an earlier global variable with the same name, so change the name of one of them", name),
+			} => write!(f, "The global variable '{}' shadows an earlier global variable", name),
 			Self::GlobalCantCallHelperFn {
 				global_name,
 			} => write!(f, "The global variable '{}' isn't allowed to call helper functions", global_name),
@@ -412,10 +412,10 @@ impl std::fmt::Display for TypePropogatorError {
 			} => write!(f, "Can't assign {} to '{}', which has type {}", got_type, name, expected_type),
 			Self::LocalVariableShadowedByGlobal {
 				name,
-			} => write!(f, "The local variable '{}' shadows an earlier global  variable with the same name, so change the name of one of them", name),
+			} => write!(f, "The local variable '{}' shadows an earlier global variable", name),
 			Self::LocalVariableShadowedByLocal {
 				name,
-			} => write!(f, "The local variable '{}' shadows an earlier local variable with the same name, so change the name of one of them", name),
+			} => write!(f, "The local variable '{}' shadows an earlier local variable", name),
 			Self::CantAssignBecauseVariableDoesntExist {
 				name,
 			} => write!(f, "Can't assign to the variable '{}', since it does not exist", name),
@@ -820,20 +820,13 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					let result_ty = self.fill_expr(helper_fns, assignment_expr, arena)?;
 					
 					if let Some(ty) = ty {
-						if self.get_variable_type(name.to_str()).is_some() {
-							return Err(TypePropogatorError::VariableAlreadyExists{
-								variable_name: Arc::from(name.to_str()),
-							});
-						}
+						self.add_local_variable(name.to_str(), ty.clone())?;
 						if !(**ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && **ty != result_ty {
-						// if *ty == (GrugType::Id{custom_name: None}) || GrugType::match_non_exact(ty, &result_ty) {
 							return Err(TypePropogatorError::VariableTypeMismatch {
 								name: Arc::from(name.to_str()),
 								got_type: result_ty.into(),
 								expected_type: (*ty).into(),
 							});
-						} else {
-							self.add_local_variable(name.to_str(), ty.clone())?
 						}
 					} else {
 						let ty = if let Some(ty) = self.get_global_variable_type(name.to_str()) {
@@ -1295,7 +1288,6 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 
 	fn get_variable_type(&self, var_name: &str) -> Option<GrugType<'arena>> {
-		// TODO: also do local variables
 		if let var@Some(_) = self.get_local_variable_type(var_name) {
 			var
 		} else {
@@ -1330,12 +1322,13 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				name: Arc::from(name),
 			});
 		}
-		match self.local_variables.last_mut().expect("There is no local scope to push onto").entry(name) {
-			Entry::Occupied(_) => return Err(TypePropogatorError::LocalVariableShadowedByLocal{
+		if self.get_local_variable_type(name).is_some() {
+			return Err(TypePropogatorError::LocalVariableShadowedByLocal{
 				name: Arc::from(name),
-			})?,
-			Entry::Vacant(x) => {x.insert(ty);},
+			});
 		}
+		let result = self.local_variables.last_mut().expect("There is no local scope to push onto").insert(name, ty).is_none();
+		debug_assert!(result);
 		Ok(())
 	}
 

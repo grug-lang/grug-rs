@@ -191,6 +191,12 @@ impl std::fmt::Display for ParserError {
 				col: _,
 			} => write!(f, "Unexpected token '{}' on line {}", token_value, line),
 			Self::GotWrongToken{
+				expected: _,
+				got: TokenType::OpenParenthesis,
+				line, 
+				..
+			} => write!(f, "Unexpected '(' after non-identifier at line {}", line),
+			Self::GotWrongToken{
 				expected,
 				got,
 				line, 
@@ -319,6 +325,17 @@ impl std::fmt::Display for ParserError {
 				line,
 				col: _,
 			} => write!(f, "Expected '(', or ':', or ' =' after the word '{}' on line {}", prev_token, line),
+			Self::ExpectedIndentation{
+				got,
+				line,
+				col: _,
+			} => write!(f, "Expected indentation, newline, or '}}', but got '{}' on line {}", got, line),
+			Self::IndentationMismatch{
+				expected_spaces,
+				got_spaces,
+				line,
+				col: _,
+			} => write!(f, "Expected {} spaces, but got {} spaces on line {}", expected_spaces, got_spaces, line),
 			_ => write!(f, "{:?}", self),
 		}
 	}

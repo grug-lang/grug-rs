@@ -56,7 +56,7 @@ mod test_bindings {
 
 	pub extern "C" fn destroy_grug_state<'a>(_state: Box<(GrugState, Vec<FileInfo>)>) { }
 
-	pub extern "C" fn compile_grug_file((_state, files): &(GrugState, Vec<FileInfo>), path: NTStrPtr<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugFileId {
+	pub extern "C" fn compile_grug_file((state, files): &(GrugState, Vec<FileInfo>), path: NTStrPtr<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugFileId {
 		let path = path.to_str();
 
 		for file in files {
@@ -75,16 +75,25 @@ mod test_bindings {
 				}
 			}
 		}
-		*err_out = Some(nt!("File not found").as_ntstrptr());
-		GrugFileId::new(u64::MAX)
+		match state.compile_grug_file(path) {
+			Ok(id) => {
+				*err_out = None;
+				return id;
+			}
+			Err(err) => {
+				let mut string = format!("{}", err);
+				string.push('\0');
+				*err_out = Some(NTStr::from_str(String::leak(string)).unwrap().as_ntstrptr());
+				return GrugFileId::new(u64::MAX);
+			}
+		}
 	}
 
 	pub extern "C" fn init_globals ((state, _): &(GrugState, Vec<FileInfo>), file_id: GrugFileId) {
 		unsafe{state.set_next_entity_id(42)};
 		unsafe{&mut * &raw mut CURRENT_ENTITY}.take().map(|entity| state.destroy_entity(entity));
-		unsafe{CURRENT_ENTITY = Some(std::mem::transmute::<GrugEntityHandle<'_>, GrugEntityHandle<'static>>(state.
-			create_entity(file_id)
-			.expect("runtime_error")))};
+		unsafe{CURRENT_ENTITY = std::mem::transmute::<Option<GrugEntityHandle<'_>>, Option<GrugEntityHandle<'static>>>(state.
+			create_entity(file_id))};
 	}
 
 	#[allow(unused_variables)]
@@ -223,7 +232,7 @@ mod game_fn_bindings {
         safe fn game_fn_draw                 <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_blocked_alrm         <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_spawn                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        // safe fn game_fn_spawn_d              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_spawn_d              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_has_resource         <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_has_entity           <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_has_string           <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
@@ -244,7 +253,7 @@ mod game_fn_bindings {
         safe fn game_fn_store                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_retrieve             <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_box_number           <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        // safe fn game_fn_print_csv            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_print_csv            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
 	}
 	pub fn register_game_functions(state: &mut GrugState) { unsafe {
 		state.register_game_fn("nothing",              game_fn_nothing             ).unwrap(); 
@@ -264,7 +273,7 @@ mod game_fn_bindings {
 		state.register_game_fn("draw",                 game_fn_draw                ).unwrap(); 
 		state.register_game_fn("blocked_alrm",         game_fn_blocked_alrm        ).unwrap(); 
 		state.register_game_fn("spawn",                game_fn_spawn               ).unwrap(); 
-		// state.register_game_fn("spawn_d",              game_fn_spawn_d             ).unwrap(); 
+		state.register_game_fn("spawn_d",              game_fn_spawn_d             ).unwrap(); 
 		state.register_game_fn("has_resource",         game_fn_has_resource        ).unwrap(); 
 		state.register_game_fn("has_entity",           game_fn_has_entity          ).unwrap(); 
 		state.register_game_fn("has_string",           game_fn_has_string          ).unwrap(); 
@@ -285,7 +294,7 @@ mod game_fn_bindings {
 		state.register_game_fn("store",                game_fn_store               ).unwrap(); 
 		state.register_game_fn("retrieve",             game_fn_retrieve            ).unwrap(); 
 		state.register_game_fn("box_number",           game_fn_box_number          ).unwrap(); 
-		// state.register_game_fn("print_csv",            game_fn_print_csv           ).unwrap(); 
+		state.register_game_fn("print_csv",            game_fn_print_csv           ).unwrap(); 
 	}}
 }
 use std::io::Write;
