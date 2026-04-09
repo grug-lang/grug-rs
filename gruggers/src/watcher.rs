@@ -1,7 +1,8 @@
 pub use watcher::*;
 use std::ffi::{OsStr, OsString};
 
-pub fn poll_watcher(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<OsString, std::io::Error>) + Send + 'static) -> Result<(), std::io::Error>{
+#[allow(unused)]
+pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<OsString, std::io::Error>) + Send + 'static) -> Result<(), std::io::Error>{
 	use std::collections::HashMap;
 	let mods_dir = OsString::from(mods_dir.as_ref());
 	let mods_dir_len = if mods_dir.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {mods_dir.len() + 1} else {mods_dir.len()};
@@ -345,6 +346,6 @@ mod watcher {
 mod watcher {
 	use std::ffi::{OsStr, OsString};
 	pub fn watch_changes(mods_dir: impl AsRef<OsStr>, f: impl FnMut(Result<OsString, std::io::Error>) + Send + 'static) -> Result<(), std::io::Error> {
-		super::poll_watcher(mods_dir, f)
+		super::poll_watch_changes(mods_dir, f)
 	}
 }
