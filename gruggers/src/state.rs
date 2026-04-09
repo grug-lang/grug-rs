@@ -7,7 +7,7 @@ use crate::xar::Xar;
 use crate::ntstring::NTStrPtr;
 use crate::arena::Arena;
 use crate::nt;
-use crate::watcher::{poll_watcher, watch_changes};
+use crate::watcher::{watch_changes};
 
 use gruggers_core::runtime_error::RuntimeError;
 pub use gruggers_core::state::State;
@@ -301,11 +301,7 @@ impl GrugState {
 		}
 
 		let (sender, reciever) = channel();
-		if true {
-			poll_watcher(mods_dir_path.as_ref().to_str().unwrap(), move |changes| sender.send(changes).unwrap()).unwrap();
-		} else {
-			watch_changes(mods_dir_path.as_ref().to_str().unwrap(), move |changes| sender.send(changes).unwrap()).unwrap();
-		}
+		watch_changes(mods_dir_path.as_ref().to_str().unwrap(), move |changes| sender.send(changes).unwrap()).unwrap();
 
 		Ok(Self {
 			mod_api,
