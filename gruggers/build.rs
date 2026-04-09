@@ -28,7 +28,13 @@ fn build_tests() {
 		_ = std::fs::copy(test_source_path.clone() + "tests.dll", archive_path.clone() + "/tests.dll");
 		_ = std::fs::copy(test_source_path + "libtests.dll.a", archive_path.clone() + "/tests.lib");
 
-		_ = std::fs::copy(bench_source_path.clone() + "bench.dll", archive_path.clone() + "/bench.dll");
-		_ = std::fs::copy(bench_source_path + "bench.lib", archive_path + "/bench.lib");
+		let bench_dll_out_path = archive_path.clone() + "/bench.dll";
+		for optional_path in ["bench.dll", "libbench.dll"] {
+			_ = std::fs::copy(bench_source_path.clone() + optional_path, &bench_dll_out_path);
+		}
+		let bench_lib_out_path = archive_path + "/bench.lib";
+		for optional_path in ["bench.lib", "libbench.lib"] {
+			_ = std::fs::copy(bench_source_path.clone() + optional_path, &bench_lib_out_path);
+		}
 	}
 }

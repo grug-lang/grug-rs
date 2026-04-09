@@ -20,9 +20,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - run: git submodule update --init --force
-    - run: cmake -S gruggers/src/grug-tests/ -B ./gruggers/src/grug-tests/build/ -G Ninja -DCMAKE_BUILD_TYPE=Release
+    - run: cmake -S gruggers/src/grug-tests/ -B ./gruggers/src/grug-tests/build/ -DCMAKE_BUILD_TYPE=Release
     - run: cmake --build ./gruggers/src/grug-tests/build
-    - run: cmake -S gruggers/src/grug-bench/ -B ./gruggers/src/grug-bench/build/ -G Ninja -DCMAKE_BUILD_TYPE=Release
+    - run: cmake -S gruggers/src/grug-bench/ -B ./gruggers/src/grug-bench/build/ -DCMAKE_BUILD_TYPE=Release
     - run: cmake --build ./gruggers/src/grug-bench/build
     - name: Build
       run: cargo build --verbose
