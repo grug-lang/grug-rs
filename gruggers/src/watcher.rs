@@ -1,7 +1,6 @@
 pub use watcher::*;
-pub use std::ffi::{OsStr, OsString};
+use std::ffi::{OsStr, OsString};
 
-#[allow(warnings)]
 pub fn poll_watcher(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<OsString, std::io::Error>) + Send + 'static) -> Result<(), std::io::Error>{
 	use std::collections::HashMap;
 	let mods_dir = OsString::from(mods_dir.as_ref());
@@ -342,3 +341,10 @@ mod watcher {
 	}
 }
 
+#[cfg(target_os="linux")]
+mod watcher {
+	use std::ffi::{OsStr, OsString};
+	pub fn watch_changes(mods_dir: impl AsRef<OsStr>, f: impl FnMut(Result<OsString, std::io::Error>) + Send + 'static) -> Result<(), std::io::Error> {
+		super::poll_watcher(mods_dir, f)
+	}
+}
