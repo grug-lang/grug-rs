@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 #![deny(warnings)]
 #![allow(clippy::single_char_add_str, clippy::bool_comparison)]
 

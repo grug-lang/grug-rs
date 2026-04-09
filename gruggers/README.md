@@ -2,7 +2,7 @@
 
 Make your mods Immortal
 
-Grug is a minimal strongly typed, embeddable, language designed for long term
+Grug is a minimal strongly typed, embeddable language designed for long term
 compatibility.  It is hot reloadable with extremely fast compile times and
 allows users to fully override backends even in closed source applications.
 You can read more about grug
