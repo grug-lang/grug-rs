@@ -163,16 +163,16 @@ In order to use gruggers as a static library, link against it alongside its
 required libraries. 
 
 For MSVC
-```
+```text
 kernel32.lib ntdll.lib userenv.lib ws2_32.lib dbghelp.lib /defaultlib:msvcrt kernel32.lib
 ```
 
 For clang
-```
+```text
 -lntdll -luserenv -lws2_32 -ldbghelp -nostdlib -lmsvcrt 
 ```
 
 For gcc
-```
+```text
 -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc
 ```
