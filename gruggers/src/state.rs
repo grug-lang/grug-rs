@@ -7,7 +7,7 @@ use crate::xar::Xar;
 use crate::ntstring::NTStrPtr;
 use crate::arena::Arena;
 use crate::nt;
-use crate::watcher::{watch_changes, DirChanges};
+use crate::watcher::{poll_watcher, watch_changes};
 
 use gruggers_core::runtime_error::RuntimeError;
 pub use gruggers_core::state::State;
@@ -238,7 +238,7 @@ pub struct GrugState {
 	pub(crate) current_on_fn_id: Cell<Option<GrugOnFnId>>,
 	pub(crate) is_errorring: Cell<bool>,
 
-	pub(crate) changes: Receiver<Result<DirChanges, std::io::Error>>,
+	pub(crate) changes: Receiver<Result<OsString, std::io::Error>>,
 }
 
 impl State for GrugState {
@@ -301,7 +301,11 @@ impl GrugState {
 		}
 
 		let (sender, reciever) = channel();
-		watch_changes(mods_dir_path.as_ref().to_str().unwrap(), move |changes| sender.send(changes).unwrap()).unwrap();
+		if true {
+			poll_watcher(mods_dir_path.as_ref().to_str().unwrap(), move |changes| sender.send(changes).unwrap()).unwrap();
+		} else {
+			watch_changes(mods_dir_path.as_ref().to_str().unwrap(), move |changes| sender.send(changes).unwrap()).unwrap();
+		}
 
 		Ok(Self {
 			mod_api,

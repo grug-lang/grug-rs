@@ -10,7 +10,6 @@ use crate::types::GrugFileId;
 use crate::ast::*;
 use crate::arena::Arena;
 use crate::ntstring::NTStrPtr;
-use crate::watcher::FileAction;
 
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box as Box2;
@@ -31,7 +30,7 @@ impl GrugState {
 	// Path is relative to mods directory
 	pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<GrugFileId, GrugError> {
 		let mut path_buf = self.mods_dir_path.clone();
-		path_buf.push("\\");
+		path_buf.push("/");
 		path_buf.push(path.as_ref());
 		let file_text = std::fs::read_to_string(path_buf).unwrap();
 
@@ -102,8 +101,7 @@ impl GrugState {
 	
 	pub fn compile_all_files(&self) -> std::vec::Vec<FileInfo> {
 		let mut files = std::vec::Vec::new();
-		#[expect(irrefutable_let_patterns)]
-		let mods_dir_len = if let x = *self.mods_dir_path.as_encoded_bytes().last().unwrap_or(&b'\0') && (x != b'\\' && x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
+		let mods_dir_len = if self.mods_dir_path.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
 		for mod_dir in std::fs::read_dir(&self.mods_dir_path).expect("Could not read mods directory") {
 			let Ok(mod_dir) = mod_dir else {
 				panic!("unable to read directory: {:?}", mod_dir);
@@ -148,31 +146,22 @@ impl GrugState {
 	
 	pub fn update_files(&self) -> std::vec::Vec<FileInfo> {
 		let mut files = std::vec::Vec::new();
-		for changes in self.changes.try_iter() {
-			let changes = changes.expect("File IO error");
-			for change in &changes {
-				match change.action {
-					FileAction::Added | FileAction::Modified | FileAction::RenamedNewName => {
-						let file_name = change.file_name();
-						let file_name: &Path = file_name.as_ref();
-						if let Some(extension) = Path::extension(file_name.as_ref()) && extension == "grug" {
-							let mod_dir_path = file_name.parent().expect("mod must have parent for successful compilation");
-							let result = self.compile_grug_file(file_name);
-							let info = FileInfo {
-								path: Box::from(file_name),
-								file_name: Box::from(file_name.file_name().unwrap()),
-								mod_name: Box::from(mod_dir_path.as_os_str()),
-								entity_type: Box::from(get_entity_type(file_name.as_os_str()).unwrap_or("")),
-								entity_name: Box::from(file_name.file_prefix().unwrap()),
-								result
-							};
-							files.push(info);
-						};
-						
-					}
-					_ => (),
-				}
-			}
+		for change in self.changes.try_iter() {
+			let file_name = change.expect("File IO error");
+			let file_name: &Path = file_name.as_ref();
+			if let Some(extension) = Path::extension(file_name.as_ref()) && extension == "grug" {
+				let mod_dir_path = file_name.parent().expect("mod must have parent for successful compilation");
+				let result = self.compile_grug_file(file_name);
+				let info = FileInfo {
+					path: Box::from(file_name),
+					file_name: Box::from(file_name.file_name().unwrap()),
+					mod_name: Box::from(mod_dir_path.as_os_str()),
+					entity_type: Box::from(get_entity_type(file_name.as_os_str()).unwrap_or("")),
+					entity_name: Box::from(file_name.file_prefix().unwrap()),
+					result
+				};
+				files.push(info);
+			};
 		}
 		files
 	}
