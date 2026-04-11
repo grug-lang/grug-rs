@@ -301,7 +301,7 @@ impl GrugState {
 		}
 
 		let (sender, reciever) = channel();
-		watch_changes(mods_dir_path.as_ref().to_str().unwrap(), move |changes| sender.send(changes).unwrap()).unwrap();
+		watch_changes(mods_dir_path.as_ref().to_str().unwrap(), move |changes| sender.send(changes).is_ok()).unwrap();
 
 		Ok(Self {
 			mod_api,

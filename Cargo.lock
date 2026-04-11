@@ -10,7 +10,7 @@ checksum = "c880a97d28a3681c0267bd29cff89621202715b065127cd445fa0f0fe0aa2880"
 
 [[package]]
 name = "gruggers"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "allocator-api2",
  "gruggers-core",
@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "gruggers-core"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "allocator-api2",
 ]

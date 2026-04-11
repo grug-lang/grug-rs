@@ -10,20 +10,16 @@ mod test_bindings {
 	use gruggers::types::{GrugValue, GrugFileId};
 	use gruggers::ntstring::{NTStrPtr, NTStr};
 	use gruggers::serde;
-	use gruggers::nt;
 
 	use std::path::Path;
 	use std::ffi::OsStr;
 
 	static mut CURRENT_ENTITY: Option<GrugEntityHandle<'static>> = None;
 
-	pub extern "C" fn create_grug_state<'a>(_mod_api_path: NTStrPtr<'a>, _mods_dir_path: NTStrPtr<'a>) -> Box<(GrugState, Vec<FileInfo>)> {
-		let mods_dir_path = nt!("src/grug-tests/tests/");
-		let mod_api_path = nt!("src/grug-tests/mod_api.json");
-
+	pub extern "C" fn create_grug_state<'a>(mod_api_path: NTStrPtr<'a>, mods_dir_path: NTStrPtr<'a>) -> Option<Box<(GrugState, Vec<FileInfo>)>> {
 		let mut state = GrugInitSettings::new()
-			.set_mod_api_path(mod_api_path.as_str())
-			.set_mods_dir(mods_dir_path.as_str())
+			.set_mod_api_path(mod_api_path.to_str())
+			.set_mods_dir(mods_dir_path.to_str())
 			.set_runtime_error_handler(|kind, msg, fn_name, script_path| {
 				let mut msg = String::from(msg);
 				msg.push('\0');
@@ -40,18 +36,10 @@ mod test_bindings {
 				)};
 			})
 			.set_backend(BytecodeBackend::new())
-			.build_state().unwrap();
-		// register_game_functions(&mut state);
-		super::game_fn_bindings::register_game_functions(&mut state);
-		// let game_functions = get_game_functions();
-		state.all_game_fns_registered().unwrap();
+			.build_state().ok()?;
+		super::game_fn_bindings::register_game_functions(&mut state).ok()?;
 		let files = state.compile_all_files();
-		// #[cfg(windows)]
-		// for file in &mut files {
-		// 	let path = unsafe{std::mem::transmute::<&mut Path, &mut [u8]>(&mut *file.path)};
-		// 	path.into_iter().for_each(|byte| if *byte == b'\\' {*byte = b'/';});
-		// }
-		Box::new((state, files))
+		Some(Box::new((state, files)))
 	}
 
 	pub extern "C" fn destroy_grug_state<'a>(_state: Box<(GrugState, Vec<FileInfo>)>) { }
@@ -151,7 +139,7 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	// pub type c_size_t = u64;
 	#[allow(non_camel_case_types)]
-	pub type create_grug_state_t = for<'a> extern "C" fn(NTStrPtr<'a>, NTStrPtr<'a>) -> Box<(GrugState, Vec<FileInfo>)>;
+	pub type create_grug_state_t = for<'a> extern "C" fn(NTStrPtr<'a>, NTStrPtr<'a>) -> Option<Box<(GrugState, Vec<FileInfo>)>>;
 	#[allow(non_camel_case_types)]
 	pub type destroy_grug_state_t = extern "C" fn(Box<(GrugState, Vec<FileInfo>)>);
 	#[allow(non_camel_case_types)]
@@ -211,7 +199,7 @@ use test_bindings::*;
 
 mod game_fn_bindings {
 	use gruggers::types::GrugValue;
-	use gruggers::state::GrugState;
+	use gruggers::state::{GrugState, StateError};
 	#[link(name = "tests", kind="dylib")]
 	#[allow(improper_ctypes)]
 	unsafe extern "C" {
@@ -255,46 +243,47 @@ mod game_fn_bindings {
         safe fn game_fn_box_number           <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_print_csv            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
 	}
-	pub fn register_game_functions(state: &mut GrugState) { unsafe {
-		state.register_game_fn("nothing",              game_fn_nothing             ).unwrap(); 
-		state.register_game_fn("magic",                game_fn_magic               ).unwrap(); 
-		state.register_game_fn("initialize",           game_fn_initialize          ).unwrap(); 
-		state.register_game_fn("initialize_bool",      game_fn_initialize_bool     ).unwrap(); 
-		state.register_game_fn("identity",             game_fn_identity            ).unwrap(); 
-		state.register_game_fn("max",                  game_fn_max                 ).unwrap(); 
-		state.register_game_fn("say",                  game_fn_say                 ).unwrap(); 
-		state.register_game_fn("sin",                  game_fn_sin                 ).unwrap(); 
-		state.register_game_fn("cos",                  game_fn_cos                 ).unwrap(); 
-		state.register_game_fn("mega",                 game_fn_mega                ).unwrap(); 
-		state.register_game_fn("get_false",            game_fn_get_false           ).unwrap(); 
-		state.register_game_fn("set_is_happy",         game_fn_set_is_happy        ).unwrap(); 
-		state.register_game_fn("mega_f32",             game_fn_mega_f32            ).unwrap(); 
-		state.register_game_fn("mega_i32",             game_fn_mega_i32            ).unwrap(); 
-		state.register_game_fn("draw",                 game_fn_draw                ).unwrap(); 
-		state.register_game_fn("blocked_alrm",         game_fn_blocked_alrm        ).unwrap(); 
-		state.register_game_fn("spawn",                game_fn_spawn               ).unwrap(); 
-		state.register_game_fn("spawn_d",              game_fn_spawn_d             ).unwrap(); 
-		state.register_game_fn("has_resource",         game_fn_has_resource        ).unwrap(); 
-		state.register_game_fn("has_entity",           game_fn_has_entity          ).unwrap(); 
-		state.register_game_fn("has_string",           game_fn_has_string          ).unwrap(); 
-		state.register_game_fn("get_opponent",         game_fn_get_opponent        ).unwrap(); 
-		state.register_game_fn("set_d",                game_fn_set_d               ).unwrap(); 
-		state.register_game_fn("get_os",               game_fn_get_os              ).unwrap(); 
-		state.register_game_fn("set_opponent",         game_fn_set_opponent        ).unwrap(); 
-		state.register_game_fn("motherload",           game_fn_motherload          ).unwrap(); 
-		state.register_game_fn("motherload_subless",   game_fn_motherload_subless  ).unwrap(); 
-		state.register_game_fn("offset_32_bit_f32",    game_fn_offset_32_bit_f32   ).unwrap(); 
-		state.register_game_fn("offset_32_bit_i32",    game_fn_offset_32_bit_i32   ).unwrap(); 
-		state.register_game_fn("offset_32_bit_string", game_fn_offset_32_bit_string).unwrap(); 
-		state.register_game_fn("talk",                 game_fn_talk                ).unwrap(); 
-		state.register_game_fn("get_position",         game_fn_get_position        ).unwrap(); 
-		state.register_game_fn("set_position",         game_fn_set_position        ).unwrap(); 
-		state.register_game_fn("cause_game_fn_error",  game_fn_cause_game_fn_error ).unwrap(); 
-		state.register_game_fn("call_on_b_fn",         game_fn_call_on_b_fn        ).unwrap(); 
-		state.register_game_fn("store",                game_fn_store               ).unwrap(); 
-		state.register_game_fn("retrieve",             game_fn_retrieve            ).unwrap(); 
-		state.register_game_fn("box_number",           game_fn_box_number          ).unwrap(); 
-		state.register_game_fn("print_csv",            game_fn_print_csv           ).unwrap(); 
+	pub fn register_game_functions(state: &mut GrugState) -> Result<(), StateError> { unsafe {
+		state.register_game_fn("nothing",              game_fn_nothing             )?; 
+		state.register_game_fn("magic",                game_fn_magic               )?; 
+		state.register_game_fn("initialize",           game_fn_initialize          )?; 
+		state.register_game_fn("initialize_bool",      game_fn_initialize_bool     )?; 
+		state.register_game_fn("identity",             game_fn_identity            )?; 
+		state.register_game_fn("max",                  game_fn_max                 )?; 
+		state.register_game_fn("say",                  game_fn_say                 )?; 
+		state.register_game_fn("sin",                  game_fn_sin                 )?; 
+		state.register_game_fn("cos",                  game_fn_cos                 )?; 
+		state.register_game_fn("mega",                 game_fn_mega                )?; 
+		state.register_game_fn("get_false",            game_fn_get_false           )?; 
+		state.register_game_fn("set_is_happy",         game_fn_set_is_happy        )?; 
+		state.register_game_fn("mega_f32",             game_fn_mega_f32            )?; 
+		state.register_game_fn("mega_i32",             game_fn_mega_i32            )?; 
+		state.register_game_fn("draw",                 game_fn_draw                )?; 
+		state.register_game_fn("blocked_alrm",         game_fn_blocked_alrm        )?; 
+		state.register_game_fn("spawn",                game_fn_spawn               )?; 
+		state.register_game_fn("spawn_d",              game_fn_spawn_d             )?; 
+		state.register_game_fn("has_resource",         game_fn_has_resource        )?; 
+		state.register_game_fn("has_entity",           game_fn_has_entity          )?; 
+		state.register_game_fn("has_string",           game_fn_has_string          )?; 
+		state.register_game_fn("get_opponent",         game_fn_get_opponent        )?; 
+		state.register_game_fn("set_d",                game_fn_set_d               )?; 
+		state.register_game_fn("get_os",               game_fn_get_os              )?; 
+		state.register_game_fn("set_opponent",         game_fn_set_opponent        )?; 
+		state.register_game_fn("motherload",           game_fn_motherload          )?; 
+		state.register_game_fn("motherload_subless",   game_fn_motherload_subless  )?; 
+		state.register_game_fn("offset_32_bit_f32",    game_fn_offset_32_bit_f32   )?; 
+		state.register_game_fn("offset_32_bit_i32",    game_fn_offset_32_bit_i32   )?; 
+		state.register_game_fn("offset_32_bit_string", game_fn_offset_32_bit_string)?; 
+		state.register_game_fn("talk",                 game_fn_talk                )?; 
+		state.register_game_fn("get_position",         game_fn_get_position        )?; 
+		state.register_game_fn("set_position",         game_fn_set_position        )?; 
+		state.register_game_fn("cause_game_fn_error",  game_fn_cause_game_fn_error )?; 
+		state.register_game_fn("call_on_b_fn",         game_fn_call_on_b_fn        )?; 
+		state.register_game_fn("store",                game_fn_store               )?; 
+		state.register_game_fn("retrieve",             game_fn_retrieve            )?; 
+		state.register_game_fn("box_number",           game_fn_box_number          )?; 
+		state.register_game_fn("print_csv",            game_fn_print_csv           )?; 
+		Ok(())
 	}}
 }
 use std::io::Write;

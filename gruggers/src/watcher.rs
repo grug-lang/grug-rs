@@ -2,7 +2,7 @@ pub use watcher::*;
 use std::ffi::{OsStr, OsString};
 
 #[allow(unused)]
-pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<OsString, std::io::Error>) + Send + 'static) -> Result<(), std::io::Error>{
+pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error>{
 	use std::collections::HashMap;
 	let mods_dir = OsString::from(mods_dir.as_ref());
 	let mods_dir_len = if mods_dir.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {mods_dir.len() + 1} else {mods_dir.len()};
@@ -29,7 +29,7 @@ pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<
 		}
 		loop {
 			// Replacement for try blocks
-			match (|| {
+			match (|| -> Result<(), std::io::Error>{
 				let mut dirs_to_check = vec![mods_dir.clone()];
 				while let Some(dir) = dirs_to_check.pop() {
 					for entry in std::fs::read_dir(dir)? {
@@ -43,7 +43,7 @@ pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<
 							Some(old_m_time) if is_newer_than(m_time, *old_m_time) => {
 								let rel_path = &entry_path.as_os_str().as_encoded_bytes()[mods_dir_len..];
 								let rel_path = unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)};
-								f(Ok(OsString::from(rel_path)));
+								if !f(Ok(OsString::from(rel_path))) {return Ok(())};
 								*old_m_time = m_time;
 							}
 							None => {
@@ -57,7 +57,7 @@ pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<
 				Ok(())
 			})() {
 				Ok(()) => (),
-				Err(err) => f(Err(err)),
+				Err(err) => if !f(Err(err)) {return;},
 			}
 			
 			std::thread::sleep(std::time::Duration::from_secs(1));
@@ -324,7 +324,7 @@ mod watcher {
 		}
 	}
 
-	pub fn watch_changes(path: impl AsRef<OsStr>, mut f: impl FnMut(Result<OsString, std::io::Error>) + Send + 'static) -> Result<(), std::io::Error>{
+	pub fn watch_changes(path: impl AsRef<OsStr>, mut f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error>{
 		let mut path = Vec::from(path.as_ref().as_encoded_bytes());
 		path.push(b'\0');
 		let handle = unsafe{open_dir(&path)?};
@@ -332,9 +332,11 @@ mod watcher {
 			loop {
 				match read_changes(&handle) {
 					Ok(changes) => {
-						changes.iter().for_each(|change| f(Ok(change.file_name())));
+						for change in changes.iter() {
+							if !f(Ok(change.file_name())) {return;}
+						}
 					},
-					Err(err) => f(Err(err)),
+					Err(err) => if !f(Err(err)) {return;},
 				}
 			}
 		});
@@ -345,7 +347,7 @@ mod watcher {
 #[cfg(target_os="linux")]
 mod watcher {
 	use std::ffi::{OsStr, OsString};
-	pub fn watch_changes(mods_dir: impl AsRef<OsStr>, f: impl FnMut(Result<OsString, std::io::Error>) + Send + 'static) -> Result<(), std::io::Error> {
+	pub fn watch_changes(mods_dir: impl AsRef<OsStr>, f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error> {
 		super::poll_watch_changes(mods_dir, f)
 	}
 }

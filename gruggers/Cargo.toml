@@ -18,4 +18,4 @@ path = "src/main.rs"
 [dependencies]
 json = "0.12.4"
 allocator-api2 = "0.4.0"
-gruggers-core = {version = "0.5.3", path = "../gruggers-core"}
+gruggers-core = {version = "0.5", path = "../gruggers-core"}
