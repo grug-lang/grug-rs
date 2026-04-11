@@ -45,6 +45,8 @@ pub enum TokenType {
 	Space,
 	Indentation,
 	String,
+	Entity,
+	Resource,
 	Word,
 	Int32,
 	Float32,
@@ -91,7 +93,8 @@ impl std::fmt::Display for TokenType {
 			Self::Int32 => write!(f, "NUMBER_TOKEN"),
 			Self::Float32 => write!(f, "NUMBER_TOKEN"),
 			Self::Comment => write!(f, "COMMENT_TOKEN"),
-			// _ => write!(f, "{:?}", self),
+			Self::Resource => write!(f, "RESOURCE_TOKEN"),
+			Self::Entity => write!(f, "ENTITY_TOKEN"),
 		}
 	}
 }
@@ -205,7 +208,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 	let file_text = file_text.as_bytes();
 	let mut i = 0;
 
-	while i < file_text.len() {
+	'outer: while i < file_text.len() {
 		macro_rules! token_match {
 			($tag: literal => $expr: expr$(, $extra_expr: expr)?) => {
 				let lit_len = $tag.len();
@@ -236,7 +239,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 					});
 					i += lit_len;
 					$($extra_expr;)?
-					continue;
+					continue 'outer;
 				}
 			}
 		}
@@ -312,44 +315,47 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 		// TODO: Does grug allow tabs for indentation and if it does, should each tab be a separate token
 		// token_match!(b"\t" => TokenType::Indentation);
 
+		// Entitiy strings, resource strings, and basic strings
 		// Strings
-		if file_text[i] == b'"' {
-			let quote_start_index = i;
-			i += 1;
-			let start_index = i;
-			let start_line = cur_line;
-			let start_col = quote_start_index - last_new_line;
+		for (start, ty) in [(&b"r\""[..], TokenType::Resource), (&b"e\""[..], TokenType::Entity), (&b"\""[..], TokenType::String)] {
+			if file_text[i..].starts_with(start) {
+				let quote_start_index = i + start.len() - 1;
+				i += start.len();
+				let start_index = i;
+				let start_line = cur_line;
+				let start_col = quote_start_index - last_new_line;
 
-			// TODO: Handle Escaped strings
-			// This requires changing Token::value to Cow<'_, str>
-			// Just allocate a new string
-			while i < file_text.len() && file_text[i] != b'"' {
-				if file_text[i] == b'\0' {
-					return Err(TokenizerError::NullByte {line: cur_line, col: i - last_new_line});
+				// TODO: Handle Escaped strings
+				// This requires changing Token::value to Cow<'_, str>
+				// Just allocate a new string
+				while i < file_text.len() && file_text[i] != b'"' {
+					if file_text[i] == b'\0' {
+						return Err(TokenizerError::NullByte {line: cur_line, col: i - last_new_line});
+					}
+					if i + 2 < file_text.len() && (&file_text[i..=(i+1)] == &[b'\\', b'\r'] || &file_text[i..=(i+1)] == &[b'\\', b'\n']) {
+						return Err(TokenizerError::LineBreakInString{
+							line: cur_line,
+							col: i - last_new_line,
+						});
+					}
+					i += 1;
 				}
-				if i + 2 < file_text.len() && (&file_text[i..=(i+1)] == &[b'\\', b'\r'] || &file_text[i..=(i+1)] == &[b'\\', b'\n']) {
-					return Err(TokenizerError::LineBreakInString{
-						line: cur_line,
-						col: i - last_new_line,
+				if i >= file_text.len() {
+					return Err(TokenizerError::UnclosedString{
+						start_line,
+						start_col,
 					});
 				}
-				i += 1;
-			}
-			if i >= file_text.len() {
-				return Err(TokenizerError::UnclosedString{
-					start_line,
-					start_col,
+				tokens.push(Token{
+					ty,
+					// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
+					value: unsafe{str::from_utf8_unchecked(&file_text[start_index..(i)])},
+					line: start_line,
+					col: start_col,
 				});
+				i += 1;
+				continue 'outer;
 			}
-			tokens.push(Token{
-				ty: TokenType::String,
-				// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-				value: unsafe{str::from_utf8_unchecked(&file_text[start_index..(i)])},
-				line: start_line,
-				col: start_col,
-			});
-			i += 1;
-			continue;
 		}
 
 		// TODO: Handle unicode strings

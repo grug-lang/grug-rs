@@ -972,6 +972,18 @@ impl<'a> AST<'a> {
 						result_type: None,
 					}
 				}
+				TokenType::Resource => {
+					Expr{
+						data: ExprData::Resource(Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr()),
+						result_type: None,
+					}
+				}
+				TokenType::Entity => {
+					Expr{
+						data: ExprData::Entity(Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr()),
+						result_type: None,
+					}
+				}
 				TokenType::Word => {
 					let value: &'a NTStr  = Box::leak(NTStr::box_from_str_in(value, arena));
 					// a word token can actually be a function call

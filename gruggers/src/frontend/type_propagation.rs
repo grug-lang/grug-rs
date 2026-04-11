@@ -283,7 +283,9 @@ pub enum TypePropogatorError {
 	},
 	GameFunctionNotProvided {
 		fn_name: String,
-	}
+	},
+	// All errors should be turned into these
+	StringError(String),
 }
 
 impl std::fmt::Display for TypePropogatorError {
@@ -463,6 +465,7 @@ impl std::fmt::Display for TypePropogatorError {
 			Self::GameFunctionNotProvided {
 				fn_name,
 			} => write!(f, "Game function {} was not registered", fn_name),
+			Self::StringError(string) => write!(f, "{}", string),
 		}
 	}
 }
@@ -985,12 +988,9 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		let result_ty = match &mut assignment_expr.data {
 			ExprData::True => GrugType::Bool,
 			ExprData::False => GrugType::Bool,
-			ExprData::String{
-				..
-			} => GrugType::String,
-			ExprData::Resource{..} | ExprData::Entity{..} => {
-				panic!("Cannot encounter resource or entity string when filling expression");
-			}
+			ExprData::String{..} => GrugType::String,
+			ExprData::Resource{..} => GrugType::Resource{extension: nt!("").as_ntstrptr()},
+			ExprData::Entity{..} => GrugType::Entity{entity_type: None},
 			ExprData::Identifier(name) => {
 				let ty = self.get_variable_type(name.to_str()).ok_or_else(|| TypePropogatorError::VariableDoesNotExist{
 					name: Arc::from(name.to_str()),
@@ -1144,24 +1144,42 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			});
 		}
 		for (param, arg) in signature.iter().zip(arguments) {
+			// TODO: Make this better
+			// If argument is resource
 			if let GrugType::Resource{extension} = param.ty 
-				&& let ExprData::String(ref mut value) = arg.data {
+				&& let ExprData::Resource(ref mut value) = arg.data {
 				let value_ntstr = value.to_ntstr();
 				self.validate_resource_string(value_ntstr.as_str(), extension.to_str())?;
 				*value = self.fix_resource_string(value_ntstr, arena).as_ntstrptr();
+			// If argument is entity
 			} else if let GrugType::Entity{entity_type: _} = param.ty 
-				&& let ExprData::String(ref mut value) = arg.data {
+				&& let ExprData::Entity(ref mut value) = arg.data {
 				let value_ntstr = value.to_ntstr();
 				self.validate_entity_string(value_ntstr.as_str())?;
 				if let Some(fixed_entity) = self.fix_entity_string(value_ntstr, arena) {*value = fixed_entity.as_ntstrptr()}
+			// argument is string but resource is expected
+			} else if let GrugType::Resource{..} = param.ty 
+				&& let ExprData::String(string) = arg.data {
+				return Err(TypePropogatorError::StringError(
+					format!("The host function '{}' expects a resource string, so put an 'r' in front of string \"{}\"", function_name, string)
+				));
+			// argument is string but entity is expected
+			} else if let GrugType::Entity{..} = param.ty 
+				&& let ExprData::String(string) = arg.data {
+				return Err(TypePropogatorError::StringError(
+					format!("The host function '{}' expects an entity string, so put an 'e' in front of string \"{}\"", function_name, string)
+				));
+			// if argument is void
 			} else if *arg.result_type.as_ref().unwrap() == &GrugType::Void {
 				return Err(TypePropogatorError::VoidArgumentInFunctionCall{
 					function_name: Arc::from(function_name),
 					signature_type: param.ty.into(),
 					parameter_name: Arc::from(param.name.to_str()),
 				});
+			// id type coersion to id
 			} else if let GrugType::Id{custom_name: None} = param.ty && let Some(GrugType::Id{custom_name: _}) = arg.result_type {
-				arg.result_type = Some(Box::leak(Box::new_in(GrugType::Id{custom_name: None}, arena)));
+				arg.result_type = Some(&GrugType::Id{custom_name: None});
+			// mismatch
 			} else if Some(&param.ty) != arg.result_type.as_deref() {
 				return Err(TypePropogatorError::FunctionArgumentMismatch {
 					function_name: Arc::from(function_name),

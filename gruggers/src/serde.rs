@@ -591,11 +591,29 @@ mod de {
 			return Err(JsonDeserializeError::ExpressionKindNotString);
 		};
 		match ty {
-			"string" | "entity" | "resource" => {
+			"string" => {
 				let Some(value) = get_object_field(input, "value", "literal_expression")?.as_str() else {
 					return Err(JsonDeserializeError::LiteralExpressionValueNotString);
 				};
 				output.push_str("\"");
+				output.push_str(value);
+				output.push_str("\"");
+				Ok(())
+			}
+			"entity" => {
+				let Some(value) = get_object_field(input, "value", "literal_expression")?.as_str() else {
+					return Err(JsonDeserializeError::LiteralExpressionValueNotString);
+				};
+				output.push_str("e\"");
+				output.push_str(value);
+				output.push_str("\"");
+				Ok(())
+			}
+			"resource" => {
+				let Some(value) = get_object_field(input, "value", "literal_expression")?.as_str() else {
+					return Err(JsonDeserializeError::LiteralExpressionValueNotString);
+				};
+				output.push_str("r\"");
 				output.push_str(value);
 				output.push_str("\"");
 				Ok(())
