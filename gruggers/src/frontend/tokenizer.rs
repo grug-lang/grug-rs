@@ -209,71 +209,71 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 	let mut i = 0;
 
 	'outer: while i < file_text.len() {
-		macro_rules! token_match {
-			($tag: literal => $expr: expr$(, $extra_expr: expr)?) => {
-				let lit_len = $tag.len();
-				if i + lit_len <= file_text.len() && &file_text[i..(i+lit_len)] == &*$tag {
-					// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
-					tokens.push(Token{
-						ty: $expr, 
-						value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])},
-						line: cur_line,
-						col: i - last_new_line,
-					});
-					i += lit_len;
-					$($extra_expr;)?
-					continue;
-				}
+		let mut token_match = |string: &[u8], token| {
+			let len = string.len();
+			if file_text[i..].starts_with(string) {
+				// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
+				tokens.push(Token{
+					ty: token, 
+					value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+len)])},
+					line: cur_line,
+					col: i - last_new_line,
+				});
+				i += len;
+				true
+			} else {
+				false
 			}
-		}
-		macro_rules! token_match_word {
-			($tag: literal => $expr: expr$(, $extra_expr: expr)?) => {
-				let lit_len = $tag.len();
-				if i + lit_len <= file_text.len() && &file_text[i..(i+lit_len)] == &*$tag && (i + lit_len == file_text.len() || !is_word_char(file_text[i+lit_len] as char)) {
-					// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
-					tokens.push(Token{
-						ty: $expr, 
-						value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])},
-						line: cur_line,
-						col: i - last_new_line,
-					});
-					i += lit_len;
-					$($extra_expr;)?
-					continue 'outer;
-				}
+		};
+		
+		if token_match(b"(", TokenType::OpenParenthesis) {continue;}
+		if token_match(b"(", TokenType::OpenParenthesis) {continue;}
+		if token_match(b")", TokenType::CloseParenthesis) {continue;}
+		if token_match(b"{", TokenType::OpenBrace) {continue;}
+		if token_match(b"}", TokenType::CloseBrace) {continue;}
+		if token_match(b"+", TokenType::Plus) {continue;}
+		if token_match(b"-", TokenType::Minus) {continue;}
+		if token_match(b"*", TokenType::Star) {continue;}
+		if token_match(b"/", TokenType::ForwardSlash) {continue;}
+		if token_match(b"%", TokenType::Percent) {continue;}
+		if token_match(b",", TokenType::Comma) {continue;}
+		if token_match(b":", TokenType::Colon) {continue;}
+		if token_match(b"\n", TokenType::NewLine) {cur_line += 1; last_new_line = i; continue;}
+		if token_match(b"\r\n", TokenType::NewLine) {cur_line += 1; last_new_line = i; continue;}
+		if token_match(b"==", TokenType::DoubleEquals) {continue;}
+		if token_match(b"!=", TokenType::NotEquals) {continue;}
+		if token_match(b"=", TokenType::Equal) {continue;}
+		if token_match(b">=", TokenType::GreaterEquals) {continue;}
+		if token_match(b">", TokenType::Greater) {continue;}
+		if token_match(b"<=", TokenType::LessEquals) {continue;}
+		if token_match(b"<", TokenType::Less) {continue;}
+		let mut token_match_word = |string: &[u8], token| {
+			let len = string.len();
+			if file_text[i..].starts_with(string) && (i + len == file_text.len() || !is_word_char(file_text[i+len] as char)) {
+				// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
+				tokens.push(Token{
+					ty: token, 
+					value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+len)])},
+					line: cur_line,
+					col: i - last_new_line,
+				});
+				i += len;
+				true
+			} else {
+				false
 			}
-		}
-		token_match!(b"(" => TokenType::OpenParenthesis);
-		token_match!(b")" => TokenType::CloseParenthesis);
-		token_match!(b"{" => TokenType::OpenBrace);
-		token_match!(b"}" => TokenType::CloseBrace);
-		token_match!(b"+" => TokenType::Plus);
-		token_match!(b"-" => TokenType::Minus);
-		token_match!(b"*" => TokenType::Star);
-		token_match!(b"/" => TokenType::ForwardSlash);
-		token_match!(b"%" => TokenType::Percent);
-		token_match!(b"," => TokenType::Comma);
-		token_match!(b":" => TokenType::Colon);
-		token_match!(b"\n" => TokenType::NewLine, {cur_line += 1; last_new_line = i});
-		token_match!(b"\r\n" => TokenType::NewLine, {cur_line += 1; last_new_line = i});
-		token_match!(b"==" => TokenType::DoubleEquals);
-		token_match!(b"!=" => TokenType::NotEquals);
-		token_match!(b"=" => TokenType::Equal);
-		token_match!(b">=" => TokenType::GreaterEquals);
-		token_match!(b">" => TokenType::Greater);
-		token_match!(b"<=" => TokenType::LessEquals);
-		token_match!(b"<" => TokenType::Less);
-		token_match_word!(b"and" => TokenType::And);
-		token_match_word!(b"or" => TokenType::Or);
-		token_match_word!(b"not" => TokenType::Not);
-		token_match_word!(b"true" => TokenType::True);
-		token_match_word!(b"false" => TokenType::False);
-		token_match_word!(b"if" => TokenType::If);
-		token_match_word!(b"else" => TokenType::Else);
-		token_match_word!(b"while" => TokenType::While);
-		token_match_word!(b"break" => TokenType::Break);
-		token_match_word!(b"return" => TokenType::Return);
-		token_match_word!(b"continue" => TokenType::Continue);
+		};
+		if token_match_word(b"and", TokenType::And) {continue;}
+		if token_match_word(b"or", TokenType::Or) {continue;}
+		if token_match_word(b"not", TokenType::Not) {continue;}
+		if token_match_word(b"true", TokenType::True) {continue;}
+		if token_match_word(b"false", TokenType::False) {continue;}
+		if token_match_word(b"if", TokenType::If) {continue;}
+		if token_match_word(b"else", TokenType::Else) {continue;}
+		if token_match_word(b"while", TokenType::While) {continue;}
+		if token_match_word(b"break", TokenType::Break) {continue;}
+		if token_match_word(b"return", TokenType::Return) {continue;}
+		if token_match_word(b"continue", TokenType::Continue) {continue;}
 
 		// Spaces
 		let lit_len = b" ".len();
