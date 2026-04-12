@@ -142,7 +142,6 @@ impl GrugState {
 	pub fn update_files(&self) -> (std::vec::Vec<OsString>, std::vec::Vec<FileInfo>) {
 		let mut resource_files = std::vec::Vec::new();
 		let mut grug_files = std::vec::Vec::new();
-		println!("current resources: {:?}", self.resources.borrow());
 		for change in self.changes.try_iter() {
 			let file_name = change.expect("File IO error");
 			{
@@ -161,7 +160,6 @@ impl GrugState {
 					grug_files.push(info);
 				}
 			}
-			println!("updated file: {:?}", file_name);
 			if self.resources.borrow().contains(&file_name) {
 				resource_files.push(file_name);
 			}

@@ -4,7 +4,11 @@ members = ["gruggers", "gruggers-core"]
 
 [profile.release]
 opt-level = 3
-debug = "full"
+panic = "abort"
+debug = "none"
+strip = true
+# lto = "fat"
+# codegen-units = 1
 
 [profile.fuzz]
 inherits = "release"

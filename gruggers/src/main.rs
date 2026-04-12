@@ -31,7 +31,7 @@ fn main() -> Result<()> {
 		None => search_mod_api_path()?,
 	};
 
-	let mods_dir = args.mods_dir.as_ref().map(AsRef::as_ref).unwrap_or("");
+	let mods_dir = args.mods_dir.as_ref().map(AsRef::as_ref).unwrap_or(".");
 
 	let mut grug_state = GrugInitSettings::new()
 		.set_mod_api_path(&mod_api_path)
