@@ -1,0 +1,34 @@
+{
+	"entities": {
+		"Dog": {
+			"description": "An actor that can fight.",
+			"on_functions": {
+				"on_bark": {
+					"description": "Called when the entity is supposed to bark",
+					"arguments": [ ]
+				}
+			}
+		}
+	},
+	"game_functions": {
+		"print_string": {
+			"description": "Prints a string",
+			"arguments": [
+				{
+					"name": "msg",
+					"type": "string"
+				}
+			]
+		},
+		"print_file": {
+			"description": "Prints a file",
+			"arguments": [
+				{
+					"name": "path",
+					"type": "resource",
+					"resource_extension": ".txt"
+				}
+			]
+		}
+	}
+}

@@ -26,7 +26,7 @@ pub extern "C" fn grug_compile_all_files(state: &GrugState) -> &[FileInfo] {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_update(state: &GrugState) -> &[FileInfo] {
-	state.update_files().leak()
+	state.update_files().1.leak()
 }
 
 #[unsafe(no_mangle)]

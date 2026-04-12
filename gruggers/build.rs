@@ -25,8 +25,14 @@ fn build_tests() {
 	}
 	#[cfg(target_os = "windows")]
 	{
-		_ = std::fs::copy(test_source_path.clone() + "tests.dll", archive_path.clone() + "/tests.dll");
-		_ = std::fs::copy(test_source_path + "libtests.dll.a", archive_path.clone() + "/tests.lib");
+		let tests_dll_out_path = archive_path.clone() + "/tests.dll";
+		for optional_path in ["tests.dll"] {
+			_ = std::fs::copy(test_source_path.clone() + optional_path, &tests_dll_out_path);
+		}
+		let tests_lib_out_path = archive_path.clone() + "/tests.lib";
+		for optional_path in ["tests.lib", "libtests.dll.a"] {
+			_ = std::fs::copy(test_source_path.clone() + optional_path, &tests_lib_out_path);
+		}
 
 		let bench_dll_out_path = archive_path.clone() + "/bench.dll";
 		for optional_path in ["bench.dll", "libbench.dll"] {

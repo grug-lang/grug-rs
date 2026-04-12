@@ -1,8 +1,3 @@
-// This is to ensure that any results that come 
-// from parsing are not ignored
-#![deny(unused_must_use)]
-#![deny(unused_mut)]
-// #![deny(warnings)]
 use crate::error::GrugError;
 use crate::state::{GrugState, FileInfo};
 // use crate::backend::GrugAst;
@@ -56,7 +51,7 @@ impl GrugState {
 			})?;
 			let game_functions = self.mod_api.game_functions();
 			
-			TypePropogator::new(entity, game_functions, &self.game_functions, mod_name.into()).fill_result_types(entity_type, &mut ast, &arena)?;
+			TypePropogator::new(entity, game_functions, &self.game_functions, mod_name.into(), &self.mods_dir_path, &self.resources).fill_result_types(entity_type, &mut ast, &arena)?;
 
 			// let mod_api_entity = self.mod_api.entities.get(entity_type);
 			let mut member_variables = Vec::new_in(&arena);
@@ -144,26 +139,34 @@ impl GrugState {
 		files
 	}
 	
-	pub fn update_files(&self) -> std::vec::Vec<FileInfo> {
-		let mut files = std::vec::Vec::new();
+	pub fn update_files(&self) -> (std::vec::Vec<OsString>, std::vec::Vec<FileInfo>) {
+		let mut resource_files = std::vec::Vec::new();
+		let mut grug_files = std::vec::Vec::new();
+		println!("current resources: {:?}", self.resources.borrow());
 		for change in self.changes.try_iter() {
 			let file_name = change.expect("File IO error");
-			let file_name: &Path = file_name.as_ref();
-			if let Some(extension) = Path::extension(file_name.as_ref()) && extension == "grug" {
-				let mod_dir_path = file_name.parent().expect("mod must have parent for successful compilation");
-				let result = self.compile_grug_file(file_name);
-				let info = FileInfo {
-					path: Box::from(file_name),
-					file_name: Box::from(file_name.file_name().unwrap()),
-					mod_name: Box::from(mod_dir_path.as_os_str()),
-					entity_type: Box::from(get_entity_type(file_name.as_os_str()).unwrap_or("")),
-					entity_name: Box::from(file_name.file_prefix().unwrap()),
-					result
-				};
-				files.push(info);
-			};
+			{
+				let file_name: &Path = file_name.as_ref();
+				if let Some(extension) = Path::extension(file_name.as_ref()) && extension == "grug" {
+					let mod_dir_path = file_name.parent().expect("mod must have parent for successful compilation");
+					let result = self.compile_grug_file(file_name);
+					let info = FileInfo {
+						path: Box::from(file_name),
+						file_name: Box::from(file_name.file_name().unwrap()),
+						mod_name: Box::from(mod_dir_path.as_os_str()),
+						entity_type: Box::from(get_entity_type(file_name.as_os_str()).unwrap_or("")),
+						entity_name: Box::from(file_name.file_prefix().unwrap()),
+						result
+					};
+					grug_files.push(info);
+				}
+			}
+			println!("updated file: {:?}", file_name);
+			if self.resources.borrow().contains(&file_name) {
+				resource_files.push(file_name);
+			}
 		}
-		files
+		(resource_files, grug_files)
 	}
 }
 

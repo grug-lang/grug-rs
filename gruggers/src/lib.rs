@@ -24,6 +24,7 @@ pub use gruggers_core::ntstring;
 pub use gruggers_core::nt;
 
 
+// TODO: Resource management
 // TODO: Non-utf8 version of NTStrPtr and NTStr
 // TODO: README and docs for gruggers
 // TODO: Hot reloading grug_files

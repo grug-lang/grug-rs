@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::pin::Pin;
 use std::cell::{Cell, RefCell, Ref};
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{HashMap, hash_map::Entry, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::ffi::{OsString, OsStr};
 use std::path::Path;
@@ -221,6 +221,7 @@ pub struct GrugState {
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
 	pub(crate) entities: Xar<GrugEntity>,
+	pub(crate) resources: RefCell<HashSet<OsString>>,
 	
 	// SAFETY: The strings within the `on_functions` field is allocated within
 	// `mod_api`. So any reference given out to this field must have the 'self
@@ -309,6 +310,7 @@ impl GrugState {
 			next_entity_id: AtomicU64::new(0),
 			game_functions: HashMap::new(),
 			runtime_error_handler: handler,
+			resources: RefCell::new(HashSet::new()),
 			entities: Xar::new(),
 			on_functions: on_fns,
 			path_to_script_ids: RefCell::new(HashMap::new()),
@@ -320,6 +322,10 @@ impl GrugState {
 			is_errorring: Cell::new(false),
 			changes: reciever,
 		})
+	}
+
+	pub fn mods_dir_path(&self) -> &OsStr {
+		&self.mods_dir_path
 	}
 
 	pub fn get_on_fn_id(&self, entity_type: &str, on_fn_name: &str) -> Result<GrugOnFnId, StateError> {

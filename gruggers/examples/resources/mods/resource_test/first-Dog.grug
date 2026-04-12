@@ -1,0 +1,3 @@
+on_bark() {
+    print_file(r"file.txt")
+}

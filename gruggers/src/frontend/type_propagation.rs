@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
+use std::cell::RefCell;
 
 use crate::types::GameFnPtr;
 use crate::ntstring::NTStr;
@@ -24,7 +25,9 @@ pub(super) struct TypePropogator<'mod_api, 'arena> {
 	entity: &'mod_api ModApiEntity<'mod_api>,
 	game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiGameFn<'mod_api>>,
 	game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>,
+	resources: &'mod_api RefCell<HashSet<OsString>>,
 	current_mod_name: &'arena OsStr,
+	mods_dir_path: &'mod_api OsStr,
 	global_variables: HashMap<&'arena str, GrugType<'arena>>,
 	local_variables: Vec<HashMap<&'arena str, GrugType<'arena>>>,
 	num_while_loops_deep: usize,
@@ -520,6 +523,9 @@ pub enum ResourceValidationError {
 	// raise TypePropagationError(f'resource name "{string}" cannot end with .')
 	EndsWithDot  {
 		value: Arc<str>
+	},
+	ResourceDoesNotExist{
+		path: PathBuf,
 	}
 }
 
@@ -573,6 +579,9 @@ impl std::fmt::Display for ResourceValidationError {
 			Self::EndsWithDot {
 				value
 			} => write!(f, "resource name \"{}\" cannot end with .", value),
+			Self::ResourceDoesNotExist {
+				path,
+			} => write!(f, "resource '{}' does not exist", path.display()),
 		}
 	}
 }
@@ -653,12 +662,21 @@ impl From<EntityValidationError> for TypePropogatorError {
 }
 
 impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
-	pub fn new (entity: &'mod_api ModApiEntity, game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiGameFn>, game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, mod_name: &'arena OsStr) -> Self {
+	pub fn new (
+		entity: &'mod_api ModApiEntity, 
+		game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiGameFn>, 
+		game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, 
+		mod_name: &'arena OsStr, 
+		mods_dir_path: &'mod_api OsStr, 
+		resources: &'mod_api RefCell<HashSet<OsString>>
+	) -> Self {
 		Self {
 			entity,
 			game_fns,
 			game_fn_ptrs,
 			current_mod_name: mod_name,
+			resources,
+			mods_dir_path,
 			global_variables: HashMap::new(),
 			local_variables: Vec::new(),
 			num_while_loops_deep: 0,
@@ -1151,6 +1169,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				let value_ntstr = value.to_ntstr();
 				self.validate_resource_string(value_ntstr.as_str(), extension.to_str())?;
 				*value = self.fix_resource_string(value_ntstr, arena).as_ntstrptr();
+				self.check_if_resource_exists(value.to_str())?;
 			// If argument is entity
 			} else if let GrugType::Entity{entity_type: _} = param.ty 
 				&& let ExprData::Entity(ref mut value) = arg.data {
@@ -1248,6 +1267,19 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		let mut string = PathBuf::from(self.current_mod_name);
 		string.push(value.as_str());
 		Box::leak(NTStr::box_from_str_in(&format!("{}", string.display()), arena))
+	}
+
+	fn check_if_resource_exists(&self, resource_str: &str) -> Result<(), ResourceValidationError> {
+		let mut full_path = PathBuf::from(self.mods_dir_path);
+		full_path.push(resource_str);
+		if !std::fs::exists(&full_path).is_ok_and(std::convert::identity) {
+			Err(ResourceValidationError::ResourceDoesNotExist{
+				path: full_path
+			})
+		} else {
+			self.resources.borrow_mut().insert(OsString::from(resource_str));
+			Ok(())
+		}
 	}
 
 	fn validate_entity_string(&mut self, entity_string: &str) -> Result<(), EntityValidationError> {
