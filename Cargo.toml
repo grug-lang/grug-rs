@@ -3,9 +3,9 @@ resolver = "3"
 members = ["gruggers", "gruggers-core"]
 
 [profile.release]
-opt-level = 3
+opt-level = "z"
 panic = "abort"
-debug = "none"
+debug = "full"
 strip = true
 # lto = "fat"
 # codegen-units = 1

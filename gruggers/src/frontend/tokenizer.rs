@@ -1,13 +1,13 @@
 use super::SPACES_PER_INDENT;
 use allocator_api2::vec::Vec;
 use crate::arena::Arena;
+use gruggers_core::error::SourceSpan;
 
 #[derive(Debug)]
 pub struct Token<'a> {
 	pub(super) ty: TokenType,
 	pub(super) value: &'a str,
-	pub(super) line: usize,
-	pub(super) col: usize,
+	pub(super) span: SourceSpan,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -216,8 +216,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 				tokens.push(Token{
 					ty: token, 
 					value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+len)])},
-					line: cur_line,
-					col: i - last_new_line,
+					span: SourceSpan{offset: i, line: cur_line},
 				});
 				i += len;
 				true
@@ -254,8 +253,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 				tokens.push(Token{
 					ty: token, 
 					value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+len)])},
-					line: cur_line,
-					col: i - last_new_line,
+					span: SourceSpan{offset: i, line: cur_line},
 				});
 				i += len;
 				true
@@ -284,12 +282,11 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 			}
 			let num_spaces = i - old_i;
 			if num_spaces == 1 {
-					// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
+				// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
 				tokens.push(Token{
 					ty: TokenType::Space, 
 					value: unsafe{str::from_utf8_unchecked(&file_text[old_i..i])},
-					line: cur_line,
-					col: old_i - last_new_line,
+					span: SourceSpan{offset: old_i, line: cur_line},
 				});
 				continue;
 			}
@@ -306,8 +303,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 			tokens.push(Token{
 				ty: TokenType::Indentation, 
 				value: unsafe{str::from_utf8_unchecked(&file_text[old_i..i])},
-				line: cur_line,
-				col: old_i - last_new_line,
+				span: SourceSpan{offset: old_i, line: cur_line},
 			});
 			continue;
 		}
@@ -319,7 +315,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 		// Strings
 		for (start, ty) in [(&b"r\""[..], TokenType::Resource), (&b"e\""[..], TokenType::Entity), (&b"\""[..], TokenType::String)] {
 			if file_text[i..].starts_with(start) {
-				let quote_start_index = i + start.len() - 1;
+				let quote_start_index = i;
 				i += start.len();
 				let start_index = i;
 				let start_line = cur_line;
@@ -338,6 +334,9 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 							col: i - last_new_line,
 						});
 					}
+					if file_text[i] == b'\n' {
+						cur_line += 1;
+					}
 					i += 1;
 				}
 				if i >= file_text.len() {
@@ -350,8 +349,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 					ty,
 					// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
 					value: unsafe{str::from_utf8_unchecked(&file_text[start_index..(i)])},
-					line: start_line,
-					col: start_col,
+					span: SourceSpan{offset: quote_start_index, line: start_line},
 				});
 				i += 1;
 				continue 'outer;
@@ -369,8 +367,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 			tokens.push(Token{
 				ty: TokenType::Word, 
 				value: unsafe{str::from_utf8_unchecked(&file_text[start..i])},
-				line: cur_line,
-				col: start - last_new_line,
+				span: SourceSpan{offset: start, line: cur_line},
 			});
 			continue;
 		}
@@ -395,7 +392,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 
 			if seen_period {
 				if file_text[i - 1] == b'.' {
-					// TODO: I think floats with trailing periods
+					// NOTE: I think floats with trailing periods
 					// should be allowed but i can understand why
 					// they're not
 					return Err(TokenizerError::FloatTrailingPeriod {
@@ -408,8 +405,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 				tokens.push(Token{
 					ty: TokenType::Float32, 
 					value: unsafe{str::from_utf8_unchecked(&file_text[start..i])},
-					line: cur_line,
-					col: start - last_new_line,
+					span: SourceSpan{offset: start, line: cur_line},
 				});
 			}
 			else {
@@ -417,8 +413,7 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 				tokens.push(Token{
 					ty: TokenType::Int32, 
 					value: unsafe{str::from_utf8_unchecked(&file_text[start..i])},
-					line: cur_line,
-					col: start - last_new_line,
+					span: SourceSpan{offset: start, line: cur_line},
 				});
 			}
 			continue;
@@ -454,12 +449,13 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 					col: i - last_new_line,
 				});
 			}
+			cur_line += 1;
+
 			// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
 			tokens.push(Token{
 				ty: TokenType::Comment, 
 				value: unsafe{str::from_utf8_unchecked(&file_text[start..i])},
-				line: cur_line,
-				col: old_i - last_new_line
+				span: SourceSpan{offset: old_i, line: cur_line - 1},
 			});
 			continue;
 		}
