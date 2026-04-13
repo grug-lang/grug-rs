@@ -798,6 +798,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					arguments,
 					body_statements,
 					return_type,
+					span: _
 				}) => {
 					debug_assert!(self.local_variables.is_empty());
 					debug_assert!(self.num_while_loops_deep == 0);

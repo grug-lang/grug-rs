@@ -30,6 +30,7 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 			name,
 			ty, 
 			assignment_expr,
+			span: member.span,
 		});
 	}
 
@@ -50,6 +51,7 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 			name, 
 			arguments: arguments.leak(),
 			body_statements,
+			span: on_function.span,
 		}, arena))));
 	}
 
@@ -71,6 +73,7 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 			return_type,
 			arguments: arguments.leak(),
 			body_statements,
+			span: helper_function.span
 		});
 	}
 

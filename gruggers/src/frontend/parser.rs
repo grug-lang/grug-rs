@@ -455,7 +455,8 @@ impl<'a> AST<'a> {
 			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
 			arguments: args,
 			body_statements,
-			return_type
+			return_type,
+			span: name_token.span,
 		})
 	}
 
@@ -486,6 +487,7 @@ impl<'a> AST<'a> {
 			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
 			arguments: args,
 			body_statements,
+			span: name_token.span
 		})
 	}
 
@@ -795,6 +797,7 @@ impl<'a> AST<'a> {
 			name: Box::leak(NTStr::box_from_str_in(global_name, arena)).as_ntstrptr(),
 			ty: global_type,
 			assignment_expr: assignment_expr.into(),
+			span: name_token.span
 		})
 	}
 

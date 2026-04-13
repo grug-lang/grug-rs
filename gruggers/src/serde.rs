@@ -42,6 +42,7 @@ mod ser {
 				name,
 				ty,
 				assignment_expr,
+				span: _
 			}) => {
 				object! {
 					"kind": "global_variable",
@@ -54,6 +55,7 @@ mod ser {
 				name,
 				arguments,
 				body_statements,
+				span: _
 			}) => {
 				object! {
 					"kind": "on_function",
@@ -67,6 +69,7 @@ mod ser {
 				arguments,
 				body_statements,
 				return_type: GrugType::Void,
+				span: _
 			}) => {
 				object! {
 					"kind": "helper_function",
@@ -80,6 +83,7 @@ mod ser {
 				arguments,
 				body_statements,
 				return_type,
+				span: _
 			}) => {
 				object! {
 					"kind": "helper_function",

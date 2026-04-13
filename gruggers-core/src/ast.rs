@@ -11,6 +11,7 @@
 //! This may be changed in a later release
 use crate::ntstring::{NTStrPtr, NTStr};
 use crate::types::GameFnPtr;
+use crate::error::SourceSpan;
 
 /// Represents the type of a value in grug
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -467,6 +468,8 @@ pub struct MemberVariable<'a> {
 	/// Initializer of the variable.
 	/// It is not allowed to call an on function or helper function.
 	pub assignment_expr: Expr<'a>,
+	/// Source span of the name of the variable
+	pub span: SourceSpan,
 }
 
 /// Represents a statement within a function
@@ -657,6 +660,8 @@ pub struct OnFunction<'a> {
 	pub arguments: &'a [Argument<'a>],
 	/// List of statements that make up the top level of the function. 
 	pub body_statements: &'a mut [Statement<'a>],
+	/// Source span of the name of the on function
+	pub span: SourceSpan,
 }
 
 /// Represents a single helper function declaration
@@ -693,6 +698,8 @@ pub struct HelperFunction<'a> {
 	pub arguments: &'a [Argument<'a>],
 	/// List of statements that make up the top level of the function. 
 	pub body_statements: &'a mut [Statement<'a>],
+	/// Source span of the name of the helper function
+	pub span: SourceSpan,
 }
 
 // TODO: All the references here should be mut references
