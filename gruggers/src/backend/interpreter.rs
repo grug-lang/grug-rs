@@ -1,6 +1,6 @@
 use crate::types::{GrugValue, GrugEntity, GrugFileId};
 use crate::ast::{
-	Argument, Statement, Expr, ExprData, MemberVariable, OnFunction,
+	Parameter, Statement, Expr, ExprData, MemberVariable, OnFunction,
 	HelperFunction, UnaryOperator, BinaryOperator, GrugType, GrugAst,
 };
 use crate::xar::Xar;
@@ -38,18 +38,18 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 	for on_function in ast.on_functions {
 		let Some(on_function) = on_function else {on_functions.push(None); continue;};
 		let name = copy_string(on_function.name, arena);
-		let mut arguments = Vec::with_capacity_in(on_function.arguments.len(), arena);
-		for argument in on_function.arguments {
-			arguments.push(Argument {
-				name: copy_string(argument.name, arena),
-				ty: copy_type(argument.ty, arena),
+		let mut parameters = Vec::with_capacity_in(on_function.parameters.len(), arena);
+		for parameter in on_function.parameters {
+			parameters.push(Parameter {
+				name: copy_string(parameter.name, arena),
+				ty: copy_type(parameter.ty, arena),
 			});
 		}
 		
 		let body_statements = copy_statements(on_function.body_statements, arena);
 		on_functions.push(Some(&*Box::leak(Box::new_in(OnFunction{
 			name, 
-			arguments: arguments.leak(),
+			parameters: parameters.leak(),
 			body_statements,
 			span: on_function.span,
 		}, arena))));
@@ -59,11 +59,11 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 	for helper_function in ast.helper_functions {
 		let name = copy_string(helper_function.name, arena);
 		let return_type = copy_type(helper_function.return_type, arena);
-		let mut arguments = Vec::with_capacity_in(helper_function.arguments.len(), arena);
-		for argument in helper_function.arguments {
-			arguments.push(Argument {
-				name: copy_string(argument.name, arena),
-				ty: copy_type(argument.ty, arena),
+		let mut parameters = Vec::with_capacity_in(helper_function.parameters.len(), arena);
+		for parameter in helper_function.parameters {
+			parameters.push(Parameter {
+				name: copy_string(parameter.name, arena),
+				ty: copy_type(parameter.ty, arena),
 			});
 		}
 		
@@ -71,7 +71,7 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 		helper_functions.push(HelperFunction{
 			name, 
 			return_type,
-			arguments: arguments.leak(),
+			parameters: parameters.leak(),
 			body_statements,
 			span: helper_function.span
 		});
@@ -329,7 +329,7 @@ impl Interpreter {
 		}
 	}
 
-	fn run_function<GrugState: State>(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &'static [Argument], values: &[GrugValue], statements: &'static [Statement]) -> Option<GrugValue> {
+	fn run_function<GrugState: State>(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &'static [Parameter], values: &[GrugValue], statements: &'static [Statement]) -> Option<GrugValue> {
 		if call_stack.local_variables.len() > MAX_RECURSION_LIMIT {
 			state.set_runtime_error(RuntimeError::StackOverflow);
 			return None
@@ -561,7 +561,7 @@ impl Interpreter {
 					if helper_fn.name.to_str() != name {
 						continue;
 					}
-					return Some(self.run_function(call_stack, state, file, entity, &*helper_fn.arguments, &values, &*helper_fn.body_statements)?);
+					return Some(self.run_function(call_stack, state, file, entity, &*helper_fn.parameters, &values, &*helper_fn.body_statements)?);
 				}
 				unreachable!("helper function not found");
 			}
@@ -669,10 +669,10 @@ impl Backend for Interpreter {
 			return false;
 		};
 
-		let values = if on_function.arguments.len() == 0 {
+		let values = if on_function.parameters.len() == 0 {
 			&[]
 		} else {
-			unsafe{std::slice::from_raw_parts(values, on_function.arguments.len())}
+			unsafe{std::slice::from_raw_parts(values, on_function.parameters.len())}
 		};
 
 		self.run_function(
@@ -680,7 +680,7 @@ impl Backend for Interpreter {
 			state,
 			file,
 			unsafe{entity.members.get().cast::<GrugEntityData>().as_ref()}, 
-			&on_function.arguments, 
+			&on_function.parameters, 
 			values,
 			&on_function.body_statements
 		).is_some()
@@ -700,7 +700,7 @@ impl Backend for Interpreter {
 			state,
 			file,
 			unsafe{entity.members.get().cast::<GrugEntityData>().as_ref()}, 
-			&on_function.arguments, 
+			&on_function.parameters, 
 			values,
 			&on_function.body_statements
 		).is_some()

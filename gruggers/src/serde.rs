@@ -53,20 +53,20 @@ mod ser {
 			},
 			GlobalStatement::OnFunction(OnFunction{
 				name,
-				arguments,
+				parameters,
 				body_statements,
 				span: _
 			}) => {
 				object! {
 					"kind": "on_function",
 					"name": name.to_str(),
-					"arguments": arguments.iter().map(serialize_argument).collect::<Vec<_>>(),
+					"parameters": parameters.iter().map(serialize_parameter).collect::<Vec<_>>(),
 					"body_statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				}
 			},
 			GlobalStatement::HelperFunction(HelperFunction{
 				name,
-				arguments,
+				parameters,
 				body_statements,
 				return_type: GrugType::Void,
 				span: _
@@ -74,13 +74,13 @@ mod ser {
 				object! {
 					"kind": "helper_function",
 					"name": name.to_str(),
-					"arguments": arguments.iter().map(serialize_argument).collect::<Vec<_>>(),
+					"parameters": parameters.iter().map(serialize_parameter).collect::<Vec<_>>(),
 					"body_statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				}
 			},
 			GlobalStatement::HelperFunction(HelperFunction{
 				name,
-				arguments,
+				parameters,
 				body_statements,
 				return_type,
 				span: _
@@ -88,7 +88,7 @@ mod ser {
 				object! {
 					"kind": "helper_function",
 					"name": name.to_str(),
-					"arguments": arguments.iter().map(serialize_argument).collect::<Vec<_>>(),
+					"parameters": parameters.iter().map(serialize_parameter).collect::<Vec<_>>(),
 					"body_statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 					"return_type": serialize_type(return_type),
 				}
@@ -221,7 +221,7 @@ mod ser {
 		}
 	}
 
-	fn serialize_argument(argument: &Argument) -> JsonValue {
+	fn serialize_parameter(argument: &Parameter) -> JsonValue {
 		object! {
 			"name": argument.name.to_str(),
 			"type": serialize_type(&argument.ty),
@@ -331,10 +331,10 @@ mod de {
 		CallExpressionFunctionNameNotString,
 		CallExpressionArgumentsNotArray,
 		OnFunctionNameNotString,
-		ArgumentsNotArray,
-		ArgumentNotObject,
-		ArgumentNameNotString,
-		ArgumentTypeNotString,
+		ParametersNotArray,
+		ParameterNotObject,
+		ParameterNameNotString,
+		ParameterTypeNotString,
 		StatementsNotArray,
 		StatementNotObject,
 		StatementKindNotString,
@@ -394,9 +394,9 @@ mod de {
 					};
 					output.push_str(name);
 					output.push_str("(");
-					let arguments = get_object_field(global_statement, "arguments", "global_on_function")?;
+					let parameters = get_object_field(global_statement, "parameters", "global_on_function")?;
 					let body_statements = get_object_field(global_statement, "body_statements", "global_on_function")?;
-					apply_arguments(arguments, output)?;
+					apply_parameters(parameters, output)?;
 					output.push_str(") ");
 					apply_statements(body_statements, indentation + 1, output)?;
 					Ok(())
@@ -407,9 +407,9 @@ mod de {
 					};
 					output.push_str(name);
 					output.push_str("(");
-					let arguments = get_object_field(global_statement, "arguments", "global_helper")?;
+					let parameters = get_object_field(global_statement, "parameters", "global_helper")?;
 					let body_statements = get_object_field(global_statement, "body_statements", "global_helper")?;
-					apply_arguments(arguments, output)?;
+					apply_parameters(parameters, output)?;
 					output.push_str(") ");
 
 					if let Ok(ty) = get_object_field(global_statement, "return_type", "global_helper_function") {
@@ -441,24 +441,24 @@ mod de {
 		}
 	}
 
-	fn apply_arguments(arguments: &JsonValue, output: &mut String) -> Result<(), JsonDeserializeError> {
-		let JsonValue::Array(arguments) = arguments else {
-			return Err(JsonDeserializeError::ArgumentsNotArray)
+	fn apply_parameters(parameters: &JsonValue, output: &mut String) -> Result<(), JsonDeserializeError> {
+		let JsonValue::Array(parameters) = parameters else {
+			return Err(JsonDeserializeError::ParametersNotArray)
 		};
-		for (i, argument) in arguments.iter().enumerate() {
-			let JsonValue::Object(argument) = argument else {
-				return Err(JsonDeserializeError::ArgumentNotObject)
+		for (i, parameter) in parameters.iter().enumerate() {
+			let JsonValue::Object(parameter) = parameter else {
+				return Err(JsonDeserializeError::ParameterNotObject)
 			};
-			let Some(name) = get_object_field(argument, "name", "argument")?.as_str() else {
-				return Err(JsonDeserializeError::ArgumentNameNotString)
+			let Some(name) = get_object_field(parameter, "name", "argument")?.as_str() else {
+				return Err(JsonDeserializeError::ParameterNameNotString)
 			};
-			let Some(ty) = get_object_field(argument, "type", "argument")?.as_str() else {
-				return Err(JsonDeserializeError::ArgumentTypeNotString)
+			let Some(ty) = get_object_field(parameter, "type", "argument")?.as_str() else {
+				return Err(JsonDeserializeError::ParameterTypeNotString)
 			};
 			output.push_str(name);
 			output.push_str(": ");
 			output.push_str(ty);
-			if i < arguments.len() - 1 {
+			if i < parameters.len() - 1 {
 				output.push_str(", ");
 			}
 		}

@@ -623,7 +623,6 @@ pub enum Statement<'a> {
 	EmptyLine,
 }
 
-// TODO: This should be renamed to Parameter
 /// Represents the name and type of a function parameter
 /// ```text
 /// helper_color(n: number) Color {
@@ -631,7 +630,7 @@ pub enum Statement<'a> {
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct Argument<'a> {
+pub struct Parameter<'a> {
 	/// Name of the parameter
 	/// `n` is the name in the example
 	pub name: NTStrPtr<'a>,
@@ -657,7 +656,7 @@ pub struct OnFunction<'a> {
 	/// Name of the function as a [null terminated string](crate::ntstring::NTStrPtr)
 	pub name: NTStrPtr<'a>,
 	/// List of parameters to the function and their types 
-	pub arguments: &'a [Argument<'a>],
+	pub parameters: &'a [Parameter<'a>],
 	/// List of statements that make up the top level of the function. 
 	pub body_statements: &'a mut [Statement<'a>],
 	/// Source span of the name of the on function
@@ -695,7 +694,7 @@ pub struct HelperFunction<'a> {
 	/// Return type is [`GrugType::Void`] if there is no return type
 	pub return_type: GrugType<'a>,
 	/// List of parameters to the function and their types 
-	pub arguments: &'a [Argument<'a>],
+	pub parameters: &'a [Parameter<'a>],
 	/// List of statements that make up the top level of the function. 
 	pub body_statements: &'a mut [Statement<'a>],
 	/// Source span of the name of the helper function
@@ -770,7 +769,7 @@ const _: () = const{
 	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
 	let x: &[HelperFunction] = &[];
 	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
-	let x: &[Argument] = &[];
+	let x: &[Parameter] = &[];
 	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
 	let x: &[Statement] = &[];
 	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}

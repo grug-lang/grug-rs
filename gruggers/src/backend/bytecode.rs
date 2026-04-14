@@ -91,7 +91,7 @@ impl<'a> Compiler<'a> {
 		debug_assert_eq!(self.while_loop_patches.len(), 0);
 		self.push_scope();
 		let begin_location = instructions.get_loc();
-		for arg in helper_function.arguments {
+		for arg in helper_function.parameters {
 			self.insert_local_variable(arg.name.to_str());
 		}
 		for statement in &*helper_function.body_statements {
@@ -110,15 +110,15 @@ impl<'a> Compiler<'a> {
 		debug_assert_eq!(self.while_loop_patches.len(), 0);
 		self.push_scope();
 		let begin_location = instructions.get_loc();
-		let arg_count = on_function.arguments.len();
-		for arg in on_function.arguments {
-			self.insert_local_variable(arg.name.to_str());
+		let param_count = on_function.parameters.len();
+		for param in on_function.parameters {
+			self.insert_local_variable(param.name.to_str());
 		}
 		for statement in &*on_function.body_statements {
 			self.compile_statement(instructions, statement);
 		}
 		instructions.stream.push(Op::ReturnVoid);
-		instructions.insert_on_fn(on_function.name.to_str(), index, begin_location, arg_count, self.locals_size_max);
+		instructions.insert_on_fn(on_function.name.to_str(), index, begin_location, param_count, self.locals_size_max);
 		self.locals_size_max = 0;
 		self.pop_scope();
 	}

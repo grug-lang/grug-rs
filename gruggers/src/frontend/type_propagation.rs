@@ -10,7 +10,7 @@ use crate::ntstring::NTStr;
 use crate::ast::{
 	GrugType, UnaryOperator, BinaryOperator,
 	ExprData, HelperFunction, Statement, Expr,
-	Argument,
+	Parameter,
 };
 use crate::frontend::GlobalStatement;
 use crate::nt;
@@ -732,20 +732,20 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			}
 			previous_on_fn_index = current_index;
 			
-			if mod_api_on_fn.arguments.len() > current_on_fn.arguments.len() {
+			if mod_api_on_fn.parameters.len() > current_on_fn.parameters.len() {
 				return Err(TypePropogatorError::TooFewParameters{
 					function_name: Arc::from(current_on_fn.name.to_str()),
-					expected_name: Arc::from(mod_api_on_fn.arguments[current_on_fn.arguments.len()].name.to_str()),
-					expected_type: mod_api_on_fn.arguments[current_on_fn.arguments.len()].ty.into(),
+					expected_name: Arc::from(mod_api_on_fn.parameters[current_on_fn.parameters.len()].name.to_str()),
+					expected_type: mod_api_on_fn.parameters[current_on_fn.parameters.len()].ty.into(),
 				});
-			} else if mod_api_on_fn.arguments.len() < current_on_fn.arguments.len() {
+			} else if mod_api_on_fn.parameters.len() < current_on_fn.parameters.len() {
 				return Err(TypePropogatorError::TooManyParameters{
 					function_name: Arc::from(current_on_fn.name.to_str()),
-					parameter_name: Arc::from(current_on_fn.arguments[mod_api_on_fn.arguments.len()].name.to_str()),
-					parameter_type: current_on_fn.arguments[mod_api_on_fn.arguments.len()].ty.into(),
+					parameter_name: Arc::from(current_on_fn.parameters[mod_api_on_fn.parameters.len()].name.to_str()),
+					parameter_type: current_on_fn.parameters[mod_api_on_fn.parameters.len()].ty.into(),
 				});
 			}
-			for (param, arg) in mod_api_on_fn.arguments.iter().zip(current_on_fn.arguments.iter()) {
+			for (param, arg) in mod_api_on_fn.parameters.iter().zip(current_on_fn.parameters.iter()) {
 				if param.name != arg.name {
 					return Err(TypePropogatorError::OnFnParameterNameMismatch {
 						function_name: Arc::from(current_on_fn.name.to_str()),
@@ -769,7 +769,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 
 			self.current_fn_name = Some(current_on_fn.name.to_str());
 			self.push_scope();
-			for arg in current_on_fn.arguments {
+			for arg in current_on_fn.parameters {
 				self.add_local_variable(arg.name.to_str(), arg.ty.into())?;
 			}
 			self.fill_statements(&ast.helper_fn_signatures, &mut current_on_fn.body_statements, &GrugType::Void, arena)?;
@@ -795,7 +795,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				GlobalStatement::EmptyLine => (),
 				GlobalStatement::HelperFunction(HelperFunction{
 					name,
-					arguments,
+					parameters,
 					body_statements,
 					return_type,
 					span: _
@@ -806,8 +806,8 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 
 					self.current_fn_name = Some(name.to_str());
 					self.push_scope();
-					for arg in *arguments {
-						self.add_local_variable(arg.name.to_str(), arg.ty.into())?;
+					for param in *parameters {
+						self.add_local_variable(param.name.to_str(), param.ty.into())?;
 					}
 					self.fill_statements(&ast.helper_fn_signatures, body_statements, return_type, arena)?;
 
@@ -830,7 +830,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 	
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_statements(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Argument<'arena>]))], statements: &mut [Statement<'arena>], expected_return_type: &GrugType<'arena>, arena: &'arena Arena) -> Result<(), TypePropogatorError> {
+	fn fill_statements(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], statements: &mut [Statement<'arena>], expected_return_type: &GrugType<'arena>, arena: &'arena Arena) -> Result<(), TypePropogatorError> {
 		self.push_scope();
 		for statement in statements {
 			match statement {
@@ -1001,7 +1001,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_expr(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Argument<'arena>]))], assignment_expr: &mut Expr<'arena>, arena: &'arena Arena) -> Result<GrugType<'arena>, TypePropogatorError> {
+	fn fill_expr(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], assignment_expr: &mut Expr<'arena>, arena: &'arena Arena) -> Result<GrugType<'arena>, TypePropogatorError> {
 		// MUST be None before type propogation
 		assert!(assignment_expr.result_type.is_none());
 		let result_ty = match &mut assignment_expr.data {
@@ -1121,7 +1121,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					self.check_arguments(fn_name, sig_arguments, args, arena)?;
 					return_ty.clone()
 				} else if let Some(game_fn) = self.game_fns.get(fn_name) {
-					self.check_arguments(fn_name, &game_fn.arguments, args, arena)?;
+					self.check_arguments(fn_name, &game_fn.parameters, args, arena)?;
 					if let Some(game_fn_ptr) = self.game_fn_ptrs.get(fn_name) {
 						*ptr = Some(*game_fn_ptr);
 						game_fn.return_ty
@@ -1148,7 +1148,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		Ok(result_ty)
 	}
 
-	fn check_arguments(&mut self, function_name: &str, signature: &[Argument<'_>], arguments: &mut [Expr<'arena>], arena: &'arena Arena) -> Result<(), TypePropogatorError> {
+	fn check_arguments(&mut self, function_name: &str, signature: &[Parameter<'_>], arguments: &mut [Expr<'arena>], arena: &'arena Arena) -> Result<(), TypePropogatorError> {
 		debug_assert!(arguments.iter().all(|arg| arg.result_type.is_some()));
 		if signature.len() > arguments.len() {
 			return Err(TypePropogatorError::TooFewArguments{

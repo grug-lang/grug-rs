@@ -1,6 +1,6 @@
 use super::tokenizer::{Token, TokenType};
 use crate::ast::{
-	GrugType, HelperFunction, Statement, OnFunction, Argument,
+	GrugType, HelperFunction, Statement, OnFunction, Parameter,
 	MemberVariable, Expr, ExprData, UnaryOperator,
 	BinaryOperator, 
 };
@@ -259,8 +259,8 @@ const MAX_PARSING_DEPTH: usize = 100;
 pub(crate) struct AST<'arena> {
 	pub(crate) global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
 	pub(crate) called_helper_fns: Vec<&'arena str, &'arena Arena>, 
-	pub(crate) helper_fn_signatures: Vec<(&'arena str, (GrugType<'arena>, &'arena [Argument<'arena>])), &'arena Arena>,
-	pub(crate) on_fn_signatures: Vec<(&'arena str, &'arena [Argument<'arena>]), &'arena Arena>,
+	pub(crate) helper_fn_signatures: Vec<(&'arena str, (GrugType<'arena>, &'arena [Parameter<'arena>])), &'arena Arena>,
+	pub(crate) on_fn_signatures: Vec<(&'arena str, &'arena [Parameter<'arena>]), &'arena Arena>,
 }
 
 pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>, ParserError> {
@@ -319,7 +319,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>
 				});
 			}
 			
-			ast.on_fn_signatures.push((on_fn.name.to_str(), on_fn.arguments));
+			ast.on_fn_signatures.push((on_fn.name.to_str(), on_fn.parameters));
 			ast.global_statements.push(GlobalStatement::OnFunction(on_fn));
 
 			seen_on_fn = true;
@@ -348,7 +348,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>
 				});
 			}
 
-			ast.helper_fn_signatures.push(((helper_fn.name.to_str()), (helper_fn.return_type, helper_fn.arguments)));
+			ast.helper_fn_signatures.push(((helper_fn.name.to_str()), (helper_fn.return_type, helper_fn.parameters)));
 			ast.global_statements.push(GlobalStatement::HelperFunction(helper_fn));
 
 			newline_allowed = true;
@@ -421,8 +421,8 @@ impl<'a> AST<'a> {
 		// This should never fail because this is checked before calling parse_helper_fn
 		consume_next_token_types(tokens, &[TokenType::OpenParenthesis]).unwrap();
 
-		let args = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
-			self.parse_arguments(tokens, arena)?
+		let parameters = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
+			self.parse_parameters(tokens, arena)?
 		} else {
 			Vec::new_in(arena).leak()
 		};
@@ -453,7 +453,7 @@ impl<'a> AST<'a> {
 
 		Ok(HelperFunction{
 			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
-			arguments: args,
+			parameters,
 			body_statements,
 			return_type,
 			span: name_token.span,
@@ -468,8 +468,8 @@ impl<'a> AST<'a> {
 		// This should never fail because this is checked before calling parse_on_fn
 		consume_next_token_types(tokens, &[TokenType::OpenParenthesis]).unwrap();
 
-		let args = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
-			self.parse_arguments(tokens, arena)?
+		let parameters = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
+			self.parse_parameters(tokens, arena)?
 		} else {
 			Vec::new_in(arena).leak()
 		};
@@ -485,14 +485,14 @@ impl<'a> AST<'a> {
 
 		Ok(OnFunction{
 			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
-			arguments: args,
+			parameters,
 			body_statements,
 			span: name_token.span
 		})
 	}
 
-	// arguments -> argument + ("," + argument)*;
-	fn parse_arguments(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<&'a [Argument<'a>], ParserError> {
+	// parameters -> parameter + ("," + parameter)*;
+	fn parse_parameters(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<&'a [Parameter<'a>], ParserError> {
 		let mut arguments = Vec::new_in(arena);
 		loop {
 			// parse_arg
@@ -511,7 +511,7 @@ impl<'a> AST<'a> {
 				}),
 				_ => (),
 			}
-			arguments.push(Argument{
+			arguments.push(Parameter{
 				name: Box::leak(NTStr::box_from_str_in(arg_name, arena)).as_ntstrptr(),
 				ty: arg_type,
 			}.into());

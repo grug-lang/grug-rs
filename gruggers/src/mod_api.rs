@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::ntstring::NTStr;
-use crate::ast::{Argument, GrugType};
+use crate::ast::{Parameter, GrugType};
 use crate::arena::Arena;
 
 use allocator_api2::boxed::Box;
@@ -41,7 +41,7 @@ impl<'a> ModApiEntity<'a> {
 pub(crate) struct ModApiOnFn<'a> {
 	#[allow(dead_code)]
 	pub(super) description: Option<String>,
-	pub(super) arguments: Vec<Argument<'a>>,
+	pub(super) parameters: Vec<Parameter<'a>>,
 }
 
 #[derive(Debug)]
@@ -49,7 +49,7 @@ pub(crate) struct ModApiGameFn<'a> {
 	#[allow(dead_code)]
 	pub(crate) description: Option<String>,
 	pub(crate) return_ty: GrugType<'a>,
-	pub(crate) arguments: Vec<Argument<'a>>,
+	pub(crate) parameters: Vec<Parameter<'a>>,
 }
 
 // TODO: Add Display impl for all variants
@@ -76,18 +76,18 @@ pub enum ModApiError{
 	OnFnArgumentResource {
 		entity_name: String,
 		on_fn_name: String,
-		argument_name: String,
+		param_name: String,
 	},
 	OnFnArgumentEntity {
 		entity_name: String,
 		on_fn_name: String,
-		argument_name: String,
+		param_name: String,
 	},
 	GameFnsNotObject,
 	OnFnArgumentVoid {
 		entity_name: String,
 		on_fn_name: String,
-		argument_name: String,
+		param_name: String,
 	},
 	GameFnArgumentsNotArray{
 		game_fn_name: String,
@@ -97,19 +97,19 @@ pub enum ModApiError{
 	},
 	GameFnArgumentMissingType{
 		game_fn_name: String,
-		argument_name: String,
+		param_name: String,
 	},
 	GameFnArgumentVoid{
 		game_fn_name: String,
-		argument_name: String,
+		param_name: String,
 	},
 	GameFnResourceMissingExtension{
 		game_fn_name: String,
-		argument_name: String,
+		param_name: String,
 	},
 	GameFnEntityMissingType{
 		game_fn_name: String,
-		argument_name: String,
+		param_name: String,
 	},
 	GameFnReturnsEntity{
 		game_fn_name: String,
@@ -164,22 +164,22 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 			let description = fn_values["description"].as_str().map(str::to_string);
 			
 			// optional "arguments" object
-			let arguments = &fn_values["arguments"];
-			if !arguments.is_array() && !arguments.is_null(){
+			let parameters = &fn_values["arguments"];
+			if !parameters.is_array() && !parameters.is_null(){
 				return Err(ModApiError::OnFnsArgumentsNotArray{
 					entity_name: entity_name.to_string(),
 					on_fn_name: fn_name.to_string(),
 				});
 			}
-			let arguments = arguments.members().map(|argument_values| {
+			let parameters = parameters.members().map(|param_values| {
 				// optional "name" string
-				let argument_name = argument_values["name"].as_str().ok_or(ModApiError::OnFnArgumentMissingName{
+				let param_name = param_values["name"].as_str().ok_or(ModApiError::OnFnArgumentMissingName{
 					entity_name: entity_name.to_string(),
 					on_fn_name: fn_name.to_string(),
 				})?;
-				let argument_name = Box::leak(NTStr::box_from_str_in(argument_name, &arena));
+				let param_name = Box::leak(NTStr::box_from_str_in(param_name, &arena));
 				// "type" string
-				let ty = argument_values["type"].as_str().ok_or(ModApiError::OnFnArgumentMissingType{
+				let ty = param_values["type"].as_str().ok_or(ModApiError::OnFnArgumentMissingType{
 					entity_name: entity_name.to_string(),
 					on_fn_name: fn_name.to_string(),
 				})?;
@@ -188,7 +188,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 					"void"     => Err(ModApiError::OnFnArgumentVoid{
 						entity_name: entity_name.to_string(),
 						on_fn_name: fn_name.to_string(),
-						argument_name: argument_name.to_string(),
+						param_name: param_name.to_string(),
 					})?,
 					"bool"     => GrugType::Bool,
 					"number"   => GrugType::Number,
@@ -197,12 +197,12 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 					"resource" => Err(ModApiError::OnFnArgumentResource{
 						entity_name: entity_name.to_string(),
 						on_fn_name: fn_name.to_string(),
-						argument_name: argument_name.to_string(),
+						param_name: param_name.to_string(),
 					})?,
 					"entity" => Err(ModApiError::OnFnArgumentEntity{
 						entity_name: entity_name.to_string(),
 						on_fn_name: fn_name.to_string(),
-						argument_name: argument_name.to_string(),
+						param_name: param_name.to_string(),
 					})?,
 					type_name => {
 						let extra_value = Box::leak(NTStr::box_from_str_in(type_name, &arena));
@@ -211,8 +211,8 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 						}
 					}
 				};
-				Ok(Argument{
-					name: unsafe{argument_name.as_ntstrptr().detach_lifetime()},
+				Ok(Parameter{
+					name: unsafe{param_name.as_ntstrptr().detach_lifetime()},
 					ty,
 				})
 			}).collect::<Result<Vec<_>, ModApiError>>()?;
@@ -224,7 +224,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 			};
 			Ok((fn_name, ModApiOnFn{
 				description,
-				arguments,
+				parameters,
 			}))
 		}).collect::<Result<Vec<_>, _>>()?;
 		let entity_name = unsafe{
@@ -249,37 +249,37 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 		let description = game_fn_values["description"].as_str().map(str::to_string);
 
 		// optional "arguments" object
-		let arguments = &game_fn_values["arguments"];
-		if !arguments.is_array() && !arguments.is_null(){
+		let parameters = &game_fn_values["arguments"];
+		if !parameters.is_array() && !parameters.is_null(){
 			return Err(ModApiError::GameFnArgumentsNotArray{
 				game_fn_name: fn_name.to_string(),
 			});
 		}
-		let arguments = arguments.members().map(|argument_values| {
+		let parameters = parameters.members().map(|param_values| {
 			// "name" string
-			let argument_name = argument_values["name"].as_str().ok_or(ModApiError::GameFnArgumentMissingName{
+			let param_name = param_values["name"].as_str().ok_or(ModApiError::GameFnArgumentMissingName{
 				game_fn_name: fn_name.to_string(),
 			})?;
-			let argument_name = Box::leak(NTStr::box_from_str_in(argument_name, &arena));
+			let param_name = Box::leak(NTStr::box_from_str_in(param_name, &arena));
 			// "type" string
-			let ty = argument_values["type"].as_str().ok_or(ModApiError::GameFnArgumentMissingType{
+			let ty = param_values["type"].as_str().ok_or(ModApiError::GameFnArgumentMissingType{
 				game_fn_name: fn_name.to_string(),
-				argument_name: argument_name.to_string(),
+				param_name: param_name.to_string(),
 			})?;
 			let ty = match ty {
 				// arguments can't be void
 				"void"     => Err(ModApiError::GameFnArgumentVoid{
 					game_fn_name: fn_name.to_string(),
-					argument_name: argument_name.to_string(),
+					param_name: param_name.to_string(),
 				})?,
 				"bool"     => GrugType::Bool,
 				"number"      => GrugType::Number,
 				"string"   => GrugType::String,
 				"id"       => GrugType::Id{custom_name: None},
 				"entity"   => {
-					let entity_type = argument_values["entity_type"].as_str().ok_or(ModApiError::GameFnEntityMissingType{
+					let entity_type = param_values["entity_type"].as_str().ok_or(ModApiError::GameFnEntityMissingType{
 						game_fn_name: fn_name.to_string(),
-						argument_name: argument_name.to_string(),
+						param_name: param_name.to_string(),
 					})?;
 					GrugType::Entity {
 						entity_type: (!entity_type.is_empty()).then(|| {
@@ -289,9 +289,9 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 					}
 				},
 				"resource" => {
-					let extension = argument_values["resource_extension"].as_str().ok_or(ModApiError::GameFnResourceMissingExtension{
+					let extension = param_values["resource_extension"].as_str().ok_or(ModApiError::GameFnResourceMissingExtension{
 						game_fn_name: fn_name.to_string(),
-						argument_name: argument_name.to_string(),
+						param_name: param_name.to_string(),
 					})?;
 					let extension = Box::leak(NTStr::box_from_str_in(extension, &arena)).as_ntstrptr();
 					GrugType::Resource {
@@ -305,8 +305,8 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 					}
 				}
 			};
-			Ok(Argument{
-				name: unsafe{argument_name.as_ntstrptr().detach_lifetime()},
+			Ok(Parameter{
+				name: unsafe{param_name.as_ntstrptr().detach_lifetime()},
 				ty,
 			})
 		}).collect::<Result<Vec<_>, ModApiError>>()?;
@@ -341,7 +341,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 		Ok((fn_name, ModApiGameFn{
 			return_ty,
 			description,
-			arguments
+			parameters
 		}))
 	}).collect::<Result<HashMap<_, _>, ModApiError>>()?;
 
