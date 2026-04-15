@@ -27,7 +27,7 @@ struct Compiler<'a> {
 	locals_sizes: Vec<usize>,
 	current_scope_size: usize,
 	locals_size_max: u32,
-	helper_fn_patches: Vec<(/* location of call instruction */ usize, /* arg_count */ u16, /* name */ &'a str)>,
+	helper_fn_patches: Vec<(/* location of call instruction */ usize, /* name */ &'a str)>,
 	while_loop_patches: Vec<(/* continue destination */ usize, Vec</* break patch locations */ usize>)>,
 }
 
@@ -68,10 +68,10 @@ impl<'a> Compiler<'a> {
 		for helper_function in ast.helper_functions {
 			compiler.compile_helper_fn(&mut instructions, helper_function);
 		}
-		for (patch_loc, args, name) in compiler.helper_fn_patches {
-			let (location, locals_size) = instructions.get_helper_fn_info(&name)
+		for (patch_loc, name) in compiler.helper_fn_patches {
+			let data_loc = instructions.get_helper_fn_info(&name)
 				.expect("helper function exists");
-			instructions.try_patch(Op::CallHelperFunction{args, locals_size, location}, patch_loc).unwrap();
+			instructions.try_patch(Op::CallHelperFunction{data_loc}, patch_loc).unwrap();
 		}
 		// panic!("{}", instructions);
 		CompiledFile {
@@ -91,14 +91,14 @@ impl<'a> Compiler<'a> {
 		debug_assert_eq!(self.while_loop_patches.len(), 0);
 		self.push_scope();
 		let begin_location = instructions.get_loc();
-		for arg in helper_function.parameters {
-			self.insert_local_variable(arg.name.to_str());
+		for param in helper_function.parameters {
+			self.insert_local_variable(param.name.to_str());
 		}
 		for statement in &*helper_function.body_statements {
 			self.compile_statement(instructions, statement);
 		}
 		instructions.stream.push(Op::ReturnVoid);
-		instructions.insert_helper_fn(helper_function.name.to_str(), begin_location, self.locals_size_max);
+		instructions.insert_helper_fn(helper_function.name.to_str(), helper_function.parameters.len() as u32, self.locals_size_max, begin_location);
 		self.locals_size_max = 0;
 		self.pop_scope();
 	}
@@ -267,16 +267,21 @@ impl<'a> Compiler<'a> {
 						let value = NTStr::arc_from_str(value.to_ntstr());
 						// SAFETY: This returned instruction stream is only valid as long as this list of strings is available
 						let string = unsafe{value.as_ntstrptr().detach_lifetime()};
-						instructions.stream.push(Op::LoadStr{string});
+						let data_loc = instructions.insert_string(string);
+						instructions.stream.push(Op::LoadStr{data_loc});
 						instructions.strings.insert(value);
 					}
 					Some(value) => {
 						let string = unsafe{value.as_ntstrptr().detach_lifetime()};
-						instructions.stream.push(Op::LoadStr{string})
+						let data_loc = instructions.insert_string(string);
+						instructions.stream.push(Op::LoadStr{data_loc});
 					}
 				}
 			}
-			ExprData::Number (value, _) => instructions.stream.push(Op::LoadNumber{number: *value}),
+			ExprData::Number (value, _) => {
+				let data_loc = instructions.insert_number(*value);
+				instructions.stream.push(Op::LoadNumber{data_loc});
+			}
 			ExprData::Identifier(name) => {
 				let name = name.to_str();
 				if let Some(loc) = self.get_local_location(name) {
@@ -363,7 +368,12 @@ impl<'a> Compiler<'a> {
 				self.compile_expr(instructions, expr);
 				match op {
 					UnaryOperator::Not   => instructions.stream.push(Op::Not),
-					UnaryOperator::Minus => {instructions.stream.push(Op::LoadNumber{number: -1.0}); instructions.stream.push(Op::Mul);}
+					// TODO: Add Negate instruction to do this in a single instruction
+					UnaryOperator::Minus => {
+						let data_loc = instructions.insert_number(-1.);
+						instructions.stream.push(Op::LoadNumber{data_loc}); 
+						instructions.stream.push(Op::Mul);
+					}
 				}
 			}
 			ExprData::Call {
@@ -379,13 +389,11 @@ impl<'a> Compiler<'a> {
 					self.compile_expr(instructions, argument);
 				}
 
-				let (location, locals_size) = if let Some(info) = instructions.get_helper_fn_info(name.to_str()) {
-					info
-				} else {
-					self.helper_fn_patches.push((instructions.get_loc(), args_count as u16, name.to_str()));
-					(0, 0)
-				};
-				instructions.stream.push(Op::CallHelperFunction{args: args_count as u16, locals_size, location});
+				let data_loc = instructions.get_helper_fn_info(name.to_str()).unwrap_or_else(|| {
+					self.helper_fn_patches.push((instructions.get_loc(), name.to_str()));
+					0
+				});
+				instructions.stream.push(Op::CallHelperFunction{data_loc});
 			},
 			ExprData::Call {
 				name: _,
@@ -398,10 +406,10 @@ impl<'a> Compiler<'a> {
 				}
 				
 				let has_return = *expr.result_type.unwrap() != GrugType::Void;
+				let data_loc = instructions.insert_game_fn_data(args_count as u32, *ptr);
 				instructions.stream.push(Op::CallGameFunction {
 					has_return,
-					args: args_count as u32,
-					ptr: *ptr,
+					data_loc
 				});
 			}
 			ExprData::Parenthesized(expr) => self.compile_expr(instructions, expr),
@@ -567,14 +575,16 @@ impl Backend for BytecodeBackend {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
-pub enum Op {
+enum Op {
 	ReturnVoid = 0x00,
 	ReturnValue,
 	LoadNumber {
-		number: f64,
+		// number: f64,
+		data_loc: u32,
 	},
 	LoadStr {
-		string: NTStrPtr<'static>,
+		// string: NTStrPtr<'static>,
+		data_loc: u32,
 	},
 	LoadFalse,
 	LoadTrue,
@@ -620,57 +630,12 @@ pub enum Op {
 		index: u32,
 	},
 	CallHelperFunction {
-		args: u16,
-		locals_size: u32,
-		location: usize,
+		data_loc: u32,
 	},
 	CallGameFunction {
 		has_return: bool,
-		args: u32,
-		ptr: GameFnPtr,
+		data_loc: u32,
 	},
-}
-
-impl PartialEq for Op {
-	fn eq(&self, other: &Self) -> bool {
-		match (self, other) {
-			(Self::ReturnVoid, Self::ReturnVoid)       => true,
-			(Self::ReturnValue, Self::ReturnValue)     => true,
-			(Self::LoadNumber{number: n_0}, Self::LoadNumber{number: n_1}) => n_0 == n_1,
-			(Self::LoadStr{string: s_0}, Self::LoadStr{string: s_1}) => s_0.to_str() == s_1.to_str(),
-			(Self::LoadFalse, Self::LoadFalse)  => true,
-			(Self::LoadTrue , Self::LoadTrue )  => true,
-			(Self::Dup{index: i0}  , Self::Dup{index: i1})  => i0 == i1,
-			// (Self::Pop      , Self::Pop      )  => true,
-			(Self::Add      , Self::Add      )  => true,
-			(Self::Sub      , Self::Sub      )  => true,
-			(Self::Mul      , Self::Mul      )  => true,
-			(Self::Div      , Self::Div      )  => true,
-			(Self::Rem      , Self::Rem      )  => true,
-			// (Self::And      , Self::And      )  => true,
-			// (Self::Or       , Self::Or       )  => true,
-			(Self::Not      , Self::Not      )  => true,
-			(Self::CmpEq    , Self::CmpEq    )  => true,
-			(Self::CmpNeq   , Self::CmpNeq   )  => true,
-			(Self::StrEq    , Self::StrEq    )  => true,
-			(Self::CmpG     , Self::CmpG     )  => true,
-			(Self::CmpGe    , Self::CmpGe    )  => true,
-			(Self::CmpL     , Self::CmpL     )  => true,
-			(Self::CmpLe    , Self::CmpLe    )  => true,
-			// (Self::PrintStr , Self::PrintStr )  => true,
-			(Self::LoadGlobal {index: o1} , Self::LoadGlobal {index: o2}) => o1 == o2,
-			(Self::StoreGlobal{index: o1} , Self::StoreGlobal{index: o2}) => o1 == o2,
-			(Self::Jmp  {offset: o1} , Self::Jmp  {offset: o2}) => o1 == o2,
-			(Self::JmpIf{offset: o1} , Self::JmpIf{offset: o2}) => o1 == o2,
-			(Self::LoadLocal  {index: o1} , Self::LoadLocal  {index: o2}) => o1 == o2,
-			(Self::StoreLocal {index: o1} , Self::StoreLocal {index: o2}) => o1 == o2,
-			(Self::CallHelperFunction {args: args0, locals_size: locals_size0, location: idx0}, 
-			 Self::CallHelperFunction {args: args1, locals_size: locals_size1, location: idx1}) => args0 == args1 && idx0 == idx1 && locals_size0 == locals_size1,
-			(Self::CallGameFunction {has_return: kind0, args: args0, ptr: ptr0}, 
-			 Self::CallGameFunction {has_return: kind1, args: args1, ptr: ptr1}) => kind0 == kind1 && args0 == args1 && ptr0 == ptr1,
-			_ => false,
-		}
-	}
 }
 
 impl Op {
@@ -682,6 +647,13 @@ impl Op {
 		}
 		(offset_from_start - 1) as i32
 	}
+}
+
+pub union ConstantData {
+	number: f64,
+	string: NTStrPtr<'static>,
+	helper_fn_data: (/* args: */ u32, /* locals_size: */ u32, /* location: */ usize),
+	game_fn_data: (/* args: */ u32, /* ptr: */ GameFnPtr),
 }
 
 struct Instructions{
@@ -696,12 +668,12 @@ struct Instructions{
 			u32,
 		)>
 	>,
-	helper_fn_locations: HashMap<Arc<str>, (/* location */ usize, /* locals_size */ u32)>,
+	constants: Vec<ConstantData>,
+	// TODO: this Arc<str> should prolly be replaced with an &'static into an arena
+	helper_fn_locations: HashMap<Arc<str>, /* constant location */ u32>,
+	game_fn_locations: HashMap</* GameFnPtr as usize */ usize, /* constant location */ u32>,
 	fn_labels: HashMap<usize, Arc<str>>,
 	strings: HashSet<Arc<NTStr>>,
-	// jumps_count: usize,
-	// jumps_end: HashMap</* to */ usize, (/* from */ Vec<usize>, /* label */ usize)>,
-	// jumps_start: HashMap</* from */ usize, /* to */ usize>,
 }
 
 impl Instructions {
@@ -709,7 +681,9 @@ impl Instructions {
 		Self {
 			stream: Vec::new(),
 			on_fn_locations: Vec::new(),
+			constants: Vec::new(),
 			helper_fn_locations: HashMap::new(),
+			game_fn_locations: HashMap::new(),
 			fn_labels: HashMap::new(),
 			strings: HashSet::new(),
 			// jumps_count: 0,
@@ -718,11 +692,27 @@ impl Instructions {
 		}
 	}
 
+	pub fn insert_number(&mut self, number: f64) -> u32 {
+		let ret_val = self.constants.len();
+		self.constants.push(ConstantData{number});
+		assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
+		ret_val as u32
+	}
+
+	pub fn insert_string(&mut self, string: NTStrPtr<'static>) -> u32 {
+		let ret_val = self.constants.len();
+		self.constants.push(ConstantData{string});
+		assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
+		ret_val as u32
+	}
+
 	#[allow(unused)]
 	pub fn clear(&mut self) { 
 		self.stream.clear();
 		self.on_fn_locations.clear();
+		self.constants.clear();
 		self.helper_fn_locations.clear();
+		self.game_fn_locations.clear();
 		self.fn_labels.clear();
 		self.strings.clear();
 		// self.jumps_count = 0;
@@ -759,14 +749,26 @@ impl Instructions {
 		self.fn_labels.insert(location, name);
 	}
 
-	pub fn get_helper_fn_info(&mut self, name: &str) -> Option<(/* location */ usize, /* locals_size */ u32)>{
+	pub fn get_helper_fn_info(&mut self, name: &str) -> Option<u32> {
 		self.helper_fn_locations.get(name).copied()
 	}
 
-	pub fn insert_helper_fn(&mut self, name: &str, location: usize, locals_size: u32) {
+	pub fn insert_helper_fn(&mut self, name: &str, args: u32, locals_size: u32, location: usize) {
 		let name = Arc::from(name);
-		self.helper_fn_locations.insert(Arc::clone(&name), (location, locals_size));
+		let const_location = self.constants.len();
+		assert!(const_location < u32::MAX as usize);
+		self.constants.push(ConstantData{helper_fn_data: (args, locals_size, location)});
+		self.helper_fn_locations.insert(Arc::clone(&name), const_location as u32);
 		self.fn_labels.insert(location, name);
+	}
+
+	pub fn insert_game_fn_data(&mut self, args: u32, ptr: GameFnPtr) -> u32 {
+		*self.game_fn_locations.entry(ptr.as_usize()).or_insert_with(|| {
+			let ret_val = self.constants.len();
+			self.constants.push(ConstantData{game_fn_data: (args, ptr)});
+			assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
+			ret_val as u32
+		})
 	}
 
 	/// SAFETY:
@@ -796,11 +798,9 @@ impl Instructions {
 				*patch = offset;
 				Some(())
 			}
-			(Op::CallHelperFunction{args: patch_args, locals_size: patch_locals_size, location: patch_location}, 
-			 Op::CallHelperFunction{args, locals_size, location}) => {
-				*patch_args = args;
-				*patch_locals_size = locals_size;
-				*patch_location = location;
+			(Op::CallHelperFunction{data_loc: patch_data_loc}, 
+			 Op::CallHelperFunction{data_loc}) => {
+				*patch_data_loc = data_loc;
 				Some(())
 			}
 			_ => None,
@@ -838,11 +838,11 @@ impl std::fmt::Display for Instructions {
 				Op::ReturnVoid => write!(f, "ReturnVoid"),
 				Op::ReturnValue => write!(f, "ReturnValue"),
 				Op::LoadStr {
-					string,
-				} => write!(f, "LoadStr {:?}", string.to_str()),
+					data_loc,
+				} => write!(f, "LoadStr {:?}", unsafe{self.constants.get_unchecked(*data_loc as usize).string.to_str()}),
 				Op::LoadNumber {
-					number,
-				} => write!(f, "Load {:?}", number),
+					data_loc,
+				} => write!(f, "Load {:?}", unsafe{self.constants.get_unchecked(*data_loc as usize).number}),
 				Op::LoadFalse => write!(f, "LoadFalse"),
 				Op::LoadTrue => write!(f, "LoadTrue"),
 				Op::Dup{
@@ -887,15 +887,18 @@ impl std::fmt::Display for Instructions {
 					index,
 				} => write!(f, "StoreLocal {}", index),
 				Op::CallHelperFunction {
-					args,
-					locals_size,
-					location,
-				} => write!(f, "CallHelperFunction {} {} {}", args, locals_size, self.fn_labels.get(&location).unwrap()),
+					data_loc,
+				} => {
+					let (args, locals_size, location) = unsafe{self.constants[*data_loc as usize].helper_fn_data};
+					write!(f, "CallHelperFunction {} {} {}", args, locals_size, self.fn_labels.get(&location).unwrap())
+				}
 				Op::CallGameFunction {
 					has_return,
-					args,
-					ptr,
-				} => write!(f, "CallGameFunction {} {} 0x{:016x}", has_return, args, &unsafe{std::mem::transmute::<GameFnPtr, *const ()>(*ptr).addr()}),
+					data_loc,
+				} => {
+					let (args, ptr) = unsafe{self.constants[*data_loc as usize].game_fn_data};
+					write!(f, "CallGameFunction {} {} 0x{:016x}", has_return, args, &unsafe{std::mem::transmute::<GameFnPtr, *const ()>(ptr).addr()})
+				}
 			}?;
 			// print labels: 
 			write!(f, "\n")?;
@@ -935,7 +938,7 @@ impl Stack {
 			let (ins, next) = unsafe{stream.split_first().unwrap_unchecked()};
 			stream = next;
 			match *ins {
-				Op::ReturnVoid         => {
+				Op::ReturnVoid           => {
 					self.stack.truncate(self.rbp);
 					if let Some((rbp, ip)) = self.stack_frames.pop() {
 						self.rbp = rbp;
@@ -944,7 +947,7 @@ impl Stack {
 						return Some(GrugValue{void: ()});
 					}
 				}
-				Op::ReturnValue        => {
+				Op::ReturnValue          => {
 					let ret_val = self.stack.pop()?;
 					self.stack.truncate(self.rbp);
 					if let Some((rbp, ip)) = self.stack_frames.pop() {
@@ -955,19 +958,19 @@ impl Stack {
 						return Some(ret_val);
 					}
 				}
-				Op::LoadNumber{number} => self.stack.push(GrugValue{number}),
-				Op::LoadStr{string}    => self.stack.push(GrugValue{string}),
-				Op::LoadFalse          => self.stack.push(GrugValue{bool: 0}),
-				Op::LoadTrue           => self.stack.push(GrugValue{bool: 1}),
-				Op::Dup{index}         => {
+				Op::LoadNumber{data_loc} => unsafe{self.stack.push(GrugValue{number: instructions.constants.get_unchecked(data_loc as usize).number})},
+				Op::LoadStr{data_loc}    => unsafe{self.stack.push(GrugValue{string: instructions.constants.get_unchecked(data_loc as usize).string})},
+				Op::LoadFalse            => self.stack.push(GrugValue{bool: 0}),
+				Op::LoadTrue             => self.stack.push(GrugValue{bool: 1}),
+				Op::Dup{index}           => {
 					self.stack.push(*self.stack.get(self.stack.len() - 1 - index as usize)?)
 				}
 				// Op::Pop                => {self.stack.pop()?;}
-				Op::Add                |
-				Op::Sub                |
-				Op::Mul                |
-				Op::Div                |
-				Op::Rem                => {
+				Op::Add                  |
+				Op::Sub                  |
+				Op::Mul                  |
+				Op::Div                  |
+				Op::Rem                  => {
 					let second = unsafe{self.stack.pop()?.number};
 					let first = unsafe{self.stack.pop()?.number};
 					let value = match ins {
@@ -980,8 +983,8 @@ impl Stack {
 					};
 					self.stack.push(GrugValue{number: value});
 				}
-				// Op::And                |
-				// Op::Or                 => {
+				// Op::And                  |
+				// Op::Or                   => {
 				// 	let second = unsafe{self.stack.pop()?.bool};
 				// 	let first = unsafe{self.stack.pop()?.bool};
 				// 	let value = match ins {
@@ -991,11 +994,11 @@ impl Stack {
 				// 	} as u8;
 				// 	self.stack.push(GrugValue{bool: value});
 				// }
-				Op::Not                => {
+				Op::Not                  => {
 					let value = unsafe{self.stack.pop()?.bool};
 					self.stack.push(GrugValue{bool: (value == 0) as u8});
 				}
-				Op::CmpEq | Op::CmpNeq => {
+				Op::CmpEq | Op::CmpNeq   => {
 					let second = self.stack.pop()?.as_bytes();
 					let first = self.stack.pop()?.as_bytes();
 					let value = match ins {
@@ -1005,13 +1008,13 @@ impl Stack {
 					};
 					self.stack.push(GrugValue{bool: value as u8});
 				}
-				Op::StrEq              => {
+				Op::StrEq                => {
 					let second = unsafe{self.stack.pop()?.string};
 					let first = unsafe{self.stack.pop()?.string};
 					self.stack.push(GrugValue{bool: (first == second) as u8});
 				}
-				Op::CmpG  | Op::CmpGe  |
-				Op::CmpL  | Op::CmpLe  => {
+				Op::CmpG  | Op::CmpGe    |
+				Op::CmpL  | Op::CmpLe    => {
 					let second = unsafe{self.stack.pop()?.number};
 					let first = unsafe{self.stack.pop()?.number};
 					let value = match ins {
@@ -1023,7 +1026,7 @@ impl Stack {
 					};
 					self.stack.push(GrugValue{bool: value as u8});
 				}
-				// Op::PrintStr           => {
+				// Op::PrintStr             => {
 				// 	use std::ptr::NonNull;
 				// 	let str = unsafe{
 				// 		NTStrPtr::from_ptr(
@@ -1036,13 +1039,13 @@ impl Stack {
 				// 	};
 				// 	println!("{}", str);
 				// }
-				Op::LoadGlobal{index}  => {
+				Op::LoadGlobal{index}    => {
 					self.stack.push(unsafe{globals.get_unchecked(index as usize)}.get());
 				}
-				Op::StoreGlobal{index} => {
+				Op::StoreGlobal{index}   => {
 					unsafe{globals.get_unchecked(index as usize)}.set(self.stack.pop()?);
 				}
-				Op::Jmp{offset}        => {
+				Op::Jmp{offset}          => {
 					stream = unsafe{
 						std::slice::from_raw_parts(
 							instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
@@ -1050,7 +1053,7 @@ impl Stack {
 						)
 					}
 				}
-				Op::JmpIf{offset}      => {
+				Op::JmpIf{offset}        => {
 					if unsafe{self.stack.pop()?.bool} != 0 {
 						stream = unsafe{
 							std::slice::from_raw_parts(
@@ -1060,7 +1063,7 @@ impl Stack {
 						}
 					}
 				}
-				Op::JmpIfNot{offset}      => {
+				Op::JmpIfNot{offset}     => {
 					if unsafe{self.stack.pop()?.bool} == 0 {
 						stream = unsafe{
 							std::slice::from_raw_parts(
@@ -1070,19 +1073,18 @@ impl Stack {
 						}
 					}
 				}
-				Op::LoadLocal{index}   => {
+				Op::LoadLocal{index}     => {
 					 let value = *self.stack.get(self.rbp + index as usize)?;
 					 self.stack.push(value);
 				}
-				Op::StoreLocal{index}  => {
+				Op::StoreLocal{index}    => {
 					let value = self.stack.pop()?;
 					*self.stack.get_mut(self.rbp + index as usize)? = value;
 				}
 				Op::CallHelperFunction {
-					args,
-					locals_size,
-					location,
+					data_loc,
 				} => {
+					let (args, locals_size, location) = unsafe{instructions.constants[data_loc as usize].helper_fn_data};
 					self.stack_frames.push((
 						self.rbp,
 						unsafe{stream.as_ptr().offset_from(instructions.stream.as_ptr()) as usize},
@@ -1093,9 +1095,9 @@ impl Stack {
 				}
 				Op::CallGameFunction {
 					has_return,
-					args,
-					ptr,
+					data_loc,
 				} => {
+					let (args, ptr) = unsafe{instructions.constants[data_loc as usize].game_fn_data};
 					let value = unsafe{(ptr.as_ptr())(state, self.stack.as_ptr().add(self.stack.len() - args as usize))};
 					self.stack.truncate(self.stack.len() - args as usize);
 					if has_return {
@@ -1122,469 +1124,3 @@ impl Stack {
 }
 
 export_backend!{BytecodeBackend::new()}
-
-#[cfg(test)]
-mod test {
-	use super::*;
-	use crate::state::GrugState;
-
-	const MOD_API: &'static str /* ' */= r#"
-	{
-		"entities" : {
-			"A" : {
-				"description": "A",
-				"on_functions": {
-					"on_fib_naive" : {
-						"description": "calculate the fibonacci number at index i using a recursive algorithm",
-						"arguments": [
-							{
-								"name": "number",
-								"type": "number"
-							}
-						]
-					},
-					"on_fib" : {
-						"description": "calculate the fibonacci number at index i",
-						"arguments": [
-							{
-								"name": "number",
-								"type": "number"
-							}
-						]
-					},
-					"on_double" : {
-						"description": "doubles the input number",
-						"arguments": [
-							{
-								"name": "input",
-								"type": "number"
-							}
-						]
-					}
-				}
-			}
-		},
-		"game_functions": {
-			"identity": {
-				"description": "returns the same number as the input",
-				"return_type": "number",
-				"arguments": [
-					{
-						"name": "input",
-						"type": "number"
-					}
-				]
-			}
-		}
-	}
-	"#;
-	const GRUG_FILE_TEXT: &'static str = 
-r#"global: number = 2
-
-on_fib_naive(number: number) {
-    identity(helper_fib_naive(number))
-}
-
-on_fib(number: number) {
-    result: number = 0
-    if number <= 0 {
-        result = 0
-    } else if number == 1 {
-        result = 1
-    } else {
-        a: number = 1
-        b: number = 1
-        i: number = 2
-        while i < number {
-            temp: number = a + b
-            a = b
-            b = temp
-            i = i + 1
-        }
-        result = b
-    }
-    identity(result)
-}
-
-on_double(input: number) {
-    identity(2 * input)
-}
-
-helper_fib_naive(n: number) number {
-    if n < 1 {
-        return 0
-    }
-    if (n == 1 or n == 2) {
-        return 1
-    }
-    return helper_fib_naive(n - 1) + helper_fib_naive(n - 2)
-}
-"#; // '
-	static mut IDENTITY_ARG: f64 = 0.;
-	extern "C" fn identity(_: &GrugState, arguments: *const GrugValue) -> GrugValue {
-		unsafe{println!("{:?}", (*arguments).number)};
-		unsafe{IDENTITY_ARG = (*arguments).number;}
-		unsafe{*arguments}
-	}
-
-	// extern "C" fn void_argless(_: &GrugState) {
-	// }
-	// extern "C" fn void_arg(_: &GrugState, _arguments: *const GrugValue) {
-	// }
-	// extern "C" fn value_argless(_: &GrugState) -> GrugValue {
-	// 	GrugValue{void: ()}
-	// }
-	// extern "C" fn value_arg(_: &GrugState, _arguments: *const GrugValue) -> GrugValue {
-	// 	GrugValue{void: ()}
-	// }
-
-	fn get_state() -> GrugState {
-		let mut state = GrugState::new_from_text(
-			MOD_API,
-			"./",
-			Default::default(),
-			BytecodeBackend::new(),
-		).unwrap();
-		unsafe{state.register_game_fn("identity", identity as for<'a> extern "C" fn (&'a _, _) -> _).unwrap()};
-		state.all_game_fns_registered().unwrap();
-		state
-	}
-
-	#[test]
-	fn vm_test_state() {
-		let state = get_state();
-
-		let on_fib_id      = state.get_on_fn_id("A", "on_fib").unwrap();
-		let on_fn_naive_id = state.get_on_fn_id("A", "on_fib_naive").unwrap();
-		let on_double_id   = state.get_on_fn_id("A", "on_double").unwrap();
-		let _file = state.compile_grug_file_from_str("path/test-A.gru ", GRUG_FILE_TEXT).unwrap();
-		let entity = state.create_entity(_file).unwrap();
-		for i in 0..20 {
-			let fib = {
-				if i == 0 {
-					0
-				} else if i == 1 {
-					1
-				} else {
-					let mut a = 1;
-					let mut b = 1;
-					let mut counter = 2;
-					while counter < i {
-						let temp = a + b;
-						b = a;
-						a = temp;
-						counter += 1;
-					}
-					a
-				}
-			};
-			assert!(state.call_on_function(&entity, on_fib_id, &[GrugValue{number: i as f64}]));
-			unsafe{assert_eq!(*&raw const IDENTITY_ARG, fib as f64)}
-			assert!(state.call_on_function(&entity, on_fn_naive_id, &[GrugValue{number: i as f64}]), "{i}");
-			unsafe{assert_eq!(*&raw const IDENTITY_ARG, fib as f64)}
-		}
-		
-		for i in 0..20 {
-			assert!(state.call_on_function(&entity, on_double_id, &[GrugValue{number: i as f64}]));
-			unsafe{assert_eq!(*&raw const IDENTITY_ARG, (i * 2) as f64)}
-		}
-	}
-
-	#[test]
-	fn vm_test_1() {
-		let state = get_state();
-		let mut stream = Instructions::new();
-		stream.stream.push(Op::ReturnVoid);
-		let mut vm = Stack::new();
-		assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some()});
-	}
-
-	#[test]
-	fn vm_test_2() {
-		let state = get_state();
-		let mut stream = Instructions::new();
-		stream.stream.push(Op::LoadNumber{number:25.});
-		stream.stream.push(Op::ReturnValue);
-		let mut vm = Stack::new();
-		assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == 25.)});
-	}
-
-	#[test]
-	fn vm_test_3() {
-		let state = get_state();
-		let mut stream = Instructions::new();
-		let mut vm = Stack::new();
-
-		for i in 0..5 {
-			for j in 1..5 {
-				let i = i as f64;
-				let j = j as f64;
-				stream.stream.push(Op::LoadNumber{number:i});
-				stream.stream.push(Op::LoadNumber{number:j});
-				stream.stream.push(Op::Add);
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == i + j)});
-				stream.clear();
-
-				stream.stream.push(Op::LoadNumber{number:i});
-				stream.stream.push(Op::LoadNumber{number:j});
-				stream.stream.push(Op::Sub);
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == i - j)});
-				stream.clear();
-
-				stream.stream.push(Op::LoadNumber{number:i});
-				stream.stream.push(Op::LoadNumber{number:j});
-				stream.stream.push(Op::Mul);
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == i * j)});
-				stream.clear();
-
-				stream.stream.push(Op::LoadNumber{number:i});
-				stream.stream.push(Op::LoadNumber{number:j});
-				stream.stream.push(Op::Div);
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == i / j)});
-				stream.clear();
-
-				stream.stream.push(Op::LoadNumber{number:i});
-				stream.stream.push(Op::LoadNumber{number:j});
-				stream.stream.push(Op::Rem);
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.number == i % j)});
-				stream.clear();
-			}
-		}
-	}
-
-	#[test]
-	fn vm_test_5() {
-		let state = get_state();
-		let mut stream = Instructions::new();
-		let mut vm = Stack::new();
-
-		for i in 0..10 {
-			for j in 0..10 {
-				let i = i as f64;
-				let j = j as f64;
-				stream.stream.push(Op::LoadNumber{number:i});
-				stream.stream.push(Op::LoadNumber{number:j});
-				stream.stream.push(Op::CmpEq);
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i == j) as u8)});
-				stream.clear();
-
-				stream.stream.push(Op::LoadNumber{number:i});
-				stream.stream.push(Op::LoadNumber{number:j});
-				stream.stream.push(Op::CmpNeq);
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i != j) as u8)});
-				stream.clear();
-
-				stream.stream.push(Op::LoadNumber{number:i});
-				stream.stream.push(Op::LoadNumber{number:j});
-				stream.stream.push(Op::CmpG);
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i > j) as u8)});
-				stream.clear();
-
-				stream.stream.push(Op::LoadNumber{number:i});
-				stream.stream.push(Op::LoadNumber{number:j});
-				stream.stream.push(Op::CmpGe);
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i >= j) as u8)});
-				stream.clear();
-
-				stream.stream.push(Op::LoadNumber{number:i});
-				stream.stream.push(Op::LoadNumber{number:j});
-				stream.stream.push(Op::CmpL);
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i < j) as u8)});
-				stream.clear();
-
-				stream.stream.push(Op::LoadNumber{number:i});
-				stream.stream.push(Op::LoadNumber{number:j});
-				stream.stream.push(Op::CmpLe);
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &[], &stream, 0, 0).is_some_and(|x| x.bool == (i <= j) as u8)});
-				stream.clear();
-			}
-		}
-	}
-
-	#[test]
-	fn vm_test_7() {
-		let state = get_state();
-		let mut stream = Instructions::new();
-		let globals = [const {Cell::new(GrugValue{void: ()})}; 10];
-		let mut vm = Stack::new();
-
-		for i in 0..10 {
-			for j in 0..10 {
-				let i = i as f64;
-				let j = j as f64;
-				stream.stream.push(Op::LoadNumber {number: i});
-				stream.stream.push(Op::StoreGlobal{index: 0});
-				stream.stream.push(Op::LoadNumber {number: j});
-				stream.stream.push(Op::StoreGlobal{index: 1});
-				stream.stream.push(Op::LoadGlobal {index: 0});
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &globals, &stream, 0, 0).is_some_and(|x| x.number == i)});
-				stream.clear();
-
-				stream.stream.push(Op::LoadNumber {number: i});
-				stream.stream.push(Op::StoreGlobal{index: 0});
-				stream.stream.push(Op::LoadNumber {number: j});
-				stream.stream.push(Op::StoreGlobal{index: 1});
-				stream.stream.push(Op::LoadGlobal {index: 0});
-				stream.stream.push(Op::LoadGlobal {index: 1});
-				stream.stream.push(Op::Add);
-				stream.stream.push(Op::StoreGlobal{index: 2});
-				stream.stream.push(Op::LoadGlobal {index: 2});
-				stream.stream.push(Op::ReturnValue);
-				assert!(unsafe{vm.run(&state, &globals, &stream, 0, 0).is_some_and(|x| x.number == i + j)});
-				stream.clear();
-			}
-		}
-	}
-
-	#[test]
-	fn vm_test_8() {
-		let state = get_state();
-		let mut stream = Instructions::new();
-		let globals = [const {Cell::new(GrugValue{void: ()})}; 10];
-		let mut vm = Stack::new();
-
-		for i in 0..10 {
-			stream.stream.push(Op::LoadNumber{number: 1.});
-			stream.stream.push(Op::StoreGlobal{index: 0});
-			stream.stream.push(Op::LoadNumber{number: 1.});
-			stream.stream.push(Op::StoreGlobal{index: 1});
-			stream.stream.push(Op::LoadNumber{number: i as f64});
-			stream.stream.push(Op::StoreGlobal{index: 2});
-			let cond_start = stream.get_loc();
-			stream.stream.push(Op::LoadGlobal{index: 2});
-			stream.stream.push(Op::LoadNumber{number: 0.});
-			stream.stream.push(Op::CmpLe);
-			let block_begin_jump = stream.get_loc();
-			stream.stream.push(Op::JmpIf{offset: 0});
-			stream.stream.push(Op::LoadGlobal{index: 1});
-			stream.stream.push(Op::LoadGlobal{index: 0});
-			stream.stream.push(Op::LoadGlobal{index: 0});
-			stream.stream.push(Op::StoreGlobal{index: 1});
-			stream.stream.push(Op::Add);
-			stream.stream.push(Op::StoreGlobal{index: 0});
-			stream.stream.push(Op::LoadGlobal{index: 2});
-			stream.stream.push(Op::LoadNumber{number: 1.});
-			stream.stream.push(Op::Sub);
-			stream.stream.push(Op::StoreGlobal{index: 2});
-			let block_end_loc = stream.get_loc();
-			stream.stream.push(Op::Jmp{offset: 0});
-			let block_continue_loc = stream.get_loc();
-			stream.stream.push(Op::LoadGlobal{index: 0});
-			stream.stream.push(Op::ReturnValue);
-
-			stream.try_patch(Op::JmpIf{offset: Op::calc_offset(block_begin_jump, block_continue_loc)}, block_begin_jump).unwrap();
-			stream.try_patch(Op::Jmp{offset: Op::calc_offset(block_end_loc, cond_start)}, block_end_loc).unwrap();
-			let fib = {
-				let mut a = 1.;
-				let mut b = 1.;
-				let mut i = i as f64;
-				while i > 0. {
-					let _b0 = b;
-					let _a0 = a;
-					let _a1 = a;
-					b = _a1;
-					let _0 = _b0 + _a0;
-					a = _0;
-					let _i = i;
-					let _1 = 1.;
-					i = _i - _1;
-				}
-				a
-			};
-			assert!(unsafe{vm.run(&state, &globals, &stream, 0, 0).is_some_and(|x| {assert_eq!(x.number, fib); true})});
-			// panic!("{:#?}", stream);
-			stream.clear();
-		}
-	}
-
-	#[test]
-	fn vm_test_9() {
-		let state = get_state();
-		let mut stream = Instructions::new();
-		let globals = [const {Cell::new(GrugValue{void: ()})}; 10];
-		let mut vm = Stack::new();
-
-		for i in 0..10 {
-			stream.clear();
-			stream.stream.push(Op::LoadNumber{number: 1.});
-			stream.stream.push(Op::StoreLocal{index: 0});
-			stream.stream.push(Op::LoadNumber{number: 1.});
-			stream.stream.push(Op::StoreLocal{index: 1});
-			stream.stream.push(Op::LoadNumber{number: i as f64});
-			stream.stream.push(Op::StoreLocal{index: 2});
-			let cond_start = stream.get_loc();
-			stream.stream.push(Op::LoadLocal{index: 2});
-			stream.stream.push(Op::LoadNumber{number: 0.});
-			stream.stream.push(Op::CmpLe);
-			let block_begin_jump = stream.get_loc();
-			stream.stream.push(Op::JmpIf{offset: 0});
-			stream.stream.push(Op::LoadLocal{index: 1});
-			stream.stream.push(Op::LoadLocal{index: 0});
-			stream.stream.push(Op::LoadLocal{index: 0});
-			stream.stream.push(Op::StoreLocal{index: 1});
-			stream.stream.push(Op::Add);
-			stream.stream.push(Op::StoreLocal{index: 0});
-			stream.stream.push(Op::LoadLocal{index: 2});
-			stream.stream.push(Op::LoadNumber{number: 1.});
-			stream.stream.push(Op::Sub);
-			stream.stream.push(Op::StoreLocal{index: 2});
-			let block_end_loc = stream.get_loc();
-			stream.stream.push(Op::Jmp{offset: 0});
-			let block_continue_loc = stream.get_loc();
-			stream.stream.push(Op::LoadLocal{index: 0});
-			stream.stream.push(Op::ReturnValue);
-
-			stream.try_patch(Op::JmpIf{offset: Op::calc_offset(block_begin_jump, block_continue_loc)}, block_begin_jump).unwrap();
-			stream.try_patch(Op::Jmp{offset: Op::calc_offset(block_end_loc, cond_start)}, block_end_loc).unwrap();
-			let fib = {
-				let mut a = 1.;
-				let mut b = 1.;
-				let mut i = i as f64;
-				while i > 0. {
-					let _b0 = b;
-					let _a0 = a;
-					let _a1 = a;
-					b = _a1;
-					let _0 = _b0 + _a0;
-					a = _0;
-					let _i = i;
-					let _1 = 1.;
-					i = _i - _1;
-				}
-				a
-			};
-			assert!(unsafe{vm.run(&state, &globals, &stream, 3, 0).is_some_and(|x| {assert_eq!(x.number, fib); true})});
-		}
-	}
-
-	#[test]
-	fn vm_test_10() {
-		let state = get_state();
-		let mut stream = Instructions::new();
-		let globals = [const {Cell::new(GrugValue{void: ()})}; 10];
-		let mut vm = Stack::new();
-
-		for i in 0..10 {
-			stream.stream.push(Op::LoadNumber{number: i as f64});
-			stream.stream.push(Op::LoadNumber{number: i as f64 - 1.});
-			stream.stream.push(Op::Dup{index: 1});
-			stream.stream.push(Op::Add);
-			stream.stream.push(Op::Add);
-			stream.stream.push(Op::ReturnValue);
-			assert!(unsafe{vm.run(&state, &globals, &stream, 0, 0).is_some_and(|x| {assert_eq!(x.number, 3. * i as f64 - 1.); true})});
-			stream.clear();
-		}
-	}
-}

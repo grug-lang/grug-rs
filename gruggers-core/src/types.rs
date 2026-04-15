@@ -40,6 +40,11 @@ impl GameFnPtr {
 	pub const fn from_ptr<GrugState: State>(value: GameFnPtrState<GrugState>) -> Self {
 		Self(unsafe{std::mem::transmute(value)})
 	}
+
+	/// converts the pointer into a usize without exposing provenance
+	pub fn as_usize(self) -> usize {
+		self.0.as_ptr().addr()
+	}
 }
 
 impl std::fmt::Debug for GameFnPtr {
