@@ -579,11 +579,9 @@ enum Op {
 	ReturnVoid = 0x00,
 	ReturnValue,
 	LoadNumber {
-		// number: f64,
 		data_loc: u32,
 	},
 	LoadStr {
-		// string: NTStrPtr<'static>,
 		data_loc: u32,
 	},
 	LoadFalse,

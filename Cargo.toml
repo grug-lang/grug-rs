@@ -3,12 +3,7 @@ resolver = "3"
 members = ["gruggers", "gruggers-core"]
 
 [profile.release]
-opt-level = "z"
-panic = "abort"
-debug = "full"
-strip = true
-# lto = "fat"
-# codegen-units = 1
+opt-level = 3
 
 [profile.fuzz]
 inherits = "release"
