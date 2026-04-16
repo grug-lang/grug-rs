@@ -24,14 +24,15 @@ pub use gruggers_core::ntstring;
 pub use gruggers_core::nt;
 
 
-// TODO: Resource management
 // TODO: Non-utf8 version of NTStrPtr and NTStr
-// TODO: README and docs for gruggers
-// TODO: Hot reloading grug_files
-// TODO: Debug info to backends
-// TODO: Better Error handling
+// TODO: (WIP) README and docs for gruggers
+// TODO: (WIP) Debug info to backends
+// TODO: (WIP) Better Error handling
 // TODO: ModsDir struct 
 // TODO: Standard Library
+//
+// TODO: (finished) Resource management
+// TODO: (finished) Hot reloading grug_files
 
 // MIT LICENSE
 // 

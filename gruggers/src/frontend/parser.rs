@@ -818,7 +818,7 @@ impl<'a> AST<'a> {
 					let _ = &consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?[0];
 
 					Expr{
-						data: ExprData::Parenthesized(Box::leak(Box::new_in(expr.into(), arena))),
+						data: ExprData::Parenthesized(Box::leak(Box::new_in(expr, arena))),
 						result_type: None,
 					}
 				}

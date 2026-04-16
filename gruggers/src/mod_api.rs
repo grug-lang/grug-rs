@@ -6,9 +6,10 @@ use crate::ast::{Parameter, GrugType};
 use crate::arena::Arena;
 
 use allocator_api2::boxed::Box;
+use allocator_api2::vec::Vec;
 
 // the 'static fields within `ModApi` are allocated within `_arena`. Any
-// reference to them must have a 'self lifetime
+// reference to them must be given a 'self lifetime
 pub(crate) struct ModApi {
 	entities: HashMap<&'static NTStr, ModApiEntity<'static>>,
 	game_functions: HashMap<&'static NTStr, ModApiGameFn<'static>>,
@@ -27,8 +28,8 @@ impl ModApi {
 #[derive(Debug)]
 pub(crate) struct ModApiEntity<'a> {
 	#[allow(dead_code)]
-	pub(crate) description: Option<String>,
-	pub(crate) on_fns: Vec<(&'a NTStr, ModApiOnFn<'a>)>,
+	pub(crate) description: Option<&'a str>,
+	pub(crate) on_fns: &'a [(&'a NTStr, ModApiOnFn<'a>)],
 }
 
 impl<'a> ModApiEntity<'a> {
@@ -40,16 +41,16 @@ impl<'a> ModApiEntity<'a> {
 #[derive(Debug)]
 pub(crate) struct ModApiOnFn<'a> {
 	#[allow(dead_code)]
-	pub(super) description: Option<String>,
-	pub(super) parameters: Vec<Parameter<'a>>,
+	pub(super) description: Option<&'a str>,
+	pub(super) parameters: &'a [Parameter<'a>],
 }
 
 #[derive(Debug)]
 pub(crate) struct ModApiGameFn<'a> {
 	#[allow(dead_code)]
-	pub(crate) description: Option<String>,
+	pub(crate) description: Option<&'a str>,
 	pub(crate) return_ty: GrugType<'a>,
-	pub(crate) parameters: Vec<Parameter<'a>>,
+	pub(crate) parameters: &'a [Parameter<'a>],
 }
 
 // TODO: Add Display impl for all variants
@@ -150,7 +151,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 
 	let entities = entities.entries().map(|(entity_name, entity_values)| {
 		// optional "description" string
-		let description = entity_values["description"].as_str().map(str::to_string);
+		let description = entity_values["description"].as_str().map(|str| Box::leak(NTStr::box_from_str_in(str, &arena)).as_str());
 
 		// optional "on_fns" object
 		let on_fns = &entity_values["on_functions"];
@@ -161,7 +162,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 		}
 		let on_fns = on_fns.entries().map(|(fn_name, fn_values)| {
 			// optional "description" string
-			let description = fn_values["description"].as_str().map(str::to_string);
+			let description = fn_values["description"].as_str().map(|str| Box::leak(NTStr::box_from_str_in(str, &arena)).as_str());
 			
 			// optional "arguments" object
 			let parameters = &fn_values["arguments"];
@@ -222,11 +223,21 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 					Box::leak(NTStr::box_from_str_in(fn_name, &arena))
 				)
 			};
+			let parameters = {
+				let mut temp = Vec::new_in(&arena);
+				temp.extend(parameters);
+				temp.leak()
+			};
 			Ok((fn_name, ModApiOnFn{
 				description,
 				parameters,
 			}))
 		}).collect::<Result<Vec<_>, _>>()?;
+		let on_fns = {
+			let mut temp = Vec::new_in(&arena);
+			temp.extend(on_fns);
+			temp.leak()
+		};
 		let entity_name = unsafe{
 			std::mem::transmute::<&NTStr, &'static NTStr>(
 				Box::leak(NTStr::box_from_str_in(entity_name, &arena))
@@ -246,7 +257,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 
 	let game_functions = game_functions.entries().map(|(fn_name, game_fn_values)| {
 		// optional "description" string
-		let description = game_fn_values["description"].as_str().map(str::to_string);
+		let description = game_fn_values["description"].as_str().map(|str| Box::leak(NTStr::box_from_str_in(str, &arena)).as_str());
 
 		// optional "arguments" object
 		let parameters = &game_fn_values["arguments"];
@@ -310,6 +321,11 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 				ty,
 			})
 		}).collect::<Result<Vec<_>, ModApiError>>()?;
+		let parameters = {
+			let mut temp = Vec::new_in(&arena);
+			temp.extend(parameters);
+			temp.leak()
+		};
 
 		// optional "return_type" string
 		let return_ty = game_fn_values["return_type"].as_str().unwrap_or("void");

@@ -4,6 +4,7 @@ members = ["gruggers", "gruggers-core"]
 
 [profile.release]
 opt-level = 3
+debug = "full"
 
 [profile.fuzz]
 inherits = "release"
