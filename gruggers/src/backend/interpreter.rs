@@ -602,6 +602,7 @@ impl Interpreter {
 }
 
 impl Backend for Interpreter {
+	#[inline]
 	fn insert_file<GrugState: State>(&self, state: &GrugState, id: GrugFileId, file: GrugAst) {
 		let mut compiled_file = CompiledFile::new(file);
 		let mut files = self.files.borrow_mut();
@@ -627,6 +628,7 @@ impl Backend for Interpreter {
 		}
 	}
 
+	#[inline]
 	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: Pin<&GrugEntity>) -> bool {
 		let file = self.files.borrow();
 		let file = file.get(entity.file_id.0 as usize)
@@ -646,6 +648,7 @@ impl Backend for Interpreter {
 		true
 	}
 
+	#[inline]
 	fn clear_entities(&mut self) {
 		self.files.borrow_mut().iter_mut().for_each(|file| {
 			file.entities.get_mut().clear();
@@ -653,6 +656,7 @@ impl Backend for Interpreter {
 		});
 	}
 
+	#[inline]
 	fn destroy_entity_data(&self, entity: &GrugEntity) {
 		let file = self.files.borrow();
 		let file = file.get(entity.file_id.0 as usize)
@@ -660,6 +664,7 @@ impl Backend for Interpreter {
 		file.entities.borrow_mut().extract_if(.., |en| std::ptr::eq(en.as_ptr().cast_const(), entity)).for_each(|_| {});
 	}
 
+	#[inline]
 	unsafe fn call_on_function_raw<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 		let file = &self.files.borrow();
 		let file = file.get(entity.file_id.0 as usize)
@@ -686,6 +691,7 @@ impl Backend for Interpreter {
 		).is_some()
 	}
 
+	#[inline]
 	fn call_on_function<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
 		let file = &self.files.borrow();
 		let file = file.get(entity.file_id.0 as usize)

@@ -475,6 +475,7 @@ impl BytecodeBackend {
 }
 
 impl Backend for BytecodeBackend {
+	#[inline]
 	fn insert_file<GrugState: State>(&self, state: &GrugState, id: GrugFileId, file: GrugAst) {
 		let mut compiled_file = Compiler::compile(file);
 		let mut files = self.files.borrow_mut();
@@ -502,6 +503,7 @@ impl Backend for BytecodeBackend {
 			unreachable!("GrugScriptIds must be contigious, Expected {}, got {}", files.len(), id.0);
 		}
 	}
+	#[inline]
 	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: Pin<&GrugEntity>) -> bool {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
@@ -519,12 +521,14 @@ impl Backend for BytecodeBackend {
 		self.stacks.borrow_mut().push(stack);
 		ret_val
 	}
+	#[inline]
 	fn clear_entities(&mut self) {
 		for file in self.files.get_mut().iter_mut() {
 			file.data.clear();
 			file.entities.borrow_mut().clear();
 		}
 	}
+	#[inline]
 	fn destroy_entity_data(&self, entity: &GrugEntity) {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
@@ -532,6 +536,7 @@ impl Backend for BytecodeBackend {
 		unsafe{file.data.delete(ErasedPtr::from_ptr(entity.members.get()))};
 		file.entities.borrow_mut().extract_if(.., |en| std::ptr::eq(en.as_ptr().cast_const(), entity)).for_each(|_| {});
 	}
+	#[inline]
 	unsafe fn call_on_function_raw<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
@@ -551,6 +556,7 @@ impl Backend for BytecodeBackend {
 		self.stacks.borrow_mut().push(stack);
 		ret_val
 	}
+	#[inline]
 	fn call_on_function<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
@@ -940,18 +946,18 @@ impl Stack {
 					self.stack.truncate(self.rbp);
 					if let Some((rbp, ip)) = self.stack_frames.pop() {
 						self.rbp = rbp;
-						stream = &mut &*instructions.stream.get(ip..)?;
+						stream = unsafe{&mut &*instructions.stream.get(ip..).unwrap_unchecked()};
 					} else {
 						return Some(GrugValue{void: ()});
 					}
 				}
 				Op::ReturnValue          => {
-					let ret_val = self.stack.pop()?;
+					let ret_val = unsafe{self.stack.pop().unwrap_unchecked()};
 					self.stack.truncate(self.rbp);
 					if let Some((rbp, ip)) = self.stack_frames.pop() {
 						self.stack.push(ret_val);
 						self.rbp = rbp;
-						stream = &mut &*instructions.stream.get(ip..)?;
+						stream = unsafe{&mut &*instructions.stream.get(ip..).unwrap_unchecked()};
 					} else {
 						return Some(ret_val);
 					}
@@ -961,16 +967,16 @@ impl Stack {
 				Op::LoadFalse            => self.stack.push(GrugValue{bool: 0}),
 				Op::LoadTrue             => self.stack.push(GrugValue{bool: 1}),
 				Op::Dup{index}           => {
-					self.stack.push(*self.stack.get(self.stack.len() - 1 - index as usize)?)
+					unsafe{self.stack.push(*self.stack.get(self.stack.len() - 1 - index as usize).unwrap_unchecked())}
 				}
-				// Op::Pop                => {self.stack.pop()?;}
+				// Op::Pop                => {unsafe{self.stack.pop().unwrap_unchecked()};}
 				Op::Add                  |
 				Op::Sub                  |
 				Op::Mul                  |
 				Op::Div                  |
 				Op::Rem                  => {
-					let second = unsafe{self.stack.pop()?.number};
-					let first = unsafe{self.stack.pop()?.number};
+					let second = unsafe{self.stack.pop().unwrap_unchecked().number};
+					let first = unsafe{self.stack.pop().unwrap_unchecked().number};
 					let value = match ins {
 						Op::Add => first + second,
 						Op::Sub => first - second,
@@ -983,8 +989,8 @@ impl Stack {
 				}
 				// Op::And                  |
 				// Op::Or                   => {
-				// 	let second = unsafe{self.stack.pop()?.bool};
-				// 	let first = unsafe{self.stack.pop()?.bool};
+				// 	let second = unsafe{self.stack.pop().unwrap_unchecked()}.bool};
+				// 	let first = unsafe{self.stack.pop().unwrap_unchecked()}.bool};
 				// 	let value = match ins {
 				// 		Op::And => (first != 0) && (second != 0),
 				// 		Op::Or  => (first != 0) || (second != 0),
@@ -993,12 +999,12 @@ impl Stack {
 				// 	self.stack.push(GrugValue{bool: value});
 				// }
 				Op::Not                  => {
-					let value = unsafe{self.stack.pop()?.bool};
+					let value = unsafe{self.stack.pop().unwrap_unchecked().bool};
 					self.stack.push(GrugValue{bool: (value == 0) as u8});
 				}
 				Op::CmpEq | Op::CmpNeq   => {
-					let second = self.stack.pop()?.as_bytes();
-					let first = self.stack.pop()?.as_bytes();
+					let second = unsafe{self.stack.pop().unwrap_unchecked()}.as_bytes();
+					let first = unsafe{self.stack.pop().unwrap_unchecked()}.as_bytes();
 					let value = match ins {
 						Op::CmpEq  => first == second,
 						Op::CmpNeq => first != second,
@@ -1007,14 +1013,14 @@ impl Stack {
 					self.stack.push(GrugValue{bool: value as u8});
 				}
 				Op::StrEq                => {
-					let second = unsafe{self.stack.pop()?.string};
-					let first = unsafe{self.stack.pop()?.string};
+					let second = unsafe{self.stack.pop().unwrap_unchecked().string};
+					let first = unsafe{self.stack.pop().unwrap_unchecked().string};
 					self.stack.push(GrugValue{bool: (first == second) as u8});
 				}
 				Op::CmpG  | Op::CmpGe    |
 				Op::CmpL  | Op::CmpLe    => {
-					let second = unsafe{self.stack.pop()?.number};
-					let first = unsafe{self.stack.pop()?.number};
+					let second = unsafe{self.stack.pop().unwrap_unchecked().number};
+					let first = unsafe{self.stack.pop().unwrap_unchecked().number};
 					let value = match ins {
 						Op::CmpG  => first >  second,
 						Op::CmpGe => first >= second,
@@ -1030,7 +1036,7 @@ impl Stack {
 				// 		NTStrPtr::from_ptr(
 				// 			NonNull::new_unchecked(
 				// 				std::ptr::with_exposed_provenance_mut(
-				// 					usize::from_ne_bytes(self.stack.pop()?.as_bytes())
+				// 					unsafe{usize::from_ne_bytes(self.stack.pop().unwrap_unchecked()}.as_bytes())
 				// 				)
 				// 			)
 				// 		).to_str()
@@ -1041,7 +1047,7 @@ impl Stack {
 					self.stack.push(unsafe{globals.get_unchecked(index as usize)}.get());
 				}
 				Op::StoreGlobal{index}   => {
-					unsafe{globals.get_unchecked(index as usize)}.set(self.stack.pop()?);
+					unsafe{globals.get_unchecked(index as usize).set(self.stack.pop().unwrap_unchecked())};
 				}
 				Op::Jmp{offset}          => {
 					stream = unsafe{
@@ -1052,7 +1058,7 @@ impl Stack {
 					}
 				}
 				Op::JmpIf{offset}        => {
-					if unsafe{self.stack.pop()?.bool} != 0 {
+					if unsafe{self.stack.pop().unwrap_unchecked().bool} != 0 {
 						stream = unsafe{
 							std::slice::from_raw_parts(
 								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
@@ -1062,7 +1068,7 @@ impl Stack {
 					}
 				}
 				Op::JmpIfNot{offset}     => {
-					if unsafe{self.stack.pop()?.bool} == 0 {
+					if unsafe{self.stack.pop().unwrap_unchecked().bool} == 0 {
 						stream = unsafe{
 							std::slice::from_raw_parts(
 								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
@@ -1072,12 +1078,12 @@ impl Stack {
 					}
 				}
 				Op::LoadLocal{index}     => {
-					 let value = *self.stack.get(self.rbp + index as usize)?;
+					 let value = unsafe{*self.stack.get(self.rbp + index as usize).unwrap_unchecked()};
 					 self.stack.push(value);
 				}
 				Op::StoreLocal{index}    => {
-					let value = self.stack.pop()?;
-					*self.stack.get_mut(self.rbp + index as usize)? = value;
+					let value = unsafe{self.stack.pop().unwrap_unchecked()};
+					*unsafe{self.stack.get_mut(self.rbp + index as usize).unwrap_unchecked()} = value;
 				}
 				Op::CallHelperFunction {
 					data_loc,
@@ -1089,7 +1095,7 @@ impl Stack {
 					));
 					self.rbp = self.stack.len() - args as usize;
 					self.stack.resize(self.rbp + locals_size as usize, GrugValue{void: ()});
-					stream = instructions.stream.get(location as usize..)?;
+					stream = unsafe{instructions.stream.get(location as usize..).unwrap_unchecked()};
 				}
 				Op::CallGameFunction {
 					has_return,

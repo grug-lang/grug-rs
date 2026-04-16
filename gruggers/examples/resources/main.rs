@@ -41,7 +41,7 @@ fn main () {
 	let on_bark_id = state.get_on_fn_id("Dog", "on_bark").unwrap();
 
 	loop {
-		_ = state.update_files();
+		println!("{:?}", state.update_files());
 		if !state.call_on_function(&*dog, on_bark_id, &[]) {panic!()};
 		std::thread::sleep(Duration::from_secs(1));
 	}

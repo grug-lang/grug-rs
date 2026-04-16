@@ -51,7 +51,8 @@ impl GrugState {
 			})?;
 			let game_functions = self.mod_api.game_functions();
 			
-			TypePropogator::new(entity, game_functions, &self.game_functions, mod_name.into(), &self.mods_dir_path, &self.resources).fill_result_types(entity_type, &mut ast, &arena)?;
+			let resources = TypePropogator::new(entity, game_functions, &self.game_functions, mod_name.into(), &self.mods_dir_path).fill_result_types(entity_type, &mut ast, &arena)?;
+			self.resources.lock().expect("poisoned mutex").extend(resources);
 
 			// let mod_api_entity = self.mod_api.entities.get(entity_type);
 			let mut member_variables = Vec::new_in(&arena);
@@ -160,7 +161,7 @@ impl GrugState {
 					grug_files.push(info);
 				}
 			}
-			if self.resources.borrow().contains(&file_name) {
+			if self.resources.lock().unwrap().contains(&file_name) {
 				resource_files.push(file_name);
 			}
 		}

@@ -96,28 +96,34 @@ pub struct BackendVTable<GrugState: State> {
 
 impl<GrugState: State> ErasedBackend<GrugState> {
 	/// See [`Backend::insert_file`]
+	#[inline]
 	pub fn insert_file(&self, state: &GrugState, id: GrugFileId, file: GrugAst<'_>) {
 		(self.vtable.insert_file)(self.data, state, id, file)
 	}
 	/// See [`Backend::init_entity`]
+	#[inline]
 	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: Pin<&GrugEntity>) -> bool {
 		(self.vtable.init_entity)(self.data, state, entity)
 	}
 	/// See [`Backend::clear_entities`]
+	#[inline]
 	pub fn clear_entities(&mut self) {
 		(self.vtable.clear_entities)(self.data)
 	}
 	/// See [`Backend::destroy_entity_data`]
+	#[inline]
 	pub fn destroy_entity_data(&self, entity: &GrugEntity) {
 		(self.vtable.destroy_entity_data)(self.data, entity)
 	}
 	/// See [`Backend::call_on_function_raw`]
 	///
 	/// SAFETY: `values` must point to a buffer of at least as many values as `on_fn_index` expects
+	#[inline]
 	pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 		unsafe{(self.vtable.call_on_function_raw)(self.data, state, entity, on_fn_index, values)}
 	}
 	/// See [`Backend::call_on_function`]
+	#[inline]
 	pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
 		(self.vtable.call_on_function)(self.data, state, entity, on_fn_index, values)
 	}

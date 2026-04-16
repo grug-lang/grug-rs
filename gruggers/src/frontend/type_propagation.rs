@@ -3,7 +3,6 @@ use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
-use std::cell::RefCell;
 
 use crate::types::GameFnPtr;
 use crate::ntstring::NTStr;
@@ -25,7 +24,7 @@ pub(super) struct TypePropogator<'mod_api, 'arena> {
 	entity: &'mod_api ModApiEntity<'mod_api>,
 	game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiGameFn<'mod_api>>,
 	game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>,
-	resources: &'mod_api RefCell<HashSet<OsString>>,
+	resources: HashSet<OsString>,
 	current_mod_name: &'arena OsStr,
 	mods_dir_path: &'mod_api OsStr,
 	global_variables: HashMap<&'arena str, GrugType<'arena>>,
@@ -668,14 +667,13 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, 
 		mod_name: &'arena OsStr, 
 		mods_dir_path: &'mod_api OsStr, 
-		resources: &'mod_api RefCell<HashSet<OsString>>
 	) -> Self {
 		Self {
 			entity,
 			game_fns,
 			game_fn_ptrs,
 			current_mod_name: mod_name,
-			resources,
+			resources: HashSet::new(),
 			mods_dir_path,
 			global_variables: HashMap::new(),
 			local_variables: Vec::new(),
@@ -684,7 +682,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		}
 	}
 
-	pub fn fill_result_types(&mut self, entity_name: &str, ast: &mut AST<'arena>, arena: &'arena Arena) -> Result<(), TypePropogatorError> {
+	pub fn fill_result_types(mut self, entity_name: &str, ast: &mut AST<'arena>, arena: &'arena Arena) -> Result<HashSet<OsString>, TypePropogatorError> {
 		self.add_global_variable(nt!("me"), GrugType::Id{custom_name: Some(Box::leak(NTStr::box_from_str_in(entity_name, arena)).as_ntstrptr())})?;
 
 		let variables = ast.global_statements
@@ -826,7 +824,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				GlobalStatement::Comment{..} => (),
 			}
 		}
-		Ok(())
+		Ok(self.resources)
 	}
 	
 	// out parameter self.current_on_fn_calls_helper_fn
@@ -1270,7 +1268,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		Box::leak(NTStr::box_from_str_in(&format!("{}", string.display()), arena))
 	}
 
-	fn check_if_resource_exists(&self, resource_str: &str) -> Result<(), ResourceValidationError> {
+	fn check_if_resource_exists(&mut self, resource_str: &str) -> Result<(), ResourceValidationError> {
 		let mut full_path = PathBuf::from(self.mods_dir_path);
 		full_path.push(resource_str);
 		if !std::fs::exists(&full_path).is_ok_and(std::convert::identity) {
@@ -1278,7 +1276,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				path: full_path
 			})
 		} else {
-			self.resources.borrow_mut().insert(OsString::from(resource_str));
+			self.resources.insert(OsString::from(resource_str));
 			Ok(())
 		}
 	}
