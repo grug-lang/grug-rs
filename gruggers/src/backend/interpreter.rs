@@ -43,6 +43,7 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 			parameters.push(Parameter {
 				name: copy_string(parameter.name, arena),
 				ty: copy_type(parameter.ty, arena),
+				..*parameter
 			});
 		}
 		
@@ -64,6 +65,7 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 			parameters.push(Parameter {
 				name: copy_string(parameter.name, arena),
 				ty: copy_type(parameter.ty, arena),
+				..*parameter
 			});
 		}
 		
@@ -171,32 +173,38 @@ fn copy_expr<'arena>(expr: &Expr<'_>, arena: &'arena Arena) -> Expr<'arena> {
 		ExprData::Unary {
 			op,
 			expr,
+			op_span,
 		} => {
 			ExprData::Unary {
 				op: *op,
 				expr: Box::leak(Box::new_in(copy_expr(expr, arena), arena)),
+				op_span: *op_span,
 			}
 		},
 		ExprData::Binary {
 			op,
 			left,
 			right,
+			op_span,
 		} => {
 			ExprData::Binary {
 				op: *op,
 				left: Box::leak(Box::new_in(copy_expr(left, arena), arena)),
 				right: Box::leak(Box::new_in(copy_expr(right, arena), arena)),
+				op_span: *op_span,
 			}
 		},
 		ExprData::Call {
 			name,
 			args,
 			ptr,
+			name_span,
 		} => {
 			ExprData::Call {
 				name: copy_string(*name, arena),
 				args: copy_exprs(args, arena),
 				ptr: *ptr,
+				name_span: *name_span,
 			}
 		},
 		ExprData::Parenthesized(expr) => ExprData::Parenthesized(Box::leak(Box::new_in(copy_expr(expr, arena), arena))),
@@ -204,6 +212,7 @@ fn copy_expr<'arena>(expr: &Expr<'_>, arena: &'arena Arena) -> Expr<'arena> {
 	Expr {
 		result_type,
 		data,
+		span: expr.span,
 	}
 }
 
@@ -494,6 +503,7 @@ impl Interpreter {
 			ExprData::Unary{
 				op,
 				expr,
+				..
 			} => {
 				let mut value = self.run_expr(call_stack, state, file, entity, &expr)?;
 				match (op, &expr.result_type) {
@@ -506,7 +516,8 @@ impl Interpreter {
 			ExprData::Binary{
 				op,
 				left,
-				right
+				right,
+				..
 			} => {
 				let first_value = self.run_expr(call_stack, state, file, entity, &left)?; 
 				let mut second_value = || self.run_expr(call_stack, state, file, entity, &right);
@@ -553,7 +564,8 @@ impl Interpreter {
 			ExprData::Call{
 				name,
 				args,
-				ptr: None
+				ptr: None,
+				..
 			} => {
 				let name = name.to_str();
 				let values = args.iter().map(|argument| self.run_expr(call_stack, state, file, entity, argument)).collect::<Option<Vec<_>>>()?;
@@ -569,6 +581,7 @@ impl Interpreter {
 				name: _,
 				args,
 				ptr: Some(ptr),
+				..
 			} => {
 				let ptr = unsafe{ptr.as_ptr()};
 				let values = args.iter().map(|arg| self.run_expr(call_stack, state, file, entity, arg)).collect::<Option<Vec<_>>>()?;

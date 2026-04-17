@@ -388,6 +388,8 @@ pub enum ExprData<'a> {
 		op   : UnaryOperator,
 		/// Inner expression
 		expr : &'a mut Expr<'a>,
+		/// Span of the operator
+		op_span: SourceSpan
 	},
 	/// Represents a binary expression
 	///
@@ -406,6 +408,8 @@ pub enum ExprData<'a> {
 		left  : &'a mut Expr<'a>,
 		/// Right hand side of the expression
 		right : &'a mut Expr<'a>,
+		/// Span of the operator
+		op_span: SourceSpan
 	},
 	/// Represents a function call.
 	///
@@ -425,6 +429,8 @@ pub enum ExprData<'a> {
 		args : &'a mut [Expr<'a>],
 		/// Pointer to the game function if this expression is a game function call
 		ptr  : Option<GameFnPtr>,
+		/// Span of the function name name
+		name_span: SourceSpan,
 	},
 	/// Represents a parenthesized expression
 	///
@@ -446,6 +452,8 @@ pub struct Expr<'a> {
 	pub result_type : Option<&'a GrugType<'a>>,
 	/// Actual data needed to represent the expression
 	pub data        : ExprData<'a>,
+	/// Span of the expression
+	pub span       : SourceSpan
 }
 
 /// Represents a single member variable declaration within a file
@@ -528,6 +536,7 @@ pub enum Statement<'a> {
 	/// Chained else if statements are represented as a nested if block within
 	/// the else block with the `is_chained` field set to true. The else block
 	/// contains a single If statement in that case. 
+	// TODO: change this to the newer grug-for-c layout
 	If {
 		/// The condition expression of the if block. The result_type of the
 		/// expression must be a boolean
@@ -637,6 +646,10 @@ pub struct Parameter<'a> {
 	/// Type of the parameter
 	/// `number` is the type in the example
 	pub ty  : GrugType<'a>,
+	/// Span of the name
+	pub name_span: SourceSpan,
+	/// Span of the type
+	pub type_span: SourceSpan,
 }
 
 /// Represents a single on function declaration

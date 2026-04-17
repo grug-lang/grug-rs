@@ -165,6 +165,7 @@ mod ser {
 			ExprData::Unary{
 				op,
 				expr,
+				op_span: _,
 			} => object! {
 				"type": "unary",
 				"operator": serialize_unary_operator(op),
@@ -174,6 +175,7 @@ mod ser {
 				left,
 				right,
 				op,
+				op_span: _,
 			} => object! {
 				"type": "binary",
 				"operator": serialize_binary_operator(op),
@@ -184,6 +186,7 @@ mod ser {
 				name,
 				args,
 				ptr: _, 
+				name_span: _,
 			} => object! {
 				"type": "call",
 				"function_name": name.to_str(),

@@ -971,11 +971,13 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			ExprData::Unary{
 				op: _,
 				expr,
+				op_span: _,
 			} => self.check_global_expr(expr, name)?,
 			ExprData::Binary{
 				left,
 				right,
 				op: _,
+				op_span: _,
 			} => {
 				self.check_global_expr(left, name)?;
 				self.check_global_expr(right, name)?;
@@ -984,6 +986,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				name: fn_name,
 				args,
 				ptr : _,
+				name_span: _,
 			} => {
 				if fn_name.to_str().starts_with("helper_") {
 					Err(TypePropogatorError::GlobalCantCallHelperFn{
@@ -1020,6 +1023,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			ExprData::Unary{
 				op: operator,
 				expr,
+				op_span: _,
 			} => {
 				if let Expr{data: ExprData::Unary{op: next_operator, ..}, ..} = expr && next_operator == operator {
 					return Err(TypePropogatorError::AdjacentUnaryOperators{
@@ -1044,6 +1048,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				left,
 				right,
 				op,
+				op_span: _,
 			} => {
 				let result_0 = self.fill_expr(helper_fns, left, arena)?;
 				let result_1 = self.fill_expr(helper_fns, right, arena)?;
@@ -1111,6 +1116,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				name: fn_name,
 				args,
 				ptr ,
+				name_span: _,
 			} => {
 				// TODO: Move this line to within check_arguments
 				let fn_name = fn_name.to_str();

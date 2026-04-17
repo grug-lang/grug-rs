@@ -296,6 +296,7 @@ impl<'a> Compiler<'a> {
 				left,
 				right,
 				op,
+				op_span: _,
 			} => {
 				self.compile_expr(instructions, left);
 				match op {
@@ -364,6 +365,7 @@ impl<'a> Compiler<'a> {
 			ExprData::Unary {
 				op,
 				expr,
+				op_span: _,
 			} => {
 				self.compile_expr(instructions, expr);
 				match op {
@@ -380,6 +382,7 @@ impl<'a> Compiler<'a> {
 				name,
 				args,
 				ptr: None,
+				name_span: _,
 			} => {
 				let args_count = args.len();
 				if args_count > u16::MAX as usize {
@@ -398,7 +401,8 @@ impl<'a> Compiler<'a> {
 			ExprData::Call {
 				name: _,
 				args,
-				ptr: Some(ptr)
+				ptr: Some(ptr),
+				name_span: _,
 			} => {
 				let args_count = args.len();
 				for argument in &**args {

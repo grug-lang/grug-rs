@@ -4,12 +4,13 @@ use std::path::Path;
 use crate::ntstring::NTStr;
 use crate::ast::{Parameter, GrugType};
 use crate::arena::Arena;
+use gruggers_core::error::SourceSpan;
 
 use allocator_api2::boxed::Box;
 use allocator_api2::vec::Vec;
 
 // the 'static fields within `ModApi` are allocated within `_arena`. Any
-// reference to them must be given a 'self lifetime
+// reference to them must have a 'self lifetime
 pub(crate) struct ModApi {
 	entities: HashMap<&'static NTStr, ModApiEntity<'static>>,
 	game_functions: HashMap<&'static NTStr, ModApiGameFn<'static>>,
@@ -215,6 +216,10 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 				Ok(Parameter{
 					name: unsafe{param_name.as_ntstrptr().detach_lifetime()},
 					ty,
+					// This span should never be used
+					// TODO: Maybe this should be the span within mod_api?
+					name_span: SourceSpan{offset: 0, line: 0},
+					type_span: SourceSpan{offset: 0, line: 0},
 				})
 			}).collect::<Result<Vec<_>, ModApiError>>()?;
 			// SAFETY: we don't give out a 'static refernce to this string
@@ -319,6 +324,8 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 			Ok(Parameter{
 				name: unsafe{param_name.as_ntstrptr().detach_lifetime()},
 				ty,
+				name_span: SourceSpan{offset: 0, line: 0},
+				type_span: SourceSpan{offset: 0, line: 0},
 			})
 		}).collect::<Result<Vec<_>, ModApiError>>()?;
 		let parameters = {

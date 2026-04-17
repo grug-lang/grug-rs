@@ -500,9 +500,10 @@ impl<'a> AST<'a> {
 			let arg_name = name_token.value;
 			consume_next_token_types(tokens, &[TokenType::Colon, TokenType::Space])?;
 
-			let arg_type = self.parse_type(get_next_token(tokens)?, arena)?;
+			let type_token = get_next_token(tokens)?;
+			let param_type = self.parse_type(type_token, arena)?;
 
-			match arg_type {
+			match param_type {
 				GrugType::Resource{..} => return Err(ParserError::ArgumentCantBeResource{
 					name: arg_name.to_string(),
 				}),
@@ -513,7 +514,9 @@ impl<'a> AST<'a> {
 			}
 			arguments.push(Parameter{
 				name: Box::leak(NTStr::box_from_str_in(arg_name, arena)).as_ntstrptr(),
-				ty: arg_type,
+				ty: param_type,
+				name_span: name_token.span,
+				type_span: type_token.span
 			}.into());
 			
 			if consume_next_token_types(tokens, &[TokenType::Comma]).is_err() {
@@ -820,36 +823,42 @@ impl<'a> AST<'a> {
 					Expr{
 						data: ExprData::Parenthesized(Box::leak(Box::new_in(expr, arena))),
 						result_type: None,
+						span: *span,
 					}
 				}
 				TokenType::True => {
 					Expr{
 						data: ExprData::True,
 						result_type: None,
+						span: *span,
 					}
 				}
 				TokenType::False => {
 					Expr{
 						data: ExprData::False,
 						result_type: None,
+						span: *span,
 					}
 				}
 				TokenType::String => {
 					Expr{
 						data: ExprData::String(Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr()),
 						result_type: None,
+						span: *span,
 					}
 				}
 				TokenType::Resource => {
 					Expr{
 						data: ExprData::Resource(Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr()),
 						result_type: None,
+						span: *span,
 					}
 				}
 				TokenType::Entity => {
 					Expr{
 						data: ExprData::Entity(Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr()),
 						result_type: None,
+						span: *span,
 					}
 				}
 				TokenType::Word => {
@@ -869,8 +878,10 @@ impl<'a> AST<'a> {
 									name: value.as_ntstrptr(),
 									args: Vec::new().leak(),
 									ptr : None,
+									name_span: *span,
 								},
 								result_type: None,
+								span: *span,
 							}
 						} else {
 							let mut arguments = Vec::new_in(arena);
@@ -885,8 +896,10 @@ impl<'a> AST<'a> {
 											name: value.as_ntstrptr(),
 											args: arguments.leak(),
 											ptr : None,
+											name_span: *span
 										},
 										result_type: None,
+										span: *span,
 									};
 								}
 							}
@@ -895,6 +908,7 @@ impl<'a> AST<'a> {
 						Expr{
 							data: ExprData::Identifier(value.as_ntstrptr()),
 							result_type: None,
+							span: *span,
 						}
 					}
 				}
@@ -905,6 +919,7 @@ impl<'a> AST<'a> {
 							Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
 						),
 						result_type: None,
+						span: *span,
 					}
 				}
 				TokenType::Float32 => {
@@ -929,6 +944,7 @@ impl<'a> AST<'a> {
 							Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
 						),
 						result_type: None,
+						span: *span,
 					}
 				}
 				TokenType::Minus | TokenType::Not => {
@@ -944,7 +960,9 @@ impl<'a> AST<'a> {
 						data: ExprData::Unary{
 							op: unary_op,
 							expr: Box::leak(Box::new_in(expr.into(), arena)),
+							op_span: *span,
 						},
+						span: *span,
 					}
 				}
 				_ =>  {
@@ -1011,12 +1029,14 @@ impl<'a> AST<'a> {
 			let next = self.parse_expression(tokens, parsing_depth + 1, r_bp, arena)?;
 
 			current = Expr {
+				span: current.span,
 				result_type: None,
 				data: ExprData::Binary {
 					op: bin_op,
 					left : Box::leak(Box::new_in(current.into(), arena)),
 					right: Box::leak(Box::new_in(next   .into(), arena)),
-				}
+					op_span: op.span,
+				},
 			};
 		}
 		Ok(current.into())
