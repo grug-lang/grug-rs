@@ -757,6 +757,7 @@ impl<'a> AST<'a> {
 			name: Box::leak(NTStr::box_from_str_in(local_name, arena)).as_ntstrptr(),
 			ty: ty.map(|ty| &*Box::leak(Box::new_in(ty, arena))),
 			assignment_expr,
+			name_span: name_token.span,
 		})
 	}
 

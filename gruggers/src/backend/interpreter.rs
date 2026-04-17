@@ -94,10 +94,12 @@ fn copy_statements<'arena>(stmts: &[Statement<'_>], arena: &'arena Arena) -> &'a
 				name,
 				ty,
 				assignment_expr,
+				name_span,
 			} => Statement::Variable {
 				name: copy_string(*name, arena),
 				ty: ty.map(|ty| &*Box::leak(Box::new_in(copy_type(*ty, arena), arena))),
 				assignment_expr : copy_expr(assignment_expr, arena),
+				name_span: *name_span,
 			},
 			Statement::Call(expr) => Statement::Call(copy_expr(expr, arena)),
 			Statement::If {
@@ -374,6 +376,7 @@ impl Interpreter {
 					name,
 					ty,
 					assignment_expr,
+					name_span: _,
 				} => {
 					let name = name.to_str();
 					let assignment_expr = self.run_expr(call_stack, state, file, entity, assignment_expr)?;

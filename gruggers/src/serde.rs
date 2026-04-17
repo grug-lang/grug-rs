@@ -237,6 +237,7 @@ mod ser {
 				name,
 				ty: Some(ty),
 				assignment_expr,
+				name_span: _,
 			} => object! {
 				"kind": "variable",
 				"name": name.to_str(),
@@ -247,6 +248,7 @@ mod ser {
 				name,
 				ty: None,
 				assignment_expr,
+				name_span: _,
 			} => object! {
 				"name": name.to_str(),
 				"kind": "variable",

@@ -129,6 +129,7 @@ impl<'a> Compiler<'a> {
 				name,
 				ty,
 				assignment_expr,
+				name_span: _,
 			} => {
 				let name = name.to_str();
 				self.compile_expr(instructions, assignment_expr);

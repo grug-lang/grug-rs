@@ -835,7 +835,8 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				Statement::Variable{
 					name,
 					ty,
-					assignment_expr
+					assignment_expr,
+					name_span: _,
 				} => {
 					let result_ty = self.fill_expr(helper_fns, assignment_expr, arena)?;
 					

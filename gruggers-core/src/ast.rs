@@ -506,6 +506,8 @@ pub enum Statement<'a> {
 		ty              : Option<&'a GrugType<'a>>,
 		/// Expression to assign to the variable
 		assignment_expr : Expr<'a>,
+		/// Span of the name
+		name_span       : SourceSpan,
 	},
 	/// A statement that only consists of a single function call.
 	///
