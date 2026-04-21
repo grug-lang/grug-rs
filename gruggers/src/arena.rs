@@ -477,6 +477,12 @@ mod arena {
 		}
 	}
 
+	impl Default for Arena {
+		fn default () -> Self {
+			Self::new()
+		}
+	}
+
 	unsafe impl Allocator for Arena {
 		fn allocate (&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
 			self.alloc(layout)

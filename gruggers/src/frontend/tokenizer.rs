@@ -2,6 +2,9 @@ use super::SPACES_PER_INDENT;
 use allocator_api2::vec::Vec;
 use crate::arena::Arena;
 use gruggers_core::error::SourceSpan;
+use gruggers_core::error::{ErrorKind, grug_error};
+
+use std::ffi::OsStr;
 
 #[derive(Debug)]
 pub struct Token<'a> {
@@ -99,8 +102,15 @@ impl std::fmt::Display for TokenType {
 	}
 }
 
+pub const TOKENIZER_ERROR: u8 = 0x2;
+
+fn tokenizer_error_kind() -> ErrorKind {
+	ErrorKind::COMPILE_ERROR.add_component(TOKENIZER_ERROR)
+}
+
 #[derive(Debug)]
 pub enum TokenizerError{
+	BasicError(grug_error<Arena>),
 	SpacesPerIndentError {
 		actual_spaces: usize,
 		spaces_per_indent: usize,
@@ -118,10 +128,6 @@ pub enum TokenizerError{
 	// "Missing digit after decimal point in '%s'"
 	FloatTrailingPeriod {
 		parsed_string: String,
-		line: usize,
-		col: usize,
-	},
-	NoSpaceAfterComment {
 		line: usize,
 		col: usize,
 	},
@@ -157,10 +163,6 @@ impl std::fmt::Display for TokenizerError {
 				line: _,
 				col: _,
 			} => write!(f, "Missing digit after decimal point in '{}'", parsed_string),
-			Self::NoSpaceAfterComment {
-				line,
-				col: _,
-			} => write!(f, "Expected a single space after the '#' on line {}", line),
 			Self::CommentTrailingWhitespace {
 				line,
 				col: _,
@@ -196,11 +198,13 @@ impl std::fmt::Display for TokenizerError {
 				line,
 				col: _
 			} => write!(f, "Unexpected null byte on line {}", line),
+			Self::BasicError(error) => write!(f, "{}", error),
 		}
 	}
 }
 
-pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Token<'b>, &'a Arena>, TokenizerError> {
+pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, file_path: P) -> Result<Vec<Token<'b>, &'a Arena>, TokenizerError> {
+	let file_path = file_path.as_ref();
 	let mut tokens = Vec::new_in(arena);
 	let mut cur_line = 1;
 	let mut last_new_line = 0;
@@ -424,10 +428,15 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 			let old_i = i;
 			i += 1;
 			if i >= file_text.len() || file_text[i] != b' ' {
-				return Err(TokenizerError::NoSpaceAfterComment{
-					line: cur_line,
-					col: i - last_new_line,
-				});
+				return Err(TokenizerError::BasicError(grug_error::new_error(
+					tokenizer_error_kind(), 
+					"member scope", 
+					file_path, 
+					// SAFETY: file_text is from a &str
+					unsafe{std::str::from_utf8_unchecked(file_text)},
+					SourceSpan{offset: i, line: cur_line},
+					format_args!("Expected a single space after the '#' on line {}", cur_line), 
+				)));
 			}
 			i += 1;
 			let start = i;
@@ -460,11 +469,16 @@ pub fn tokenize<'a, 'b>(file_text: &'b str, arena: &'a Arena) -> Result<Vec<Toke
 			continue;
 		}
 
-		return Err(TokenizerError::UnrecognizedCharacter{
-			ch: file_text[i] as char,
-			line: cur_line,
-			col: i - last_new_line,
-		});
+		// SAFETY: file_text is from a &str
+		let file_text = unsafe{std::str::from_utf8_unchecked(file_text)};
+		return Err(TokenizerError::BasicError(grug_error::new_error(
+			tokenizer_error_kind(), 
+			"member scope", 
+			file_path, 
+			file_text,
+			SourceSpan{offset: i, line: cur_line},
+			format_args!("Unrecognized character '{}' on line {}", file_text[i..].chars().next().expect("There is atleast one more character"), cur_line), 
+		)));
 	}
 	
 	Ok(tokens)

@@ -1,7 +1,8 @@
 //! Defines the [`State`] trait
 use crate::runtime_error::RuntimeError;
+use crate::backend::ErasedBackend;
 
-pub(crate) struct DummyState;
+pub struct DummyState;
 impl State for DummyState {
 	fn set_runtime_error(&self, _error: RuntimeError) {
 		unreachable!();
@@ -28,3 +29,8 @@ pub trait State: Sized {
 	/// This should be reset automatically when a new on_function is called
 	fn is_errorring(&self) -> bool;
 }
+
+// This check ensures that c code can safely zero the backend field in GrugInitSettings
+const _: () = unsafe{const {std::mem::forget(std::mem::MaybeUninit::<Option<ErasedBackend<DummyState>>>::zeroed().assume_init())}};
+const _: () = const {assert!(std::mem::size_of::<Option<ErasedBackend<DummyState>>>() == std::mem::size_of::<ErasedBackend<DummyState>>())};
+

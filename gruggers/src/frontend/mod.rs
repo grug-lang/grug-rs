@@ -42,7 +42,7 @@ impl GrugState {
 		let mut arena = self.arenas.borrow_mut().pop().unwrap_or_else(|| Arena::new());
 		// immediately invoked closure so we get try {} finally {}
 		let id = (|| {
-			let tokens = tokenizer::tokenize(file_text, &arena)?;
+			let tokens = tokenizer::tokenize(file_text, &arena, path)?;
 
 			let mut ast = parser::parse(&tokens, &arena)?;
 
@@ -275,9 +275,6 @@ fn check_custom_id_is_pascal(entity_type: &OsStr) -> Result<&str, FileError> {
 
 #[derive(Debug)]
 pub enum FileError {
-	FilePathDoesNotContainForwardSlash{
-		path: String
-	},
 	MissingPeriodInFileName {
 		file_name: OsString,
 	},
@@ -303,9 +300,6 @@ pub enum FileError {
 impl std::fmt::Display for FileError {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
-			Self::FilePathDoesNotContainForwardSlash{
-				path
-			} => write!(f, "The grug file path {}, does not contain a '/' character", path),
 			Self::MissingPeriodInFileName {
 				file_name
 			} => write!(f, "'{}' is missing a period in its filename", file_name.display()),

@@ -2,33 +2,19 @@ use crate::error::GrugError;
 use crate::frontend::*;
 use crate::arena::Arena;
 
-use allocator_api2::vec::Vec;
-
-pub fn dump_file_to_json (grug_path: &str, output_path: &str) -> Result<(), GrugError> {
+pub fn dump_file_to_json (grug_text: &str) -> Result<String, GrugError> {
 	let arena = Arena::new();
-	let mut file_text = Vec::new_in(&arena);
-	let mut file = std::fs::File::open(grug_path).unwrap();
-	std::io::copy(&mut file, &mut file_text).unwrap();
-	
-	let file_text = std::str::from_utf8(&file_text).unwrap();
 
-	let tokens = tokenizer::tokenize(file_text, &arena)?;
+	let tokens = tokenizer::tokenize(grug_text, &arena, "")?;
 
 	let ast = parser::parse(&tokens, &arena)?;
 	
-	let string = ast_to_json(&ast.global_statements);
-
-	std::fs::write(output_path, &string).unwrap();
-	Ok(())
+	Ok(ast_to_json(&ast.global_statements))
 }
 
-pub fn generate_file_from_json (json_path: &str, output_path: &str) -> Result<(), GrugError> {
-	let file_text = std::fs::read_to_string(json_path).unwrap();
-	// TODO: This should maybe have a proper error
-	let json_value = json::parse(&file_text).unwrap();
-	let file_text = json_to_text(&json_value).unwrap();
-	std::fs::write(output_path, file_text).unwrap();
-	Ok(())
+pub fn generate_file_from_json (input_json: &str) -> Result<String, GrugError> {
+	let json_value = json::parse(&input_json).unwrap();
+	Ok(json_to_text(&json_value).unwrap())
 }
 
 mod ser {
@@ -356,11 +342,9 @@ mod de {
 	pub fn json_to_text(input: &JsonValue) -> Result<String, JsonDeserializeError> {
 		if let JsonValue::Array(input) = input {
 			let mut output = String::new();
-			for (i, statement) in input.iter().enumerate() {
+			for statement in input.iter() {
 				apply_global_statement(statement, 0, &mut output)?;
-				if i < input.len() - 1 {
-					output.push_str("\n");
-				}
+				output.push_str("\n");
 			}
 			Ok(output)
 		} else {

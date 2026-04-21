@@ -1,7 +1,7 @@
 //! Defines traits and types for working with backends from a state
 use crate::types::{GrugFileId, GrugEntity, GrugValue};
 use crate::ast::GrugAst;
-use crate::state::{State, DummyState};
+use crate::state::State;
 use crate::runtime_error::RuntimeError;
 use crate::ntstring::{NTStrPtr, NTStr};
 
@@ -60,10 +60,6 @@ pub trait Backend {
 	#[must_use]
 	fn call_on_function<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool;
 }
-
-// This check ensures that c code can safely zero the backend field in GrugInitSettings
-const _: () = unsafe{const {std::mem::forget(std::mem::MaybeUninit::<Option<ErasedBackend<DummyState>>>::zeroed().assume_init())}};
-const _: () = const {assert!(std::mem::size_of::<Option<ErasedBackend<DummyState>>>() == std::mem::size_of::<ErasedBackend<DummyState>>())};
 
 /// C-api compatible version of `&dyn [Backend]`
 #[repr(C)]

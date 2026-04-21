@@ -4,9 +4,12 @@ use crate::frontend::parser::ParserError;
 use crate::frontend::type_propagation::TypePropogatorError;
 use crate::mod_api::ModApiError;
 pub use gruggers_core::runtime_error::RuntimeError;
+use gruggers_core::error::grug_error;
+use crate::arena::Arena;
 
 #[derive(Debug)]
 pub enum GrugError {
+	GrugError(grug_error<Box<Arena>>),
 	FileError(FileError),
 	TokenizerError(TokenizerError),
 	ParserError(ParserError),
@@ -14,13 +17,8 @@ pub enum GrugError {
 	TypePropogatorError(TypePropogatorError),
 }
 
-impl std::error::Error for GrugError { }
-
 impl From<FileError> for GrugError {
 	fn from (from: FileError) -> Self {
-		// this extra single quote is needed to prevent a vim plugin from
-		// mishandling quotes in the rest of the file
-		// '
 		Self::FileError(from)
 	}
 }
@@ -56,7 +54,8 @@ impl std::fmt::Display for GrugError {
 			Self::FileError(error) => write!(f, "{}", error),
 			Self::ParserError(error) => write!(f, "{}", error),
 			Self::TypePropogatorError(error) => write!(f, "{}", error),
-			err => write!(f, "{:?}", err),
+			Self::GrugError(error) => write!(f, "{}", error),
+			Self::ModApiError(error) => write!(f, "{:?}", error),
 		}
 	}
 }

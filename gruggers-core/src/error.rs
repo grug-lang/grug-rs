@@ -1,7 +1,9 @@
 use allocator_api2::alloc::Allocator;
 use allocator_api2::vec::Vec;
-use crate::ntstring::{NTStrPtr, NTStr};
+use allocator_api2::boxed::Box;
+use crate::ntstring::{NTStrPtr, NTStr, NTBytes, copy_box_nt_bytes_in};
 use std::io::Write;
+use std::ffi::OsStr;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
@@ -57,15 +59,50 @@ impl SourceSpan {
 	}
 }
 
+/// Short code that represents an error from grug
+///
+/// Remaining bits can be used to add specific codes for specific errors
+#[repr(align(4))]
+#[derive(Clone, Copy, Debug)]
+pub struct ErrorKind(pub [u8;4]);
+const _: () = const {assert!(std::mem::size_of::<ErrorKind>() == 4)};
+
+impl From<u8> for ErrorKind {
+	fn from(other: u8) -> Self {
+		Self([other, 0, 0, 0])
+	}
+}
+
+impl ErrorKind {
+	pub const NONE: Self = Self([0x0, 0, 0, 0]);
+	pub const INIT_ERROR: Self = Self([0x1, 0, 0, 0]);
+	pub const COMPILE_ERROR: Self = Self([0x2, 0, 0, 0]);
+	pub const RUNTIME_ERROR: Self = Self([0x3, 0, 0, 0]);
+
+	pub fn add_component(mut self, other: u8) -> Self {
+		let mut i = 0;
+		while i < self.0.len() {
+			if self.0[i] == 0 {
+				self.0[i] = other;
+				return self;
+			}
+			i += 1;
+		}
+		panic!("components: {:?}", self.0);
+	}
+}
+
 #[allow(non_camel_case_types)]
 #[allow(dead_code)]
 #[repr(C)]
 pub struct grug_error<A> {
+	/// Represents the kind of error that occurred and which specific error
+	error_kind: ErrorKind,
 	/// name of the function the error occurred in. If the error is the member
 	/// scope, this string is `member scope`, 
 	function_name: NTStrPtr<'static>,
 	/// Path to the file with the error
-	file_path: NTStrPtr<'static>,
+	file_path: NTBytes<'static>,
 	/// Source line that contains the error
 	source_line: NTStrPtr<'static>,
 	/// line number of the error
@@ -86,24 +123,48 @@ pub struct grug_error<A> {
 	allocator: Box<A>,
 }
 
+impl<A> std::fmt::Debug for grug_error<A> {
+	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+		f.debug_struct("Error")
+			.field("errorkind", &self.error_kind)
+			.field("function_name", &self.function_name)
+			.field("file_path", &self.file_path)
+			.field("source_line", &self.source_line)
+			.field("line", &self.line)
+			.field("column", &self.column)
+			.field("error_message", &self.error_message)
+			.finish_non_exhaustive()
+	}
+}
+
 impl<A: Allocator> grug_error<A> {
-	pub fn new_error_in(function_name: &str, file_path: &str, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments, alloc: A) -> Self {
+	pub fn new_error(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments) -> Self where
+		A: Default,
+	{
+		let alloc = A::default();
+		Self::new_error_in(error_kind, function_name, file_path, source_text, err_span, error_message, alloc)
+	}
+
+	pub fn new_error_in(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments, alloc: A) -> Self {
 		let line = err_span.line;
 		let column = err_span.get_col(source_text);
 		let source_line = err_span.get_source_line(source_text);
-		// SAFETY: We never give out a `'static` pointer to this string from safe code
-		let function_name = unsafe{NTStr::box_from_str_in(function_name, &alloc).as_ntstrptr().detach_lifetime()};
-		// SAFETY: We never give out a `'static` pointer to this string from safe code
-		let source_line = unsafe{NTStr::box_from_str_in(source_line, &alloc).as_ntstrptr().detach_lifetime()};
-		// SAFETY: We never give out a `'static` pointer to this string from safe code
-		let file_path = unsafe{NTStr::box_from_str_in(file_path, &alloc).as_ntstrptr().detach_lifetime()};
 
 		let mut err_string = Vec::new_in(&alloc);
 		write!(err_string, 
-			   "  in {function_name} ({file_path}:{line}:{column})\
-				Error: {error_message}\
-				{line} $ {source_line}\0"
+			"  in {function_name} ({}:{line}:{column})\n\
+			Error: {error_message}\n\
+			{line} $ {source_line}\0",
+			file_path.display()
 		).expect("writing into a vec should never fail");
+
+		// SAFETY: We never give out a `'static` pointer to this string from safe code
+		let function_name = unsafe{Box::leak(NTStr::box_from_str_in(function_name, &alloc)).as_ntstrptr().detach_lifetime()};
+		// SAFETY: We never give out a `'static` pointer to this string from safe code
+		let source_line = unsafe{Box::leak(NTStr::box_from_str_in(source_line, &alloc)).as_ntstrptr().detach_lifetime()};
+		// SAFETY: We never give out a `'static` pointer to this string from safe code
+		let file_path = unsafe{NTBytes::from_bytes_unchecked(Box::leak(copy_box_nt_bytes_in(file_path.as_encoded_bytes(), &alloc))).detach_lifetime()};
+
 
 		// SAFETY: err_string only contains utf8 strings, and is null terminated
 		// The string can last as long as the allocator exists, and we never give
@@ -126,6 +187,7 @@ impl<A: Allocator> grug_error<A> {
 
 
 		Self {
+			error_kind,
 			function_name,
 			file_path,
 			source_line,
@@ -140,7 +202,8 @@ impl<A: Allocator> grug_error<A> {
 
 impl<A> std::fmt::Display for grug_error<A> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		f.write_str(self.error_string.to_str())
+		// TODO: This should be changed to self.error_string later
+		f.write_str(self.error_message.to_str())
 	}
 }
 

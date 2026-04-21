@@ -107,32 +107,46 @@ mod test_bindings {
 	}
 
 	#[allow(unused_variables)]
-	pub extern "C" fn dump_file_to_json<'a> (_state: &(GrugState, Vec<FileInfo>), input_grug_path: NTStrPtr<'a>, output_json_path: NTStrPtr<'a>) -> i32 {
-		let grug_path = input_grug_path.to_ntstr();
-		let json_path = output_json_path.to_ntstr();
+	pub extern "C" fn dump_file_to_json<'a> (_state: &(GrugState, Vec<FileInfo>), input_grug_file: NTStrPtr<'a>, output_buffer: *mut u8, output_buffer_len: usize) -> i32 {
+		let grug_file = input_grug_file.to_ntstr();
 
-		match serde::dump_file_to_json(grug_path, json_path) {
-			Ok(()) => 0,
+		match serde::dump_file_to_json(grug_file) {
+			Ok(string) => {
+				if string.len() + 1 >= output_buffer_len {
+					return 1;
+				} else {
+					unsafe{string.as_ptr().copy_to(output_buffer, string.len())};
+					unsafe{output_buffer.add(string.len()).write(b'\0')};
+				}
+				0
+			},
 			Err(err) => {
 				eprintln!("{}", err);
 				1
 			}
 		}
 	}
-	#[allow(unused_variables)]
-	pub extern "C" fn generate_file_from_json<'a> (_state: &(GrugState, Vec<FileInfo>), input_json_path: NTStrPtr<'a>, output_grug_path: NTStrPtr<'a>) -> i32 {
-		let output_grug_path = output_grug_path.to_ntstr();
-		let input_json_path = input_json_path.to_ntstr();
 
-		match serde::generate_file_from_json(input_json_path, output_grug_path) {
-			Ok(()) => 0,
+	pub extern "C" fn generate_file_from_json<'a> (_state: &(GrugState, Vec<FileInfo>), input_json: NTStrPtr<'a>, output_buffer: *mut u8, output_buffer_len: usize) -> i32 {
+		let input_json = input_json.to_ntstr();
+
+		match serde::generate_file_from_json(input_json) {
+			Ok(string) => {
+				if string.len() + 1 >= output_buffer_len {
+					return 1;
+				} else {
+					unsafe{string.as_ptr().copy_to(output_buffer, string.len())};
+					unsafe{output_buffer.add(string.len()).write(b'\0')};
+				}
+				0
+			},
 			Err(err) => {
 				eprintln!("{}", err);
 				1
 			}
 		}
 	}
-	#[allow(unused_variables)]
+
 	pub extern "C" fn game_fn_error ((state, _): &(GrugState, Vec<FileInfo>), msg: NTStrPtr<'static>) {
 		state.set_runtime_error(RuntimeError::GameFunctionError{message: msg.to_str()});
 	}
@@ -150,9 +164,9 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	pub type call_export_fn_t = for<'a> extern "C" fn (&(GrugState, Vec<FileInfo>), GrugFileId, NTStrPtr<'a>, *const GrugValue, usize);
 	#[allow(non_camel_case_types)]
-	pub type dump_file_to_json_t = for<'a> extern "C" fn (&(GrugState, Vec<FileInfo>), NTStrPtr<'a>, NTStrPtr<'a>) -> i32;
+	pub type dump_file_to_json_t = for<'a> extern "C" fn (&(GrugState, Vec<FileInfo>), NTStrPtr<'a>, *mut u8, usize) -> i32;
 	#[allow(non_camel_case_types)]
-	pub type generate_file_from_json_t = for<'a> extern "C" fn (&(GrugState, Vec<FileInfo>), NTStrPtr<'a>, NTStrPtr<'a>) -> i32;
+	pub type generate_file_from_json_t = for<'a> extern "C" fn (&(GrugState, Vec<FileInfo>), NTStrPtr<'a>, *mut u8, usize) -> i32;
 	#[allow(non_camel_case_types)]
 	pub type game_fn_error_t = extern "C" fn (&(GrugState, Vec<FileInfo>), NTStrPtr<'static>);
 
