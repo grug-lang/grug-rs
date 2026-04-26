@@ -44,6 +44,8 @@ pub enum TokenType {
 	Break,
 	Return,
 	Continue,
+	Export,
+	Local,
 	Space,
 	Indentation,
 	String,
@@ -174,6 +176,8 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 		token_match_word!(b"break" => TokenType::Break);
 		token_match_word!(b"return" => TokenType::Return);
 		token_match_word!(b"continue" => TokenType::Continue);
+		token_match_word!(b"export" => TokenType::Export);
+		token_match_word!(b"local" => TokenType::Local);
 
 		// Spaces
 		let lit_len = b" ".len();
