@@ -233,70 +233,144 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 					assignment_expr,
 					span: name_token.span
 				}));
+			let global_variable = ast.parse_global_variable(&mut tokens, &arena)?;
+			ast.global_statements.push(GlobalStatement::Variable(global_variable));
+			consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
 
-				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+			newline_allowed = true;
+			newline_required = true;
+			just_seen_global = true;
+		// on_fn -> "export" + " " + name + "(" + arguments? + ")" + statements 
+		} else if let Ok(_) = consume_next_token_types(&mut tokens, &[TokenType::Export]) {
+			// Require space after Export Token
+			consume_space(&mut tokens)?;
 
-				newline_allowed = true;
-				newline_required = true;
-			} else if let Ok([name_token]) = assert_next_token_types(&tokens, &[TokenType::Word]) && name_token.value.starts_with("on_") {
-				let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word]).unwrap();
-				let fn_name = name_token.value;
-				
-				// expect newline after each item
-				if newline_required {
-					return ast.new_parse_error(
-						name_token.span,
-						format_args!("Expected an empty line")
-					);
+			let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
+
+			// Cannot have global function after helper function
+			if seen_helper_fn {
+				return Err(ParserError::OnFunctionAfterHelperFunctions{
+					name: name_token.value.to_string(),
+				});
+			}
+			// expect newline after each item
+			if newline_required {
+				return Err(ParserError::ExpectedNewLine{
+					line: name_token.span.line,
+				});
+			}
+
+			let fn_name = name_token.value;
+
+			consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
+
+			let parameters = if assert_next_token_types(&mut tokens, &[TokenType::Word]).is_ok() {
+				ast.parse_parameters(&mut tokens, arena)?
+			} else {
+				&[]
+			};
+			consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
+			
+			let body_statements = ast.parse_statements(&mut tokens, 0, 1, arena)?;
+
+			if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
+				return Err(ParserError::EmptyFunction{
+					name: fn_name.to_string(),
+				});
+			}
+
+			let on_fn = OnFunction{
+				name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
+				parameters,
+				body_statements,
+				span: name_token.span
+			};
+
+			let fn_name = on_fn.name.to_str();
+			if ast.on_fn_signatures.iter().find(|(name, _)| *name == fn_name).is_some() {
+				return Err(ParserError::AlreadyDefinedOnFn{
+					fn_name: Arc::from(fn_name),
+				});
+			}
+			
+			ast.on_fn_signatures.push((on_fn.name.to_str(), on_fn.parameters));
+			ast.global_statements.push(GlobalStatement::OnFunction(on_fn));
+
+			seen_on_fn = true;
+
+			newline_allowed = true;
+			newline_seen = false;
+			newline_required = true;
+
+			just_seen_global = false;
+			consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+		// helper_fn -> "local" + " " + name + "(" + arguments? + ")" + type + statements 
+		} else if let Ok(_) = consume_next_token_types(&mut tokens, &[TokenType::Local]) {
+			consume_space(&mut tokens)?;
+			let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
+			// expect newline after each item
+			if newline_required {
+				return Err(ParserError::ExpectedNewLine{
+					line: name_token.span.line,
+				});
+			}
+
+			let fn_name = name_token.value;
+
+			if ast.called_helper_fns.iter().find(|val| **val == fn_name).is_none() {
+				return Err(ParserError::HelperFnDefinedBeforeCall {
+					fn_name: fn_name.into(),
+				});
+			}
+
+			// This should never fail because this is checked before calling parse_helper_fn
+			consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis]).unwrap();
+
+			let parameters = if assert_next_token_types(&mut tokens, &[TokenType::Word]).is_ok() {
+				ast.parse_parameters(&mut tokens, arena)?
+			} else {
+				&[]
+			};
+			consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
+
+			// return type
+			let return_type = if let Ok([_, type_token]) = consume_next_token_types(&mut tokens, &[TokenType::Space, TokenType::Word]) {
+				match ast.parse_type(type_token, arena)? {
+					GrugType::Resource{..} => return Err(ParserError::HelperFnReturnTypeCantBeResource{
+						fn_name: fn_name.to_string(),
+					}),
+					GrugType::Entity{..}   => return Err(ParserError::HelperFnReturnTypeCantBeEntity{
+						fn_name: fn_name.to_string(),
+					}),
+					x => x,
 				}
+			} else {
+				GrugType::Void
+			};
+			
+			let body_statements = ast.parse_statements(&mut tokens, 0, 1, arena)?;
 
-				ast.current_function = fn_name;
+			if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
+				return Err(ParserError::EmptyFunction{
+					name: fn_name.to_string(),
+				});
+			}
 
-				// Cannot have global function after helper function
-				if seen_helper_fn {
-					return ast.new_parse_error(
-						name_token.span,
-						format_args!("{}() must be defined before all helper_ functions", fn_name)
-					);
-				}
-				consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
+			let helper_fn = HelperFunction{
+				name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
+				parameters,
+				body_statements,
+				return_type,
+				span: name_token.span,
+			};
 
-				let parameters = if assert_next_token_types(&tokens, &[TokenType::Word]).is_ok() {
-					ast.parse_parameters(&mut tokens, arena)?
-				} else {
-					&[]
-				};
-				consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
-				
-				let body_statements = ast.parse_statements(&mut tokens, 0, 1, arena)?;
+			seen_helper_fn = true;
 
-				if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
-					return ast.new_parse_error(
-						name_token.span,
-						format_args!("{}() can't be empty", fn_name),
-					);
-				}
-
-				let on_fn = OnFunction{
-					name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
-					parameters,
-					body_statements,
-					span: name_token.span
-				};
-
-				if ast.on_fn_signatures.iter().any(|(name, _)| *name == fn_name) {
-					return ast.new_parse_error(
-						name_token.span,
-						format_args!("The function '{}' was defined several times in the same file", fn_name),
-					);
-				}
-				ast.current_function = "member scope";
-				
-				ast.on_fn_signatures.push((fn_name, on_fn.parameters));
-				ast.global_statements.push(GlobalStatement::OnFunction(on_fn));
-
-				seen_on_fn = true;
-
+			if ast.helper_fn_signatures.iter().find(|(name, _)| *name == fn_name).is_some() {
+				return Err(ParserError::AlreadyDefinedHelperFunction{
+					fn_name: Arc::from(helper_fn.name.to_str()),
+				});
+			}
 				newline_allowed = true;
 				newline_seen = false;
 				newline_required = true;
