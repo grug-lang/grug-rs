@@ -45,6 +45,8 @@ pub enum TokenType {
 	Break,
 	Return,
 	Continue,
+	Export,
+	Local,
 	Space,
 	Indentation,
 	String,
@@ -89,6 +91,8 @@ impl std::fmt::Display for TokenType {
 			Self::Break => write!(f, "BREAK_TOKEN"),
 			Self::Return => write!(f, "RETURN_TOKEN"),
 			Self::Continue => write!(f, "CONTINUE_TOKEN"),
+			Self::Export => write!(f, "EXPORT_TOKEN"),
+			Self::Local => write!(f, "LOCAL_TOKEN"),
 			Self::Space => write!(f, "SPACE_TOKEN"),
 			Self::Indentation => write!(f, "INDENTATION_TOKEN"),
 			Self::String => write!(f, "STRING_TOKEN"),
@@ -276,6 +280,8 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 		token_match_word!(b"break" => TokenType::Break);
 		token_match_word!(b"return" => TokenType::Return);
 		token_match_word!(b"continue" => TokenType::Continue);
+		token_match_word!(b"export" => TokenType::Export);
+		token_match_word!(b"local" => TokenType::Local);
 
 		// Spaces
 		let lit_len = b" ".len();

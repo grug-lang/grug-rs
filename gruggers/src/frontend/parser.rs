@@ -115,10 +115,10 @@ pub enum ParserError {
 	ReassigningMe,
 	// grug_error("%s() is defined before the first time it gets called", fn.fn_name);
 	HelperFnDefinedBeforeCall {
-		helper_fn_name: String
+		fn_name: String
 	},
 	AlreadyDefinedHelperFunction {
-		helper_fn_name: Arc<str>,
+		fn_name: Arc<str>,
 	},
 	// grug_error("The f32 %s is too big", str);
 	FloatTooBig {
@@ -130,7 +130,7 @@ pub enum ParserError {
 	},
 	// grug_assert(!get_helper_fn(name), "The function '%s' was defined several times in the same file", name);
 	AlreadyDefinedOnFn {
-		on_fn_name: Arc<str>, 
+		fn_name: Arc<str>, 
 	}
 }
 
@@ -189,14 +189,14 @@ impl std::fmt::Display for ParserError {
 				line,
 			} => write!(f, "The global variable '{}' was not assigned a value on line {}", name, line),
 			Self::HelperFnDefinedBeforeCall {
-				helper_fn_name
-			} => write!(f, "{}() is defined before the first time it gets called", helper_fn_name),
+				fn_name
+			} => write!(f, "{}() is defined before the first time it gets called", fn_name),
 			Self::OnFunctionAfterHelperFunctions {
 				name,
 			} => write!(f, "{}() must be defined before all helper_ functions", name),
 			Self::AlreadyDefinedHelperFunction {
-				helper_fn_name,
-			} => write!(f, "The function '{}' was defined several times in the same file", helper_fn_name),
+				fn_name,
+			} => write!(f, "The function '{}' was defined several times in the same file", fn_name),
 			Self::ExpectedPrimaryExpression {
 				got_token,
 				line,
@@ -208,8 +208,8 @@ impl std::fmt::Display for ParserError {
 			} => write!(f, "Expected an empty line, on line {}", line),
 			// grug_assert(!get_helper_fn(name), "The function '%s' was defined several times in the same file", name);
 			Self::AlreadyDefinedOnFn {
-				on_fn_name
-			} => write!(f, "The function '{}' was defined several times in the same file", on_fn_name),
+				fn_name
+			} => write!(f, "The function '{}' was defined several times in the same file", fn_name),
 			Self::ArgumentCantBeResource {
 				name,
 			} => write!(f, "The argument '{}' can't have 'resource' as its type", name),
@@ -296,7 +296,13 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>
 			newline_allowed = true;
 			newline_required = true;
 			just_seen_global = true;
-		} else if let Ok([name_token, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && name_token.value.starts_with("on_") {
+		// on_fn -> "export" + " " + name + "(" + arguments? + ")" + statements 
+		} else if let Ok(_) = consume_next_token_types(&mut tokens, &[TokenType::Export]) {
+			// Require space after Export Token
+			consume_space(&mut tokens)?;
+
+			let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
+
 			// Cannot have global function after helper function
 			if seen_helper_fn {
 				return Err(ParserError::OnFunctionAfterHelperFunctions{
@@ -310,12 +316,36 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>
 				});
 			}
 
-			let on_fn = ast.parse_on_fn(&mut tokens, arena)?;
+			let fn_name = name_token.value;
 
-			let on_fn_name = on_fn.name.to_str();
-			if ast.on_fn_signatures.iter().find(|(name, _)| *name == on_fn_name).is_some() {
+			consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
+
+			let parameters = if assert_next_token_types(&mut tokens, &[TokenType::Word]).is_ok() {
+				ast.parse_parameters(&mut tokens, arena)?
+			} else {
+				&[]
+			};
+			consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
+			
+			let body_statements = ast.parse_statements(&mut tokens, 0, 1, arena)?;
+
+			if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
+				return Err(ParserError::EmptyFunction{
+					name: fn_name.to_string(),
+				});
+			}
+
+			let on_fn = OnFunction{
+				name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
+				parameters,
+				body_statements,
+				span: name_token.span
+			};
+
+			let fn_name = on_fn.name.to_str();
+			if ast.on_fn_signatures.iter().find(|(name, _)| *name == fn_name).is_some() {
 				return Err(ParserError::AlreadyDefinedOnFn{
-					on_fn_name: Arc::from(on_fn.name.to_str()),
+					fn_name: Arc::from(fn_name),
 				});
 			}
 			
@@ -330,7 +360,10 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>
 
 			just_seen_global = false;
 			consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
-		} else if let Ok([name_token, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && name_token.value.starts_with("helper_") {
+		// helper_fn -> "local" + " " + name + "(" + arguments? + ")" + type + statements 
+		} else if let Ok(_) = consume_next_token_types(&mut tokens, &[TokenType::Local]) {
+			consume_space(&mut tokens)?;
+			let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
 			// expect newline after each item
 			if newline_required {
 				return Err(ParserError::ExpectedNewLine{
@@ -338,13 +371,60 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>
 				});
 			}
 
-			let helper_fn = ast.parse_helper_fn(&mut tokens, arena)?;
+			let fn_name = name_token.value;
+
+			if ast.called_helper_fns.iter().find(|val| **val == fn_name).is_none() {
+				return Err(ParserError::HelperFnDefinedBeforeCall {
+					fn_name: fn_name.into(),
+				});
+			}
+
+			// This should never fail because this is checked before calling parse_helper_fn
+			consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis]).unwrap();
+
+			let parameters = if assert_next_token_types(&mut tokens, &[TokenType::Word]).is_ok() {
+				ast.parse_parameters(&mut tokens, arena)?
+			} else {
+				&[]
+			};
+			consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
+
+			// return type
+			let return_type = if let Ok([_, type_token]) = consume_next_token_types(&mut tokens, &[TokenType::Space, TokenType::Word]) {
+				match ast.parse_type(type_token, arena)? {
+					GrugType::Resource{..} => return Err(ParserError::HelperFnReturnTypeCantBeResource{
+						fn_name: fn_name.to_string(),
+					}),
+					GrugType::Entity{..}   => return Err(ParserError::HelperFnReturnTypeCantBeEntity{
+						fn_name: fn_name.to_string(),
+					}),
+					x => x,
+				}
+			} else {
+				GrugType::Void
+			};
+			
+			let body_statements = ast.parse_statements(&mut tokens, 0, 1, arena)?;
+
+			if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
+				return Err(ParserError::EmptyFunction{
+					name: fn_name.to_string(),
+				});
+			}
+
+			let helper_fn = HelperFunction{
+				name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
+				parameters,
+				body_statements,
+				return_type,
+				span: name_token.span,
+			};
+
 			seen_helper_fn = true;
 
-			let helper_fn_name = helper_fn.name.to_str();
-			if ast.helper_fn_signatures.iter().find(|(name, _)| *name == helper_fn_name).is_some() {
+			if ast.helper_fn_signatures.iter().find(|(name, _)| *name == fn_name).is_some() {
 				return Err(ParserError::AlreadyDefinedHelperFunction{
-					helper_fn_name: Arc::from(helper_fn.name.to_str()),
+					fn_name: Arc::from(helper_fn.name.to_str()),
 				});
 			}
 
@@ -407,89 +487,6 @@ impl<'a> AST<'a> {
 		}
 	}
 
-	// helper_fn -> "on_" + name + "(" + arguments? + ")" + type + statements 
-	fn parse_helper_fn(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<HelperFunction<'a>, ParserError> {
-		let name_token = tokens.next().unwrap();
-		let fn_name = name_token.value;
-
-		if self.called_helper_fns.iter().find(|val| **val == fn_name).is_none() {
-			return Err(ParserError::HelperFnDefinedBeforeCall {
-				helper_fn_name: fn_name.into(),
-			});
-		}
-
-		// This should never fail because this is checked before calling parse_helper_fn
-		consume_next_token_types(tokens, &[TokenType::OpenParenthesis]).unwrap();
-
-		let parameters = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
-			self.parse_parameters(tokens, arena)?
-		} else {
-			Vec::new_in(arena).leak()
-		};
-		consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
-
-		// return type
-		let return_type = if let Ok([_, type_token]) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Word]) {
-			match self.parse_type(type_token, arena)? {
-				GrugType::Resource{..} => return Err(ParserError::HelperFnReturnTypeCantBeResource{
-					fn_name: fn_name.to_string(),
-				}),
-				GrugType::Entity{..}   => return Err(ParserError::HelperFnReturnTypeCantBeEntity{
-					fn_name: fn_name.to_string(),
-				}),
-				x => x,
-			}
-		} else {
-			GrugType::Void
-		};
-		
-		let body_statements = self.parse_statements(tokens, 0, 1, arena)?;
-
-		if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
-			return Err(ParserError::EmptyFunction{
-				name: fn_name.to_string(),
-			});
-		}
-
-		Ok(HelperFunction{
-			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
-			parameters,
-			body_statements,
-			return_type,
-			span: name_token.span,
-		})
-	}
-
-	// on_fn -> "on_" + name + "(" + arguments? + ")" + statements 
-	fn parse_on_fn(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<OnFunction<'a>, ParserError> {
-		let name_token = tokens.next().unwrap();
-		let fn_name = name_token.value;
-
-		// This should never fail because this is checked before calling parse_on_fn
-		consume_next_token_types(tokens, &[TokenType::OpenParenthesis]).unwrap();
-
-		let parameters = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
-			self.parse_parameters(tokens, arena)?
-		} else {
-			Vec::new_in(arena).leak()
-		};
-		consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
-		
-		let body_statements = self.parse_statements(tokens, 0, 1, arena)?;
-
-		if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
-			return Err(ParserError::EmptyFunction{
-				name: fn_name.to_string(),
-			});
-		}
-
-		Ok(OnFunction{
-			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
-			parameters,
-			body_statements,
-			span: name_token.span
-		})
-	}
 
 	// parameters -> parameter + ("," + parameter)*;
 	fn parse_parameters(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<&'a [Parameter<'a>], ParserError> {
