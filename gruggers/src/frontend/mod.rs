@@ -6,6 +6,8 @@ use crate::ast::*;
 use crate::arena::Arena;
 use crate::ntstring::NTStrPtr;
 
+use gruggers_core::error::{grug_error, ErrorKind, SourceSpan};
+
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box as Box2;
 
@@ -231,7 +233,7 @@ fn get_mod_name (path: &OsStr) -> &OsStr {
 	// path.split_once('/').map(|x| x.0).ok_or(GrugError::FileError(FileError::FilePathDoesNotContainForwardSlash{path: String::from(path)}))
 }
 
-fn get_entity_type(path: &OsStr) -> Result<&str, FileError> {
+fn get_entity_type(path: &OsStr) -> Result<&str, grug_error<Arena>> {
 	let mut dot_pos = None;
 	let mut dash_pos = None;
 	let path_bytes = path.as_encoded_bytes();
@@ -239,98 +241,99 @@ fn get_entity_type(path: &OsStr) -> Result<&str, FileError> {
 	for (i, ch) in path_bytes.iter().enumerate().rev() {
 		match (ch, dot_pos, dash_pos) {
 			(b'.', None, None) => dot_pos = Some(i),
-			(b'-', None, None) => Err(FileError::MissingPeriodInFileName{file_name: OsString::from(file_name)})?,
+			(b'-', None, None) => 
+				return Err(grug_error::new_error(
+					ErrorKind::FILE_NAME_ERROR,
+					"",
+					path, 
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("'{}' is missing a period in its filename", file_name.display())
+				)),
 			(b'-', Some(_), None) => {dash_pos = Some(i); break;},
 			_ => (),
 		}
 	}
-	let (Some(dot_pos), Some(dash_pos)) = (dot_pos, dash_pos) else {
-		Err(FileError::EntityMissing{file_name: OsString::from(file_name)})?
+	let (dot_pos, dash_pos) = match (dot_pos, dash_pos) {
+		(Some(dot_pos), Some(dash_pos)) if dot_pos == dash_pos + 1 => {
+			return Err(grug_error::new_error(
+				ErrorKind::FILE_NAME_ERROR,
+				"",
+				path, 
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("'{}' is missing an entity type in its name", file_name.display())
+			));
+		}
+		(Some(dot_pos), Some(dash_pos)) => (dot_pos, dash_pos),
+		_ => {
+			return Err(grug_error::new_error(
+				ErrorKind::FILE_NAME_ERROR,
+				"",
+				path, 
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("'{}' is missing an entity type in its name", file_name.display())
+			));
+		}
 	};
 	// SAFETY: dash_pos is b'-' which is valid utf8, and dot_pos is b'.' which
 	// is also utf8 so (dash_pos+1)..dot_pos will not truncate a utf8 codepoint
 	let entity_type = unsafe{OsStr::from_encoded_bytes_unchecked(&path_bytes[(dash_pos + 1)..dot_pos])};
 	if entity_type.len() > MAX_FILE_ENTITY_TYPE_LENGTH {
-		return Err(FileError::EntityLenExceedsMaxLen{path: OsString::from(path), entity_len: entity_type.len()});
-	}
-	if entity_type.is_empty() {
-		return Err(FileError::EntityMissing{file_name: OsString::from(file_name)});
+		return Err(grug_error::new_error(
+			ErrorKind::FILE_NAME_ERROR,
+			"",
+			path, 
+			"",
+			SourceSpan{offset: 0, line: 0},
+			format_args!("There are more than {} characters \n\
+				in the entity type of '{}', exceeding MAX_FILE_ENTITY_TYPE_LENGTH", 
+				entity_type.len(), path.display()
+			)
+		));
 	}
 	check_custom_id_is_pascal(entity_type)
 }
 
-fn check_custom_id_is_pascal(entity_type: &OsStr) -> Result<&str, FileError> {
-	let entity_type = entity_type.to_str().ok_or_else(|| FileError::EntityNotUtf8{entity_type: OsString::from(entity_type)})?;
+fn check_custom_id_is_pascal(entity_type: &OsStr) -> Result<&str, grug_error<Arena>> {
+	let entity_type = entity_type.to_str().ok_or_else(|| 
+		grug_error::new_error(
+			ErrorKind::FILE_NAME_ERROR,
+			"",
+			entity_type, 
+			"",
+			SourceSpan{offset: 0, line: 0},
+			format_args!("'{}' is not valid utf8", 
+				entity_type.display()
+			)
+		)
+	)?;
 	let mut chars = entity_type.chars();
-	let Some(_) = chars.next() else {
-		return Err(FileError::EntityNotPascalCase1{entity_type: String::from(entity_type)});
-	};
+	// TODO: This only triggers if entity_type is empty, which should never happen?
+	if let Some(first) = chars.next() && !first.is_uppercase() {
+		return Err(grug_error::new_error(
+			ErrorKind::FILE_NAME_ERROR,
+			"",
+			entity_type.as_ref(), 
+			"",
+			SourceSpan{offset: 0, line: 0},
+			format_args!("'{entity_type}' seems like a custom ID type, but it doesn't start in Uppercase")
+		));
+	}
 	for ch in chars {
 		if !(ch.is_uppercase() || ch.is_lowercase() || ch.is_ascii_digit()) {
-			return Err(FileError::EntityNotPascalCase2{entity_type: String::from(entity_type), wrong_char: ch});
+			return Err(grug_error::new_error(
+				ErrorKind::FILE_NAME_ERROR,
+				"",
+				entity_type.as_ref(), 
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("'{entity_type}' seems like a custom ID type, but it contains '{ch}', which isn't uppercase/lowercase/a digit", )
+			));
 		}
 	}
 	Ok(entity_type)
-}
-
-#[derive(Debug)]
-pub enum FileError {
-	MissingPeriodInFileName {
-		file_name: OsString,
-	},
-	EntityLenExceedsMaxLen {
-		path: OsString,
-		entity_len: usize,
-	},
-	EntityMissing {
-		file_name: OsString,
-	},
-	EntityNotUtf8 {
-		entity_type: OsString,
-	},
-	EntityNotPascalCase1 {
-		entity_type: String,
-	},
-	EntityNotPascalCase2 {
-		entity_type: String,
-		wrong_char: char,
-	}
-}
-
-impl std::fmt::Display for FileError {
-	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		match self {
-			Self::MissingPeriodInFileName {
-				file_name
-			} => write!(f, "'{}' is missing a period in its filename", file_name.display()),
-			Self::EntityLenExceedsMaxLen {
-				path,
-				entity_len: _,
-			} => write!(f, 
-				"There are more than {MAX_FILE_ENTITY_TYPE_LENGTH} characters \n\
-				in the entity type of '{}', exceeding MAX_FILE_ENTITY_TYPE_LENGTH",
-				path.display()
-			),
-			Self::EntityMissing {
-				file_name
-			} => write!(f, 
-				"'{}' is missing an entity type in its name",
-				file_name.display()
-			),
-			Self::EntityNotUtf8 {
-				entity_type
-			} => write!(f, "'{}' is not valid utf8", entity_type.display()),
-			Self::EntityNotPascalCase1 {
-				entity_type,
-			} => write!(f, "'{entity_type}' seems like a custom ID type, but isn't in PascalCase"),
-			Self::EntityNotPascalCase2 {
-				entity_type,
-				wrong_char,
-			} => write!(f,
-				"'{entity_type}' seems like a custom ID type, but it contains '{wrong_char}', which isn't uppercase/lowercase/a digit"
-			),
-		}
-	}
 }
 
 pub mod type_propagation;

@@ -67,20 +67,19 @@ impl SourceSpan {
 ///
 #[repr(align(4))]
 #[derive(Clone, Copy, Debug)]
-pub struct ErrorKind(pub [u8;4]);
+pub struct ErrorKind([u8;4]);
 const _: () = const {assert!(std::mem::size_of::<ErrorKind>() == 4)};
-
-impl From<u8> for ErrorKind {
-	fn from(other: u8) -> Self {
-		Self([other, 0, 0, 0])
-	}
-}
 
 impl ErrorKind {
 	pub const NONE: Self = Self([0x0, 0, 0, 0]);
 	pub const INIT_ERROR: Self = Self([0x1, 0, 0, 0]);
 	pub const COMPILE_ERROR: Self = Self([0x2, 0, 0, 0]);
 	pub const RUNTIME_ERROR: Self = Self([0x3, 0, 0, 0]);
+
+	pub const FILE_NAME_ERROR: Self = Self::COMPILE_ERROR.add_component(0x1);
+	pub const TOKENIZER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x2);
+	pub const PARSER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x3);
+	pub const TYPE_CHECKER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x4);
 
 	pub const fn add_component(mut self, other: u8) -> Self {
 		let mut i = 0;
@@ -93,7 +92,19 @@ impl ErrorKind {
 		}
 		panic!("");
 	}
+
+	pub const fn as_u32(self) -> u32 {
+		u32::from_ne_bytes(self.0)
+	}
 }
+
+impl PartialEq for ErrorKind {
+	fn eq(&self, other: &Self) -> bool {
+		self.0 == other.0
+	}
+}
+
+impl Eq for ErrorKind { }
 
 /// Contains all data associated with a compile time error in grug
 /// 
@@ -177,12 +188,20 @@ impl<A: Allocator> grug_error<A> {
 		let source_line = err_span.get_source_line(source_text);
 
 		let mut err_string = Vec::new_in(&alloc);
-		write!(err_string, 
-			"  in {function_name} ({}:{line}:{column})\n\
-			Error: {error_message}\n\
-			{line} $ {source_line}\0",
-			file_path.display()
-		).expect("writing into a vec should never fail");
+		if error_kind == ErrorKind::FILE_NAME_ERROR {
+			write!(err_string, 
+				"Error: {error_message}\n\
+				  {}\0",
+				file_path.display()
+			).expect("writing into a vec should never fail");
+		} else if error_kind == ErrorKind::TOKENIZER_ERROR {
+			write!(err_string, 
+				"  in ({}:{line}:{column})\n\
+				Error: {error_message}\n\
+				{line} $ {source_line}\0",
+				file_path.display()
+			).expect("writing into a vec should never fail");
+		}
 
 		// SAFETY: We never give out a `'static` pointer to this string from safe code
 		let function_name = unsafe{Box::leak(NTStr::box_from_str_in(function_name, &alloc)).as_ntstrptr().detach_lifetime()};
@@ -229,6 +248,7 @@ impl<A: Allocator> grug_error<A> {
 impl<A> std::fmt::Display for grug_error<A> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		// TODO: This should be changed to self.error_string later
+		// TODO: Each different top level error kind should have a different format
 		f.write_str(self.error_message.to_str())
 	}
 }

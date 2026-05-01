@@ -1,8 +1,7 @@
 use super::SPACES_PER_INDENT;
 use allocator_api2::vec::Vec;
 use crate::arena::Arena;
-use gruggers_core::error::SourceSpan;
-use gruggers_core::error::{ErrorKind, grug_error};
+use gruggers_core::error::{ErrorKind, grug_error, SourceSpan};
 
 use std::ffi::OsStr;
 
@@ -102,12 +101,6 @@ impl std::fmt::Display for TokenType {
 	}
 }
 
-pub const TOKENIZER_ERROR: u8 = 0x2;
-
-fn tokenizer_error_kind() -> ErrorKind {
-	ErrorKind::COMPILE_ERROR.add_component(TOKENIZER_ERROR)
-}
-
 pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, file_path: P) -> Result<Vec<Token<'b>, &'a Arena>, grug_error<Arena>> {
 	let file_path = file_path.as_ref();
 	let mut tokens = Vec::new_in(arena);
@@ -201,7 +194,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 			}
 			if num_spaces % SPACES_PER_INDENT != 0 {
 				return Err(grug_error::new_error(
-					tokenizer_error_kind(), 
+					ErrorKind::TOKENIZER_ERROR, 
 					"member scope", 
 					file_path, 
 					file_text_str,
@@ -237,7 +230,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 				while i < file_text.len() && file_text[i] != b'"' {
 					if file_text[i] == b'\0' {
 						return Err(grug_error::new_error(
-							tokenizer_error_kind(), 
+							ErrorKind::TOKENIZER_ERROR, 
 							"member scope", 
 							file_path, 
 							file_text_str,
@@ -247,7 +240,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 					}
 					if i + 2 < file_text.len() && (&file_text[i..=(i+1)] == &[b'\\', b'\r'] || &file_text[i..=(i+1)] == &[b'\\', b'\n']) {
 						return Err(grug_error::new_error(
-							tokenizer_error_kind(), 
+							ErrorKind::TOKENIZER_ERROR, 
 							"member scope", 
 							file_path, 
 							file_text_str,
@@ -262,7 +255,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 				}
 				if i >= file_text.len() {
 					return Err(grug_error::new_error(
-						tokenizer_error_kind(), 
+						ErrorKind::TOKENIZER_ERROR, 
 						"member scope", 
 						file_path, 
 						file_text_str,
@@ -306,7 +299,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 				if file_text[i] == b'.'{
 					if seen_period {
 						return Err(grug_error::new_error(
-							tokenizer_error_kind(), 
+							ErrorKind::TOKENIZER_ERROR, 
 							"member scope", 
 							file_path, 
 							file_text_str,
@@ -325,7 +318,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 					// should be allowed but i can understand why
 					// they're not
 					return Err(grug_error::new_error(
-						tokenizer_error_kind(), 
+						ErrorKind::TOKENIZER_ERROR, 
 						"member scope", 
 						file_path, 
 						file_text_str,
@@ -359,7 +352,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 			i += 1;
 			if i >= file_text.len() || file_text[i] != b' ' {
 				return Err(grug_error::new_error(
-					tokenizer_error_kind(), 
+					ErrorKind::TOKENIZER_ERROR, 
 					"member scope", 
 					file_path, 
 					file_text_str,
@@ -372,7 +365,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 			while i < file_text.len() && file_text[i] != b'\r' && file_text[i] != b'\n' {
 				if file_text[i] == b'\0' {
 					return Err(grug_error::new_error(
-						tokenizer_error_kind(), 
+						ErrorKind::TOKENIZER_ERROR, 
 						"member scope", 
 						file_path, 
 						file_text_str,
@@ -385,7 +378,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 			
 			if (i - start) == 0 {
 				return Err(grug_error::new_error(
-					tokenizer_error_kind(), 
+					ErrorKind::TOKENIZER_ERROR, 
 					"member scope", 
 					file_path, 
 					file_text_str,
@@ -394,7 +387,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 				));
 			} else if (file_text[i - 1] as char).is_ascii_whitespace() {
 				return Err(grug_error::new_error(
-					tokenizer_error_kind(), 
+					ErrorKind::TOKENIZER_ERROR, 
 					"member scope", 
 					file_path, 
 					file_text_str,
@@ -414,7 +407,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 		}
 
 		return Err(grug_error::new_error(
-			tokenizer_error_kind(), 
+			ErrorKind::TOKENIZER_ERROR, 
 			"member scope", 
 			file_path, 
 			file_text_str,
