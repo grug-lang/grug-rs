@@ -17,7 +17,7 @@
 //! that at runtime, parsing into a [`CStr`] will also cause UB
 //!
 //! On the other hand, it is also UB if the [`NTStrPtr`] points to non-utf8 data.
-//! [`CStr`] will catch this when converting into a [`str`]. This is a
+//! [`CStr`] will catch this when converting into a [prim@`str`]. This is a
 //! limitation of these types to be aware of.
 
 use std::sync::Arc;
@@ -230,6 +230,7 @@ mod str {
 
 		// This causes asan errors
 		pub fn len(self) -> usize {
+			#[inline]
 			fn len_default(val: NTStrPtr) -> usize {
 				let mut len = 0;
 				while unsafe{val.0.add(len).read() as u8} != b'\0' {len += 1;}
@@ -237,6 +238,7 @@ mod str {
 			}
 			#[cfg(target_arch="x86_64")]
 			{
+				#[inline]
 				#[target_feature(enable = "sse2")]
 				fn len_sse(val: NTStrPtr) -> usize {
 					use std::arch::x86_64::*;
@@ -261,6 +263,7 @@ mod str {
 					}
 				}
 
+				#[inline]
 				#[target_feature(enable = "avx2")]
 				fn len_avx2(val: NTStrPtr) -> usize {
 					use std::arch::x86_64::*;
@@ -447,6 +450,7 @@ mod bytes {
 		///
 		/// This function will never segfault on modern platforms, but it may cause ASAN read errors
 		pub fn len(self) -> usize {
+			#[inline]
 			fn len_default(val: NTBytes) -> usize {
 				let mut len = 0;
 				while unsafe{val.0.add(len).read() as u8} != b'\0' {len += 1;}
@@ -454,18 +458,26 @@ mod bytes {
 			}
 			#[cfg(target_arch="x86_64")]
 			{
+				#[inline]
 				#[target_feature(enable = "sse2")]
 				fn len_sse(val: NTBytes) -> usize {
 					use std::arch::x86_64::*;
 					use std::mem::{align_of, size_of};
 
+					
 					let ptr = val.0.cast::<u8>().as_ptr();
 					const _: () = const {assert!(size_of::<__m128i>() == align_of::<__m128i>());};
+					// calculate the difference between the pointer and the
+					// nearest multiple of 16 bytes
 					let diff = size_of::<__m128i>() - ptr.align_offset(align_of::<__m128i>());
+					// Round the pointer down to the nearest multiple of 16
+					// bytes (size_of::<__m128i>)
 					let ptr = ptr.wrapping_sub(diff).cast::<__m128i>();
 
 					let zeros: __m128i = _mm_set1_epi8(0);
 					
+					// movemask filled with null bytes shifted down by diff to
+					// mask off any bytes before the actual data
 					let movemask = _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe{ptr.read()})) >> diff;
 					if movemask != 0 {return movemask.trailing_zeros() as usize};
 
@@ -473,11 +485,16 @@ mod bytes {
 
 					loop {
 						offset += 1;
+						// movemask of null bytes
 						let movemask = _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe{ptr.add(offset).read()}));
+						// if any null bytes are found, return the length to
+						// the first null byte
+						// Any data afterwards is ignored
 						if movemask != 0 {return offset * size_of::<__m128i>() + movemask.trailing_zeros() as usize - diff};
 					}
 				}
 
+				#[inline]
 				#[target_feature(enable = "avx2")]
 				fn len_avx2(val: NTBytes) -> usize {
 					use std::arch::x86_64::*;
@@ -534,7 +551,7 @@ mod bytes {
 
 		/// Converts self into a `&[u8]`
 		///
-		/// Excludes the null byte unlike [`to_bytes_with_null`]
+		/// Excludes the null byte unlike [`Self::to_bytes_with_null`]
 		pub fn to_bytes(self) -> &'a [u8] {
 			let len = self.len();
 			unsafe{std::slice::from_raw_parts(self.0.cast().as_ptr(), len)}
@@ -542,7 +559,7 @@ mod bytes {
 		
 		/// Converts self into a `&[u8]`
 		///
-		/// Includes the null byte unlike [`to_bytes`]
+		/// Includes the null byte unlike [`Self::to_bytes`]
 		pub fn to_bytes_with_null(self) -> &'a [u8] {
 			let len = self.len();
 			unsafe{std::slice::from_raw_parts(self.0.cast().as_ptr(), len)}
@@ -607,6 +624,10 @@ mod bytes {
 	}
 
 	/// Returns a null terminated Box<[u8]> allocated within 'alloc'
+	/// 
+	/// # Panics
+	///
+	/// If the buffer contains a null byte
 	pub fn copy_box_nt_bytes_in<A: Allocator>(bytes: &[u8], a: A) -> Box<[u8], A> {
 		assert!(!bytes.contains(&b'\0'));
 		let (ptr, a) = Box::into_raw_with_allocator(Box::<[u8], _>::new_uninit_slice_in(bytes.len() + 1, a));

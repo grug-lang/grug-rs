@@ -9,6 +9,8 @@ use gruggers_core::error::SourceSpan;
 use allocator_api2::boxed::Box;
 use allocator_api2::vec::Vec;
 
+use json::JsonValue;
+
 // the 'static fields within `ModApi` are allocated within `_arena`. Any
 // reference to them must have a 'self lifetime
 pub(crate) struct ModApi {
@@ -60,8 +62,24 @@ pub enum ModApiError{
 	JsonError(json::Error),
 	IOError(std::io::Error),
 	EntitiesNotObject,
-	OnFunctionsNotObject{
+	OnFunctionsNotArray{
 		entity_name: String,
+	},
+	OnFunctionNotObject{
+		entity_name: String,
+		index: usize,
+	},
+	OnFunctionMissingName{
+		entity_name: String,
+		index: usize,
+	},
+	OnFunctionNameNotString{
+		entity_name: String,
+		index: usize,
+	},
+	OnFunctionDescriptionNotString{
+		entity_name: String,
+		on_function_name: String,
 	},
 	OnFnsArgumentsNotArray{
 		entity_name: String,
@@ -156,21 +174,54 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 
 		// optional "on_fns" object
 		let on_fns = &entity_values["on_functions"];
-		if !on_fns.is_object() && !on_fns.is_null() {
-			return Err(ModApiError::OnFunctionsNotObject{
+		if !on_fns.is_array() && !on_fns.is_null() {
+			return Err(ModApiError::OnFunctionsNotArray{
 				entity_name: entity_name.to_string(),
 			});
 		}
-		let on_fns = on_fns.entries().map(|(fn_name, fn_values)| {
+		let on_fns = on_fns.members().enumerate().map(|(i, function)| {
+			let JsonValue::Object(function) = function else {
+				return Err(ModApiError::OnFunctionNotObject {
+					entity_name: String::from(entity_name),
+					index: i
+				});
+			};
+			// "name" string
+			let fn_name = match function.get("name") {
+				None => return Err(ModApiError::OnFunctionMissingName{
+					entity_name: String::from(entity_name),
+					index: i,
+				}),
+				Some(str) => {
+					let Some(str) = str.as_str() else {
+						return Err(ModApiError::OnFunctionNameNotString{
+							entity_name: String::from(entity_name),
+							index: i,
+						});
+					};
+					&*Box::leak(NTStr::box_from_str_in(str, &arena))
+				}
+			};
 			// optional "description" string
-			let description = fn_values["description"].as_str().map(|str| Box::leak(NTStr::box_from_str_in(str, &arena)).as_str());
+			let description = match function.get("description") {
+				None => None,
+				Some(str) => {
+					let Some(str) = str.as_str() else {
+						return Err(ModApiError::OnFunctionDescriptionNotString{
+							entity_name: String::from(entity_name),
+							on_function_name: String::from(&*fn_name),
+						});
+					};
+					Some(Box::leak(NTStr::box_from_str_in(str, &arena)).as_str())
+				}
+			};
 			
 			// optional "arguments" object
-			let parameters = &fn_values["arguments"];
+			let parameters = &function["arguments"];
 			if !parameters.is_array() && !parameters.is_null(){
 				return Err(ModApiError::OnFnsArgumentsNotArray{
-					entity_name: entity_name.to_string(),
-					on_fn_name: fn_name.to_string(),
+					entity_name: String::from(entity_name),
+					on_fn_name: String::from(&*fn_name),
 				});
 			}
 			let parameters = parameters.members().map(|param_values| {
@@ -223,11 +274,6 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 				})
 			}).collect::<Result<Vec<_>, ModApiError>>()?;
 			// SAFETY: we don't give out a 'static refernce to this string
-			let fn_name = unsafe{
-				std::mem::transmute::<&NTStr, &'static NTStr>(
-					Box::leak(NTStr::box_from_str_in(fn_name, &arena))
-				)
-			};
 			let parameters = {
 				let mut temp = Vec::new_in(&arena);
 				temp.extend(parameters);

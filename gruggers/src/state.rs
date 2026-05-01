@@ -2,9 +2,9 @@ use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text, ModApiError};
 use crate::error::GrugError;
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, GameFnPtrState};
+use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, GameFnPtrState, INVALID_GRUG_SCRIPT_ID};
 use crate::xar::Xar;
-use crate::ntstring::NTStrPtr;
+use crate::ntstring::{NTStrPtr, NTBytes};
 use crate::arena::Arena;
 use crate::nt;
 use crate::watcher::{watch_changes};
@@ -18,6 +18,7 @@ use std::pin::Pin;
 use std::cell::{Cell, RefCell, Ref};
 use std::collections::{HashMap, hash_map::Entry, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::mem::MaybeUninit;
 use std::sync::Mutex;
 use std::ffi::{OsString, OsStr};
 use std::path::Path;
@@ -632,4 +633,39 @@ pub struct FileInfo {
 	pub entity_type: Box<str>,
 	pub entity_name: Box<OsStr>,
 	pub result: Result<GrugFileId, GrugError>,
+}
+
+// Test struct for c api
+// Eventually replace FileInfo with this
+#[derive(Debug)]
+struct FileInfo2<'a> {
+	pub(crate) path: NTBytes<'a>,
+	pub(crate) file_name: NTBytes<'a>,
+	pub(crate) mod_name: NTBytes<'a>,
+	pub(crate) entity_type: NTStrPtr<'a>,
+	pub(crate) entity_name: NTBytes<'a>,
+	pub(crate) file_id: GrugFileId,
+	pub(crate) error: MaybeUninit<GrugError>,
+}
+
+impl<'a> FileInfo2<'a> {
+	pub fn path (&self) -> &Path {
+		OsStr::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(self.path.to_bytes())})
+	}
+	pub fn file_name (&self) -> &OsStr {
+		unsafe{OsStr::from_encoded_bytes_unchecked(self.file_name.to_bytes())}
+	}
+	pub fn mod_name (&self) -> &OsStr {
+		unsafe{OsStr::from_encoded_bytes_unchecked(self.mod_name.to_bytes())}
+	}
+	pub fn entity_type (&self) -> &str {
+		self.entity_type.to_str()
+	}
+	pub fn entity_name (&self) -> &OsStr {
+		unsafe{OsStr::from_encoded_bytes_unchecked(self.entity_name.to_bytes())}
+	}
+	pub fn result (&self) -> Result<GrugFileId, &GrugError> {
+		if self.file_id == INVALID_GRUG_SCRIPT_ID {unsafe{Err(self.error.assume_init_ref())}}
+		else {Ok(self.file_id)}
+	}
 }

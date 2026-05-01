@@ -61,7 +61,10 @@ impl SourceSpan {
 
 /// Short code that represents an error from grug
 ///
+/// Least significant byte is used to encode the top level error kind
+/// (No Error, Initialization Error, Compile error, and runtime error)
 /// Remaining bits can be used to add specific codes for specific errors
+///
 #[repr(align(4))]
 #[derive(Clone, Copy, Debug)]
 pub struct ErrorKind(pub [u8;4]);
@@ -92,12 +95,17 @@ impl ErrorKind {
 	}
 }
 
+/// Contains all data associated with a compile time error in grug
+/// 
+/// In order to maintain c compatibility, all string fields are represented as
+/// null terminated pointers. 
 #[allow(non_camel_case_types)]
 #[allow(dead_code)]
 #[repr(C)]
 pub struct grug_error<A> {
-	/// Represents the kind of error that occurred and which specific error
-	error_kind: ErrorKind,
+	/// A unique integer identifier for the error that represents the
+	/// kind of error that occurred and which specific error
+	pub error_kind: ErrorKind,
 	/// name of the function the error occurred in. If the error is the member
 	/// scope, this string is `member scope`, 
 	function_name: NTStrPtr<'static>,
@@ -135,6 +143,24 @@ impl<A> std::fmt::Debug for grug_error<A> {
 			.field("error_message", &self.error_message)
 			.finish_non_exhaustive()
 	}
+}
+
+impl<A> grug_error<A> {
+	/// The name of the function the error occurred in. returns `member scope`
+	/// if the error was not in a function 
+	pub fn function_name(&self) -> &str {self.function_name.to_str()}
+	/// The path to the file with the error
+	pub fn file_path(&self) -> &OsStr {unsafe{OsStr::from_encoded_bytes_unchecked(self.file_path.to_bytes())}}
+	/// The source line that contains the error
+	pub fn source_line(&self) -> &str {self.source_line.to_str()}
+	/// The line number the error occurred at
+	pub fn line(&self) -> usize {self.line}
+	/// The column number the error occurred at
+	pub fn column(&self) -> usize {self.column}
+	/// A single line message that describes the error
+	pub fn error_message(&self) -> &str {self.error_message.to_str()}
+	/// A string that can be directly printed to the screen
+	pub fn error_string(&self) -> &str {self.error_string.to_str()}
 }
 
 impl<A: Allocator> grug_error<A> {

@@ -59,9 +59,9 @@ impl std::fmt::Debug for GameFnPtr {
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub struct GrugId(pub u64);
 
-// TODO: Rename this to GrugFileId
 /// An id that uniquely refers to a script path. 
 pub type GrugFileId = GrugId;
+pub const INVALID_GRUG_SCRIPT_ID: GrugFileId = GrugFileId::new(u64::MAX);
 
 impl std::fmt::Display for GrugId {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
