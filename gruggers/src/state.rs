@@ -638,7 +638,7 @@ pub struct FileInfo {
 // Test struct for c api
 // Eventually replace FileInfo with this
 #[derive(Debug)]
-struct FileInfo2<'a> {
+pub struct FileInfo2<'a> {
 	pub(crate) path: NTBytes<'a>,
 	pub(crate) file_name: NTBytes<'a>,
 	pub(crate) mod_name: NTBytes<'a>,

@@ -82,7 +82,7 @@ impl ErrorKind {
 	pub const COMPILE_ERROR: Self = Self([0x2, 0, 0, 0]);
 	pub const RUNTIME_ERROR: Self = Self([0x3, 0, 0, 0]);
 
-	pub fn add_component(mut self, other: u8) -> Self {
+	pub const fn add_component(mut self, other: u8) -> Self {
 		let mut i = 0;
 		while i < self.0.len() {
 			if self.0[i] == 0 {
@@ -91,7 +91,7 @@ impl ErrorKind {
 			}
 			i += 1;
 		}
-		panic!("components: {:?}", self.0);
+		panic!("");
 	}
 }
 
