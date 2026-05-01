@@ -7,10 +7,12 @@ use crate::ast::{
 use super::GlobalStatement;
 use crate::ntstring::NTStr;
 use crate::arena::Arena;
+use crate::error::GrugError;
 
-use gruggers_core::error::SourceSpan;
+use gruggers_core::error::{grug_error, ErrorKind, SourceSpan};
 
 use std::sync::Arc;
+use std::ffi::OsStr;
 
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
@@ -131,7 +133,8 @@ pub enum ParserError {
 	// grug_assert(!get_helper_fn(name), "The function '%s' was defined several times in the same file", name);
 	AlreadyDefinedOnFn {
 		on_fn_name: Arc<str>, 
-	}
+	},
+	Basic(grug_error<Arena>),
 }
 
 impl std::fmt::Display for ParserError {
@@ -250,73 +253,158 @@ impl std::fmt::Display for ParserError {
 				got,
 				line,
 			} => write!(f, "Expected space (' '), but got {} at line {}", got, line),
+			Self::Basic(err) => write!(f, "{}", err),
 		}
+	}
+}
+
+impl From<grug_error<Arena>> for ParserError {
+	fn from(other: grug_error<Arena>) -> Self {
+		Self::Basic(other)
 	}
 }
 
 const MAX_PARSING_DEPTH: usize = 100;
 
 pub(crate) struct AST<'arena> {
+	// needed for error reporting
+	pub(crate) file_text: &'arena str,
+	// needed for error reporting
+	pub(crate) file_path: &'arena OsStr,
+	// needed to report `out of tokens errors`
+	pub(crate) last_token_span: SourceSpan,
+	// needed to report error location
+	pub(crate) current_function: &'arena str,
 	pub(crate) global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
 	pub(crate) called_helper_fns: Vec<&'arena str, &'arena Arena>, 
 	pub(crate) helper_fn_signatures: Vec<(&'arena str, (GrugType<'arena>, &'arena [Parameter<'arena>])), &'arena Arena>,
 	pub(crate) on_fn_signatures: Vec<(&'arena str, &'arena [Parameter<'arena>]), &'arena Arena>,
 }
 
-pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>, ParserError> {
-	let mut ast = AST::new_in(arena);
+pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a str, file_path: &'a OsStr) -> Result<AST<'a>, GrugError> {
+	let final_token = tokens.last().map(|token| token.span).unwrap_or(SourceSpan{offset: 0, line: 0});
+	let mut ast = AST::new_in(final_token, file_text, file_path, arena);
 	let mut seen_helper_fn = false;
 
 	let mut seen_on_fn = false;
 	let mut newline_allowed = false;
 	let mut newline_seen = false;
 	let mut newline_required = false;
-	let mut just_seen_global = false;
 	let mut last_newline_token_span = SourceSpan{offset: 0, line: 0};
 
 	let mut tokens = tokens.iter();
 
-	while let Ok(token) = peek_next_token(&tokens) {
-		if assert_next_token_types(&tokens, &[TokenType::Word, TokenType::Colon]).is_ok() {
+	while let Ok(token) = ast.peek_next_token(&tokens) {
+		if let Ok([name_token, _]) = ast.consume_next_token_types(&mut tokens, &[TokenType::Word, TokenType::Colon]) {
 			if seen_on_fn {
-				return Err(ParserError::GlobalAfterOnFunctions {
-					token_value: token.value.to_string(),
-				});
-			}
-			if newline_required && !just_seen_global {
-				return Err(ParserError::GlobalAfterOnFunctions {
-					token_value: token.value.to_string(),
-				});
+				Err(grug_error::new_error(
+					ErrorKind::PARSER_ERROR,
+					ast.current_function,
+					file_path, 
+					file_text,
+					name_token.span,
+					format_args!("Move the global variable '{}' so it is above the on_ functions", name_token.value)
+				))?;
 			}
 
-			let global_variable = ast.parse_global_variable(&mut tokens, &arena)?;
-			ast.global_statements.push(GlobalStatement::Variable(global_variable));
-			consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+			let global_name = name_token.value; 
+
+			if global_name == "me" {
+				Err(grug_error::new_error(
+					ErrorKind::PARSER_ERROR,
+					ast.current_function,
+					file_path, 
+					file_text,
+					name_token.span,
+					format_args!("The global variable 'me' has to have its name changed to something else, since grug already declares that variable")
+				))?;
+			}
+			ast.consume_space(&mut tokens)?;
+
+			let global_type = ast.parse_type(ast.get_next_token(&mut tokens)?, arena)?;
+			match global_type {
+				GrugType::Resource{..} => Err(ParserError::GlobalCantBeResource{
+					name: global_name.to_string(),
+				})?,
+				GrugType::Entity{..}   => Err(ParserError::GlobalCantBeEntity{
+					name: global_name.to_string(),
+				})?,
+				_ => (),
+			}
+
+			if ast.peek_next_token(&tokens)?.ty != TokenType::Space {
+				Err(ParserError::GlobalMissingInitializer{
+					name: global_name.to_string(),
+					line: name_token.span.line,
+				})?
+			}
+
+			ast.consume_space(&mut tokens)?;
+			ast.consume_next_token_types(&mut tokens, &[TokenType::Equal])?;
+
+			ast.consume_space(&mut tokens)?;
+			
+			let assignment_expr = ast.parse_expression(&mut tokens, 0, 0., arena)?;
+			
+			ast.global_statements.push(GlobalStatement::Variable(MemberVariable{
+				name: Box::leak(NTStr::box_from_str_in(global_name, arena)).as_ntstrptr(),
+				ty: global_type,
+				assignment_expr: assignment_expr.into(),
+				span: name_token.span
+			}));
+
+			ast.consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
 
 			newline_allowed = true;
 			newline_required = true;
-			just_seen_global = true;
-		} else if let Ok([name_token, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && name_token.value.starts_with("on_") {
+		} else if let Ok([name_token]) = ast.assert_next_token_types(&tokens, &[TokenType::Word]) && name_token.value.starts_with("on_") {
+			let [name_token] = ast.consume_next_token_types(&mut tokens, &[TokenType::Word]).unwrap();
+			ast.current_function = name_token.value;
+
 			// Cannot have global function after helper function
 			if seen_helper_fn {
-				return Err(ParserError::OnFunctionAfterHelperFunctions{
+				Err(ParserError::OnFunctionAfterHelperFunctions{
 					name: name_token.value.to_string(),
-				});
+				})?
 			}
 			// expect newline after each item
 			if newline_required {
-				return Err(ParserError::ExpectedNewLine{
+				Err(ParserError::ExpectedNewLine{
 					line: name_token.span.line,
-				});
+				})?
 			}
 
-			let on_fn = ast.parse_on_fn(&mut tokens, arena)?;
+			let fn_name = name_token.value;
+			ast.consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
+
+			let parameters = if ast.assert_next_token_types(&mut tokens, &[TokenType::Word]).is_ok() {
+				ast.parse_parameters(&mut tokens, arena)?
+			} else {
+				&[]
+			};
+			ast.consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
+			
+			let body_statements = ast.parse_statements(&mut tokens, 0, 1, arena)?;
+
+			if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
+				Err(ParserError::EmptyFunction{
+					name: fn_name.to_string(),
+				})?;
+			}
+			ast.current_function = "member scope";
+
+			let on_fn = OnFunction{
+				name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
+				parameters,
+				body_statements,
+				span: name_token.span
+			};
 
 			let on_fn_name = on_fn.name.to_str();
 			if ast.on_fn_signatures.iter().find(|(name, _)| *name == on_fn_name).is_some() {
-				return Err(ParserError::AlreadyDefinedOnFn{
+				Err(ParserError::AlreadyDefinedOnFn{
 					on_fn_name: Arc::from(on_fn.name.to_str()),
-				});
+				})?
 			}
 			
 			ast.on_fn_signatures.push((on_fn.name.to_str(), on_fn.parameters));
@@ -328,24 +416,74 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>
 			newline_seen = false;
 			newline_required = true;
 
-			just_seen_global = false;
-			consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
-		} else if let Ok([name_token, ..]) = assert_next_token_types(&tokens, &[TokenType::Word, TokenType::OpenParenthesis]) && name_token.value.starts_with("helper_") {
+			ast.consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+		// helper_fn -> "local" + " " + name + "(" + arguments? + ")" + type + statements 
+		} else if let Ok([name_token]) = ast.assert_next_token_types(&tokens, &[TokenType::Word]) && name_token.value.starts_with("helper_") {
+			let [name_token] = ast.consume_next_token_types(&mut tokens, &[TokenType::Word]).unwrap();
+			ast.current_function = name_token.value;
 			// expect newline after each item
 			if newline_required {
-				return Err(ParserError::ExpectedNewLine{
+				Err(ParserError::ExpectedNewLine{
 					line: name_token.span.line,
-				});
+				})?
 			}
 
-			let helper_fn = ast.parse_helper_fn(&mut tokens, arena)?;
+			let fn_name = name_token.value;
+
+			if ast.called_helper_fns.iter().find(|val| **val == fn_name).is_none() {
+				Err(ParserError::HelperFnDefinedBeforeCall {
+					helper_fn_name: fn_name.into(),
+				})?
+			}
+
+			ast.consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
+
+			let parameters = if ast.assert_next_token_types(&mut tokens, &[TokenType::Word]).is_ok() {
+				ast.parse_parameters(&mut tokens, arena)?
+			} else {
+				&[]
+			};
+			ast.consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
+
+			// return type
+			let return_type = if let Ok([_, type_token]) = ast.consume_next_token_types(&mut tokens, &[TokenType::Space, TokenType::Word]) {
+				match ast.parse_type(type_token, arena)? {
+					GrugType::Resource{..} => Err(ParserError::HelperFnReturnTypeCantBeResource{
+						fn_name: fn_name.to_string(),
+					})?,
+					GrugType::Entity{..}   => Err(ParserError::HelperFnReturnTypeCantBeEntity{
+						fn_name: fn_name.to_string(),
+					})?,
+					x => x,
+				}
+			} else {
+				GrugType::Void
+			};
+			
+			let body_statements = ast.parse_statements(&mut tokens, 0, 1, arena)?;
+
+			if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
+				Err(ParserError::EmptyFunction{
+					name: fn_name.to_string(),
+				})?;
+			}
+			ast.current_function = "member scope";
+
+			let helper_fn = HelperFunction{
+				name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
+				parameters,
+				body_statements,
+				return_type,
+				span: name_token.span,
+			};
+
 			seen_helper_fn = true;
 
 			let helper_fn_name = helper_fn.name.to_str();
 			if ast.helper_fn_signatures.iter().find(|(name, _)| *name == helper_fn_name).is_some() {
-				return Err(ParserError::AlreadyDefinedHelperFunction{
+				Err(ParserError::AlreadyDefinedHelperFunction{
 					helper_fn_name: Arc::from(helper_fn.name.to_str()),
-				});
+				})?
 			}
 
 			ast.helper_fn_signatures.push(((helper_fn.name.to_str()), (helper_fn.return_type, helper_fn.parameters)));
@@ -355,13 +493,12 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>
 			newline_seen = false;
 			newline_required = true;
 
-			just_seen_global = false;
-			consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
-		} else if let Ok([token]) = consume_next_token_types(&mut tokens, &[TokenType::NewLine]) {
+			ast.consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+		} else if let Ok([token]) = ast.consume_next_token_types(&mut tokens, &[TokenType::NewLine]) {
 			if !newline_allowed {
-				return Err(ParserError::NewlineNotAllowed{
+				Err(ParserError::NewlineNotAllowed{
 					line: token.span.line,
-				});
+				})?
 			}
 
 			// Disallow consecutive empty lines
@@ -371,35 +508,39 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena) -> Result<AST<'a>
 			last_newline_token_span = token.span;
 			
 			ast.global_statements.push(GlobalStatement::EmptyLine);
-		} else if let Ok([comment_token]) = consume_next_token_types(&mut tokens, &[TokenType::Comment]) {
+		} else if let Ok([comment_token]) = ast.consume_next_token_types(&mut tokens, &[TokenType::Comment]) {
 			newline_allowed = true;
 
 			ast.global_statements.push(GlobalStatement::Comment{
 				value: Box::leak(NTStr::box_from_str_in(comment_token.value, arena)).as_ntstrptr(),
 			});
-			consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+			ast.consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
 		} else {
-			return Err(ParserError::UnexpectedToken{
+			Err(ParserError::UnexpectedToken{
 				token_value: String::from(token.value),
 				line: token.span.line,
-			});
+			})?
 		}
 	}
 
 	if !newline_allowed && newline_seen {
-		return Err(ParserError::NewlineNotAllowed{
+		Err(ParserError::NewlineNotAllowed{
 			// a newline has been seen so the line number will be incremented by one
 			// but we want the line number of the previous line
 			line: last_newline_token_span.line,
-		});
+		})?
 	}
 
 	Ok(ast)
 }
 
 impl<'a> AST<'a> {
-	fn new_in(arena: &'a Arena) -> Self {
+	fn new_in(last_token_span: SourceSpan, file_text: &'a str, file_path: &'a OsStr, arena: &'a Arena) -> Self {
 		Self {
+			file_text,
+			file_path,
+			last_token_span,
+			current_function: "member scope",
 			global_statements: Vec::new_in(arena),
 			called_helper_fns: Vec::new_in(arena),
 			helper_fn_signatures: Vec::new_in(arena),
@@ -407,100 +548,16 @@ impl<'a> AST<'a> {
 		}
 	}
 
-	// helper_fn -> "on_" + name + "(" + arguments? + ")" + type + statements 
-	fn parse_helper_fn(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<HelperFunction<'a>, ParserError> {
-		let name_token = tokens.next().unwrap();
-		let fn_name = name_token.value;
-
-		if self.called_helper_fns.iter().find(|val| **val == fn_name).is_none() {
-			return Err(ParserError::HelperFnDefinedBeforeCall {
-				helper_fn_name: fn_name.into(),
-			});
-		}
-
-		// This should never fail because this is checked before calling parse_helper_fn
-		consume_next_token_types(tokens, &[TokenType::OpenParenthesis]).unwrap();
-
-		let parameters = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
-			self.parse_parameters(tokens, arena)?
-		} else {
-			Vec::new_in(arena).leak()
-		};
-		consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
-
-		// return type
-		let return_type = if let Ok([_, type_token]) = consume_next_token_types(tokens, &[TokenType::Space, TokenType::Word]) {
-			match self.parse_type(type_token, arena)? {
-				GrugType::Resource{..} => return Err(ParserError::HelperFnReturnTypeCantBeResource{
-					fn_name: fn_name.to_string(),
-				}),
-				GrugType::Entity{..}   => return Err(ParserError::HelperFnReturnTypeCantBeEntity{
-					fn_name: fn_name.to_string(),
-				}),
-				x => x,
-			}
-		} else {
-			GrugType::Void
-		};
-		
-		let body_statements = self.parse_statements(tokens, 0, 1, arena)?;
-
-		if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
-			return Err(ParserError::EmptyFunction{
-				name: fn_name.to_string(),
-			});
-		}
-
-		Ok(HelperFunction{
-			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
-			parameters,
-			body_statements,
-			return_type,
-			span: name_token.span,
-		})
-	}
-
-	// on_fn -> "on_" + name + "(" + arguments? + ")" + statements 
-	fn parse_on_fn(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<OnFunction<'a>, ParserError> {
-		let name_token = tokens.next().unwrap();
-		let fn_name = name_token.value;
-
-		// This should never fail because this is checked before calling parse_on_fn
-		consume_next_token_types(tokens, &[TokenType::OpenParenthesis]).unwrap();
-
-		let parameters = if assert_next_token_types(tokens, &[TokenType::Word]).is_ok() {
-			self.parse_parameters(tokens, arena)?
-		} else {
-			Vec::new_in(arena).leak()
-		};
-		consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
-		
-		let body_statements = self.parse_statements(tokens, 0, 1, arena)?;
-
-		if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
-			return Err(ParserError::EmptyFunction{
-				name: fn_name.to_string(),
-			});
-		}
-
-		Ok(OnFunction{
-			name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
-			parameters,
-			body_statements,
-			span: name_token.span
-		})
-	}
-
 	// parameters -> parameter + ("," + parameter)*;
 	fn parse_parameters(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<&'a [Parameter<'a>], ParserError> {
 		let mut arguments = Vec::new_in(arena);
 		loop {
 			// parse_arg
-			let name_token = get_next_token(tokens)?;
+			let name_token = self.get_next_token(tokens)?;
 			let arg_name = name_token.value;
-			consume_next_token_types(tokens, &[TokenType::Colon, TokenType::Space])?;
+			self.consume_next_token_types(tokens, &[TokenType::Colon, TokenType::Space])?;
 
-			let type_token = get_next_token(tokens)?;
+			let type_token = self.get_next_token(tokens)?;
 			let param_type = self.parse_type(type_token, arena)?;
 
 			match param_type {
@@ -519,11 +576,11 @@ impl<'a> AST<'a> {
 				type_span: type_token.span
 			}.into());
 			
-			if consume_next_token_types(tokens, &[TokenType::Comma]).is_err() {
+			if self.consume_next_token_types(tokens, &[TokenType::Comma]).is_err() {
 				break;
 			}
 			
-			consume_space(tokens)?;
+			self.consume_space(tokens)?;
 		}
 		Ok(arguments.leak())
 	}
@@ -531,17 +588,17 @@ impl<'a> AST<'a> {
 	// TODO: Get the grammar for statements
 	// This parser consumes a space before consuming the curly braces
 	fn parse_statements(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<&'a mut [Statement<'a>], ParserError> {
-		assert_parsing_depth(parsing_depth)?;
-		consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
+		self.assert_parsing_depth(parsing_depth)?;
+		self.consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
 
 		let mut newline_allowed = false;
 		let mut newline_seen = false;
 
 		let mut statements = Vec::new_in(arena);
 
-		while !is_end_of_block(tokens, indentation)? {
+		while !self.is_end_of_block(tokens, indentation)? {
 			// newlines
-			if let Ok([token]) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
+			if let Ok([token]) = self.consume_next_token_types(tokens, &[TokenType::NewLine]) {
 				if !newline_allowed {
 					return Err(ParserError::NewlineNotAllowed{
 						line: token.span.line,
@@ -555,15 +612,15 @@ impl<'a> AST<'a> {
 			} else {
 				newline_allowed = true;
 				newline_seen = false;
-				consume_indentation(tokens, indentation)?;
+				self.consume_indentation(tokens, indentation)?;
 
 				statements.push(self.parse_statement(tokens, parsing_depth + 1, indentation, arena)?.into());
-				consume_next_token_types(tokens, &[TokenType::NewLine])?;
+				self.consume_next_token_types(tokens, &[TokenType::NewLine])?;
 			}
 		}
 
 		if !newline_allowed && newline_seen {
-			let [next_token] = peek_next_tokens(tokens)?;
+			let [next_token] = self.peek_next_tokens(tokens)?;
 			return Err(ParserError::NewlineNotAllowed{
 				// a newline has been seen so the line number will be incremented by one
 				// but we want the line number of the previous line
@@ -572,16 +629,16 @@ impl<'a> AST<'a> {
 		}
 
 		if indentation != 1 {
-			consume_indentation(tokens, indentation - 1)?;
+			self.consume_indentation(tokens, indentation - 1)?;
 		}
-		consume_next_token_types(tokens, &[TokenType::CloseBrace])?;
+		self.consume_next_token_types(tokens, &[TokenType::CloseBrace])?;
 
 		Ok(statements.leak())
 	}
 
 	// stmt -> variable_stmt | if_stmt | return_stmt | while_stmt | ;
 	fn parse_statement(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<Statement<'a>, ParserError> {
-		let next_tokens = peek_next_tokens::<2>(tokens)?;
+		let next_tokens = self.peek_next_tokens::<2>(tokens)?;
 		match next_tokens[0].ty {
 			TokenType::Word => {
 				match next_tokens[1].ty {
@@ -603,7 +660,7 @@ impl<'a> AST<'a> {
 				// if condition and block
 				let mut ifs = Vec::new();
 				loop {
-					consume_next_token_types(tokens, &[TokenType::If, TokenType::Space])?;
+					self.consume_next_token_types(tokens, &[TokenType::If, TokenType::Space])?;
 
 					let condition = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
 					let if_block = self.parse_statements(tokens, parsing_depth + 1, indentation + 1, arena)?;
@@ -613,11 +670,11 @@ impl<'a> AST<'a> {
 					let is_chained;
 					let else_block;
 
-					if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]).is_ok() {
-						let [space_token, if_token] = peek_next_tokens(tokens)?;
+					if self.consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]).is_ok() {
+						let [space_token, if_token] = self.peek_next_tokens(tokens)?;
 						if TokenType::Space == space_token.ty && TokenType::If == if_token.ty {
 							is_chained = true;
-							consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
+							self.consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
 							ifs.push((
 								condition,
 								is_chained,
@@ -666,14 +723,14 @@ impl<'a> AST<'a> {
 				let expr = if let TokenType::NewLine = next_tokens[1].ty {
 					None
 				} else {
-					consume_space(tokens)?;
+					self.consume_space(tokens)?;
 					Some(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?)
 				};
 				Ok(Statement::Return{ expr: expr.map(|expr| Box::leak(Box::new_in(expr, arena))) })
 			}
 			TokenType::While => {
-				assert_parsing_depth(parsing_depth)?;
-				consume_next_token_types(tokens, &[TokenType::While, TokenType::Space])?;
+				self.assert_parsing_depth(parsing_depth)?;
+				self.consume_next_token_types(tokens, &[TokenType::While, TokenType::Space])?;
 
 				let condition = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
 				let block = self.parse_statements(tokens, parsing_depth + 1, indentation + 1, arena)?;
@@ -710,17 +767,17 @@ impl<'a> AST<'a> {
 
 	// local_variable -> word + (":" + type)? + "=" + " " + expr
 	fn parse_local_variable(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, arena: &'a Arena) -> Result<Statement<'a>, ParserError> {
-		assert_parsing_depth(parsing_depth)?;
-		let name_token = get_next_token(tokens)?;
+		self.assert_parsing_depth(parsing_depth)?;
+		let name_token = self.get_next_token(tokens)?;
 		let local_name = name_token.value; 
 		let mut ty = None;
 
-		if consume_next_token_types(tokens, &[TokenType::Colon]).is_ok() {
+		if self.consume_next_token_types(tokens, &[TokenType::Colon]).is_ok() {
 			if local_name == "me" {
 				return Err(ParserError::LocalNamedMe);
 			}
-			consume_space(tokens)?;
-			ty = Some(self.parse_type(get_next_token(tokens)?, arena)?);
+			self.consume_space(tokens)?;
+			ty = Some(self.parse_type(self.get_next_token(tokens)?, arena)?);
 
 			match ty {
 				Some(GrugType::Resource{..}) => return Err(ParserError::VariableCantBeResource{
@@ -734,12 +791,16 @@ impl<'a> AST<'a> {
 		}
 		// TODO: This error should just be folded into ExpectedSpace but it has
 		// to be different to match the required error message
-		consume_space(tokens).map_err(|x| match x {
-			ParserError::ExpectedSpace{line, ..} => ParserError::MissingVariableAssignment{
-				name: local_name.to_string(),
-				line,
-			},
-			ParserError::OutOfTokensError => ParserError::OutOfTokensError,
+		self.consume_space(tokens).map_err(|x| match x.error_kind {
+			EXPECTED_SPACE_ERROR => grug_error::new_error(
+				ErrorKind::PARSER_ERROR,
+				self.current_function,
+				self.file_path,
+				self.file_text,
+				x.span(),
+				format_args!("The variable '{}' was not assigned a value on line {}", local_name, x.span().line),
+			),
+			OUT_OF_TOKENS_ERROR => x,
 			_ => unreachable!(),
 		})?;
 
@@ -749,59 +810,15 @@ impl<'a> AST<'a> {
 			return Err(ParserError::ReassigningMe);
 		}
 
-		consume_next_token_types(tokens, &[TokenType::Equal])?;
+		self.consume_next_token_types(tokens, &[TokenType::Equal])?;
 
-		consume_space(tokens)?;
+		self.consume_space(tokens)?;
 		let assignment_expr = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
 		Ok(Statement::Variable{
 			name: Box::leak(NTStr::box_from_str_in(local_name, arena)).as_ntstrptr(),
 			ty: ty.map(|ty| &*Box::leak(Box::new_in(ty, arena))),
 			assignment_expr,
 			name_span: name_token.span,
-		})
-	}
-
-	// global -> word + ":" + type + " =" + expr;
-	fn parse_global_variable(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<MemberVariable<'a>, ParserError> {
-		let name_token = get_next_token(tokens)?;
-		let global_name = name_token.value; 
-
-		if global_name == "me" {
-			return Err(ParserError::GlobalNamedMe);
-		}
-		consume_next_token_types(tokens, &[TokenType::Colon])?;
-		consume_space(tokens)?;
-
-		let global_type = self.parse_type(get_next_token(tokens)?, arena)?;
-		match global_type {
-			GrugType::Resource{..} => return Err(ParserError::GlobalCantBeResource{
-				name: global_name.to_string(),
-			}),
-			GrugType::Entity{..}   => return Err(ParserError::GlobalCantBeEntity{
-				name: global_name.to_string(),
-			}),
-			_ => (),
-		}
-
-		if peek_next_token(tokens)?.ty != TokenType::Space {
-			return Err(ParserError::GlobalMissingInitializer{
-				name: global_name.to_string(),
-				line: name_token.span.line,
-			});
-		}
-
-		consume_space(tokens)?;
-		consume_next_token_types(tokens, &[TokenType::Equal])?;
-
-		consume_space(tokens)?;
-		
-		let assignment_expr = self.parse_expression(tokens, 0, 0., arena)?;
-		
-		Ok(MemberVariable{
-			name: Box::leak(NTStr::box_from_str_in(global_name, arena)).as_ntstrptr(),
-			ty: global_type,
-			assignment_expr: assignment_expr.into(),
-			span: name_token.span
 		})
 	}
 
@@ -813,13 +830,13 @@ impl<'a> AST<'a> {
 	// }
 
 	fn parse_expression(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, min_precedence: f32, arena: &'a Arena) -> Result<Expr<'a>, ParserError> {
-		assert_parsing_depth(parsing_depth)?;
+		self.assert_parsing_depth(parsing_depth)?;
 		let mut current: Expr = {
-			let Token{ty, span, value} = get_next_token(tokens)?;
+			let Token{ty, span, value} = self.get_next_token(tokens)?;
 			match ty {
 				TokenType::OpenParenthesis => {
 					let expr = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
-					let _ = &consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?[0];
+					let _ = &self.consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?[0];
 
 					Expr{
 						data: ExprData::Parenthesized(Box::leak(Box::new_in(expr, arena))),
@@ -865,7 +882,7 @@ impl<'a> AST<'a> {
 				TokenType::Word => {
 					let value: &'a NTStr  = Box::leak(NTStr::box_from_str_in(value, arena));
 					// a word token can actually be a function call
-					if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenParenthesis]) {
+					if let Ok([_]) = self.consume_next_token_types(tokens, &[TokenType::OpenParenthesis]) {
 						if value.as_str().starts_with("helper_") {
 							if self.called_helper_fns.iter().find(|name| **name == &*value.as_str()).is_none() {
 								self.called_helper_fns.push(value);
@@ -873,7 +890,7 @@ impl<'a> AST<'a> {
 						}
 						// immediate ")" | (expr + ("," + " " + expr)*) + ")"
 						
-						if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
+						if let Ok([_]) = self.consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
 							Expr{
 								data: ExprData::Call {
 									name: value.as_ntstrptr(),
@@ -888,10 +905,10 @@ impl<'a> AST<'a> {
 							let mut arguments = Vec::new_in(arena);
 							loop {
 								arguments.push(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?.into());
-								if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Comma, TokenType::Space]) {
+								if let Ok(_) = self.consume_next_token_types(tokens, &[TokenType::Comma, TokenType::Space]) {
 									
 								} else {
-									let [_] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
+									let [_] = self.consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 									break Expr {
 										data: ExprData::Call {
 											name: value.as_ntstrptr(),
@@ -951,7 +968,7 @@ impl<'a> AST<'a> {
 				TokenType::Minus | TokenType::Not => {
 					let unary_op = match ty {
 						TokenType::Minus => UnaryOperator::Minus,
-						TokenType::Not => {consume_space(tokens)?; UnaryOperator::Not},
+						TokenType::Not => {self.consume_space(tokens)?; UnaryOperator::Not},
 						_ => unreachable!(),
 					};
 					let ((), r_bp) = Self::get_prefix_precedence(unary_op);
@@ -974,7 +991,7 @@ impl<'a> AST<'a> {
 				}
 			}
 		};
-		while let Ok([space, op]) = peek_next_tokens(tokens) {
+		while let Ok([space, op]) = self.peek_next_tokens(tokens) {
 			let TokenType::Space = space.ty else {
 				break;
 			};
@@ -1024,9 +1041,9 @@ impl<'a> AST<'a> {
 			if l_bp < min_precedence {
 				break;
 			}
-			consume_space(tokens)?;
-			_ = get_next_token(tokens)?;
-			consume_space(tokens)?;
+			self.consume_space(tokens)?;
+			_ = self.get_next_token(tokens)?;
+			self.consume_space(tokens)?;
 			let next = self.parse_expression(tokens, parsing_depth + 1, r_bp, arena)?;
 
 			current = Expr {
@@ -1092,102 +1109,154 @@ impl<'a> AST<'a> {
 			}
 		})
 	}
-}
 
-fn is_end_of_block(tokens: &mut std::slice::Iter<Token>, indentation: usize) -> Result<bool, ParserError> {
-	use super::SPACES_PER_INDENT;
+	fn is_end_of_block(&self, tokens: &mut std::slice::Iter<'a, Token<'a>>, indentation: usize) -> Result<bool, ParserError> {
+		use super::SPACES_PER_INDENT;
 
-	assert!(indentation != 0);
-	let next_token = peek_next_token(tokens)?;
-	match next_token.ty {
-		TokenType::CloseBrace => Ok(true),
-		TokenType::NewLine => Ok(false),
-		TokenType::Indentation => {
-			// TODO: I don't understand this?
-			//
-			// 	    fn on_something() {
-			// 	    	if (boolean) {
-			//				some_game_fn()
-			// 	  ->	}
-			// 	    }
-			// 	There would be an indentation token at the arrow with 4 spaces
-			// 	(indentation is going from 2 to 1) and this branch detects that
-			//
-			// 	Would'nt it be better to check for the close braces directly
-			Ok(next_token.value.len() == (indentation - 1) * SPACES_PER_INDENT)
-		}
-		_ => Err(ParserError::ExpectedIndentation {
-			got: next_token.value.to_string(),
-			line: next_token.span.line,
-		})
-	}
-}
-
-// Checks if the passed in parsing_depth is allowed
-fn assert_parsing_depth(parsing_depth: usize) -> Result<(), ParserError> {
-	if parsing_depth > MAX_PARSING_DEPTH {
-		Err(ParserError::ExceededMaxParsingDepth)
-	} else {
-		Ok(())
-	}
-}
-
-// checks whether the next few tokens match the expected tokens without consuming the input
-fn assert_next_token_types<'a>(tokens: &std::slice::Iter<'a, Token<'a>>, expected: &[TokenType]) -> Result<&'a [Token<'a>], ParserError> {
-	if tokens.len() < expected.len() {
-		return Err(ParserError::OutOfTokensError);
-	}
-	for (Token{ty: got_ty, span, ..}, expected_ty) in tokens.clone().zip(expected) {
-		if got_ty != expected_ty {
-			return Err(ParserError::GotWrongToken{
-				expected: *expected_ty,
-				got: *got_ty,
-				line: span.line,
-			});
+		assert!(indentation != 0);
+		let next_token = self.peek_next_token(tokens)?;
+		match next_token.ty {
+			TokenType::CloseBrace => Ok(true),
+			TokenType::NewLine => Ok(false),
+			TokenType::Indentation => {
+				// TODO: I don't understand this?
+				//
+				// 	    fn on_something() {
+				// 	    	if (boolean) {
+				//				some_game_fn()
+				// 	  ->	}
+				// 	    }
+				// 	There would be an indentation token at the arrow with 4 spaces
+				// 	(indentation is going from 2 to 1) and this branch detects that
+				//
+				// 	Would'nt it be better to check for the close braces directly
+				Ok(next_token.value.len() == (indentation - 1) * SPACES_PER_INDENT)
+			}
+			_ => Err(ParserError::ExpectedIndentation {
+				got: next_token.value.to_string(),
+				line: next_token.span.line,
+			})
 		}
 	}
-	Ok(&tokens.as_slice()[..expected.len()])
-}
 
-// consumes the next few tokens if they match the given types, otherwise leaves the input unchanged
-fn consume_next_token_types<'a, const N: usize>(tokens: &'_ mut std::slice::Iter<'a, Token<'a>>, expected: &'_ [TokenType; N]) -> Result<&'a [Token<'a>; N], ParserError> {
-	assert_next_token_types(tokens, expected)?;
-	let ret_val = &tokens.as_slice()[..expected.len()];
-	*tokens = tokens.as_slice()[expected.len()..].iter();
-	Ok(unsafe{&*(ret_val as *const [Token] as *const [Token; N])})
-}
-
-fn get_next_token<'a> (tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
-	tokens.next().ok_or(ParserError::OutOfTokensError)
-}
-
-fn peek_next_token<'a> (tokens: &std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
-	tokens.as_slice().first().ok_or(ParserError::OutOfTokensError)
-}
-
-fn peek_next_tokens<'a, const N: usize> (tokens: &std::slice::Iter<'a, Token<'a>>) -> Result<&'a [Token<'a>; N], ParserError> {
-	Ok(unsafe{&*(tokens.as_slice().get(..N).ok_or(ParserError::OutOfTokensError)? as *const _ as * const _)})
-}
-
-fn consume_space<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError> {
-	Ok(&consume_next_token_types(tokens, &[TokenType::Space]).map_err(|err| match err {
-		ParserError::GotWrongToken{got, line, ..} => ParserError::ExpectedSpace{got, line},
-		ParserError::OutOfTokensError => ParserError::OutOfTokensError,
-		_ => unreachable!(),
-	})?[0])
-}
-
-fn consume_indentation<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, indentation: usize) -> Result<&'a Token<'a>, ParserError> {
-	use super::SPACES_PER_INDENT;
-
-	let token = &consume_next_token_types(tokens, &[TokenType::Indentation])?[0];
-	let spaces = token.value.len();
-	if spaces != indentation * SPACES_PER_INDENT {
-		return Err(ParserError::IndentationMismatch{
-			expected_spaces: indentation * SPACES_PER_INDENT,
-			got_spaces: spaces,
-			line: token.span.line,
-		});
+	// Checks if the passed in parsing_depth is allowed
+	#[track_caller]
+	fn assert_parsing_depth(&self, parsing_depth: usize) -> Result<(), ParserError> {
+		if parsing_depth > MAX_PARSING_DEPTH {
+			Err(ParserError::ExceededMaxParsingDepth)
+		} else {
+			Ok(())
+		}
 	}
-	Ok(token)
+
+	// checks whether the next few tokens match the expected tokens without consuming the input
+	#[track_caller]
+	fn assert_next_token_types<const N: usize>(&self, tokens: &std::slice::Iter<'a, Token<'a>>, expected: &[TokenType; N]) -> Result<&'a [Token<'a>;N], grug_error<Arena>> {
+		if tokens.len() < expected.len() {
+			return Err(self.out_of_tokens_err());
+		}
+		for (Token{ty: got_ty, span, ..}, expected_ty) in tokens.clone().zip(expected) {
+			if got_ty != expected_ty {
+				if *got_ty == TokenType::OpenParenthesis {
+					return Err(grug_error::new_error(
+						GOT_WRONG_TOKEN_ERROR,
+						self.current_function,
+						self.file_path, 
+						self.file_text,
+						*span,
+						format_args!("Unexpected '(' after non-identifier at line {}", span.line)
+					));
+				} else {
+					return Err(grug_error::new_error(
+						GOT_WRONG_TOKEN_ERROR,
+						self.current_function,
+						self.file_path, 
+						self.file_text,
+						*span,
+						format_args!("Expected token type {}, but got {} on line {}", expected_ty, got_ty, span.line)
+					));
+				}
+			}
+		}
+		Ok(unsafe{&*(tokens.as_slice().as_ptr() as *const [Token; N])})
+	}
+
+	// consumes the next few tokens if they match the given types, otherwise leaves the input unchanged
+	#[track_caller]
+	fn consume_next_token_types<const N: usize>(&self, tokens: &'_ mut std::slice::Iter<'a, Token<'a>>, expected: &'_ [TokenType; N]) -> Result<&'a [Token<'a>; N], grug_error<Arena>> {
+		let ret_val = self.assert_next_token_types(tokens, expected)?;
+		*tokens = tokens.as_slice()[expected.len()..].iter();
+		Ok(ret_val)
+	}
+
+	#[track_caller]
+	fn get_next_token(&self, tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, grug_error<Arena>> {
+		tokens.next().ok_or_else(||
+			self.out_of_tokens_err()
+		)
+	}
+
+	#[track_caller]
+	fn peek_next_token(&self, tokens: &std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, grug_error<Arena>> {
+		tokens.as_slice().first().ok_or_else(||
+			self.out_of_tokens_err()
+		)
+	}
+
+	#[track_caller]
+	fn out_of_tokens_err(&self) -> grug_error<Arena> {
+		grug_error::new_error(
+			ErrorKind::PARSER_ERROR,
+			self.current_function,
+			self.file_path, 
+			self.file_text,
+			self.last_token_span,
+			format_args!("token_index 1 was out of bounds in peek_token()")
+		)
+	}
+
+	#[track_caller]
+	fn peek_next_tokens<const N: usize> (&self, tokens: &std::slice::Iter<'a, Token<'a>>) -> Result<&'a [Token<'a>; N], ParserError> {
+		Ok(unsafe{&*(tokens.as_slice().get(..N).ok_or(self.out_of_tokens_err())? as *const _ as * const _)})
+	}
+
+	#[track_caller]
+	fn consume_space(&self, tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, grug_error<Arena>> {
+		let token = self.get_next_token(tokens)?;
+		
+		if token.ty != TokenType::Space {
+			return Err(grug_error::new_error(
+				EXPECTED_SPACE_ERROR,
+				self.current_function,
+				self.file_path, 
+				self.file_text,
+				token.span,
+				format_args!("Expected space (' '), but got {} at line {}", token.ty, token.span.line)
+			))
+		}
+		return Ok(token)
+	}
+
+	#[track_caller]
+	fn consume_indentation(&self, tokens: &mut std::slice::Iter<'a, Token<'a>>, indentation: usize) -> Result<&'a Token<'a>, grug_error<Arena>> {
+		use super::SPACES_PER_INDENT;
+
+		let [token] = self.consume_next_token_types(tokens, &[TokenType::Indentation])?;
+		let spaces = token.value.len();
+		if spaces != indentation * SPACES_PER_INDENT {
+			return Err(grug_error::new_error(
+				ErrorKind::PARSER_ERROR,
+				self.current_function,
+				self.file_path, 
+				self.file_text,
+				token.span,
+				format_args!("Expected {} spaces, but got {} spaces on line {}", indentation * SPACES_PER_INDENT, spaces, token.span.line)
+			))
+		}
+		Ok(token)
+	}
 }
+
+const GOT_WRONG_TOKEN_ERROR: ErrorKind = ErrorKind::PARSER_ERROR.add_component(0x1);
+const OUT_OF_TOKENS_ERROR: ErrorKind = ErrorKind::PARSER_ERROR.add_component(0x2);
+const EXPECTED_SPACE_ERROR: ErrorKind = ErrorKind::PARSER_ERROR.add_component(0x3);

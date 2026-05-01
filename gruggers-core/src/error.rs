@@ -66,7 +66,7 @@ impl SourceSpan {
 /// Remaining bits can be used to add specific codes for specific errors
 ///
 #[repr(align(4))]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ErrorKind([u8;4]);
 const _: () = const {assert!(std::mem::size_of::<ErrorKind>() == 4)};
 
@@ -93,14 +93,21 @@ impl ErrorKind {
 		panic!("");
 	}
 
+	pub const fn matches(&self, other: &Self) -> bool {
+		let mut i = 0;
+		while i < self.0.len() {
+			if self.0[i] == 0 || other.0[i] == 0{
+				return true;
+			} else if self.0[i] != other.0[i] {
+				return false;
+			}
+			i += 1;
+		}
+		return true;
+	}
+
 	pub const fn as_u32(self) -> u32 {
 		u32::from_ne_bytes(self.0)
-	}
-}
-
-impl PartialEq for ErrorKind {
-	fn eq(&self, other: &Self) -> bool {
-		self.0 == other.0
 	}
 }
 
@@ -124,10 +131,8 @@ pub struct grug_error<A> {
 	file_path: NTBytes<'static>,
 	/// Source line that contains the error
 	source_line: NTStrPtr<'static>,
-	/// line number of the error
-	line: usize,
-	/// column number of the error
-	column: usize,
+	/// Location of the error
+	span: SourceSpan,
 	/// Single line error message
 	error_message: NTStrPtr<'static>,
 	/// A string that can be directly printed to the screen
@@ -147,10 +152,10 @@ impl<A> std::fmt::Debug for grug_error<A> {
 		f.debug_struct("Error")
 			.field("errorkind", &self.error_kind)
 			.field("function_name", &self.function_name)
-			.field("file_path", &self.file_path)
+			.field("file_path", &self.file_path().display())
 			.field("source_line", &self.source_line)
-			.field("line", &self.line)
-			.field("column", &self.column)
+			.field("line", &self.span.line)
+			.field("offset", &self.span.offset)
 			.field("error_message", &self.error_message)
 			.finish_non_exhaustive()
 	}
@@ -164,10 +169,8 @@ impl<A> grug_error<A> {
 	pub fn file_path(&self) -> &OsStr {unsafe{OsStr::from_encoded_bytes_unchecked(self.file_path.to_bytes())}}
 	/// The source line that contains the error
 	pub fn source_line(&self) -> &str {self.source_line.to_str()}
-	/// The line number the error occurred at
-	pub fn line(&self) -> usize {self.line}
-	/// The column number the error occurred at
-	pub fn column(&self) -> usize {self.column}
+	/// The location that the error occurred at
+	pub fn span(&self) -> SourceSpan {self.span}
 	/// A single line message that describes the error
 	pub fn error_message(&self) -> &str {self.error_message.to_str()}
 	/// A string that can be directly printed to the screen
@@ -175,9 +178,11 @@ impl<A> grug_error<A> {
 }
 
 impl<A: Allocator> grug_error<A> {
+	#[track_caller]
 	pub fn new_error(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments) -> Self where
 		A: Default,
 	{
+		println!("error location {:?}", std::panic::Location::caller());
 		let alloc = A::default();
 		Self::new_error_in(error_kind, function_name, file_path, source_text, err_span, error_message, alloc)
 	}
@@ -188,13 +193,13 @@ impl<A: Allocator> grug_error<A> {
 		let source_line = err_span.get_source_line(source_text);
 
 		let mut err_string = Vec::new_in(&alloc);
-		if error_kind == ErrorKind::FILE_NAME_ERROR {
+		if error_kind.matches(&ErrorKind::FILE_NAME_ERROR) {
 			write!(err_string, 
 				"Error: {error_message}\n\
 				  {}\0",
 				file_path.display()
 			).expect("writing into a vec should never fail");
-		} else if error_kind == ErrorKind::TOKENIZER_ERROR {
+		} else if error_kind.matches(&ErrorKind::TOKENIZER_ERROR) {
 			write!(err_string, 
 				"  in ({}:{line}:{column})\n\
 				Error: {error_message}\n\
@@ -209,6 +214,8 @@ impl<A: Allocator> grug_error<A> {
 		let source_line = unsafe{Box::leak(NTStr::box_from_str_in(source_line, &alloc)).as_ntstrptr().detach_lifetime()};
 		// SAFETY: We never give out a `'static` pointer to this string from safe code
 		let file_path = unsafe{NTBytes::from_bytes_unchecked(Box::leak(copy_box_nt_bytes_in(file_path.as_encoded_bytes(), &alloc))).detach_lifetime()};
+
+		// let source = unsafe{Box::leak(NTStr::box_from_str_in(source_text, &alloc)).as_ntstrptr().detach_lifetime()};
 
 
 		// SAFETY: err_string only contains utf8 strings, and is null terminated
@@ -236,8 +243,7 @@ impl<A: Allocator> grug_error<A> {
 			function_name,
 			file_path,
 			source_line,
-			line,
-			column,
+			span: err_span,
 			error_message,
 			error_string,
 			allocator: Box::new(alloc),

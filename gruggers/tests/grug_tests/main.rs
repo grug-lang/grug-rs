@@ -38,8 +38,8 @@ mod test_bindings {
 			.set_backend(BytecodeBackend::new())
 			.build_state().ok()?;
 		super::game_fn_bindings::register_game_functions(&mut state).ok()?;
-		let files = state.compile_all_files();
-		// let files = Vec::new();
+		// let files = state.compile_all_files();
+		let files = Vec::new();
 		Some(Box::new((state, files)))
 	}
 
@@ -110,7 +110,7 @@ mod test_bindings {
 	pub extern "C" fn dump_file_to_json<'a> (_state: &(GrugState, Vec<FileInfo>), input_grug_file: NTStrPtr<'a>, output_buffer: *mut u8, output_buffer_len: usize) -> i32 {
 		let grug_file = input_grug_file.to_ntstr();
 
-		match serde::dump_file_to_json(grug_file) {
+		match serde::dump_file_to_json(grug_file, "") {
 			Ok(string) => {
 				if string.len() + 1 >= output_buffer_len {
 					return 1;

@@ -2,12 +2,14 @@ use crate::error::GrugError;
 use crate::frontend::*;
 use crate::arena::Arena;
 
-pub fn dump_file_to_json (grug_text: &str) -> Result<String, GrugError> {
+use std::ffi::OsStr;
+
+pub fn dump_file_to_json (grug_text: &str, file_path: impl AsRef<OsStr>) -> Result<String, GrugError> {
 	let arena = Arena::new();
 
 	let tokens = tokenizer::tokenize(grug_text, &arena, "")?;
 
-	let ast = parser::parse(&tokens, &arena)?;
+	let ast = parser::parse(&tokens, &arena, grug_text, file_path.as_ref())?;
 	
 	Ok(ast_to_json(&ast.global_statements))
 }

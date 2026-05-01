@@ -46,7 +46,7 @@ impl GrugState {
 		let id = (|| {
 			let tokens = tokenizer::tokenize(file_text, &arena, path)?;
 
-			let mut ast = parser::parse(&tokens, &arena)?;
+			let mut ast = parser::parse(&tokens, &arena, file_text, path)?;
 
 			let entity = self.mod_api.entities().get(entity_type).ok_or_else(|| TypePropogatorError::EntityDoesNotExist{
 				entity_name: Arc::from(entity_type),
