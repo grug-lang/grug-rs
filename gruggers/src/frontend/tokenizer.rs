@@ -5,7 +5,7 @@ use gruggers_core::error::{ErrorKind, grug_error, SourceSpan};
 
 use std::ffi::OsStr;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Token<'a> {
 	pub(super) ty: TokenType,
 	pub(super) value: &'a str,
