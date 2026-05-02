@@ -11,7 +11,8 @@ pub fn dump_file_to_json (grug_text: &str, file_path: impl AsRef<OsStr>) -> Resu
 
 	let ast = parser::parse(&tokens, &arena, grug_text, file_path.as_ref())?;
 	
-	Ok(ast_to_json(&ast.global_statements))
+	let json = json::stringify_pretty(ast_to_json(&ast.global_statements), 4);
+	Ok(json)
 }
 
 pub fn generate_file_from_json (input_json: &str) -> Result<String, GrugError> {
@@ -23,9 +24,8 @@ mod ser {
 	use crate::ast::*;
 	use crate::frontend::GlobalStatement;
 	use json::{JsonValue, object};
-	pub(super) fn ast_to_json(ast: &[GlobalStatement<'_>]) -> String {
-		// let mut json_ast = Vec::new();
-		let ast = ast.iter().map(|statement| match statement {
+	pub(super) fn ast_to_json(ast: &[GlobalStatement<'_>]) -> JsonValue {
+		ast.iter().map(|statement| match statement {
 			GlobalStatement::Variable(MemberVariable{
 				name,
 				ty,
@@ -33,38 +33,29 @@ mod ser {
 				span: _
 			}) => {
 				object! {
-					"kind": "global_variable",
+					"type": "GLOBAL_VARIABLE",
 					"name": name.to_str(), 
-					"type": serialize_type(ty),
-					"assignment_expr": serialize_expr(assignment_expr),
+					"variable_type": serialize_type(ty),
+					"assignment": serialize_expr(assignment_expr),
 				}
 			},
+			// TODO: "parameters should always be present"
 			GlobalStatement::OnFunction(OnFunction{
 				name,
 				parameters,
 				body_statements,
 				span: _
 			}) => {
-				object! {
-					"kind": "on_function",
+				let mut object = object! {
+					"type": "GLOBAL_ON_FN",
 					"name": name.to_str(),
-					"parameters": parameters.iter().map(serialize_parameter).collect::<Vec<_>>(),
-					"body_statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
+					"statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
+				};
+				if !parameters.is_empty() {
+					// TODO: rename this to "parameters"
+					object["arguments"] = parameters.iter().map(serialize_parameter).collect::<Vec<_>>().into();
 				}
-			},
-			GlobalStatement::HelperFunction(HelperFunction{
-				name,
-				parameters,
-				body_statements,
-				return_type: GrugType::Void,
-				span: _
-			}) => {
-				object! {
-					"kind": "helper_function",
-					"name": name.to_str(),
-					"parameters": parameters.iter().map(serialize_parameter).collect::<Vec<_>>(),
-					"body_statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
-				}
+				object
 			},
 			GlobalStatement::HelperFunction(HelperFunction{
 				name,
@@ -73,29 +64,35 @@ mod ser {
 				return_type,
 				span: _
 			}) => {
-				object! {
-					"kind": "helper_function",
+				let mut object = object! {
+					"type": "GLOBAL_HELPER_FN",
 					"name": name.to_str(),
-					"parameters": parameters.iter().map(serialize_parameter).collect::<Vec<_>>(),
-					"body_statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
-					"return_type": serialize_type(return_type),
+					"statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
+				};
+				if !parameters.is_empty() {
+					// TODO: rename this to "parameters"
+					object["arguments"] = parameters.iter().map(serialize_parameter).collect::<Vec<_>>().into();
 				}
+				if *return_type != GrugType::Void {
+					// TODO: rename this to "parameters"
+					object["return_type"] = serialize_type(return_type);
+				}
+				object
 			},
 			GlobalStatement::Comment{
 				value,
 			} => {
 				object! {
-					"kind": "comment",
-					"value": value.to_str(),
+					"type": "GLOBAL_COMMENT",
+					"comment": value.to_str(),
 				}
 			},
 			GlobalStatement::EmptyLine => {
 				object! {
-					"kind": "empty_line",
+					"type": "GLOBAL_EMPTY_LINE",
 				}
 			},
-		}).collect::<Vec<_>>();
-		json::stringify_pretty(ast, 4)
+		}).collect::<Vec<_>>().into()
 	}
 
 	fn serialize_type(ty: &GrugType) -> JsonValue {
@@ -122,40 +119,37 @@ mod ser {
 	fn serialize_expr(expr: &Expr) -> JsonValue {
 		match &expr.data {
 			ExprData::True => object! {
-				"type": "boolean",
-				"value": "true",
+				"type": "TRUE_EXPR",
 			},
 			ExprData::False => object! {
-				"type": "boolean",
-				"value": "false",
+				"type": "FALSE_EXPR",
 			},
 			ExprData::String(value) => object! { 
-				"type": "string",
-				"value": value.to_str(),
+				"type": "STRING_EXPR",
+				"str": value.to_str(),
 			},
 			ExprData::Resource(value) => object! { 
-				"type": "resource",
-				"value": value.to_str(),
+				"type": "RESOURCE_EXPR",
+				"str": value.to_str(),
 			},
 			ExprData::Entity(value) => object! { 
-				"type": "entity",
-				"value": value.to_str(),
+				"type": "ENTITY_EXPR",
+				"str": value.to_str(),
 			},
 			ExprData::Identifier(name) => object! { 
-				"type": "identifier",
-				"value": name.to_str(),
+				"type": "IDENTIFIER_EXPR",
+				"str": name.to_str(),
 			},
-			ExprData::Number (value, string) => object! { 
-				"type": "number",
-				"value": *value,
-				"string": string.to_str(),
+			ExprData::Number (_, string) => object! { 
+				"type": "NUMBER_EXPR",
+				"value": string.to_str(),
 			},
 			ExprData::Unary{
 				op,
 				expr,
 				op_span: _,
 			} => object! {
-				"type": "unary",
+				"type": "UNARY_EXPR",
 				"operator": serialize_unary_operator(op),
 				"expr": serialize_expr(expr),
 			},
@@ -164,24 +158,36 @@ mod ser {
 				right,
 				op,
 				op_span: _,
-			} => object! {
-				"type": "binary",
-				"operator": serialize_binary_operator(op),
-				"left": serialize_expr(left),
-				"right": serialize_expr(right),
-			},
+			} => {
+				let ty = if matches!(op, BinaryOperator::Or | BinaryOperator::And) {
+					"LOGICAL_EXPR"
+				} else {
+					"BINARY_EXPR"
+				};
+				object! {
+					"type": ty,
+					"operator": serialize_binary_operator(op),
+					"left_expr": serialize_expr(left),
+					"right_expr": serialize_expr(right),
+				}
+			}
 			ExprData::Call{
 				name,
 				args,
 				ptr: _, 
 				name_span: _,
-			} => object! {
-				"type": "call",
-				"function_name": name.to_str(),
-				"arguments": args.iter().map(serialize_expr).collect::<Vec<_>>(),
-			},
+			} => {
+				let mut object = object! {
+					"type": "CALL_EXPR",
+					"name": name.to_str(),
+				};
+				if !args.is_empty() {
+					object["arguments"] = args.iter().map(serialize_expr).collect::<Vec<_>>().into();
+				}
+				object
+			}
 			ExprData::Parenthesized(expr) => object! {
-				"type": "parenthesized",
+				"type": "PARENTHESIZED_EXPR",
 				"expr": serialize_expr(expr),
 			},
 		}
@@ -189,26 +195,26 @@ mod ser {
 
 	fn serialize_unary_operator(operator: &UnaryOperator) -> JsonValue {
 		match operator {
-			UnaryOperator::Not => "not ".into(),
-			UnaryOperator::Minus => "-".into(),
+			UnaryOperator::Not => "NOT_TOKEN".into(),
+			UnaryOperator::Minus => "MINUS_TOKEN".into(),
 		}
 	}
 
 	fn serialize_binary_operator(operator: &BinaryOperator) -> JsonValue {
 		match operator {
-			BinaryOperator::Or => "or".into(),
-			BinaryOperator::And => "and".into(),
-			BinaryOperator::DoubleEquals => "==".into(),
-			BinaryOperator::NotEquals => "!=".into(),
-			BinaryOperator::Greater => ">".into(),
-			BinaryOperator::GreaterEquals => ">=".into(),
-			BinaryOperator::Less => "<".into(),
-			BinaryOperator::LessEquals => "<=".into(),
-			BinaryOperator::Plus => "+".into(),
-			BinaryOperator::Minus => "-".into(),
-			BinaryOperator::Multiply => "*".into(),
-			BinaryOperator::Division => "/".into(),
-			BinaryOperator::Remainder => "%".into(),
+			BinaryOperator::Or => "OR_TOKEN".into(),
+			BinaryOperator::And => "AND_TOKEN".into(),
+			BinaryOperator::DoubleEquals => "EQUALS_TOKEN".into(),
+			BinaryOperator::NotEquals => "NOT_EQUALS_TOKEN".into(),
+			BinaryOperator::Greater => "GREATER_TOKEN".into(),
+			BinaryOperator::GreaterEquals => "GREATER_OR_EQUAL_TOKEN".into(),
+			BinaryOperator::Less => "LESS_TOKEN".into(),
+			BinaryOperator::LessEquals => "LESS_OR_EQUAL_TOKEN".into(),
+			BinaryOperator::Plus => "PLUS_TOKEN".into(),
+			BinaryOperator::Minus => "MINUS_TOKEN".into(),
+			BinaryOperator::Multiply => "MULTIPLICATION_TOKEN".into(),
+			BinaryOperator::Division => "DIVISION_TOKEN".into(),
+			BinaryOperator::Remainder => "REMAINDER_TOKEN".into(),
 		}
 	}
 
@@ -223,77 +229,77 @@ mod ser {
 		match statement {
 			Statement::Variable{
 				name,
-				ty: Some(ty),
+				ty,
 				assignment_expr,
 				name_span: _,
-			} => object! {
-				"kind": "variable",
-				"name": name.to_str(),
-				"type": serialize_type(ty),
-				"assignment_expr": serialize_expr(assignment_expr),
-			},
-			Statement::Variable{
-				name,
-				ty: None,
-				assignment_expr,
-				name_span: _,
-			} => object! {
-				"name": name.to_str(),
-				"kind": "variable",
-				"assignment_expr": serialize_expr(assignment_expr),
-			},
-			Statement::Call(expr) => object! {
-				"kind": "call",
-				"expr": serialize_expr(expr),
-			},
+			} => {
+				let mut object = object! {
+					"type": "VARIABLE_STATEMENT",
+					"name": name.to_str(),
+					"assignment": serialize_expr(assignment_expr),
+				};
+				if let Some(ty) = ty {
+					object["variable_type"] = serialize_type(ty);
+				}
+				object
+			}
+			Statement::Call(expr) => {
+				let expr = serialize_expr(expr);
+				let name = expr["name"].as_str().expect("name is always a string");
+				
+				let mut object = object! {
+					"type": "CALL_STATEMENT",
+					"name": name,
+				};
+				if let JsonValue::Array(arguments) = &expr["arguments"] {
+					object["arguments"] = JsonValue::from(&**arguments);
+				}
+				object
+			}
 			Statement::If{
 				condition,
 				is_chained: _,
 				if_block,
 				else_block,
-			} if else_block.is_empty() => object! {
-				"kind": "if",
-				"cond": serialize_expr(condition),
-				"if_block": if_block.iter().map(serialize_statement).collect::<Vec<_>>(),
-			},
-			Statement::If{
-				condition,
-				is_chained,
-				if_block,
-				else_block,
-			} => object! {
-				"kind": "if",
-				"cond": serialize_expr(condition),
-				"if_block": if_block.iter().map(serialize_statement).collect::<Vec<_>>(),
-				"is_chained": *is_chained,
-				"else_block": else_block.iter().map(serialize_statement).collect::<Vec<_>>(),
-			},
+			} => {
+				let mut object = object! {
+					"type": "IF_STATEMENT",
+					"condition": serialize_expr(condition),
+				};
+				if !if_block.is_empty() {
+					object["if_statements"] = if_block.iter().map(serialize_statement).collect::<Vec<_>>().into();
+				}
+				if !else_block.is_empty() {
+					object["else_statements"] = else_block.iter().map(serialize_statement).collect::<Vec<_>>().into();
+				}
+				object
+			}
 			Statement::Return{
 				expr: None,
 			} => object! {
-				"kind": "return",
+				"type": "RETURN_STATEMENT",
 			},
 			Statement::Return{
 				expr: Some(expr),
 			} => object! {
-				"kind": "return",
+				"type": "RETURN_STATEMENT",
 				"expr": serialize_expr(expr),
 			},
 			Statement::While{
 				condition,
 				block,
 			} => object! {
-				"kind": "while",
-				"cond": serialize_expr(condition),
+				"type": "WHILE_STATEMENT",
+				"condition": serialize_expr(condition),
 				"statements": block.iter().map(serialize_statement).collect::<Vec<_>>(),
 			},
 			Statement::Comment(value) => object! {
-				"kind": "comment",
-				"value": value.to_str(),
+				"type": "COMMENT_STATEMENT",
+				"comment": value.to_str(),
 			},
-			Statement::Break => object!{"kind": "break"},
-			Statement::Continue => object!{"kind": "continue"},
-			Statement::EmptyLine => object!{"kind": "empty_line"},
+			Statement::Break => object!{"type": "BREAK_STATEMENT"},
+			Statement::Continue => object!{"type": "CONTINUE_STATEMENT"},
+			Statement::EmptyLine => object!{"type": "EMPTY_LINE_STATEMENT"},
 		}
 	}
 }
@@ -334,11 +340,11 @@ mod de {
 		LocalVariableNameNotString,
 		LocalVariableTypeNotString,
 		ElseBlockNotArray,
-		IfStatementMissingIsChained,
-		IsChainedNotBool,
 		CommentValueNotString,
 		HelperFunctionNameNotString,
 		HelperFunctionReturnTypeNotString,
+		InvalidGlobalStatementType,
+		UnrecognizedOperator,
 	}
 
 	pub fn json_to_text(input: &JsonValue) -> Result<String, JsonDeserializeError> {
@@ -356,76 +362,79 @@ mod de {
 
 	fn apply_global_statement(input: &JsonValue, indentation: usize, output: &mut String) -> Result<(), JsonDeserializeError> {
 		if let JsonValue::Object(global_statement) = input {
-			let Some(kind) = get_object_field(global_statement, "kind", "global_statement")?.as_str() else {
+			let Some(kind) = get_object_field(global_statement, "type", "global_statement")?.as_str() else {
 				return Err(JsonDeserializeError::GlobalStatementKindNotString)
 			};
 			match kind {
-				"global_variable" => {
-					let Some(name) = get_object_field(global_statement, "name", "global_variable")?.as_str() else {
+				"GLOBAL_VARIABLE" => {
+					let Some(name) = get_object_field(global_statement, "name", "GLOBAL_VARIABLE")?.as_str() else {
 						return Err(JsonDeserializeError::GlobalVariableNameNotString)
 					};
 
 					output.push_str(name);
 					output.push_str(": ");
 
-					let Some(ty) = get_object_field(global_statement, "type", "global_variable")?.as_str() else {
+					let Some(ty) = get_object_field(global_statement, "variable_type", "GLOBAL_VARIABLE")?.as_str() else {
 						return Err(JsonDeserializeError::GlobalVariableTypeNotString)
 					};
 
 					output.push_str(ty);
 					output.push_str(" = ");
 
-					let assignment_expr = get_object_field(global_statement, "assignment_expr", "global_variable")?;
+					let assignment_expr = get_object_field(global_statement, "assignment", "GLOBAL_VARIABLE")?;
 					apply_expr(assignment_expr, output)?;
 					Ok(())
 				}
-				"on_function" => {
-					let Some(name) = get_object_field(global_statement, "name", "global_on_function")?.as_str() else {
+				"GLOBAL_ON_FN" => {
+					let Some(name) = get_object_field(global_statement, "name", "GLOBAL_ON_FN")?.as_str() else {
 						return Err(JsonDeserializeError::OnFunctionNameNotString)
 					};
 					output.push_str(name);
 					output.push_str("(");
-					let parameters = get_object_field(global_statement, "parameters", "global_on_function")?;
-					let body_statements = get_object_field(global_statement, "body_statements", "global_on_function")?;
-					apply_parameters(parameters, output)?;
+					if let Ok(parameters) = get_object_field(global_statement, "arguments", "GLOBAL_ON_FN") {
+						apply_parameters(parameters, output)?;
+					}
 					output.push_str(") ");
+
+					let body_statements = get_object_field(global_statement, "statements", "GLOBAL_ON_FN")?;
 					apply_statements(body_statements, indentation + 1, output)?;
 					Ok(())
 				}
-				"helper_function" => {
-					let Some(name) = get_object_field(global_statement, "name", "global_helper")?.as_str() else {
+				"GLOBAL_HELPER_FN" => {
+					let Some(name) = get_object_field(global_statement, "name", "GLOBAL_HELPER_FN")?.as_str() else {
 						return Err(JsonDeserializeError::HelperFunctionNameNotString)
 					};
 					output.push_str(name);
 					output.push_str("(");
-					let parameters = get_object_field(global_statement, "parameters", "global_helper")?;
-					let body_statements = get_object_field(global_statement, "body_statements", "global_helper")?;
-					apply_parameters(parameters, output)?;
+					if let Ok(parameters) = get_object_field(global_statement, "arguments", "GLOBAL_HELPER_FN") {
+						apply_parameters(parameters, output)?;
+					}
 					output.push_str(") ");
 
-					if let Ok(ty) = get_object_field(global_statement, "return_type", "global_helper_function") {
+					if let Ok(ty) = get_object_field(global_statement, "return_type", "GLOBAL_HELPER_FN") {
 						let Some(ty) = ty.as_str() else {
 							return Err(JsonDeserializeError::HelperFunctionReturnTypeNotString);
 						};
 						output.push_str(ty);
 						output.push_str(" ");
 					}
+					let body_statements = get_object_field(global_statement, "statements", "GLOBAL_HELPER_FN")?;
 					
 					apply_statements(body_statements, indentation + 1, output)?;
 					Ok(())
 				}
-				"comment" => {
-					let Some(value) = get_object_field(global_statement, "value", "comment")?.as_str() else {
+				"GLOBAL_COMMENT" => {
+					let Some(value) = get_object_field(global_statement, "comment", "GLOBAL_COMMENT")?.as_str() else {
 						return Err(JsonDeserializeError::CommentValueNotString);
 					};
 					output.push_str("# ");
 					output.push_str(value);
 					Ok(())
 				}
-				"empty_line" => {
+				"GLOBAL_EMPTY_LINE" => {
 					Ok(())
 				}
-				_ => unreachable!(),
+				_ => Err(JsonDeserializeError::InvalidGlobalStatementType)
 			}
 		} else {
 			Err(JsonDeserializeError::GlobalStatementNotObject)
@@ -465,19 +474,19 @@ mod de {
 			let JsonValue::Object(statement) = statement else {
 				return Err(JsonDeserializeError::StatementNotObject);
 			};
-			let Some(kind) = get_object_field(statement, "kind", "statement")?.as_str() else {
+			let Some(kind) = get_object_field(statement, "type", "statement")?.as_str() else {
 				return Err(JsonDeserializeError::StatementKindNotString);
 			};
 			match kind {
-				"variable" => {
+				"VARIABLE_STATEMENT" => {
 					apply_indentation(indentation, output);
-					let Some(name) = get_object_field(statement, "name", "variable")?.as_str() else {
+					let Some(name) = get_object_field(statement, "name", "VARIABLE_STATEMENT")?.as_str() else {
 						return Err(JsonDeserializeError::LocalVariableNameNotString)
 					};
 
 					output.push_str(name);
 
-					if let Ok(ty) = get_object_field(statement, "type", "variable") {
+					if let Ok(ty) = get_object_field(statement, "variable_type", "VARIABLE_STATEMENT") {
 						let Some(ty) = ty.as_str() else {
 							return Err(JsonDeserializeError::LocalVariableTypeNotString);
 						};
@@ -487,82 +496,100 @@ mod de {
 
 					output.push_str(" = ");
 
-					let assignment_expr = get_object_field(statement, "assignment_expr", "variable")?;
+					let assignment_expr = get_object_field(statement, "assignment", "variable")?;
 					apply_expr(assignment_expr, output)?;
 				}
-				"call" => {
+				"CALL_STATEMENT" => {
 					apply_indentation(indentation, output);
-					let call = get_object_field(statement, "expr", "call_statement")?;
-					apply_expr(call, output)?;
+					let Some(name) = get_object_field(statement, "name", "CALL_STATEMENT")?.as_str() else {
+						return Err(JsonDeserializeError::CallExpressionFunctionNameNotString);
+					};
+					output.push_str(name);
+					output.push_str("(");
+
+					if let Ok(arguments) = get_object_field(statement, "arguments", "CALL_STATEMENT") {
+						let JsonValue::Array(arguments) = arguments else {
+							return Err(JsonDeserializeError::CallExpressionArgumentsNotArray);
+						};
+						for (i, argument) in arguments.iter().enumerate() {
+							apply_expr(argument, output)?;
+							
+							if i < arguments.len() - 1 {
+								output.push_str(", ")
+							}
+						}
+					}
+					output.push_str(")");
 				}
-				"if" => {
+				"IF_STATEMENT" => {
 					apply_indentation(indentation, output);
 					let mut statement = statement;
-					loop {
+					'outer: loop {
 						output.push_str("if ");
-						apply_expr(get_object_field(statement, "cond", "if")?, output)?;
+						apply_expr(get_object_field(statement, "condition", "IF_STATEMENT")?, output)?;
 						output.push_str(" ");
-						apply_statements(get_object_field(statement, "if_block", "if")?, indentation + 1, output)?;
 
-						if let Ok(else_block) = get_object_field(statement, "else_block", "if") {
-							let value@JsonValue::Array(else_block) = else_block else {
+						if let Ok(if_statements) = get_object_field(statement, "if_statements", "IF_STATEMENT") {
+							apply_statements(if_statements, indentation + 1, output)?;
+						} else {
+							apply_statements(&JsonValue::Array(vec![]), indentation + 1, output)?;
+						}
+						if let Ok(else_block) = get_object_field(statement, "else_statements", "IF_STATEMENT") {
+							output.push_str(" else ");
+							let else_block_array@JsonValue::Array(else_block) = else_block else {
 								return Err(JsonDeserializeError::ElseBlockNotArray);
 							};
-							let Ok(is_chained) = get_object_field(statement, "is_chained", "if") else {
-								return Err(JsonDeserializeError::IfStatementMissingIsChained);
-							};
-							let JsonValue::Boolean(is_chained) = is_chained else {
-								return Err(JsonDeserializeError::IsChainedNotBool);
-							};
-							if *is_chained {
-								output.push_str(" else ");
-								assert!(else_block.len() == 1);
-								let JsonValue::Object(if_statement) = &value[0] else {
-									return Err(JsonDeserializeError::StatementNotObject);
-								};
-								statement = if_statement;
-								continue;
-							} else if !else_block.is_empty() {
-								output.push_str(" else ");
-								apply_statements(value, indentation + 1, output)?;
-								break;
+							// TODO: Fix this upstream in grug_tests
+							// single if statement in else block means chained if blocks
+							'chained: {
+								if let &[JsonValue::Object(ref first_statement)] = else_block.as_slice() {
+									let Some(kind) = get_object_field(first_statement, "type", "statement")?.as_str() else {
+										return Err(JsonDeserializeError::StatementKindNotString);
+									};
+									if kind != "IF_STATEMENT" {
+										break 'chained;
+									}
+									statement = &first_statement;
+									continue 'outer;
+								} 
 							}
+							apply_statements(else_block_array, indentation + 1, output)?;
 						}
 						break;
 					}
 				}
-				"while" => {
+				"WHILE_STATEMENT" => {
 					apply_indentation(indentation, output);
 					output.push_str("while ");
-					apply_expr(get_object_field(statement, "cond", "while")?, output)?;
+					apply_expr(get_object_field(statement, "condition", "WHILE_STATEMENT")?, output)?;
 					output.push_str(" ");
-					apply_statements(get_object_field(statement, "statements", "while")?, indentation + 1, output)?;
+					apply_statements(get_object_field(statement, "statements", "WHILE_STATEMENT")?, indentation + 1, output)?;
 				}
-				"break" => {
+				"BREAK_STATEMENT" => {
 					apply_indentation(indentation, output);
 					output.push_str("break");
 				}
-				"continue" => {
+				"CONTINUE_STATEMENT" => {
 					apply_indentation(indentation, output);
 					output.push_str("continue");
 				}
-				"comment" => {
+				"COMMENT_STATEMENT" => {
 					apply_indentation(indentation, output);
-					let Some(value) = get_object_field(statement, "value", "comment")?.as_str() else {
+					let Some(value) = get_object_field(statement, "comment", "COMMENT_STATEMENT")?.as_str() else {
 						return Err(JsonDeserializeError::CommentValueNotString);
 					};
 					output.push_str("# ");
 					output.push_str(value);
 				}
-				"return" => {
+				"RETURN_STATEMENT" => {
 					apply_indentation(indentation, output);
 					output.push_str("return");
-					if let Ok(expr) = get_object_field(statement, "expr", "return") {
+					if let Ok(expr) = get_object_field(statement, "expr", "RETURN_STATEMENT") {
 						output.push_str(" ");
 						apply_expr(expr, output)?;
 					}
 				}
-				"empty_line" => (),
+				"EMPTY_LINE_STATEMENT" => (),
 				value => unreachable!("{}", value),
 			}
 			output.push_str("\n");
@@ -586,8 +613,8 @@ mod de {
 			return Err(JsonDeserializeError::ExpressionKindNotString);
 		};
 		match ty {
-			"string" => {
-				let Some(value) = get_object_field(input, "value", "literal_expression")?.as_str() else {
+			"STRING_EXPR" => {
+				let Some(value) = get_object_field(input, "str", "LITERAL_EXPRESSION")?.as_str() else {
 					return Err(JsonDeserializeError::LiteralExpressionValueNotString);
 				};
 				output.push_str("\"");
@@ -595,8 +622,8 @@ mod de {
 				output.push_str("\"");
 				Ok(())
 			}
-			"entity" => {
-				let Some(value) = get_object_field(input, "value", "literal_expression")?.as_str() else {
+			"ENTITY_EXPR" => {
+				let Some(value) = get_object_field(input, "str", "LITERAL_EXPRESSION")?.as_str() else {
 					return Err(JsonDeserializeError::LiteralExpressionValueNotString);
 				};
 				output.push_str("e\"");
@@ -604,8 +631,8 @@ mod de {
 				output.push_str("\"");
 				Ok(())
 			}
-			"resource" => {
-				let Some(value) = get_object_field(input, "value", "literal_expression")?.as_str() else {
+			"RESOURCE_EXPR" => {
+				let Some(value) = get_object_field(input, "str", "LITERAL_EXPRESSION")?.as_str() else {
 					return Err(JsonDeserializeError::LiteralExpressionValueNotString);
 				};
 				output.push_str("r\"");
@@ -613,62 +640,71 @@ mod de {
 				output.push_str("\"");
 				Ok(())
 			}
-			"boolean" | "identifier" => {
-				let Some(value) = get_object_field(input, "value", "literal_expression")?.as_str() else {
+			"TRUE_EXPR" => {
+				output.push_str("true"); 
+				Ok(())
+			}
+			"FALSE_EXPR" => {
+				output.push_str("false"); 
+				Ok(())
+			}
+			"IDENTIFIER_EXPR" => {
+				let Some(value) = get_object_field(input, "str", "IDENTIFIER_EXPR")?.as_str() else {
 					return Err(JsonDeserializeError::LiteralExpressionValueNotString);
 				};
 				output.push_str(value);
 				Ok(())
 			}
-			"number" => {
-				let Some(string) = get_object_field(input, "string", "literal_expression")?.as_str() else {
+			"NUMBER_EXPR" => {
+				let Some(string) = get_object_field(input, "value", "LITERAL_EXPRESSION")?.as_str() else {
 					return Err(JsonDeserializeError::LiteralExpressionStringNotString);
 				};
-				use std::fmt::Write;
-				write!(output, "{}", string).unwrap();
+				output.push_str(string);
 				Ok(())
 			}
-			"unary" => {
-				let Some(op) = get_object_field(input, "operator", "unary_expression")?.as_str() else {
+			"UNARY_EXPR" => {
+				let Some(op) = get_object_field(input, "operator", "UNARY_EXPR")?.as_str() else {
 					return Err(JsonDeserializeError::UnaryExpressionOperatorNotString);
 				};
-				output.push_str(op);
-				let expr = get_object_field(input, "expr", "unary_expression")?;
-				apply_expr(expr, output)
+				apply_operator(op, output)?;
+				apply_expr(get_object_field(input, "expr", "UNARY_EXPR")?, output)
 			}
-			"binary" => {
-				let Some(op) = get_object_field(input, "operator", "binary_expression")?.as_str() else {
+			"BINARY_EXPR" | "LOGICAL_EXPR" => {
+				let Some(op) = get_object_field(input, "operator", "BINARY_EXPR")?.as_str() else {
 					return Err(JsonDeserializeError::BinaryExpressionOperatorNotString);
 				};
-				let left = get_object_field(input, "left", "binary_expression")?;
-				let right = get_object_field(input, "right", "binary_expression")?;
+				let left = get_object_field(input, "left_expr", "BINARY_EXPR")?;
+				let right = get_object_field(input, "right_expr", "BINARY_EXPR")?;
 				apply_expr(left, output)?;
 				output.push_str(" ");
-				output.push_str(op);
+				apply_operator(op, output)?;
 				output.push_str(" ");
 				apply_expr(right, output)
 			}
-			"call" => {
-				let Some(function_name) = get_object_field(input, "function_name", "call_expression")?.as_str() else {
+			"CALL_EXPR" => {
+				let Some(name) = get_object_field(input, "name", "CALL_EXPR")?.as_str() else {
 					return Err(JsonDeserializeError::CallExpressionFunctionNameNotString);
 				};
-				let JsonValue::Array(arguments) = get_object_field(input, "arguments", "call_expression")? else {
-					return Err(JsonDeserializeError::CallExpressionArgumentsNotArray);
-				};
-				output.push_str(function_name);
+				
+				output.push_str(name);
 				output.push_str("(");
-				for (i, argument) in arguments.iter().enumerate() {
-					apply_expr(argument, output)?;
-					
-					if i < arguments.len() - 1 {
-						output.push_str(", ")
+				if let Ok(arguments) = get_object_field(input, "arguments", "CALL_EXPR") {
+					let JsonValue::Array(arguments) = arguments else {
+						return Err(JsonDeserializeError::CallExpressionArgumentsNotArray);
+					};
+					for (i, argument) in arguments.iter().enumerate() {
+						apply_expr(argument, output)?;
+						
+						if i < arguments.len() - 1 {
+							output.push_str(", ")
+						}
 					}
 				}
 				output.push_str(")");
 				Ok(())
 			}
-			"parenthesized" => {
-				let expr = get_object_field(input, "expr", "parenthesized_expression")?;
+			"PARENTHESIZED_EXPR" => {
+				let expr = get_object_field(input, "expr", "PARENTHESIZED_EXPR")?;
 				output.push_str("(");
 				apply_expr(expr, output)?;
 				output.push_str(")");
@@ -676,6 +712,27 @@ mod de {
 			}
 			_ => Err(JsonDeserializeError::UnexpectedExpressionKind),
 		}
+	}
+
+	fn apply_operator(input: &str, output: &mut String) -> Result<(), JsonDeserializeError> {
+		let string = match input {
+			"NOT_TOKEN" => "not ",
+			"AND_TOKEN" => "and",
+			"OR_TOKEN" => "or",
+			"PLUS_TOKEN" => "+",
+			"MINUS_TOKEN" => "-",
+			"MULTIPLICATION_TOKEN" => "*",
+			"DIVISION_TOKEN" => "/",
+			"EQUALS_TOKEN" => "==",
+			"NOT_EQUALS_TOKEN" => "!=",
+			"GREATER_OR_EQUAL_TOKEN" => ">=",
+			"GREATER_TOKEN" => ">",
+			"LESS_OR_EQUAL_TOKEN" => "<=",
+			"LESS_TOKEN" => "<",
+			_ => Err(JsonDeserializeError::UnrecognizedOperator)?,
+		};
+		output.push_str(string);
+		Ok(())
 	}
 
 	fn get_object_field<'a>(input: &'a Object, field: &'static str, parent_context: &str) -> Result<&'a JsonValue, JsonDeserializeError> {
