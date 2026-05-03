@@ -8,7 +8,7 @@ use super::GlobalStatement;
 use crate::ntstring::NTStr;
 use crate::arena::Arena;
 
-use gruggers_core::error::{grug_error, ErrorKind, SourceSpan};
+use gruggers_core::error::{GrugError, ErrorKind, SourceSpan};
 
 use std::ffi::OsStr;
 
@@ -18,7 +18,7 @@ use allocator_api2::boxed::Box;
 #[allow(unused)]
 #[derive(Debug)]
 pub enum ParserError<'a> {
-	GrugError(grug_error<Arena>),
+	GrugError(GrugError<Arena>),
 	// grug_error("Unexpected token '%s' on line %zu", token.str, get_token_line_number(i));
 	UnexpectedToken {
 		token: Token<'a>,
@@ -48,13 +48,13 @@ pub enum ParserError<'a> {
 }
 
 impl<'a> ParserError<'a> {
-	fn into_grug_error(self, ast: &AST) -> grug_error<Arena> {
+	fn into_grug_error(self, ast: &AST) -> GrugError<Arena> {
 		match self {
 			Self::GrugError(err) => err,
 			// grug_error("Unexpected token '%s' on line %zu", token.str, get_token_line_number(i));
 			Self::UnexpectedToken {
 				token,
-			} => grug_error::new_error(
+			} => GrugError::new_error(
 				ErrorKind::PARSER_ERROR,
 				ast.current_function,
 				ast.file_path,
@@ -65,7 +65,7 @@ impl<'a> ParserError<'a> {
 			Self::GotWrongToken {
 				expected: _,
 				got: Token{ty: TokenType::OpenParenthesis, span, ..},
-			} => grug_error::new_error(
+			} => GrugError::new_error(
 				ErrorKind::PARSER_ERROR,
 				ast.current_function,
 				ast.file_path,
@@ -76,7 +76,7 @@ impl<'a> ParserError<'a> {
 			Self::GotWrongToken {
 				expected,
 				got,
-			} => grug_error::new_error(
+			} => GrugError::new_error(
 				ErrorKind::PARSER_ERROR,
 				ast.current_function,
 				ast.file_path,
@@ -86,7 +86,7 @@ impl<'a> ParserError<'a> {
 			),
 			Self::ExpectedSpace {
 				got
-			} => grug_error::new_error(
+			} => GrugError::new_error(
 				ErrorKind::PARSER_ERROR,
 				ast.current_function,
 				ast.file_path,
@@ -96,7 +96,7 @@ impl<'a> ParserError<'a> {
 			),
 			// TODO: This is a bad error message
 			// "token_index 1 was out of bounds in peek_token()"
-			Self::OutOfTokensError => grug_error::new_error(
+			Self::OutOfTokensError => GrugError::new_error(
 				ErrorKind::PARSER_ERROR,
 				ast.current_function,
 				ast.file_path,
@@ -104,7 +104,7 @@ impl<'a> ParserError<'a> {
 				ast.last_token_span,
 				format_args!("token_index 1 was out of bounds in peek_token()"),
 			),
-			Self::ExceededMaxParsingDepth => grug_error::new_error(
+			Self::ExceededMaxParsingDepth => GrugError::new_error(
 				ErrorKind::PARSER_ERROR,
 				ast.current_function,
 				ast.file_path,
@@ -115,7 +115,7 @@ impl<'a> ParserError<'a> {
 			Self::IndentationMismatch{
 				expected_spaces,
 				token,
-			} => grug_error::new_error(
+			} => GrugError::new_error(
 				ErrorKind::PARSER_ERROR,
 				ast.current_function,
 				ast.file_path,
@@ -125,7 +125,7 @@ impl<'a> ParserError<'a> {
 			),
 			Self::ExpectedIndentation{
 				got,
-			} => grug_error::new_error(
+			} => GrugError::new_error(
 				ErrorKind::PARSER_ERROR,
 				ast.current_function,
 				ast.file_path,
@@ -176,8 +176,8 @@ impl<'a> std::fmt::Display for ParserError<'a> {
 	}
 }
 
-impl<'a> From<grug_error<Arena>> for ParserError<'a> {
-	fn from(other: grug_error<Arena>) -> Self {
+impl<'a> From<GrugError<Arena>> for ParserError<'a> {
+	fn from(other: GrugError<Arena>) -> Self {
 		Self::GrugError(other)
 	}
 }
@@ -199,7 +199,7 @@ pub(crate) struct AST<'arena> {
 	pub(crate) on_fn_signatures: Vec<(&'arena str, &'arena [Parameter<'arena>]), &'arena Arena>,
 }
 
-pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a str, file_path: &'a OsStr) -> Result<AST<'a>, grug_error<Arena>> {
+pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a str, file_path: &'a OsStr) -> Result<AST<'a>, GrugError<Arena>> {
 	let final_token = tokens.last().map(|token| token.span).unwrap_or(SourceSpan{offset: 0, line: 0});
 	let mut ast = AST::new_in(final_token, file_text, file_path, arena);
 	let mut seen_helper_fn = false;
@@ -488,7 +488,7 @@ impl<'a> AST<'a> {
 
 	#[inline]
 	fn new_parse_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, ParserError<'static>> {
-		Err(ParserError::GrugError(grug_error::new_error(
+		Err(ParserError::GrugError(GrugError::new_error(
 			ErrorKind::PARSER_ERROR,
 			self.current_function,
 			self.file_path,
@@ -684,7 +684,10 @@ impl<'a> AST<'a> {
 					consume_space(tokens)?;
 					Some(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?)
 				};
-				Ok(Statement::Return{ expr: expr.map(|expr| Box::leak(Box::new_in(expr, arena))) })
+				Ok(Statement::Return{ 
+					return_span: next_tokens[0].span,
+					expr: expr.map(|expr| Box::leak(Box::new_in(expr, arena)))
+				})
 			}
 			TokenType::While => {
 				assert_parsing_depth(parsing_depth)?;
@@ -700,11 +703,11 @@ impl<'a> AST<'a> {
 			}
 			TokenType::Break => {
 				tokens.next();
-				Ok(Statement::Break)
+				Ok(Statement::Break(next_tokens[0].span))
 			}
 			TokenType::Continue => {
 				tokens.next();
-				Ok(Statement::Continue)
+				Ok(Statement::Continue(next_tokens[0].span))
 			}
 			TokenType::NewLine => {
 				tokens.next();
@@ -712,7 +715,10 @@ impl<'a> AST<'a> {
 			}
 			TokenType::Comment => {
 				tokens.next();
-				Ok(Statement::Comment(Box::leak(NTStr::box_from_str_in(next_tokens[0].value, arena)).as_ntstrptr()))
+				Ok(Statement::Comment{
+					comment_span: next_tokens[0].span,
+					value: Box::leak(NTStr::box_from_str_in(next_tokens[0].value, arena)).as_ntstrptr()
+				})
 			}
 			got_token => {
 				return self.new_parse_error(

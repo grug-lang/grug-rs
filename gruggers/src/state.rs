@@ -1,6 +1,6 @@
 use crate::xar::XarHandle;
-use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text, ModApiError};
-use crate::error::GrugError;
+use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
+use crate::error::{GrugError, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, GameFnPtrState, INVALID_GRUG_SCRIPT_ID};
 use crate::xar::Xar;
@@ -168,7 +168,7 @@ impl<'a> GrugInitSettings<'a> {
 		self
 	}
 
-	pub fn build_state(self) -> Result<GrugState, GrugError> {
+	pub fn build_state(self) -> Result<GrugState, GrugError<Arena>> {
 		let mod_api_path = unsafe{Self::maybe_nt_or_length(self.mod_api_path, self.mod_api_path_len)}
 			.unwrap_or("./mod_api.json");
 		let mods_dir_path = unsafe{Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)}
@@ -269,17 +269,17 @@ impl State for GrugState {
 }
 
 impl GrugState {
-	fn new (mod_api_path: impl AsRef<OsStr>, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
+	fn new (mod_api_path: impl AsRef<OsStr>, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError<Arena>> {
 		let mod_api = get_mod_api(mod_api_path.as_ref())?;
 		Self::new_inner(mod_api, mods_dir_path, handler, backend)
 	}
 
-	pub fn new_from_text (mod_api_text: &str, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, GrugError> {
-		let mod_api = get_mod_api_from_text(mod_api_text)?;
+	pub fn new_from_text (mod_api_text: &str, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, GrugError<Arena>> {
+		let mod_api = get_mod_api_from_text("<Mod API Source>", mod_api_text)?;
 		Self::new_inner(mod_api, mods_dir_path, handler, backend.into())
 	}
 
-	fn new_inner (mod_api: ModApi, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError> {
+	fn new_inner (mod_api: ModApi, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError<Arena>> {
 		let mut on_fns = Vec::new();
 		let init_globals = nt!("init_globals");
 		for (entity_type, entity) in mod_api.entities() {
@@ -415,12 +415,17 @@ impl GrugState {
 		Some(string)
 	}
 
-	pub fn all_game_fns_registered(&self) -> Result<(), ModApiError> {
+	pub fn all_game_fns_registered(&self) -> Result<(), GrugError<Arena>> {
 		for game_fn_name in self.mod_api.game_functions().keys() {
 			if !self.game_functions.contains_key(game_fn_name.as_str()) {
-				Err(ModApiError::GameFnNotProvided{
-					game_fn_name: String::from(&**game_fn_name),
-				})?;
+				return Err(GrugError::new_error(
+					ErrorKind::INIT_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("host function '{game_fn_name}' has not been registered"),
+				));
 			}
 		}
 		Ok(())
@@ -632,7 +637,7 @@ pub struct FileInfo {
 	pub mod_name: Box<OsStr>,
 	pub entity_type: Box<str>,
 	pub entity_name: Box<OsStr>,
-	pub result: Result<GrugFileId, GrugError>,
+	pub result: Result<GrugFileId, GrugError<Arena>>,
 }
 
 // Test struct for c api
@@ -645,7 +650,7 @@ pub struct FileInfo2<'a> {
 	pub(crate) entity_type: NTStrPtr<'a>,
 	pub(crate) entity_name: NTBytes<'a>,
 	pub(crate) file_id: GrugFileId,
-	pub(crate) error: MaybeUninit<GrugError>,
+	pub(crate) error: MaybeUninit<GrugError<Arena>>,
 }
 
 impl<'a> FileInfo2<'a> {
@@ -664,7 +669,7 @@ impl<'a> FileInfo2<'a> {
 	pub fn entity_name (&self) -> &OsStr {
 		unsafe{OsStr::from_encoded_bytes_unchecked(self.entity_name.to_bytes())}
 	}
-	pub fn result (&self) -> Result<GrugFileId, &GrugError> {
+	pub fn result (&self) -> Result<GrugFileId, &GrugError<Arena>> {
 		if self.file_id == INVALID_GRUG_SCRIPT_ID {unsafe{Err(self.error.assume_init_ref())}}
 		else {Ok(self.file_id)}
 	}

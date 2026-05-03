@@ -148,13 +148,15 @@ fn copy_statements<'arena>(stmts: &[Statement<'_>], arena: &'arena Arena) -> &'a
 				block: copy_statements(block, arena),
 			},
 			Statement::Return {
+				return_span,
 				expr,
 			} => Statement::Return {
+				return_span: *return_span,
 				expr: expr.as_ref().map(|expr| Box::leak(Box::new_in(copy_expr(expr, arena), arena))),
 			},
-			Statement::Comment(string) => Statement::Comment(copy_string(*string, arena)),
-			Statement::Break => Statement::Break,
-			Statement::Continue => Statement::Continue,
+			Statement::Comment{comment_span, value} => Statement::Comment{comment_span: *comment_span, value: copy_string(*value, arena)},
+			Statement::Break(span) => Statement::Break(*span),
+			Statement::Continue(span) => Statement::Continue(*span),
 			Statement::EmptyLine => Statement::EmptyLine,
 		};
 		vec.push(stmt);
@@ -436,6 +438,7 @@ impl Interpreter {
 					}
 				},
 				Statement::Return{
+					return_span: _,
 					expr,
 				} => {
 					if let Some(expr) = expr {
@@ -465,12 +468,12 @@ impl Interpreter {
 						}
 					}
 				},
-				Statement::Comment(_) => (),
-				Statement::Break => {
+				Statement::Comment{comment_span: _, value: _} => (),
+				Statement::Break(_) => {
 					ret_val = GrugControlFlow::Break;
 					break 'outer;
 				},
-				Statement::Continue => {
+				Statement::Continue(_) => {
 					ret_val = GrugControlFlow::Continue;
 					break 'outer;
 				},

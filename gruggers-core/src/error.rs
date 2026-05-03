@@ -63,22 +63,28 @@ impl SourceSpan {
 ///
 /// Least significant byte is used to encode the top level error kind
 /// (No Error, Initialization Error, Compile error, and runtime error)
-/// Remaining bits can be used to add specific codes for specific errors
+/// Remaining bytes can be used to add specific codes for specific errors
 ///
-#[repr(align(4))]
+/// Each byte is considered a separate field. So to add a sub error kind, set
+/// the next available byte to a non zero value
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ErrorKind([u8;4]);
 const _: () = const {assert!(std::mem::size_of::<ErrorKind>() == 4)};
 
 impl ErrorKind {
-	pub const NONE: Self = Self([0x0, 0, 0, 0]);
-	pub const INIT_ERROR: Self = Self([0x1, 0, 0, 0]);
-	pub const COMPILE_ERROR: Self = Self([0x2, 0, 0, 0]);
-	pub const RUNTIME_ERROR: Self = Self([0x3, 0, 0, 0]);
+	pub const NONE:               Self = Self([0x0, 0, 0, 0]);
+	pub const INIT_ERROR:         Self = Self([0x1, 0, 0, 0]);
+	pub const COMPILE_ERROR:      Self = Self([0x2, 0, 0, 0]);
+	pub const RUNTIME_ERROR:      Self = Self([0x3, 0, 0, 0]);
 
-	pub const FILE_NAME_ERROR: Self = Self::COMPILE_ERROR.add_component(0x1);
-	pub const TOKENIZER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x2);
-	pub const PARSER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x3);
+	pub const MOD_API_ERROR:      Self = Self::INIT_ERROR.add_component(0x1);
+
+	pub const MOD_API_IO_ERROR:   Self = Self::MOD_API_ERROR.add_component(0x1);
+	pub const MOD_API_JSON_ERROR: Self = Self::MOD_API_ERROR.add_component(0x2);
+
+	pub const FILE_NAME_ERROR:    Self = Self::COMPILE_ERROR.add_component(0x1);
+	pub const TOKENIZER_ERROR:    Self = Self::COMPILE_ERROR.add_component(0x2);
+	pub const PARSER_ERROR:       Self = Self::COMPILE_ERROR.add_component(0x3);
 	pub const TYPE_CHECKER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x4);
 
 	pub const fn add_component(mut self, other: u8) -> Self {
@@ -120,7 +126,7 @@ impl Eq for ErrorKind { }
 #[allow(non_camel_case_types)]
 #[allow(dead_code)]
 #[repr(C)]
-pub struct grug_error<A> {
+pub struct GrugError<A> {
 	/// A unique integer identifier for the error that represents the
 	/// kind of error that occurred and which specific error
 	pub error_kind: ErrorKind,
@@ -147,7 +153,7 @@ pub struct grug_error<A> {
 	allocator: Box<A>,
 }
 
-impl<A> std::fmt::Debug for grug_error<A> {
+impl<A> std::fmt::Debug for GrugError<A> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		f.debug_struct("Error")
 			.field("errorkind", &self.error_kind)
@@ -161,7 +167,7 @@ impl<A> std::fmt::Debug for grug_error<A> {
 	}
 }
 
-impl<A> grug_error<A> {
+impl<A> GrugError<A> {
 	/// The name of the function the error occurred in. returns `member scope`
 	/// if the error was not in a function 
 	pub fn function_name(&self) -> &str {self.function_name.to_str()}
@@ -177,7 +183,7 @@ impl<A> grug_error<A> {
 	pub fn error_string(&self) -> &str {self.error_string.to_str()}
 }
 
-impl<A: Allocator> grug_error<A> {
+impl<A: Allocator> GrugError<A> {
 	#[track_caller]
 	pub fn new_error(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments) -> Self where
 		A: Default,
@@ -250,7 +256,7 @@ impl<A: Allocator> grug_error<A> {
 	}
 }
 
-impl<A> std::fmt::Display for grug_error<A> {
+impl<A> std::fmt::Display for GrugError<A> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		// TODO: This should be changed to self.error_string later
 		// TODO: Each different top level error kind should have a different format

@@ -7,7 +7,6 @@ pub mod backend;
 
 pub mod mod_api;
 pub mod serde;
-pub mod error;
 pub mod state;
 
 pub mod capi;
@@ -17,6 +16,7 @@ mod arena;
 mod cachemap;
 mod watcher;
 
+pub use gruggers_core::error;
 pub use gruggers_core::types;
 pub use gruggers_core::ast;
 
@@ -24,15 +24,16 @@ pub use gruggers_core::ntstring;
 pub use gruggers_core::nt;
 
 
-// TODO: Non-utf8 version of NTStrPtr and NTStr
+// TODO: Add #[track_caller] to error functions for tracing
+// TODO: (WIP) ModsDir struct 
+// TODO: Standard Library
 // TODO: (WIP) README and docs for gruggers
 // TODO: (WIP) Debug info to backends
 // TODO: (WIP) Better Error handling
-// TODO: ModsDir struct 
-// TODO: Standard Library
 //
 // TODO: (finished) Resource management
 // TODO: (finished) Hot reloading grug_files
+// TODO: (finished) Non-utf8 version of NTStrPtr and NTStr
 
 // MIT LICENSE
 // 

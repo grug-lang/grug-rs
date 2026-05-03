@@ -590,10 +590,16 @@ pub enum Statement<'a> {
 	/// return result
 	/// ```
 	Return {
+		/// Span of the return keyword
+		return_span: SourceSpan,
+		/// Expression that is returned from the function
 		expr: Option<&'a mut Expr<'a>>,
 	},
 	/// A comment within a function
-	Comment(NTStrPtr<'a>),
+	Comment{
+		comment_span: SourceSpan,
+		value: NTStrPtr<'a>
+	},
 	/// A break statement.
 	///
 	/// ```text
@@ -610,7 +616,9 @@ pub enum Statement<'a> {
 	/// ```
 	///
 	/// This statement can only occur within a while loop
-	Break,
+	///
+	/// The span points at the location of the `break` keyword
+	Break(SourceSpan),
 	/// A continue statement.
 	///
 	/// ```text
@@ -627,7 +635,9 @@ pub enum Statement<'a> {
 	/// ```
 	///
 	/// This statement can only occur within a while loop
-	Continue,
+	///
+	/// The span points at the location of the `continue` keyword
+	Continue(SourceSpan),
 	/// An empty line within a function.
 	/// 
 	/// It is a compile error to have multiple empty lines in a row

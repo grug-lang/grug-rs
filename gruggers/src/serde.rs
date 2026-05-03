@@ -4,7 +4,7 @@ use crate::arena::Arena;
 
 use std::ffi::OsStr;
 
-pub fn dump_file_to_json (grug_text: &str, file_path: impl AsRef<OsStr>) -> Result<String, GrugError> {
+pub fn dump_file_to_json (grug_text: &str, file_path: impl AsRef<OsStr>) -> Result<String, GrugError<Arena>> {
 	let arena = Arena::new();
 
 	let tokens = tokenizer::tokenize(grug_text, &arena, "")?;
@@ -15,7 +15,7 @@ pub fn dump_file_to_json (grug_text: &str, file_path: impl AsRef<OsStr>) -> Resu
 	Ok(json)
 }
 
-pub fn generate_file_from_json (input_json: &str) -> Result<String, GrugError> {
+pub fn generate_file_from_json (input_json: &str) -> Result<String, GrugError<Arena>> {
 	let json_value = json::parse(&input_json).unwrap();
 	Ok(json_to_text(&json_value).unwrap())
 }
@@ -275,11 +275,13 @@ mod ser {
 				object
 			}
 			Statement::Return{
+				return_span: _,
 				expr: None,
 			} => object! {
 				"type": "RETURN_STATEMENT",
 			},
 			Statement::Return{
+				return_span: _,
 				expr: Some(expr),
 			} => object! {
 				"type": "RETURN_STATEMENT",
@@ -293,12 +295,12 @@ mod ser {
 				"condition": serialize_expr(condition),
 				"statements": block.iter().map(serialize_statement).collect::<Vec<_>>(),
 			},
-			Statement::Comment(value) => object! {
+			Statement::Comment{comment_span: _, value} => object! {
 				"type": "COMMENT_STATEMENT",
 				"comment": value.to_str(),
 			},
-			Statement::Break => object!{"type": "BREAK_STATEMENT"},
-			Statement::Continue => object!{"type": "CONTINUE_STATEMENT"},
+			Statement::Break(_) => object!{"type": "BREAK_STATEMENT"},
+			Statement::Continue(_) => object!{"type": "CONTINUE_STATEMENT"},
 			Statement::EmptyLine => object!{"type": "EMPTY_LINE_STATEMENT"},
 		}
 	}

@@ -235,7 +235,7 @@ impl<'a> Compiler<'a> {
 				}
 			}
 			Statement::Call(expr) => self.compile_expr(instructions, expr),
-			Statement::Return{expr} => {
+			Statement::Return{return_span: _, expr} => {
 				if let Some(expr) = expr {
 					self.compile_expr(instructions, expr);
 					instructions.stream.push(Op::ReturnValue);
@@ -243,11 +243,11 @@ impl<'a> Compiler<'a> {
 					instructions.stream.push(Op::ReturnVoid);
 				}
 			}
-			Statement::Break => {
+			Statement::Break(_) => {
 				self.while_loop_patches.last_mut().unwrap().1.push(instructions.get_loc());
 				instructions.stream.push(Op::Jmp{offset: 0});
 			}
-			Statement::Continue => {
+			Statement::Continue(_) => {
 				let continue_loc = self.while_loop_patches.last().unwrap().0;
 				instructions.stream.push(Op::Jmp{offset: Op::calc_offset(instructions.get_loc(), continue_loc)});
 			}

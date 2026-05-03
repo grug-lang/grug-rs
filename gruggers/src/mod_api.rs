@@ -4,7 +4,8 @@ use std::path::Path;
 use crate::ntstring::NTStr;
 use crate::ast::{Parameter, GrugType};
 use crate::arena::Arena;
-use gruggers_core::error::SourceSpan;
+
+use gruggers_core::error::{ErrorKind, GrugError, SourceSpan};
 
 use allocator_api2::boxed::Box;
 use allocator_api2::vec::Vec;
@@ -56,148 +57,99 @@ pub(crate) struct ModApiGameFn<'a> {
 	pub(crate) parameters: &'a [Parameter<'a>],
 }
 
-// TODO: Add Display impl for all variants
-#[derive(Debug)]
-pub enum ModApiError{
-	JsonError(json::Error),
-	IOError(std::io::Error),
-	EntitiesNotObject,
-	OnFunctionsNotArray{
-		entity_name: String,
-	},
-	OnFunctionNotObject{
-		entity_name: String,
-		index: usize,
-	},
-	OnFunctionMissingName{
-		entity_name: String,
-		index: usize,
-	},
-	OnFunctionNameNotString{
-		entity_name: String,
-		index: usize,
-	},
-	OnFunctionDescriptionNotString{
-		entity_name: String,
-		on_function_name: String,
-	},
-	OnFnsArgumentsNotArray{
-		entity_name: String,
-		on_fn_name: String,
-	},
-	OnFnArgumentMissingName{
-		entity_name: String,
-		on_fn_name: String,
-	},
-	OnFnArgumentMissingType{
-		entity_name: String,
-		on_fn_name: String,
-	},
-	OnFnArgumentResource {
-		entity_name: String,
-		on_fn_name: String,
-		param_name: String,
-	},
-	OnFnArgumentEntity {
-		entity_name: String,
-		on_fn_name: String,
-		param_name: String,
-	},
-	GameFnsNotObject,
-	OnFnArgumentVoid {
-		entity_name: String,
-		on_fn_name: String,
-		param_name: String,
-	},
-	GameFnArgumentsNotArray{
-		game_fn_name: String,
-	},
-	GameFnArgumentMissingName{
-		game_fn_name: String,
-	},
-	GameFnArgumentMissingType{
-		game_fn_name: String,
-		param_name: String,
-	},
-	GameFnArgumentVoid{
-		game_fn_name: String,
-		param_name: String,
-	},
-	GameFnResourceMissingExtension{
-		game_fn_name: String,
-		param_name: String,
-	},
-	GameFnEntityMissingType{
-		game_fn_name: String,
-		param_name: String,
-	},
-	GameFnReturnsEntity{
-		game_fn_name: String,
-	},
-	GameFnReturnsResource{
-		game_fn_name: String,
-	},
-	GameFnNotProvided {
-		game_fn_name: String,
-	}
+pub(crate) fn get_mod_api(mod_api_path: impl AsRef<Path>) -> Result<ModApi, GrugError<Arena>> {
+	let mod_api_path = mod_api_path.as_ref();
+	let mod_api_text = std::fs::read_to_string(mod_api_path).map_err(|err| 
+		GrugError::new_error(
+			ErrorKind::MOD_API_IO_ERROR,
+			"",
+			mod_api_path.as_ref(), 
+			"",
+			SourceSpan{offset: 0, line: 0},
+			format_args!("IO Error: {}", err),
+		)
+	)?;
+	get_mod_api_from_text(mod_api_path, &mod_api_text)
 }
 
-impl From<json::Error> for ModApiError {
-	fn from(other: json::Error) -> ModApiError {
-		ModApiError::JsonError(other)
-	}
-}
-
-impl From<std::io::Error> for ModApiError {
-	fn from(other: std::io::Error) -> ModApiError {
-		ModApiError::IOError(other)
-	}
-}
-
-pub(crate) fn get_mod_api<P: AsRef<Path>>(mod_api_path: P) -> Result<ModApi, ModApiError> {
-	let mod_api_text = std::fs::read_to_string(mod_api_path)?;
-	get_mod_api_from_text(&mod_api_text)
-}
-
-pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApiError> {
+pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text: &str) -> Result<ModApi, GrugError<Arena>> {
 	let arena = Arena::new();
-	let mod_api_json = json::parse(mod_api_text)?;
-	// "entities" object
-	let entities = &mod_api_json["entities"];
-	if !entities.is_object() {
-		return Err(ModApiError::EntitiesNotObject);
+
+	macro_rules! mod_api_err{
+		(root => $fmt: literal $(, $args: expr)*) => {
+			GrugError::new_error(
+				ErrorKind::MOD_API_JSON_ERROR,
+				"",
+				mod_api_path.as_ref().as_ref(), 
+				mod_api_text,
+				SourceSpan{offset: 0, line: 0},
+				format_args!($fmt $(, $args)*),
+			)
+		};
+		($source: expr => $fmt: literal) => {
+			GrugError::new_error(
+				ErrorKind::MOD_API_JSON_ERROR,
+				$source,
+				mod_api_path.as_ref().as_ref(), 
+				mod_api_text,
+				SourceSpan{offset: 0, line: 0},
+				format_args!($fmt),
+			)
+		}
 	}
 
-	let entities = entities.entries().map(|(entity_name, entity_values)| {
+	let mod_api_json = json::parse(mod_api_text).map_err(|err| 
+		mod_api_err!(root => "{}", err)
+	)?;
+	let JsonValue::Object(mod_api_root) = mod_api_json else {
+		return Err(mod_api_err!(root => "root is not object"));
+	};
+	// "entities" object
+	let entities = match mod_api_root.get("entities") {
+		None => return Err(mod_api_err!(root => "root.entities does not exist")),
+		Some(entities) => {
+			let JsonValue::Object(entities) = entities else {
+				return Err(mod_api_err!(root => "root.entities is not an object"));
+			};
+			entities
+		}
+	};
+
+	let entities = entities.iter().map(|(entity_name, entity_values)| {
+		let JsonValue::Object(entity_values) = entity_values else {
+			return Err(mod_api_err!(entity_name => "root.entities.{entity_name} is not an object"));
+		};
 		// optional "description" string
-		let description = entity_values["description"].as_str().map(|str| Box::leak(NTStr::box_from_str_in(str, &arena)).as_str());
+		let description = match entity_values.get("description") {
+			None => None,
+			Some(str) => {
+				let Some(str) = str.as_str() else {
+					return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.description is not a string"));
+				};
+				Some(Box::leak(NTStr::box_from_str_in(str, &arena)).as_str())
+			}
+		};
 
 		// optional "on_fns" object
-		let on_fns = &entity_values["on_functions"];
-		if !on_fns.is_array() && !on_fns.is_null() {
-			return Err(ModApiError::OnFunctionsNotArray{
-				entity_name: entity_name.to_string(),
-			});
-		}
-		let on_fns = on_fns.members().enumerate().map(|(i, function)| {
+		let on_fns = match &entity_values.get("on_functions") {
+			None => &vec![],
+			Some(on_fns) => {
+				let JsonValue::Array(on_fns) = on_fns else {
+					return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions is not an array"));
+				};
+				on_fns
+			}
+		};
+		let on_fns = on_fns.into_iter().enumerate().map(|(i, function)| {
 			let JsonValue::Object(function) = function else {
-				return Err(ModApiError::OnFunctionNotObject {
-					entity_name: String::from(entity_name),
-					index: i
-				});
+				return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[{i}] is not an object"));
 			};
 			// "name" string
 			let fn_name = match function.get("name") {
-				None => return Err(ModApiError::OnFunctionMissingName{
-					entity_name: String::from(entity_name),
-					index: i,
-				}),
+				None => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[{i}].name missing")),
 				Some(str) => {
 					let Some(str) = str.as_str() else {
-						return Err(ModApiError::OnFunctionNameNotString{
-							entity_name: String::from(entity_name),
-							index: i,
-						});
+						return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[{i}].name is not a string"));
 					};
 					&*Box::leak(NTStr::box_from_str_in(str, &arena))
 				}
@@ -207,56 +159,55 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 				None => None,
 				Some(str) => {
 					let Some(str) = str.as_str() else {
-						return Err(ModApiError::OnFunctionDescriptionNotString{
-							entity_name: String::from(entity_name),
-							on_function_name: String::from(&*fn_name),
-						});
+						return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[\"{fn_name}\"].description is not a string"));
 					};
 					Some(Box::leak(NTStr::box_from_str_in(str, &arena)).as_str())
 				}
 			};
 			
 			// optional "arguments" object
-			let parameters = &function["arguments"];
-			if !parameters.is_array() && !parameters.is_null(){
-				return Err(ModApiError::OnFnsArgumentsNotArray{
-					entity_name: String::from(entity_name),
-					on_fn_name: String::from(&*fn_name),
-				});
-			}
-			let parameters = parameters.members().map(|param_values| {
-				// optional "name" string
-				let param_name = param_values["name"].as_str().ok_or(ModApiError::OnFnArgumentMissingName{
-					entity_name: entity_name.to_string(),
-					on_fn_name: fn_name.to_string(),
-				})?;
-				let param_name = Box::leak(NTStr::box_from_str_in(param_name, &arena));
+			let parameters = match &function.get("arguments") {
+				None => &vec![],
+				Some(parameters) => {
+					let JsonValue::Array(parameters) = parameters else {
+						return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[\"{fn_name}\"].arguments is not an array"));
+					};
+					parameters
+				}
+			};
+			let parameters = parameters.into_iter().enumerate().map(|(j, param_values)| {
+				let JsonValue::Object(param_values) = param_values else {
+					return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[\"{fn_name}\"].arguments[{j}] is not an object"))
+				};
+				// "name" string
+				let param_name = match param_values.get("name") {
+					None => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[{i}].arguments[{j}].name missing")),
+					Some(str) => {
+						let Some(str) = str.as_str() else {
+							return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[{i}].arguments[{j}].name is not a string"));
+						};
+						&*Box::leak(NTStr::box_from_str_in(str, &arena))
+					}
+				};
 				// "type" string
-				let ty = param_values["type"].as_str().ok_or(ModApiError::OnFnArgumentMissingType{
-					entity_name: entity_name.to_string(),
-					on_fn_name: fn_name.to_string(),
-				})?;
+				let ty = match param_values.get("type") {
+					None => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[{i}].arguments[{j}].type missing")),
+					Some(str) => {
+						let Some(str) = str.as_str() else {
+							return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[{i}].arguments[{j}].type is not a string"));
+						};
+						&*Box::leak(NTStr::box_from_str_in(str, &arena)).as_str()
+					}
+				};
 				let ty = match ty {
 					// arguments can't be void
-					"void"     => Err(ModApiError::OnFnArgumentVoid{
-						entity_name: entity_name.to_string(),
-						on_fn_name: fn_name.to_string(),
-						param_name: param_name.to_string(),
-					})?,
+					"void"     => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[\"{fn_name}\"].arguments[\"{param_name}\"].type is void")),
 					"bool"     => GrugType::Bool,
 					"number"   => GrugType::Number,
 					"string"   => GrugType::String,
 					"id"       => GrugType::Id{custom_name: None},
-					"resource" => Err(ModApiError::OnFnArgumentResource{
-						entity_name: entity_name.to_string(),
-						on_fn_name: fn_name.to_string(),
-						param_name: param_name.to_string(),
-					})?,
-					"entity" => Err(ModApiError::OnFnArgumentEntity{
-						entity_name: entity_name.to_string(),
-						on_fn_name: fn_name.to_string(),
-						param_name: param_name.to_string(),
-					})?,
+					"resource"     => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[\"{fn_name}\"].arguments[\"{param_name}\"].type is resource")),
+					"entity"     => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[\"{fn_name}\"].arguments[\"{param_name}\"].type is entity")),
 					type_name => {
 						let extra_value = Box::leak(NTStr::box_from_str_in(type_name, &arena));
 						GrugType::Id {
@@ -272,7 +223,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 					name_span: SourceSpan{offset: 0, line: 0},
 					type_span: SourceSpan{offset: 0, line: 0},
 				})
-			}).collect::<Result<Vec<_>, ModApiError>>()?;
+			}).collect::<Result<Vec<_>, _>>()?;
 			// SAFETY: we don't give out a 'static refernce to this string
 			let parameters = {
 				let mut temp = Vec::new_in(&arena);
@@ -298,51 +249,88 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 			description,
 			on_fns
 		}))
-	}).collect::<Result<HashMap<_, _>, ModApiError>>()?;
+	}).collect::<Result<HashMap<_, _>, _>>()?;
+	
 	
 	// "game_functions" object
-	let game_functions = &mod_api_json["game_functions"];
-	if !game_functions.is_object() {
-		return Err(ModApiError::GameFnsNotObject);
-	}
-
-	let game_functions = game_functions.entries().map(|(fn_name, game_fn_values)| {
-		// optional "description" string
-		let description = game_fn_values["description"].as_str().map(|str| Box::leak(NTStr::box_from_str_in(str, &arena)).as_str());
-
-		// optional "arguments" object
-		let parameters = &game_fn_values["arguments"];
-		if !parameters.is_array() && !parameters.is_null(){
-			return Err(ModApiError::GameFnArgumentsNotArray{
-				game_fn_name: fn_name.to_string(),
-			});
+	let game_functions = match mod_api_root.get("game_functions") {
+		None => return Err(mod_api_err!(root => "root.game_functions does not exist")),
+		Some(game_functions) => {
+			let JsonValue::Object(game_functions) = game_functions else {
+				return Err(mod_api_err!(root => "root.game_functions is not an object"));
+			};
+			game_functions
 		}
-		let parameters = parameters.members().map(|param_values| {
+	};
+
+	let game_functions = game_functions.iter().map(|(fn_name, game_fn_values)| {
+		let JsonValue::Object(game_fn_values) = game_fn_values else {
+			return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name} is not an object"));
+		};
+		// optional "description" string
+		let description = match game_fn_values.get("description") {
+			None => None,
+			Some(str) => {
+				let Some(str) = str.as_str() else {
+					return Err(mod_api_err!(fn_name => "root.game_fn_values.{fn_name}.description is not a string"));
+				};
+				Some(Box::leak(NTStr::box_from_str_in(str, &arena)).as_str())
+			}
+		};
+		
+		// optional "arguments" object
+		let parameters = match &game_fn_values.get("arguments") {
+			None => &vec![],
+			Some(parameters) => {
+				let JsonValue::Array(parameters) = parameters else {
+					return Err(mod_api_err!(fn_name => "root.game_fn_values.{fn_name}.arguments is not an array"));
+				};
+				parameters
+			}
+		};
+
+		let parameters = parameters.iter().enumerate().map(|(i, param_values)| {
+			let JsonValue::Object(param_values) = param_values else {
+				return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.arguments[{i}] is not an object"));
+			};
 			// "name" string
-			let param_name = param_values["name"].as_str().ok_or(ModApiError::GameFnArgumentMissingName{
-				game_fn_name: fn_name.to_string(),
-			})?;
-			let param_name = Box::leak(NTStr::box_from_str_in(param_name, &arena));
+			let param_name = match param_values.get("name") {
+				None => return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.arguments[{i}].name is missing")),
+				Some(str) => {
+					let Some(str) = str.as_str() else {
+						return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.arguments.name is not a string"));
+					};
+					&*Box::leak(NTStr::box_from_str_in(str, &arena))
+				}
+			};
 			// "type" string
-			let ty = param_values["type"].as_str().ok_or(ModApiError::GameFnArgumentMissingType{
-				game_fn_name: fn_name.to_string(),
-				param_name: param_name.to_string(),
-			})?;
+			let ty = match param_values.get("type") {
+				None => return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.arguments[\"{param_name}\"].type is missing")),
+				Some(str) => {
+					let Some(str) = str.as_str() else {
+						return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.arguments[\"{param_name}\"].type is not a string"));
+					};
+					&*Box::leak(NTStr::box_from_str_in(str, &arena)).as_str()
+				}
+			};
 			let ty = match ty {
 				// arguments can't be void
-				"void"     => Err(ModApiError::GameFnArgumentVoid{
-					game_fn_name: fn_name.to_string(),
-					param_name: param_name.to_string(),
-				})?,
+				"void"     => return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.arguments[\"{param_name}\"].type is void")),
 				"bool"     => GrugType::Bool,
 				"number"      => GrugType::Number,
 				"string"   => GrugType::String,
 				"id"       => GrugType::Id{custom_name: None},
 				"entity"   => {
-					let entity_type = param_values["entity_type"].as_str().ok_or(ModApiError::GameFnEntityMissingType{
-						game_fn_name: fn_name.to_string(),
-						param_name: param_name.to_string(),
-					})?;
+					// "entity_type" string
+					let entity_type = match param_values.get("entity_type") {
+						None => return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.arguments[\"{param_name}\"].entity_type is missing")),
+						Some(str) => {
+							let Some(str) = str.as_str() else {
+								return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.arguments[\"{param_name}\"].entity_type is not a string"));
+							};
+							&*Box::leak(NTStr::box_from_str_in(str, &arena))
+						}
+					};
 					GrugType::Entity {
 						entity_type: (!entity_type.is_empty()).then(|| {
 							let entity_type = Box::leak(NTStr::box_from_str_in(entity_type, &arena));
@@ -351,10 +339,16 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 					}
 				},
 				"resource" => {
-					let extension = param_values["resource_extension"].as_str().ok_or(ModApiError::GameFnResourceMissingExtension{
-						game_fn_name: fn_name.to_string(),
-						param_name: param_name.to_string(),
-					})?;
+					// "resource_extension" string
+					let extension = match param_values.get("resource_extension") {
+						None => return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.arguments[\"{param_name}\"].resource_extension is missing")),
+						Some(str) => {
+							let Some(str) = str.as_str() else {
+								return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.arguments[\"{param_name}\"].resource_extension is not a string"));
+							};
+							&*Box::leak(NTStr::box_from_str_in(str, &arena))
+						}
+					};
 					let extension = Box::leak(NTStr::box_from_str_in(extension, &arena)).as_ntstrptr();
 					GrugType::Resource {
 						extension
@@ -373,7 +367,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 				name_span: SourceSpan{offset: 0, line: 0},
 				type_span: SourceSpan{offset: 0, line: 0},
 			})
-		}).collect::<Result<Vec<_>, ModApiError>>()?;
+		}).collect::<Result<Vec<_>, _>>()?;
 		let parameters = {
 			let mut temp = Vec::new_in(&arena);
 			temp.extend(parameters);
@@ -381,19 +375,23 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 		};
 
 		// optional "return_type" string
-		let return_ty = game_fn_values["return_type"].as_str().unwrap_or("void");
+		let return_ty = match game_fn_values.get("return_type") {
+			None => "void",
+			Some(str) => {
+				let Some(str) = str.as_str() else {
+					return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.return_type is not a string"));
+				};
+				&*Box::leak(NTStr::box_from_str_in(str, &arena))
+			}
+		};
 		let return_ty = match return_ty {
 			"void"     => GrugType::Void,
 			"bool"     => GrugType::Bool,
 			"number"      => GrugType::Number,
 			"string"   => GrugType::String,
 			"id"       => GrugType::Id{custom_name: None},
-			"entity" => Err(ModApiError::GameFnReturnsEntity{
-				game_fn_name: fn_name.to_string(),
-			})?,
-			"resource" => Err(ModApiError::GameFnReturnsResource{
-				game_fn_name: fn_name.to_string(),
-			})?,
+			"entity"     => return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.return_type is entity")),
+			"resource"     => return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.return_type is resource")),
 			type_name => {
 				let extra_value = Box::leak(NTStr::box_from_str_in(type_name, &arena)).as_ntstrptr();
 				GrugType::Id {
@@ -412,7 +410,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_text: &str) -> Result<ModApi, ModApi
 			description,
 			parameters
 		}))
-	}).collect::<Result<HashMap<_, _>, ModApiError>>()?;
+	}).collect::<Result<HashMap<_, _>, _>>()?;
 
 	Ok(ModApi{
 		entities: unsafe{std::mem::transmute::<HashMap<&'_ NTStr, ModApiEntity<'_>>, HashMap<&'static NTStr, ModApiEntity<'static>>>(entities)},

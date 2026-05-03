@@ -6,7 +6,7 @@ use gruggers::nt;
 mod test_bindings {
 	use gruggers::state::{GrugInitSettings, GrugState, State, GrugEntityHandle, FileInfo};
 	use gruggers::backend::BytecodeBackend;
-	use gruggers::error::RuntimeError;
+	use gruggers_core::runtime_error::RuntimeError;
 	use gruggers::types::{GrugValue, GrugFileId};
 	use gruggers::ntstring::{NTStrPtr, NTStr};
 	use gruggers::serde;

@@ -1,10 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
-use std::sync::Arc;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
-use gruggers_core::error::{grug_error, ErrorKind, SourceSpan};
+use gruggers_core::error::{GrugError, ErrorKind, SourceSpan};
 
 use crate::types::GameFnPtr;
 use crate::ntstring::{NTStr, NTStrPtr};
@@ -100,575 +99,6 @@ impl std::fmt::Display for OwnedGrugType {
 	}
 }
 
-#[derive(Debug)]
-pub enum TypePropogatorError {
-	GrugError(grug_error<Arena>),
-	// grug_assert(grug_entity, "The entity '%s' was not declared by mod_api.json", file_entity_type);
-	EntityDoesNotExist{
-		entity_name: Arc<str>,
-	},
-	// grug_assert(!get_global_variable(name), "The global variable '%s' shadows an earlier global variable with the same name, so change the name of one of them", name);
-	GlobalVariableShadowed {
-		name: Arc<str>,
-	},
-	// grug_assert(!starts_with(expr->call.fn_name, "helper_"), "The global variable '%s' isn't allowed to call helper functions", name);
-	GlobalCantCallHelperFn {
-		global_name: Arc<str>,
-	},
-	// grug_assert(var, "The variable '%s' does not exist", expr->literal.string);
-	VariableDoesNotExist {
-		name: Arc<str>,
-	},
-	// grug_assert(expr->unary.operator != expr->unary.expr->unary.operator, "Found '%s' directly next to another '%s', which can be simplified by just removing both of them", get_token_type_str[expr->unary.operator], get_token_type_str[expr->unary.expr->unary.operator]);
-	AdjacentUnaryOperators {
-		operator: UnaryOperator,
-	},
-	// grug_assert(expr->result_type == type_bool, "Found 'not' before %s, but it can only be put before a bool", expr->result_type_name);
-	NotOperatorNotBeforeBool{
-		got: OwnedGrugType,
-	},
-	// grug_assert(expr->result_type == type_i32 || expr->result_type == type_f32, "Found '-' before %s, but it can only be put before an i32 or f32", expr->result_type_name);
-	MinusOperatorNotBeforeNumber {
-		got: OwnedGrugType,
-	},
-	// grug_assert(binary_expr.operator == EQUALS_TOKEN || binary_expr.operator == NOT_EQUALS_TOKEN, "You can't use the %s operator on a string", get_token_type_str[binary_expr.operator]);
-	CannotCompareStrings {
-		// This can only be BinaryOperator::DoubleEquals | BinaryOperator::NotEquals
-		operator: BinaryOperator,
-	},
-	// grug_error("The left and right operand of a binary expression ('%s') must have the same type, but got %s and %s", get_token_type_str[binary_expr.operator], binary_expr.left_expr->result_type_name, binary_expr.right_expr->result_type_name);
-	BinaryOperatorTypeMismatch {
-		operator: BinaryOperator,
-		left: OwnedGrugType,
-		right: OwnedGrugType,
-	},
-	// grug_assert(binary_expr.left_expr->result_type == type_bool, "'%s' operator expects bool", get_token_type_str[binary_expr.operator]);
-	LogicalOperatorExpectsBool {
-		// Must be 'or' or 'and' operators
-		operator: BinaryOperator,
-	},
-	// grug_assert(binary_expr.left_expr->result_type == type_i32 || binary_expr.left_expr->result_type == type_f32, "'%s' operator expects i32 or f32", get_token_type_str[binary_expr.operator]);
-	ComparisonOperatorExpectsNumber {
-		// Must be '>', '>=', '<', or '<=' operators
-		operator: BinaryOperator,
-		got_type: OwnedGrugType,
-	},
-	// grug_assert(binary_expr.left_expr->result_type == type_i32 || binary_expr.left_expr->result_type == type_f32, "'%s' operator expects i32 or f32", get_token_type_str[binary_expr.operator]);
-	ArithmeticOperatorExpectsNumber {
-		// Must be '+', '-', '*', or '/' operators
-		operator: BinaryOperator,
-		got_type: OwnedGrugType,
-	},
-	// grug_assert(binary_expr.left_expr->result_type == type_i32, "'%%' operator expects i32");
-	RemainderOperatorExpectsNumber {
-		got_ty: OwnedGrugType,
-	},
-	// grug_error("Mods aren't allowed to call their own on_ functions, but '%s' was called", name);
-	CallOnFnWithinOnFn {
-		on_fn_name: Arc<str>,
-	},
-	// grug_error("The function '%s' does not exist", name);
-	FunctionDoesNotExist {
-		function_name: Arc<str>,
-	},
-	// grug_assert(call_expr.argument_count >= param_count, "Function call '%s' expected the argument '%s' with type %s", name, params[call_expr.argument_count].name, params[call_expr.argument_count].type_name);
-	TooFewArguments{
-		function_name: Arc<str>,
-		expected_name: Arc<str>,
-		expected_type: OwnedGrugType,
-	},
-	// grug_assert(call_expr.argument_count <= param_count, "Function call '%s' got an unexpected extra argument with type %s", name, call_expr.arguments[param_count].result_type_name);
-	TooManyArguments{
-		function_name: Arc<str>,
-		got_type: OwnedGrugType,
-	},
-	ResourceValidationError(ResourceValidationError),
-	EntityValidationError(EntityValidationError),
-	// grug_assert(arg->result_type != type_void, "Function call '%s' expected the type %s for argument '%s', but got a function call that doesn't return anything", name, param.type_name, param.name);
-	VoidArgumentInFunctionCall {
-		function_name: Arc<str>,
-		signature_type: OwnedGrugType,
-		parameter_name: Arc<str>
-	},
-	// grug_error("Function call '%s' expected the type %s for argument '%s', but got %s", name, param.type_name, param.name, arg->result_type_name);
-	FunctionArgumentMismatch {
-		function_name: Arc<str>,
-		expected_type: OwnedGrugType,
-		got_type: OwnedGrugType,
-		parameter_name: Arc<str>
-	},
-	// grug_assert(entity_on_fn, "The function '%s' was not declared by entity '%s' in mod_api.json", on_fns[fn_index].fn_name, file_entity_type);
-	OnFnDoesNotExist {
-		function_name: Arc<str>,
-		entity_name: Arc<str>,
-	},
-	// grug_assert(arg_count >= param_count, "Function '%s' expected the parameter '%s' with type %s", name, params[arg_count].name, params[arg_count].type_name);
-	TooFewParameters{
-		function_name: Arc<str>,
-		expected_name: Arc<str>,
-		expected_type: OwnedGrugType,
-	},
-	// grug_assert(arg_count <= param_count, "Function '%s' got an unexpected extra parameter '%s' with type %s", name, args[param_count].name, args[param_count].type_name);
-	TooManyParameters{
-		function_name: Arc<str>,
-		parameter_name: Arc<str>,
-		parameter_type: OwnedGrugType,
-	},
-	// grug_assert(streq(arg_name, param.name), "Function '%s' its '%s' parameter was supposed to be named '%s'", name, arg_name, param.name);
-	OnFnParameterNameMismatch{
-		function_name: Arc<str>,
-		got_name: Arc<str>,
-		expected_name: Arc<str>,
-	},
-	//grug_error("Function '%s' its '%s' parameter was supposed to have the type %s, but got %s", name, param.name, param.type_name, arg_type_name);
-	OnFnParameterTypeMismatch{
-		function_name: Arc<str>,
-		parameter_name: Arc<str>,
-		got_type: OwnedGrugType,
-		expected_type: OwnedGrugType,
-	},
-	// grug_assert(!streq(global->assignment_expr.literal.string, "me"), "Global variables can't be assigned 'me'");
-	GlobalCantBeAssignedMe {
-		name: Arc<str>,
-	},
-	// grug_error("Can't assign %s to '%s', which has type %s", global->assignment_expr.result_type_name, global->name, global->type_name);
-	VariableTypeMismatch {
-		name: Arc<str>,
-		got_type: OwnedGrugType,
-		expected_type: OwnedGrugType,
-	},
-	// grug_assert(!get_local_variable(name), "The local variable '%s' shadows an earlier local variable with the same name, so change the name of one of them", name);
-	LocalVariableShadowedByGlobal {
-		name: Arc<str>,
-	},
-	// grug_assert(!get_global_variable(name), "The local variable '%s' shadows an earlier global variable with the same name, so change the name of one of them", name);
-	LocalVariableShadowedByLocal {
-		name: Arc<str>,
-	},
-	// grug_assert(var, "Can't assign to the variable '%s', since it does not exist", variable_statement.name);
-	CantAssignBecauseVariableDoesntExist {
-		name: Arc<str>,
-	},
-	// "If condition must be bool but got '%s'", 
-	IfConditionTypeMismatch {
-		got_type: OwnedGrugType,
-	},
-	// "While condition must be bool but got '%s'", 
-	WhileConditionTypeMismatch {
-		got_type: OwnedGrugType,
-	},
-	// TODO: This needs location information 
-	// "There is a break statement that isn't inside of a while loop" 
-	BreakStatementOutsideWhileLoop,
-	// TODO: This needs location information 
-	// "There is a break statement that isn't inside of a while loop" 
-	ContinueStatementOutsideWhileLoop,
-
-	// TODO: This needs more information, like the name of the global
-	// grug_assert(!compiled_init_globals_fn, "Global id variables can't be reassigned");
-	GlobalIdsCantBeReassigned,
-	// grug_assert(!var, "The variable '%s' already exists", variable_statement.name);
-	VariableAlreadyExists {
-		variable_name: Arc<str>
-	},
-	// grug_assert(fn_return_type != type_void, "Function '%s' wasn't supposed to return any value", filled_fn_name);
-	// grug_error("Function '%s' is supposed to return %s, not %s", filled_fn_name, fn_return_type_name, statement.return_statement.value->result_type_name);
-	// grug_assert(fn_return_type == type_void, "Function '%s' is supposed to return a value of type %s", filled_fn_name, fn_return_type_name);
-	MismatchedReturnType {
-		function_name: Arc<str>,
-		expected_type: OwnedGrugType,
-		got_type: OwnedGrugType,
-	},
-	// grug_assert(last_statement.type == RETURN_STATEMENT, "Function '%s' is supposed to return %s as its last line", filled_fn_name, fn_return_type_name);
-	LastStatementNotReturn {
-		function_name: Arc<str>,
-		expected_return_type: OwnedGrugType,
-	},
-	// grug_assert(previous_on_fn_index <= on_fn_index, "The function '%s' needs to be moved before/after a different on_ function, according to the entity '%s' in mod_api.json", on_fn->fn_name, grug_entity->name);
-	OutOfOrderOnFn {
-		entity_name: Arc<str>,
-		on_fn_name: Arc<str>,
-	},
-	GameFunctionNotProvided {
-		fn_name: String,
-	},
-	// All errors should be turned into these
-	StringError(String),
-}
-
-impl std::fmt::Display for TypePropogatorError {
-	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		match self {
-			Self::GrugError(err) => write!(f, "{}", err),
-			Self::EntityDoesNotExist{
-				entity_name,
-			} => write!(f, "'{}' seems like a custom ID type, but it doesn't start in Uppercase", entity_name),
-			Self::GlobalVariableShadowed {
-				name,
-			} => write!(f, "The global variable '{}' shadows an earlier global variable", name),
-			Self::GlobalCantCallHelperFn {
-				global_name,
-			} => write!(f, "The global variable '{}' isn't allowed to call helper functions", global_name),
-			Self::VariableDoesNotExist {
-				name,
-			} => write!(f, "The variable '{}' does not exist", name),
-			Self::AdjacentUnaryOperators {
-				operator,
-			} => write!(f, "Found '{0}' directly next to another '{0}', which can be simplified by just removing both of them", operator),
-			Self::NotOperatorNotBeforeBool{
-				got,
-			} => write!(f, "Found 'not' before {}, but it can only be put before a bool", got),
-			Self::MinusOperatorNotBeforeNumber {
-				got,
-			} => write!(f, "Found '-' before {}, but it can only be put before a number", got),
-			Self::CannotCompareStrings {
-				operator,
-			} => write!(f, "You can't use the {} operator on a string", operator),
-			Self::BinaryOperatorTypeMismatch {
-				operator,
-				left: OwnedGrugType::String,
-				right: _,
-			} => write!(f, "You can't use the {} operator on a string", operator),
-			Self::BinaryOperatorTypeMismatch {
-				operator,
-				left: _,
-				right: OwnedGrugType::String,
-			} => write!(f, "You can't use the {} operator on a string", operator),
-			Self::BinaryOperatorTypeMismatch {
-				operator,
-				left,
-				right,
-			} => write!(f, "The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", operator, left, right),
-			Self::LogicalOperatorExpectsBool {
-				operator,
-			} => write!(f, "'{}' operator expects bool", operator),
-			Self::ComparisonOperatorExpectsNumber {
-				operator,
-				got_type: _,
-			} => write!(f, "'{}' operator expects number", operator),
-			Self::ArithmeticOperatorExpectsNumber {
-				got_type: OwnedGrugType::String,
-				operator,
-			} => write!(f, "You can't use the {} operator on a string", operator),
-			Self::ArithmeticOperatorExpectsNumber {
-				operator,
-				got_type: _,
-			} => write!(f, "'{}' operator expects number", operator),
-			Self::RemainderOperatorExpectsNumber {
-				got_ty: _,
-			} => write!(f, "'%' operator expects number"),
-			Self::CallOnFnWithinOnFn {
-				on_fn_name,
-			} => write!(f, "Mods aren't allowed to call their own on_ functions, but '{}' was called", on_fn_name),
-			Self::FunctionDoesNotExist {
-				function_name,
-			} if function_name.starts_with("helper_") => write!(f, "The helper function '{}' was not defined by this grug file", function_name),
-			Self::FunctionDoesNotExist {
-				function_name,
-			} => write!(f, "The game function '{}' was not declared by mod_api.json", function_name),
-			Self::TooFewArguments{
-				function_name,
-				expected_name,
-				expected_type,
-			} => write!(f, "Function call '{}' expected the argument '{}' with type {}", function_name, expected_name, expected_type),
-			Self::TooManyArguments{
-				function_name,
-				got_type,
-			} => write!(f, "Function call '{}' got an unexpected extra argument with type {}", function_name, got_type),
-			Self::ResourceValidationError(error) => write!(f, "{}", error),
-			Self::EntityValidationError(error) => write!(f, "{}", error),
-			Self::VoidArgumentInFunctionCall {
-				function_name,
-				signature_type,
-				parameter_name
-			} => write!(f, "Function call '{}' expected the type {} for argument '{}', but got a function call that doesn't return anything", function_name, signature_type, parameter_name),
-			Self::FunctionArgumentMismatch {
-				function_name,
-				expected_type,
-				got_type,
-				parameter_name
-			} => write!(f, "Function call '{}' expected the type {} for argument '{}', but got {}", function_name, expected_type, parameter_name, got_type),
-			Self::OnFnDoesNotExist {
-				function_name,
-				entity_name,
-			} => write!(f, "The function '{}' was not declared by entity '{}' in mod_api.json", function_name, entity_name),
-			Self::TooFewParameters{
-				function_name,
-				expected_name,
-				expected_type,
-			} => write!(f, "Function '{}' expected the parameter '{}' with type {}", function_name, expected_name, expected_type),
-			Self::TooManyParameters{
-				function_name,
-				parameter_name,
-				parameter_type,
-			} => write!(f, "Function '{}' got an unexpected extra parameter '{}' with type {}", function_name, parameter_name, parameter_type),
-			Self::OnFnParameterNameMismatch{
-				function_name,
-				got_name,
-				expected_name,
-			} => write!(f, "Function '{}' its '{}' parameter was supposed to be named '{}'", function_name, got_name, expected_name),
-			Self::OnFnParameterTypeMismatch{
-				function_name,
-				parameter_name,
-				got_type,
-				expected_type,
-			} => write!(f, "Function '{}' its '{}' parameter was supposed to have the type {}, but got {}", function_name, parameter_name, expected_type, got_type),
-			Self::GlobalCantBeAssignedMe {
-				name: _,
-			} => write!(f, "Global variables can't be assigned 'me'"),
-			Self::VariableTypeMismatch {
-				name,
-				got_type,
-				expected_type,
-			} => write!(f, "Can't assign {} to '{}', which has type {}", got_type, name, expected_type),
-			Self::LocalVariableShadowedByGlobal {
-				name,
-			} => write!(f, "The local variable '{}' shadows an earlier global variable", name),
-			Self::LocalVariableShadowedByLocal {
-				name,
-			} => write!(f, "The local variable '{}' shadows an earlier local variable", name),
-			Self::CantAssignBecauseVariableDoesntExist {
-				name,
-			} => write!(f, "Can't assign to the variable '{}', since it does not exist", name),
-			Self::IfConditionTypeMismatch {
-				got_type,
-			} => write!(f, "If condition must be bool but got '{}'", got_type),
-			Self::WhileConditionTypeMismatch {
-				got_type,
-			} => write!(f, "While condition must be bool but got '{}'", got_type),
-			Self::BreakStatementOutsideWhileLoop => write!(f, "There is a break statement that isn't inside of a while loop"),
-			Self::ContinueStatementOutsideWhileLoop => write!(f, "There is a continue statement that isn't inside of a while loop"),
-			Self::GlobalIdsCantBeReassigned => write!(f, "Global id variables can't be reassigned"),
-			// grug_assert(!var, "The variable '%s' already exists", variable_statement.name);
-			Self::VariableAlreadyExists {
-				variable_name
-			} => write!(f, "The variable '{}' already exists", variable_name),
-			// grug_assert(fn_return_type == type_void, "Function '%s' is supposed to return a value of type %s", filled_fn_name, fn_return_type_name);
-			Self::MismatchedReturnType {
-				function_name,
-				expected_type,
-				got_type: OwnedGrugType::Void,
-			} => write!(f, "Function '{}' is supposed to return a value of type {}", function_name, expected_type),
-			// grug_assert(fn_return_type != type_void, "Function '%s' wasn't supposed to return any value", filled_fn_name);
-			Self::MismatchedReturnType {
-				function_name,
-				expected_type: OwnedGrugType::Void,
-				got_type: _,
-			} => write!(f, "Function '{}' wasn't supposed to return any value", function_name),
-			// grug_error("Function '%s' is supposed to return %s, not %s", filled_fn_name, fn_return_type_name, statement.return_statement.value->result_type_name);
-			Self::MismatchedReturnType {
-				function_name,
-				expected_type,
-				got_type,
-			} => write!(f, "Function '{}' is supposed to return {}, not {}", function_name, expected_type, got_type),
-			// grug_assert(last_statement.type == RETURN_STATEMENT, "Function '%s' is supposed to return %s as its last line", filled_fn_name, fn_return_type_name);
-			Self::LastStatementNotReturn {
-				function_name,
-				expected_return_type,
-			} => write!(f, "Function '{}' is supposed to return {} as its last line", function_name, expected_return_type),
-			// grug_assert(previous_on_fn_index <= on_fn_index, "The function '%s' needs to be moved before/after a different on_ function, according to the entity '%s' in mod_api.json", on_fn->fn_name, grug_entity->name);
-			Self::OutOfOrderOnFn {
-				entity_name,
-				on_fn_name,
-			} => write!(f, "The function '{}' needs to be moved before/after a different on_ function, according to the entity '{}' in mod_api.json", on_fn_name, entity_name),
-			Self::GameFunctionNotProvided {
-				fn_name,
-			} => write!(f, "Game function {} was not registered", fn_name),
-			Self::StringError(string) => write!(f, "{}", string),
-		}
-	}
-}
-
-#[derive(Debug)]
-pub enum ResourceValidationError {
-	GrugError(grug_error<Arena>),
-	// grug_assert(string[0] != '\0', "Resources can't be empty strings");
-	// TODO: This needs to display the actual argument
-	EmptyResource {},
-	// grug_assert(string[0] != '/', "Remove the leading slash from the resource \"%s\"", string);
-	LeadingForwardSlash {
-		value: Arc<str>
-	},
-	//grug_assert(string[string_len - 1] != '/', "Remove the trailing slash from the resource \"%s\"", string);
-	TrailingForwardSlash {
-		value: Arc<str>
-	},
-	// grug_assert(!strchr(string, '\\'), "Replace the '\\' with '/' in the resource \"%s\"", string);
-	ContainsBackslash {
-		value: Arc<str>
-	},
-	// grug_assert(!strstr(string, "//"), "Replace the '//' with '/' in the resource \"%s\"", string);
-	ContainsDoubleForwardSlash {
-		value: Arc<str>
-	},
-	// TODO: This error needs a better message
-	// grug_assert(string_len != 1 && string[1] != '/', "Remove the '.' from the resource \"%s\"", string);
-	BeginsWithDotWithoutSlash {
-		value: Arc<str>
-	},
-	// TODO: This error needs a better message
-	// grug_assert(dot[1] != '/' && dot[1] != '\0', "Remove the '.' from the resource \"%s\"", string);
-	ContainsSlashDotInMiddle {
-		value: Arc<str>
-	},
-	// TODO: This error needs a better message
-	// grug_assert(string_len != 2 && string[2] != '/', "Remove the '..' from the resource \"%s\"", string);
-	BeginsWithDotDotWithoutSlash {
-		value: Arc<str>
-	},
-	// TODO: This error needs a better message
-	// grug_assert(dotdot[2] != '/' && dotdot[2] != '\0', "Remove the '..' from the resource \"%s\"", string);
-	// " 
-	ContainsSlashDotDotInMiddle {
-		value: Arc<str>
-	},
-	// grug_assert(ends_with(string, resource_extension), "The resource '%s' was supposed to have the extension '%s'", string, resource_extension);
-	ExtensionMismatch {
-		expected: Arc<str>,
-		value: Arc<str>
-	},
-	// raise TypePropagationError(f'resource name "{string}" cannot end with .')
-	EndsWithDot  {
-		value: Arc<str>
-	},
-	ResourceDoesNotExist{
-		path: PathBuf,
-	}
-}
-
-impl std::fmt::Display for ResourceValidationError {
-	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		match self {
-			Self::GrugError(err) => write!(f, "{}", err),
-			Self::EmptyResource{} => write!(f, "Resources can't be empty strings"),
-			// grug_assert(string[0] != '/', "Remove the leading slash from the resource \"%s\"", string);
-			Self::LeadingForwardSlash {
-				value
-			} => write!(f, "Remove the leading slash from the resource \"{}\"", value),
-			//grug_assert(string[string_len - 1] != '/', "Remove the trailing slash from the resource \"%s\"", string);
-			Self::TrailingForwardSlash {
-				value
-			} => write!(f, "Remove the trailing slash from the resource \"{}\"", value),
-			// grug_assert(!strchr(string, '\\'), "Replace the '\\' with '/' in the resource \"%s\"", string);
-			Self::ContainsBackslash {
-				value
-			} => write!(f, "Replace the '\\' with '/' in the resource \"{}\"", value),
-			// grug_assert(!strstr(string, "//"), "Replace the '//' with '/' in the resource \"%s\"", string);
-			Self::ContainsDoubleForwardSlash {
-				value
-			} => write!(f, "Replace the '//' with '/' in the resource \"{}\"", value),
-			// TODO: This error needs a better message
-			// grug_assert(string_len != 1 && string[1] != '/', "Remove the '.' from the resource \"%s\"", string);
-			Self::BeginsWithDotWithoutSlash {
-				value
-			} => write!(f, "Remove the '.' from the resource \"{}\"", value),
-			// TODO: This error needs a better message
-			// grug_assert(dot[1] != '/' && dot[1] != '\0', "Remove the '.' from the resource \"%s\"", string);
-			Self::ContainsSlashDotInMiddle {
-				value
-			} => write!(f, "Remove the '.' from the resource \"{}\"", value),
-			// TODO: This error needs a better message
-			// grug_assert(string_len != 2 && string[2] != '/', "Remove the '..' from the resource \"%s\"", string);
-			Self::BeginsWithDotDotWithoutSlash {
-				value
-			} => write!(f, "Remove the '..' from the resource \"{}\"", value),
-			// TODO: This error needs a better message
-			// grug_assert(dotdot[2] != '/' && dotdot[2] != '\0', "Remove the '..' from the resource \"%s\"", string);
-			// " 
-			Self::ContainsSlashDotDotInMiddle {
-				value
-			} => write!(f, "Remove the '..' from the resource \"{}\"", value),
-			// grug_assert(ends_with(string, resource_extension), "The resource '%s' was supposed to have the extension '%s'", string, resource_extension);
-			Self::ExtensionMismatch {
-				expected,
-				value
-			} => write!(f, "The resource '{}' was supposed to have the extension '{}'", value, expected),
-			// raise TypePropagationError(f'resource name "{string}" cannot end with .')
-			Self::EndsWithDot {
-				value
-			} => write!(f, "resource name \"{}\" cannot end with .", value),
-			Self::ResourceDoesNotExist {
-				path,
-			} => write!(f, "resource '{}' does not exist", path.display()),
-		}
-	}
-}
-
-#[derive(Debug)]
-pub enum EntityValidationError {
-	EntityCantBeEmpty,
-	// grug_assert(len > 0, "Entity '%s' is missing a mod name", string);
-	EntityMissingModName {
-		entity_string: Arc<str>,
-	},
-	// grug_assert(*entity_name != '\0', "Entity '%s' specifies the mod name '%s', but it is missing an entity name after the ':'", string, mod_name);
-	EntityMissingEntityName {
-		mod_name: String,
-		entity_string: Arc<str>,
-	},
-	// grug_assert(!streq(mod_name, mod), "Entity '%s' its mod name '%s' is invalid, since the file it is in refers to its own mod; just change it to '%s'", string, mod_name, entity_name);
-	ModNameIsCurrentMod {
-		full_entity_string: Arc<str>,
-		mod_name: String,
-		entity_name: String,
-	},
-	// grug_assert(islower(c) || isdigit(c) || c == '_' || c == '-', "Entity '%s' its mod name contains the invalid character '%c'", string, c);
-	ModNameHasInvalidCharacter {
-		entity_name: Arc<str>, 
-		invalid_char: char
-	},
-	// grug_assert(islower(c) || isdigit(c) || c == '_' || c == '-', "Entity '%s' its entity name contains the invalid character '%c'", string, c);
-	EntityNameHasInvalidCharacter {
-		entity_name: Arc<str>, 
-		invalid_char: char
-	},
-}
-
-impl std::fmt::Display for EntityValidationError {
-	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		match self {
-			Self::EntityCantBeEmpty => write!(f, "Entities can't be empty strings"),
-			// grug_assert(len > 0, "Entity '%s' is missing a mod name", string);
-			Self::EntityMissingModName {
-				entity_string,
-			} => write!(f, "Entity '{}' is missing a mod name", entity_string),
-			// grug_assert(*entity_name != '\0', "Entity '%s' specifies the mod name '%s', but it is missing an entity name after the ':'", string, mod_name);
-			Self::EntityMissingEntityName {
-				mod_name,
-				entity_string,
-			} => write!(f, "Entity '{}' specifies the mod name '{}', but it is missing an entity name after the ':'", entity_string, mod_name),
-			// grug_assert(!streq(mod_name, mod), "Entity '%s' its mod name '%s' is invalid, since the file it is in refers to its own mod; just change it to '%s'", string, mod_name, entity_name);
-			Self::ModNameIsCurrentMod {
-				full_entity_string,
-				mod_name,
-				entity_name,
-			} => write!(f, "Entity '{}' its mod name '{}' is invalid, since the file it is in refers to its own mod; just change it to '{}'", full_entity_string, mod_name, entity_name),
-			// grug_assert(islower(c) || isdigit(c) || c == '_' || c == '-', "Entity '%s' its mod name contains the invalid character '%c'", string, c);
-			Self::ModNameHasInvalidCharacter {
-				entity_name, 
-				invalid_char
-			} => write!(f, "Entity '{}' its mod name contains the invalid character '{}'", entity_name, invalid_char),
-			// grug_assert(islower(c) || isdigit(c) || c == '_' || c == '-', "Entity '%s' its entity name contains the invalid character '%c'", string, c);
-			Self::EntityNameHasInvalidCharacter {
-				entity_name, 
-				invalid_char
-			} => write!(f, "Entity '{}' its entity name contains the invalid character '{}'", entity_name, invalid_char),
-		}
-	}
-}
-
-impl From<ResourceValidationError> for TypePropogatorError {
-	fn from (other: ResourceValidationError) -> Self {
-		Self::ResourceValidationError(other)
-	}
-}
-
-impl From<EntityValidationError> for TypePropogatorError {
-	fn from (other: EntityValidationError) -> Self {
-		Self::EntityValidationError(other)
-	}
-}
-
 impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	pub fn new (
 		entity: &'mod_api ModApiEntity, 
@@ -696,20 +126,18 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		}
 	}
 
-	#[track_caller]
-	fn new_type_propagator_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, TypePropogatorError> {
-		println!("{:?}", std::panic::Location::caller());
-		Err(TypePropogatorError::GrugError(grug_error::new_error(
+	fn new_type_propagator_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, GrugError<Arena>> {
+		Err(GrugError::new_error(
 			ErrorKind::TYPE_CHECKER_ERROR,
 			self.current_function,
 			self.file_path,
 			self.file_text, 
 			span,
 			args
-		)))
+		))
 	}
 
-	pub fn fill_result_types(mut self, entity_name: &str, ast: &mut AST<'arena>, arena: &'arena Arena) -> Result<HashSet<OsString>, TypePropogatorError> {
+	pub fn fill_result_types(mut self, entity_name: &str, ast: &mut AST<'arena>, arena: &'arena Arena) -> Result<HashSet<OsString>, GrugError<Arena>> {
 		self.add_global_variable(
 			nt!("me"), 
 			GrugType::Id{custom_name: Some(Box::leak(NTStr::box_from_str_in(entity_name, arena)).as_ntstrptr())},
@@ -724,17 +152,16 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 
 			if let ExprData::Identifier(name) = &variable.assignment_expr.data 
 				&& name.to_str() == "me" {
-				// grug_assert(!streq(global->assignment_expr.literal.string, "me"), "Global variables can't be assigned 'me'");
-				return Err(TypePropogatorError::GlobalCantBeAssignedMe {
-					name: Arc::from(name.to_str()),
-				});
+				return self.new_type_propagator_error(
+					variable.span,
+					format_args!("Global variables can't be assigned 'me'")
+				);
 			}
 			if !(variable.ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && result_ty != variable.ty {
-				return Err(TypePropogatorError::VariableTypeMismatch {
-					name: Arc::from(variable.name.to_str()),
-					got_type: result_ty.into(),
-					expected_type: variable.ty.into(),
-				});
+				return self.new_type_propagator_error(
+					variable.span,
+					format_args!("Can't assign {} to '{}', which has type {}", result_ty, variable.name, variable.ty)
+				);
 			}
 			self.add_global_variable(variable.name.to_str(), result_ty, variable.span)?;
 		}
@@ -754,41 +181,38 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				continue;
 			};
 			if previous_on_fn_index > current_index {
-				return Err(TypePropogatorError::OutOfOrderOnFn {
-					entity_name: Arc::from(entity_name),
-					on_fn_name: Arc::from(current_on_fn.name.to_str()),
-				});
+				return self.new_type_propagator_error(
+					current_on_fn.span,
+					format_args!("The function '{}' needs to be moved before/after a different on_ function, according to the entity '{}' in mod_api.json", current_on_fn.name.to_str(), entity_name)
+				);
 			}
 			previous_on_fn_index = current_index;
 			
 			if mod_api_on_fn.parameters.len() > current_on_fn.parameters.len() {
-				return Err(TypePropogatorError::TooFewParameters{
-					function_name: Arc::from(current_on_fn.name.to_str()),
-					expected_name: Arc::from(mod_api_on_fn.parameters[current_on_fn.parameters.len()].name.to_str()),
-					expected_type: mod_api_on_fn.parameters[current_on_fn.parameters.len()].ty.into(),
-				});
+				let param = &mod_api_on_fn.parameters[current_on_fn.parameters.len()];
+				return self.new_type_propagator_error(
+					current_on_fn.span,
+					format_args!("Function '{}' expected the parameter '{}' with type {}", current_on_fn.name.to_str(), param.name.to_str(), param.ty)
+				);
 			} else if mod_api_on_fn.parameters.len() < current_on_fn.parameters.len() {
-				return Err(TypePropogatorError::TooManyParameters{
-					function_name: Arc::from(current_on_fn.name.to_str()),
-					parameter_name: Arc::from(current_on_fn.parameters[mod_api_on_fn.parameters.len()].name.to_str()),
-					parameter_type: current_on_fn.parameters[mod_api_on_fn.parameters.len()].ty.into(),
-				});
+				let param = &current_on_fn.parameters[mod_api_on_fn.parameters.len()];
+				return self.new_type_propagator_error(
+					param.name_span,
+					format_args!("Function '{}' got an unexpected extra parameter '{}' with type {}", current_on_fn.name.to_str(), param.name.to_str(), param.ty)
+				);
 			}
 			for (param, arg) in mod_api_on_fn.parameters.iter().zip(current_on_fn.parameters.iter()) {
 				if param.name != arg.name {
-					return Err(TypePropogatorError::OnFnParameterNameMismatch {
-						function_name: Arc::from(current_on_fn.name.to_str()),
-						got_name: Arc::from(arg.name.to_str()),
-						expected_name: Arc::from(param.name.to_str()),
-					});
+					return self.new_type_propagator_error(
+						arg.type_span,
+						format_args!("Function '{}' its '{}' parameter was supposed to be named '{}'", current_on_fn.name.to_str(), arg.name.to_str(), param.name.to_str())
+					);
 				}
 				if param.ty != arg.ty.into() {
-					return Err(TypePropogatorError::OnFnParameterTypeMismatch {
-						function_name: Arc::from(current_on_fn.name.to_str()),
-						parameter_name: Arc::from(param.name.to_str()),
-						got_type: arg.ty.into(),
-						expected_type: param.ty.into(),
-					});
+					return self.new_type_propagator_error(
+						arg.type_span,
+						format_args!("Function '{}' its '{}' parameter was supposed to have the type {}, but got {}", current_on_fn.name.to_str(), param.name.to_str(), param.ty, arg.ty)
+					);
 				}
 			}
 			// These should only be set inside self.fill_statements
@@ -809,11 +233,12 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		}
 		let entity_on_functions = &self.entity.on_fns;
 		for on_fn in on_functions {
-			if !entity_on_functions.iter().any(|(name, _)| **name == *on_fn.name.to_ntstr()) {
-				return Err(TypePropogatorError::OnFnDoesNotExist {
-					function_name: Arc::from(on_fn.name.to_str()),
-					entity_name: Arc::from(entity_name),
-				});
+			let on_fn_name = on_fn.name.to_ntstr();
+			if !entity_on_functions.iter().any(|(name, _)| *name == on_fn_name) {
+				return self.new_type_propagator_error(
+					on_fn.span,
+					format_args!("The function '{}' was not declared by entity '{}' in mod_api.json", on_fn_name, entity_name)
+				);
 			}
 		}
 
@@ -827,13 +252,14 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					parameters,
 					body_statements,
 					return_type,
-					span: _
+					span,
 				}) => {
 					debug_assert!(self.local_variables.is_empty());
 					debug_assert!(self.num_while_loops_deep == 0);
 					debug_assert!(self.current_fn_name.is_none());
 
-					self.current_fn_name = Some(name.to_str());
+					let name = name.to_str();
+					self.current_fn_name = Some(name);
 					self.push_scope();
 					for param in *parameters {
 						self.add_local_variable(param.name.to_str(), param.ty.into(), param.name_span)?;
@@ -841,15 +267,15 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					self.fill_statements(&ast.helper_fn_signatures, body_statements, return_type, arena)?;
 
 					if *return_type != GrugType::Void && !matches!(body_statements.last(), Some(Statement::Return{..})) {
-						return Err(TypePropogatorError::LastStatementNotReturn {
-							function_name: Arc::from(self.current_fn_name.unwrap()),
-							expected_return_type: return_type.into(),
-						});
+						return self.new_type_propagator_error(
+							*span,
+							format_args!("Function '{}' is supposed to return {} as its last line", name, return_type)
+						);
 					}
 
 					self.pop_scope();
 
-					debug_assert!(self.current_fn_name == Some(name.to_str()));
+					debug_assert!(self.current_fn_name == Some(name));
 					self.current_fn_name = None;
 				}
 				GlobalStatement::Comment{..} => (),
@@ -859,7 +285,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 	
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_statements(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], statements: &mut [Statement<'arena>], expected_return_type: &GrugType<'arena>, arena: &'arena Arena) -> Result<(), TypePropogatorError> {
+	fn fill_statements(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], statements: &mut [Statement<'arena>], expected_return_type: &GrugType<'arena>, arena: &'arena Arena) -> Result<(), GrugError<Arena>> {
 		self.push_scope();
 		for statement in statements {
 			match statement {
@@ -874,33 +300,34 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					if let Some(ty) = ty {
 						self.add_local_variable(name.to_str(), ty.clone(), *name_span)?;
 						if !(**ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && **ty != result_ty {
-							return Err(TypePropogatorError::VariableTypeMismatch {
-								name: Arc::from(name.to_str()),
-								got_type: result_ty.into(),
-								expected_type: (*ty).into(),
-							});
+							return self.new_type_propagator_error(
+								assignment_expr.span,
+								format_args!("Can't assign {} to '{}', which has type {}", result_ty, name, ty)
+							);
 						}
 					} else {
 						let ty = if let Some(ty) = self.get_global_variable_type(name.to_str()) {
 							if matches!(ty, GrugType::Id {..}) {
-								return Err(TypePropogatorError::GlobalIdsCantBeReassigned);
+								return self.new_type_propagator_error(
+									assignment_expr.span,
+									format_args!("Global id variables can't be reassigned")
+								);
 							}
 							ty
 						} else if let Some(ty) = self.get_local_variable_type(name.to_str()) {
 							ty
 						} else {
-							return Err(TypePropogatorError::CantAssignBecauseVariableDoesntExist {
-								name: Arc::from(name.to_str()),
-							});
+							return self.new_type_propagator_error(
+								assignment_expr.span,
+								format_args!("Can't assign to the variable '{}', since it does not exist", name)
+							);
 						};
 
 						if !(ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && ty != result_ty {
-						// if result_ty != var.ty {
-							return Err(TypePropogatorError::VariableTypeMismatch {
-								name: Arc::from(name.to_str()),
-								got_type: result_ty.into(),
-								expected_type: ty.into(),
-							});
+							return self.new_type_propagator_error(
+								assignment_expr.span,
+								format_args!("Can't assign {} to '{}', which has type {}", result_ty, name, ty)
+							);
 						}
 					}
 				}
@@ -920,9 +347,10 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					loop {
 						let cond_type = self.fill_expr(helper_fns, condition, arena)?;
 						if cond_type != GrugType::Bool {
-							return Err(TypePropogatorError::IfConditionTypeMismatch {
-								got_type: cond_type.into()
-							});
+							return self.new_type_propagator_error(
+								condition.span,
+								format_args!("If condition must be bool but got '{}'", cond_type)
+							);
 						}
 						self.fill_statements(helper_fns, if_block, expected_return_type, arena)?;
 						if !else_block.is_empty() {
@@ -949,9 +377,10 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				} => {
 					let cond_type = self.fill_expr(helper_fns, condition, arena)?;
 					if cond_type != GrugType::Bool {
-						return Err(TypePropogatorError::WhileConditionTypeMismatch {
-							got_type: cond_type.into()
-						});
+						return self.new_type_propagator_error(
+							condition.span,
+							format_args!("While condition must be bool but got '{}'", cond_type)
+						);
 					}
 					self.num_while_loops_deep += 1;
 					self.fill_statements(helper_fns, block, expected_return_type, arena)?;
@@ -959,28 +388,45 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 
 				}
 				Statement::Return {
+					return_span,
 					expr,
 				} => {
-					// result_ty MUST be filled
 					let return_ty = expr.as_mut()
 						.map(|expr| self.fill_expr(helper_fns, expr, arena))
 						.unwrap_or(Ok(GrugType::Void))?;
 					if *expected_return_type != (GrugType::Id{custom_name: None}) && *expected_return_type != return_ty {
-						return Err(TypePropogatorError::MismatchedReturnType{
-							function_name: Arc::from(self.current_fn_name.unwrap()),
-							expected_type: expected_return_type.into(),
-							got_type: return_ty.into(),
-						})
+						if return_ty == GrugType::Void {
+							return self.new_type_propagator_error(
+								*return_span,
+								format_args!("Function '{}' is supposed to return a value of type {}", self.current_fn_name.unwrap(), expected_return_type)
+							);
+						} else if *expected_return_type == GrugType::Void {
+							return self.new_type_propagator_error(
+								*return_span,
+								format_args!("Function '{}' wasn't supposed to return any value", self.current_fn_name.unwrap())
+							);
+						} else {
+							return self.new_type_propagator_error(
+								*return_span,
+								format_args!("Function '{}' is supposed to return {}, not {}", self.current_fn_name.unwrap(), expected_return_type, return_ty)
+							);
+						}
 					}
 				}
-				Statement::Break => {
+				Statement::Break(span) => {
 					if self.num_while_loops_deep == 0 {
-						return Err(TypePropogatorError::BreakStatementOutsideWhileLoop);
+						return self.new_type_propagator_error(
+							*span,
+							format_args!("There is a break statement that isn't inside of a while loop")
+						);
 					}
 				}
-				Statement::Continue => {
+				Statement::Continue(span) => {
 					if self.num_while_loops_deep == 0 {
-						return Err(TypePropogatorError::ContinueStatementOutsideWhileLoop);
+						return self.new_type_propagator_error(
+							*span,
+							format_args!("There is a continue statement that isn't inside of a while loop")
+						);
 					}
 				}
 				_ => (),
@@ -991,7 +437,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 
 	// Check that the global variable's assigned value doesn't contain a call_to a helper function nor identifier
-	fn check_global_expr(&mut self, assignment_expr: &Expr<'_>, name: &str) -> Result<(), TypePropogatorError> {
+	fn check_global_expr(&mut self, assignment_expr: &Expr<'_>, name: &str) -> Result<(), GrugError<Arena>> {
 		match &assignment_expr.data {
 			ExprData::Entity(_) => unreachable!(),
 			ExprData::Resource(_) => unreachable!(),
@@ -1020,10 +466,12 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				ptr : _,
 				name_span: _,
 			} => {
-				if fn_name.to_str().starts_with("helper_") {
-					Err(TypePropogatorError::GlobalCantCallHelperFn{
-						global_name: Arc::from(name),
-					})?;
+				let fn_name = fn_name.to_str();
+				if fn_name.starts_with("helper_") {
+					return self.new_type_propagator_error(
+						assignment_expr.span,
+						format_args!("The global variable '{}' isn't allowed to call helper functions", name)
+					);
 				}
 				args.iter().map(|argument| self.check_global_expr(argument, name))
 					.collect::<Result<Vec<_>, _>>()?;
@@ -1034,7 +482,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_expr(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], assignment_expr: &mut Expr<'arena>, arena: &'arena Arena) -> Result<GrugType<'arena>, TypePropogatorError> {
+	fn fill_expr(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], assignment_expr: &mut Expr<'arena>, arena: &'arena Arena) -> Result<GrugType<'arena>, GrugError<Arena>> {
 		// MUST be None before type propogation
 		assert!(assignment_expr.result_type.is_none());
 		let result_ty = match &mut assignment_expr.data {
@@ -1044,34 +492,40 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			ExprData::Resource{..} => GrugType::Resource{extension: nt!("").as_ntstrptr()},
 			ExprData::Entity{..} => GrugType::Entity{entity_type: None},
 			ExprData::Identifier(name) => {
-				let ty = self.get_variable_type(name.to_str()).ok_or_else(|| TypePropogatorError::VariableDoesNotExist{
-					name: Arc::from(name.to_str()),
-				})?;
+				let Some(ty) = self.get_variable_type(name.to_str()) else {
+					return self.new_type_propagator_error(
+						assignment_expr.span,
+						format_args!("The variable '{}' does not exist", name.to_str())
+					);
+				};
 				ty
 			},
 			ExprData::Number{
 				..
 			} => GrugType::Number,
 			ExprData::Unary{
-				op: operator,
+				op,
 				expr,
-				op_span: _,
+				op_span,
 			} => {
-				if let Expr{data: ExprData::Unary{op: next_operator, ..}, ..} = expr && next_operator == operator {
-					return Err(TypePropogatorError::AdjacentUnaryOperators{
-						operator: *operator,
-					});
+				if let Expr{data: ExprData::Unary{op: next_op, ..}, ..} = expr && next_op == op {
+					return self.new_type_propagator_error(
+						*op_span,
+						format_args!("Found '{0}' directly next to another '{0}', which can be simplified by just removing both of them", op)
+					);
 				}
 				let result_ty = self.fill_expr(helper_fns, expr, arena)?;
-				match (operator, &result_ty) {
+				match (op, &result_ty) {
 					(UnaryOperator::Not, GrugType::Bool) => (),
-					(UnaryOperator::Not, got) => return Err(TypePropogatorError::NotOperatorNotBeforeBool{
-						got: got.into(),
-					}),
+					(UnaryOperator::Not, got) => return self.new_type_propagator_error(
+						*op_span,
+						format_args!("Found 'not' before {}, but it can only be put before a bool", got)
+					),
 					(UnaryOperator::Minus, GrugType::Number) => (),
-					(UnaryOperator::Minus, got) => return Err(TypePropogatorError::MinusOperatorNotBeforeNumber{
-						got: got.into(),
-					}),
+					(UnaryOperator::Minus, got) => return self.new_type_propagator_error(
+						*op_span,
+						format_args!("Found '-' before {}, but it can only be put before a number", got)
+					),
 					// _ => (),
 				};
 				result_ty
@@ -1080,7 +534,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				left,
 				right,
 				op,
-				op_span: _,
+				op_span,
 			} => {
 				let result_0 = self.fill_expr(helper_fns, left, arena)?;
 				let result_1 = self.fill_expr(helper_fns, right, arena)?;
@@ -1088,26 +542,34 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					(GrugType::String, BinaryOperator::DoubleEquals) | 
 					(GrugType::String, BinaryOperator::NotEquals) => (),
 					(GrugType::String, _) => {
-						return Err(TypePropogatorError::CannotCompareStrings{
-							operator: *op
-						});
+						return self.new_type_propagator_error(
+							*op_span,
+							format_args!("You can't use the {} operator on a string", op)
+						);
 					},
 					_ => (),
 				}
 				if !GrugType::match_non_exact(&result_0, &result_1) {
-					return Err(TypePropogatorError::BinaryOperatorTypeMismatch{
-						operator: *op,
-						left: result_0.into(),
-						right: result_1.into(),
-					});
+					if result_0 == GrugType::String || result_1 == GrugType::String{
+						return self.new_type_propagator_error(
+							*op_span,
+							format_args!("You can't use the {} operator on a string", op)
+						);
+					} else {
+						return self.new_type_propagator_error(
+							*op_span,
+							format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, result_0, result_1)
+						);
+					}
 				}
 
 				match op {
 					BinaryOperator::Or | BinaryOperator::And => {
 						if result_0 != GrugType::Bool {
-							return Err(TypePropogatorError::LogicalOperatorExpectsBool {
-								operator: *op,
-							});
+							return self.new_type_propagator_error(
+								*op_span,
+								format_args!("'{}' operator expects bool", op)
+							);
 						}
 						GrugType::Bool
 					}
@@ -1117,28 +579,36 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					BinaryOperator::Greater | BinaryOperator::GreaterEquals | 
 					BinaryOperator::Less | BinaryOperator::LessEquals => {
 						if result_0 != GrugType::Number {
-							return Err(TypePropogatorError::ComparisonOperatorExpectsNumber {
-								operator: *op,
-								got_type: result_0.into(),
-							});
+							return self.new_type_propagator_error(
+								*op_span,
+								format_args!("'{}' operator expects number", op)
+							);
 						}
 						GrugType::Bool
 					},
 					BinaryOperator::Plus | BinaryOperator::Minus |
 					BinaryOperator::Multiply | BinaryOperator::Division => {
 						if result_0 != GrugType::Number {
-							return Err(TypePropogatorError::ArithmeticOperatorExpectsNumber {
-								operator: *op,
-								got_type: result_0.into(),
-							});
+							if result_0 == GrugType::String {
+								return self.new_type_propagator_error(
+									*op_span,
+									format_args!("You can't use the {} operator on a string", op)
+								);
+							} else {
+								return self.new_type_propagator_error(
+									*op_span,
+									format_args!("'{}' operator expects number", op)
+								);
+							}
 						}
 						result_0
 					},
 					BinaryOperator::Remainder => {
 						if result_0 != GrugType::Number {
-							return Err(TypePropogatorError::RemainderOperatorExpectsNumber {
-								got_ty: result_0.into(),
-							});
+							return self.new_type_propagator_error(
+								*op_span,
+								format_args!("'%' operator expects number")
+							);
 						}
 						result_0
 					},
@@ -1148,31 +618,41 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				name: fn_name,
 				args,
 				ptr ,
-				name_span: _,
+				name_span,
 			} => {
-				// TODO: Move this line to within check_arguments
 				let fn_name = fn_name.to_str();
 				if let Some((_, (return_ty, sig_arguments))) = helper_fns.iter().find(|(name, _)| *name == fn_name) {
-					self.check_arguments(helper_fns, fn_name, sig_arguments, args, arena)?;
+					self.check_arguments(helper_fns, fn_name, *name_span, sig_arguments, args, arena)?;
 					return_ty.clone()
 				} else if let Some(game_fn) = self.game_fns.get(fn_name) {
-					self.check_arguments(helper_fns, fn_name, &game_fn.parameters, args, arena)?;
+					self.check_arguments(helper_fns, fn_name, *name_span, &game_fn.parameters, args, arena)?;
 					if let Some(game_fn_ptr) = self.game_fn_ptrs.get(fn_name) {
 						*ptr = Some(*game_fn_ptr);
 						game_fn.return_ty
 					} else {
-						return Err(TypePropogatorError::GameFunctionNotProvided{
-							fn_name: String::from(fn_name),
-						});
+						panic!("This error is not triggerred by grug_tests");
+						// return self.new_type_propagator_error(
+						// 	*name_span,
+						// 	format_args!("Game function {} was not registered", fn_name)
+						// );
 					}
 				} else if fn_name.starts_with("on_") {
-					return Err(TypePropogatorError::CallOnFnWithinOnFn {
-						on_fn_name: Arc::from(fn_name)
-					});
+					return self.new_type_propagator_error(
+						*name_span,
+						format_args!("Mods aren't allowed to call their own on_ functions, but '{}' was called", fn_name)
+					);
 				} else {
-					return Err(TypePropogatorError::FunctionDoesNotExist {
-						function_name: Arc::from(fn_name)
-					});
+					if fn_name.starts_with("helper_") {
+						return self.new_type_propagator_error(
+							*name_span,
+							format_args!("The helper function '{}' was not defined by this grug file", fn_name)
+						);
+					} else {
+						return self.new_type_propagator_error(
+							*name_span,
+							format_args!("The game function '{}' was not declared by mod_api.json", fn_name)
+						);
+					}
 				}
 			},
 			ExprData::Parenthesized(expr) => {
@@ -1183,19 +663,27 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		Ok(result_ty)
 	}
 
-	fn check_arguments(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], function_name: &str, signature: &[Parameter<'_>], arguments: &mut [Expr<'arena>], arena: &'arena Arena) -> Result<(), TypePropogatorError> {
+	fn check_arguments(&mut self, 
+		helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], 
+		function_name: &str, 
+		name_span: SourceSpan, 
+		signature: &[Parameter<'_>], 
+		arguments: &mut [Expr<'arena>], 
+		arena: &'arena Arena
+	) -> Result<(), GrugError<Arena>> {
 		if signature.len() > arguments.len() {
-			return Err(TypePropogatorError::TooFewArguments{
-				function_name: Arc::from(function_name),
-				expected_name: Arc::from(signature[arguments.len()].name.to_str()),
-				expected_type: signature[arguments.len()].ty.into(),
-			});
+			let param = signature[arguments.len()];
+			return self.new_type_propagator_error(
+				name_span,
+				format_args!("Function call '{}' expected the argument '{}' with type {}", function_name, param.name.to_str(), param.ty)
+			);
 		} else if signature.len() < arguments.len() {
-			let got_type = self.fill_expr(helper_fns, &mut arguments[signature.len()], arena)?;
-			return Err(TypePropogatorError::TooManyArguments{
-				function_name: Arc::from(function_name),
-				got_type: got_type.into(),
-			});
+			let arg = &mut arguments[signature.len()];
+			let got_type = self.fill_expr(helper_fns, arg, arena)?;
+			return self.new_type_propagator_error(
+				arg.span,
+				format_args!("Function call '{}' got an unexpected extra argument with type {}", function_name, got_type)
+			);
 		}
 		for (param, arg) in signature.iter().zip(arguments) {
 			let arg_result_ty = self.fill_expr(helper_fns, arg, arena)?;
@@ -1211,15 +699,17 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			// argument is string but resource is expected
 			} else if let GrugType::Resource{..} = param.ty 
 				&& let ExprData::String(string) = arg.data {
-				return Err(TypePropogatorError::StringError(
-					format!("The host function '{}' expects a resource string, so put an 'r' in front of string \"{}\"", function_name, string)
-				));
+				return self.new_type_propagator_error(
+					arg.span,
+					format_args!("The host function '{}' expects a resource string, so put an 'r' in front of string \"{}\"", function_name, string)
+				);
 			// argument is string but entity is expected
 			} else if let GrugType::Entity{..} = param.ty 
 				&& let ExprData::String(string) = arg.data {
-				return Err(TypePropogatorError::StringError(
-					format!("The host function '{}' expects an entity string, so put an 'e' in front of string \"{}\"", function_name, string)
-				));
+				return self.new_type_propagator_error(
+					arg.span,
+					format_args!("The host function '{}' expects an entity string, so put an 'e' in front of string \"{}\"", function_name, string)
+				);
 			// if argument is void
 			} else if *arg.result_type.as_ref().unwrap() == &GrugType::Void {
 				return self.new_type_propagator_error(
@@ -1240,7 +730,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		Ok(())
 	}
 
-	fn validate_and_fix_resource_string(&mut self, value: &str, extension: &str, span: SourceSpan, arena: &'arena Arena) -> Result<&'arena NTStr, TypePropogatorError> {
+	fn validate_and_fix_resource_string(&mut self, value: &str, extension: &str, span: SourceSpan, arena: &'arena Arena) -> Result<&'arena NTStr, GrugError<Arena>> {
 		if value.is_empty() {
 			return self.new_type_propagator_error(
 				span,
@@ -1319,7 +809,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		}
 	}
 
-	fn validate_and_fix_entity_string(&mut self, entity_string_old: &mut NTStrPtr<'arena>, span: SourceSpan, arena: &'arena Arena) -> Result<(), TypePropogatorError> {
+	fn validate_and_fix_entity_string(&mut self, entity_string_old: &mut NTStrPtr<'arena>, span: SourceSpan, arena: &'arena Arena) -> Result<(), GrugError<Arena>> {
 		let entity_string = entity_string_old.to_str();
 		// Validate string
 		if entity_string.is_empty() {
@@ -1404,7 +894,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		self.global_variables.get(var_name).cloned()
 	}
 
-	fn add_local_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), TypePropogatorError> {
+	fn add_local_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), GrugError<Arena>> {
 		if self.get_global_variable_type(&name).is_some() {
 			return self.new_type_propagator_error(
 				name_span,
@@ -1422,7 +912,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		Ok(())
 	}
 
-	fn add_global_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), TypePropogatorError> {
+	fn add_global_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), GrugError<Arena>> {
 		match self.global_variables.entry(name) {
 			Entry::Occupied(_) => return self.new_type_propagator_error(
 				name_span,
