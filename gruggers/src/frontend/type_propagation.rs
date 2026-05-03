@@ -4,8 +4,10 @@ use std::sync::Arc;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
+use gruggers_core::error::{grug_error, ErrorKind, SourceSpan};
+
 use crate::types::GameFnPtr;
-use crate::ntstring::NTStr;
+use crate::ntstring::{NTStr, NTStrPtr};
 use crate::ast::{
 	GrugType, UnaryOperator, BinaryOperator,
 	ExprData, HelperFunction, Statement, Expr,
@@ -21,6 +23,9 @@ use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
 
 pub(super) struct TypePropogator<'mod_api, 'arena> {
+	file_text: &'arena str,
+	file_path: &'arena OsStr,
+	current_function: &'arena str,
 	entity: &'mod_api ModApiEntity<'mod_api>,
 	game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiGameFn<'mod_api>>,
 	game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>,
@@ -97,6 +102,7 @@ impl std::fmt::Display for OwnedGrugType {
 
 #[derive(Debug)]
 pub enum TypePropogatorError {
+	GrugError(grug_error<Arena>),
 	// grug_assert(grug_entity, "The entity '%s' was not declared by mod_api.json", file_entity_type);
 	EntityDoesNotExist{
 		entity_name: Arc<str>,
@@ -293,6 +299,7 @@ pub enum TypePropogatorError {
 impl std::fmt::Display for TypePropogatorError {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
+			Self::GrugError(err) => write!(f, "{}", err),
 			Self::EntityDoesNotExist{
 				entity_name,
 			} => write!(f, "'{}' seems like a custom ID type, but it doesn't start in Uppercase", entity_name),
@@ -474,6 +481,7 @@ impl std::fmt::Display for TypePropogatorError {
 
 #[derive(Debug)]
 pub enum ResourceValidationError {
+	GrugError(grug_error<Arena>),
 	// grug_assert(string[0] != '\0', "Resources can't be empty strings");
 	// TODO: This needs to display the actual argument
 	EmptyResource {},
@@ -531,6 +539,7 @@ pub enum ResourceValidationError {
 impl std::fmt::Display for ResourceValidationError {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
+			Self::GrugError(err) => write!(f, "{}", err),
 			Self::EmptyResource{} => write!(f, "Resources can't be empty strings"),
 			// grug_assert(string[0] != '/', "Remove the leading slash from the resource \"%s\"", string);
 			Self::LeadingForwardSlash {
@@ -667,8 +676,13 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, 
 		mod_name: &'arena OsStr, 
 		mods_dir_path: &'mod_api OsStr, 
+		file_text: &'arena str,
+		file_path: &'arena OsStr,
 	) -> Self {
 		Self {
+			file_text,
+			file_path,
+			current_function: "member scope",
 			entity,
 			game_fns,
 			game_fn_ptrs,
@@ -682,8 +696,25 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		}
 	}
 
+	#[track_caller]
+	fn new_type_propagator_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, TypePropogatorError> {
+		println!("{:?}", std::panic::Location::caller());
+		Err(TypePropogatorError::GrugError(grug_error::new_error(
+			ErrorKind::TYPE_CHECKER_ERROR,
+			self.current_function,
+			self.file_path,
+			self.file_text, 
+			span,
+			args
+		)))
+	}
+
 	pub fn fill_result_types(mut self, entity_name: &str, ast: &mut AST<'arena>, arena: &'arena Arena) -> Result<HashSet<OsString>, TypePropogatorError> {
-		self.add_global_variable(nt!("me"), GrugType::Id{custom_name: Some(Box::leak(NTStr::box_from_str_in(entity_name, arena)).as_ntstrptr())})?;
+		self.add_global_variable(
+			nt!("me"), 
+			GrugType::Id{custom_name: Some(Box::leak(NTStr::box_from_str_in(entity_name, arena)).as_ntstrptr())},
+			SourceSpan{line: 0, offset: 0}
+		)?;
 
 		let variables = ast.global_statements
 			.iter_mut().filter_map(|st| match st {GlobalStatement::Variable(x) => Some(x), _ => None});
@@ -705,7 +736,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					expected_type: variable.ty.into(),
 				});
 			}
-			self.add_global_variable(variable.name.to_str(), result_ty)?;
+			self.add_global_variable(variable.name.to_str(), result_ty, variable.span)?;
 		}
 
 		let mut previous_on_fn_index = 0;
@@ -767,8 +798,8 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 
 			self.current_fn_name = Some(current_on_fn.name.to_str());
 			self.push_scope();
-			for arg in current_on_fn.parameters {
-				self.add_local_variable(arg.name.to_str(), arg.ty.into())?;
+			for param in current_on_fn.parameters {
+				self.add_local_variable(param.name.to_str(), param.ty.into(), param.name_span)?;
 			}
 			self.fill_statements(&ast.helper_fn_signatures, &mut current_on_fn.body_statements, &GrugType::Void, arena)?;
 			self.pop_scope();
@@ -805,7 +836,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					self.current_fn_name = Some(name.to_str());
 					self.push_scope();
 					for param in *parameters {
-						self.add_local_variable(param.name.to_str(), param.ty.into())?;
+						self.add_local_variable(param.name.to_str(), param.ty.into(), param.name_span)?;
 					}
 					self.fill_statements(&ast.helper_fn_signatures, body_statements, return_type, arena)?;
 
@@ -836,12 +867,12 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					name,
 					ty,
 					assignment_expr,
-					name_span: _,
+					name_span,
 				} => {
 					let result_ty = self.fill_expr(helper_fns, assignment_expr, arena)?;
 					
 					if let Some(ty) = ty {
-						self.add_local_variable(name.to_str(), ty.clone())?;
+						self.add_local_variable(name.to_str(), ty.clone(), *name_span)?;
 						if !(**ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && **ty != result_ty {
 							return Err(TypePropogatorError::VariableTypeMismatch {
 								name: Arc::from(name.to_str()),
@@ -1121,12 +1152,11 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			} => {
 				// TODO: Move this line to within check_arguments
 				let fn_name = fn_name.to_str();
-				args.iter_mut().map(|argument| self.fill_expr(helper_fns, argument, arena)).collect::<Result<Vec<_>, _>>()?;
 				if let Some((_, (return_ty, sig_arguments))) = helper_fns.iter().find(|(name, _)| *name == fn_name) {
-					self.check_arguments(fn_name, sig_arguments, args, arena)?;
+					self.check_arguments(helper_fns, fn_name, sig_arguments, args, arena)?;
 					return_ty.clone()
 				} else if let Some(game_fn) = self.game_fns.get(fn_name) {
-					self.check_arguments(fn_name, &game_fn.parameters, args, arena)?;
+					self.check_arguments(helper_fns, fn_name, &game_fn.parameters, args, arena)?;
 					if let Some(game_fn_ptr) = self.game_fn_ptrs.get(fn_name) {
 						*ptr = Some(*game_fn_ptr);
 						game_fn.return_ty
@@ -1153,8 +1183,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		Ok(result_ty)
 	}
 
-	fn check_arguments(&mut self, function_name: &str, signature: &[Parameter<'_>], arguments: &mut [Expr<'arena>], arena: &'arena Arena) -> Result<(), TypePropogatorError> {
-		debug_assert!(arguments.iter().all(|arg| arg.result_type.is_some()));
+	fn check_arguments(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], function_name: &str, signature: &[Parameter<'_>], arguments: &mut [Expr<'arena>], arena: &'arena Arena) -> Result<(), TypePropogatorError> {
 		if signature.len() > arguments.len() {
 			return Err(TypePropogatorError::TooFewArguments{
 				function_name: Arc::from(function_name),
@@ -1162,26 +1191,23 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				expected_type: signature[arguments.len()].ty.into(),
 			});
 		} else if signature.len() < arguments.len() {
+			let got_type = self.fill_expr(helper_fns, &mut arguments[signature.len()], arena)?;
 			return Err(TypePropogatorError::TooManyArguments{
 				function_name: Arc::from(function_name),
-				got_type: arguments[signature.len()].result_type.as_deref().unwrap().into(),
+				got_type: got_type.into(),
 			});
 		}
 		for (param, arg) in signature.iter().zip(arguments) {
+			let arg_result_ty = self.fill_expr(helper_fns, arg, arena)?;
 			// TODO: Make this better
 			// If argument is resource
 			if let GrugType::Resource{extension} = param.ty 
 				&& let ExprData::Resource(ref mut value) = arg.data {
-				let value_ntstr = value.to_ntstr();
-				self.validate_resource_string(value_ntstr.as_str(), extension.to_str())?;
-				*value = self.fix_resource_string(value_ntstr, arena).as_ntstrptr();
-				self.check_if_resource_exists(value.to_str())?;
+				*value = self.validate_and_fix_resource_string(value.to_str(), extension.to_str(), arg.span, arena)?.as_ntstrptr();
 			// If argument is entity
 			} else if let GrugType::Entity{entity_type: _} = param.ty 
 				&& let ExprData::Entity(ref mut value) = arg.data {
-				let value_ntstr = value.to_ntstr();
-				self.validate_entity_string(value_ntstr.as_str())?;
-				if let Some(fixed_entity) = self.fix_entity_string(value_ntstr, arena) {*value = fixed_entity.as_ntstrptr()}
+				self.validate_and_fix_entity_string(value, arg.span, arena)?;
 			// argument is string but resource is expected
 			} else if let GrugType::Resource{..} = param.ty 
 				&& let ExprData::String(string) = arg.data {
@@ -1196,122 +1222,131 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				));
 			// if argument is void
 			} else if *arg.result_type.as_ref().unwrap() == &GrugType::Void {
-				return Err(TypePropogatorError::VoidArgumentInFunctionCall{
-					function_name: Arc::from(function_name),
-					signature_type: param.ty.into(),
-					parameter_name: Arc::from(param.name.to_str()),
-				});
+				return self.new_type_propagator_error(
+					arg.span,
+					format_args!("Function call '{}' expected the type {} for argument '{}', but got a function call that doesn't return anything", function_name, param.ty, param.name)
+				);
 			// id type coersion to id
 			} else if let GrugType::Id{custom_name: None} = param.ty && let Some(GrugType::Id{custom_name: _}) = arg.result_type {
 				arg.result_type = Some(&GrugType::Id{custom_name: None});
 			// mismatch
 			} else if Some(&param.ty) != arg.result_type.as_deref() {
-				return Err(TypePropogatorError::FunctionArgumentMismatch {
-					function_name: Arc::from(function_name),
-					expected_type: param.ty.into(),
-					got_type: arg.result_type.as_deref().unwrap().into(),
-					parameter_name: Arc::from(param.name.to_str()),
-				});
+				return self.new_type_propagator_error(
+					arg.span,
+					format_args!("Function call '{}' expected the type {} for argument '{}', but got {}", function_name, param.ty, param.name, arg_result_ty)
+				);
 			}
 		}
 		Ok(())
 	}
 
-	fn validate_resource_string(&mut self, value: &str, extension: &str) -> Result<(), ResourceValidationError> {
+	fn validate_and_fix_resource_string(&mut self, value: &str, extension: &str, span: SourceSpan, arena: &'arena Arena) -> Result<&'arena NTStr, TypePropogatorError> {
 		if value.is_empty() {
-			Err(ResourceValidationError::EmptyResource{ })
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Resources can't be empty strings")
+			);
 		} else if value.starts_with("/") {
-			Err(ResourceValidationError::LeadingForwardSlash {
-				value: Arc::from(value),
-			})
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Remove the leading slash from the resource \"{}\"", value)
+			);
 		} else if value.ends_with("/") {
-			Err(ResourceValidationError::TrailingForwardSlash {
-				value: Arc::from(value),
-			})
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Remove the trailing slash from the resource \"{}\"", value)
+			);
 		} else if value.contains("\\") {
-			Err(ResourceValidationError::ContainsBackslash {
-				value: Arc::from(value),
-			})
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Replace the '\\' with '/' in the resource \"{}\"", value)
+			);
 		} else if value.contains("//") {
-			Err(ResourceValidationError::ContainsDoubleForwardSlash {
-				value: Arc::from(value),
-			})
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Replace the '//' with '/' in the resource \"{}\"", value)
+			);
 		} else if value == ".." || value.starts_with("../") {
-			Err(ResourceValidationError::BeginsWithDotDotWithoutSlash {
-				value: Arc::from(value),
-			})
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Remove the '..' from the resource \"{}\"", value)
+			);
 		} else if value.ends_with("/..") || value.contains("/../") {
-			Err(ResourceValidationError::ContainsSlashDotDotInMiddle {
-				value: Arc::from(value),
-			})
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Remove the '..' from the resource \"{}\"", value)
+			);
 		} else if value == "." || value.starts_with("./") {
-			Err(ResourceValidationError::BeginsWithDotWithoutSlash {
-				value: Arc::from(value),
-			})
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Remove the '.' from the resource \"{}\"", value)
+			);
 		} else if value.ends_with("/.") || value.contains("/./") {
-			Err(ResourceValidationError::ContainsSlashDotInMiddle {
-				value: Arc::from(value),
-			})
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Remove the '.' from the resource \"{}\"", value)
+			);
 		} else if value.ends_with(".") {
-			Err(ResourceValidationError::EndsWithDot {
-				value: Arc::from(value),
-			})
+			return self.new_type_propagator_error(
+				span,
+				format_args!("resource name \"{}\" cannot end with .", value)
+			);
 		} else if value.ends_with(extension) {
-			Ok(())
+			()
 		} else {
-			Err(ResourceValidationError::ExtensionMismatch {
-				expected: Arc::from(extension),
-				value: Arc::from(value),
-			})
+			return self.new_type_propagator_error(
+				span,
+				format_args!("The resource '{}' was supposed to have the extension '{}'", value, extension)
+			);
 		}
-	}
-
-	fn fix_resource_string(&mut self, value: &NTStr, arena: &'arena Arena) -> &'arena NTStr {
-		// TODO: If the mod name is non utf8, this may cause problems
-		// Because cross mod resources are not supported, we should probably
-		// just not even fix the resource string anymore
+		// fix string
 		let mut string = PathBuf::from(self.current_mod_name);
-		string.push(value.as_str());
-		Box::leak(NTStr::box_from_str_in(&format!("{}", string.display()), arena))
-	}
+		string.push(value);
+		let resource_str = Box::leak(NTStr::box_from_str_in(&format!("{}", string.display()), arena));
 
-	fn check_if_resource_exists(&mut self, resource_str: &str) -> Result<(), ResourceValidationError> {
+		// check if resource exists
 		let mut full_path = PathBuf::from(self.mods_dir_path);
-		full_path.push(resource_str);
+		full_path.push(resource_str.as_str());
+		// we can't do `Ok(true) == std::fs::exists(&full_path)` because std::io::Error is not PartialEq
 		if !std::fs::exists(&full_path).is_ok_and(std::convert::identity) {
-			Err(ResourceValidationError::ResourceDoesNotExist{
-				path: full_path
-			})
+			return self.new_type_propagator_error(
+				span,
+				format_args!("resource '{}' does not exist", full_path.display())
+			);
 		} else {
-			self.resources.insert(OsString::from(resource_str));
-			Ok(())
+			self.resources.insert(OsString::from(resource_str.as_str()));
+			Ok(resource_str)
 		}
 	}
 
-	fn validate_entity_string(&mut self, entity_string: &str) -> Result<(), EntityValidationError> {
+	fn validate_and_fix_entity_string(&mut self, entity_string_old: &mut NTStrPtr<'arena>, span: SourceSpan, arena: &'arena Arena) -> Result<(), TypePropogatorError> {
+		let entity_string = entity_string_old.to_str();
+		// Validate string
 		if entity_string.is_empty() {
-			return Err(EntityValidationError::EntityCantBeEmpty);
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Entities can't be empty strings")
+			);
 		}
 
 		let (mod_name, entity_name) = if let Some((mod_name, entity_name)) = entity_string.split_once(":") {
 			if mod_name.is_empty() {
-				return Err(EntityValidationError::EntityMissingModName {
-					entity_string: Arc::from(entity_string),
-				});
+				return self.new_type_propagator_error(
+					span,
+					format_args!("Entity '{}' is missing a mod name", entity_string)
+				);
 			}
 			if entity_name.is_empty() {
-				return Err(EntityValidationError::EntityMissingEntityName {
-					mod_name: String::from(mod_name),
-					entity_string: Arc::from(entity_string),
-				});
+				return self.new_type_propagator_error(
+					span,
+					format_args!("Entity '{}' specifies the mod name '{}', but it is missing an entity name after the ':'", entity_string, mod_name)
+				);
 			}
 			if mod_name == self.current_mod_name {
-				// grug_assert(!streq(mod_name, mod), "Entity '%s' its mod name '%s' is invalid, since the file it is in refers to its own mod; just change it to '%s'", string, mod_name, entity_name);
-				return Err(EntityValidationError::ModNameIsCurrentMod {
-					full_entity_string: Arc::from(entity_string),
-					mod_name: String::from(mod_name),
-					entity_name: String::from(entity_name),
-				});
+				return self.new_type_propagator_error(
+					span,
+					format_args!("Entity '{}' its mod name '{}' is invalid, since the file it is in refers to its own mod; just change it to '{}'", entity_string, mod_name, entity_name)
+				);
 			}
 			(mod_name, entity_name)
 		} else {
@@ -1319,28 +1354,25 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		};
 
 		if let Some(ch) = mod_name.chars().find(|ch| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '_' || *ch == '-')) {
-			return Err(EntityValidationError::ModNameHasInvalidCharacter{
-				entity_name: Arc::from(entity_string),
-				invalid_char: ch,
-			});
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Entity '{}' its mod name contains the invalid character '{}'", entity_string, ch)
+			);
 		}
 		if let Some(ch) = entity_name.chars().find(|ch| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '_' || *ch == '-')) {
-			return Err(EntityValidationError::EntityNameHasInvalidCharacter{
-				entity_name: Arc::from(entity_string),
-				invalid_char: ch,
-			});
+			return self.new_type_propagator_error(
+				span,
+				format_args!("Entity '{}' its entity name contains the invalid character '{}'", entity_string, ch)
+			);
 		}
-		Ok(())
-	}
 
-	fn fix_entity_string(&mut self, value: &NTStr, arena: &'arena Arena) -> Option<&'arena NTStr> {
+		// Fix string
 		// TODO: If the mod name is non utf8, this may cause problems
 		// Cross mod entities are supported, so we actually need to handle this properly
-		if value.split_once(":").is_none() {
-			Some(Box::leak(NTStr::box_from_str_in(&format!("{}:{}", self.current_mod_name.display(), value), arena)))
-		} else {
-			None
+		if mod_name == "" {
+			*entity_string_old = Box::leak(NTStr::box_from_str_in(&format!("{}:{}", self.current_mod_name.display(), entity_name), arena)).as_ntstrptr()
 		}
+		Ok(())
 	}
 
 	fn get_variable_type(&self, var_name: &str) -> Option<GrugType<'arena>> {
@@ -1372,27 +1404,30 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		self.global_variables.get(var_name).cloned()
 	}
 
-	fn add_local_variable(&mut self, name: &'arena str, ty: GrugType<'arena>) -> Result<(), TypePropogatorError> {
+	fn add_local_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), TypePropogatorError> {
 		if self.get_global_variable_type(&name).is_some() {
-			return Err(TypePropogatorError::LocalVariableShadowedByGlobal{
-				name: Arc::from(name),
-			});
+			return self.new_type_propagator_error(
+				name_span,
+				format_args!("The local variable '{}' shadows an earlier global variable", name),
+			);
 		}
 		if self.get_local_variable_type(name).is_some() {
-			return Err(TypePropogatorError::LocalVariableShadowedByLocal{
-				name: Arc::from(name),
-			});
+			return self.new_type_propagator_error(
+				name_span,
+				format_args!("The local variable '{}' shadows an earlier local variable", name),
+			);
 		}
 		let result = self.local_variables.last_mut().expect("There is no local scope to push onto").insert(name, ty).is_none();
 		debug_assert!(result);
 		Ok(())
 	}
 
-	fn add_global_variable(&mut self, name: &'arena str, ty: GrugType<'arena>) -> Result<(), TypePropogatorError> {
+	fn add_global_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), TypePropogatorError> {
 		match self.global_variables.entry(name) {
-			Entry::Occupied(_) => return Err(TypePropogatorError::GlobalVariableShadowed{
-				name: Arc::from(name),
-			})?,
+			Entry::Occupied(_) => return self.new_type_propagator_error(
+				name_span,
+				format_args!("The global variable '{}' shadows an earlier global variable", name),
+			),
 			Entry::Vacant(x) => {x.insert(ty);},
 		}
 		Ok(())
