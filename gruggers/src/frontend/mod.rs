@@ -306,10 +306,10 @@ fn get_entity_type(path: &OsStr) -> Result<&str, GrugError<Arena>> {
 			)
 		));
 	}
-	check_custom_id_is_pascal(entity_type)
+	check_custom_id_is_pascal(entity_type, path)
 }
 
-fn check_custom_id_is_pascal(entity_type: &OsStr) -> Result<&str, GrugError<Arena>> {
+fn check_custom_id_is_pascal<'a>(entity_type: &'a OsStr, path: &'_ OsStr) -> Result<&'a str, GrugError<Arena>> {
 	let entity_type = entity_type.to_str().ok_or_else(|| 
 		GrugError::new_error(
 			ErrorKind::FILE_NAME_ERROR,
@@ -328,7 +328,7 @@ fn check_custom_id_is_pascal(entity_type: &OsStr) -> Result<&str, GrugError<Aren
 		return Err(GrugError::new_error(
 			ErrorKind::FILE_NAME_ERROR,
 			"",
-			entity_type.as_ref(), 
+			path, 
 			"",
 			SourceSpan{offset: 0, line: 0},
 			format_args!("'{entity_type}' seems like a custom ID type, but it doesn't start in Uppercase")
@@ -339,10 +339,10 @@ fn check_custom_id_is_pascal(entity_type: &OsStr) -> Result<&str, GrugError<Aren
 			return Err(GrugError::new_error(
 				ErrorKind::FILE_NAME_ERROR,
 				"",
-				entity_type.as_ref(), 
+				path, 
 				"",
 				SourceSpan{offset: 0, line: 0},
-				format_args!("'{entity_type}' seems like a custom ID type, but it contains '{ch}', which isn't uppercase/lowercase/a digit", )
+				format_args!("'{entity_type}' seems like a custom ID type, but it contains '{ch}', which isn't uppercase, lowercase, or a digit", )
 			));
 		}
 	}

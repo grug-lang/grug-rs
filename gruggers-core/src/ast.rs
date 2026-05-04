@@ -160,8 +160,8 @@ pub enum UnaryOperator {
 impl std::fmt::Display for UnaryOperator {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
-			Self::Not => write!(f, "NOT_TOKEN"),
-			Self::Minus => write!(f, "MINUS_TOKEN"),
+			Self::Not => write!(f, "not"),
+			Self::Minus => write!(f, "-"),
 		}
 	}
 }
@@ -329,19 +329,19 @@ pub enum BinaryOperator {
 impl std::fmt::Display for BinaryOperator {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
-			Self::Or => write!(f, "OR_TOKEN"),
-			Self::And => write!(f, "AND_TOKEN"),
-			Self::DoubleEquals => write!(f, "EQUALS_TOKEN"),
-			Self::NotEquals => write!(f, "NOT_EQUALS_TOKEN"),
-			Self::Greater => write!(f, "GREATER_TOKEN"),
-			Self::GreaterEquals => write!(f, "GREATER_OR_EQUAL_TOKEN"),
-			Self::Less => write!(f, "LESS_TOKEN"),
-			Self::LessEquals => write!(f, "LESS_OR_EQUAL_TOKEN"),
-			Self::Plus => write!(f, "PLUS_TOKEN"),
-			Self::Minus => write!(f, "MINUS_TOKEN"),
-			Self::Multiply => write!(f, "MULTIPLICATION_TOKEN"),
-			Self::Division => write!(f, "DIVISION_TOKEN"),
-			Self::Remainder => write!(f, "REMAINDER_TOKEN"),
+			Self::Or => write!(f, "or"),
+			Self::And => write!(f, "and"),
+			Self::DoubleEquals => write!(f, "=="),
+			Self::NotEquals => write!(f, "!="),
+			Self::Greater => write!(f, ">"),
+			Self::GreaterEquals => write!(f, ">="),
+			Self::Less => write!(f, "<"),
+			Self::LessEquals => write!(f, "<="),
+			Self::Plus => write!(f, "+"),
+			Self::Minus => write!(f, "-"),
+			Self::Multiply => write!(f, "*"),
+			Self::Division => write!(f, "/"),
+			Self::Remainder => write!(f, "%"),
 		}
 	}
 }

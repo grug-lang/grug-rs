@@ -58,45 +58,45 @@ pub enum TokenType {
 impl std::fmt::Display for TokenType {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match self {
-			Self::OpenParenthesis => write!(f, "OPEN_PARENTHESIS_TOKEN"),
-			Self::CloseParenthesis => write!(f, "CLOSE_PARENTHESIS_TOKEN"),
-			Self::OpenBrace => write!(f, "OPEN_BRACE_TOKEN"),
-			Self::CloseBrace => write!(f, "CLOSE_BRACE_TOKEN"),
-			Self::Plus => write!(f, "PLUS_TOKEN"),
-			Self::Minus => write!(f, "MINUS_TOKEN"),
-			Self::Star => write!(f, "MULTIPLICATION_TOKEN"),
-			Self::ForwardSlash => write!(f, "DIVISION_TOKEN"),
-			Self::Percent => write!(f, "REMAINDER_TOKEN"),
-			Self::Comma => write!(f, "COMMA_TOKEN"),
-			Self::Colon => write!(f, "COLON_TOKEN"),
-			Self::NewLine => write!(f, "NEWLINE_TOKEN"),
-			Self::DoubleEquals => write!(f, "EQUALS_TOKEN"),
-			Self::NotEquals => write!(f, "NOT_EQUALS_TOKEN"),
-			Self::Equal => write!(f, "ASSIGNMENT_TOKEN"),
-			Self::GreaterEquals => write!(f, "GREATER_OR_EQUAL_TOKEN"),
-			Self::Greater => write!(f, "GREATER_TOKEN"),
-			Self::LessEquals => write!(f, "LESS_OR_EQUAL_TOKEN"),
-			Self::Less => write!(f, "LESS_TOKEN"),
-			Self::And => write!(f, "AND_TOKEN"),
-			Self::Or => write!(f, "OR_TOKEN"),
-			Self::Not => write!(f, "NOT_TOKEN"),
-			Self::True => write!(f, "TRUE_TOKEN"),
-			Self::False => write!(f, "FALSE_TOKEN"),
-			Self::If => write!(f, "IF_TOKEN"),
-			Self::Else => write!(f, "ELSE_TOKEN"),
-			Self::While => write!(f, "WHILE_TOKEN"),
-			Self::Break => write!(f, "BREAK_TOKEN"),
-			Self::Return => write!(f, "RETURN_TOKEN"),
-			Self::Continue => write!(f, "CONTINUE_TOKEN"),
-			Self::Space => write!(f, "SPACE_TOKEN"),
-			Self::Indentation => write!(f, "INDENTATION_TOKEN"),
-			Self::String => write!(f, "STRING_TOKEN"),
-			Self::Word => write!(f, "WORD_TOKEN"),
-			Self::Int32 => write!(f, "NUMBER_TOKEN"),
-			Self::Float32 => write!(f, "NUMBER_TOKEN"),
-			Self::Comment => write!(f, "COMMENT_TOKEN"),
-			Self::Resource => write!(f, "RESOURCE_TOKEN"),
-			Self::Entity => write!(f, "ENTITY_TOKEN"),
+			Self::OpenParenthesis => write!(f, "'('"),
+			Self::CloseParenthesis => write!(f, "')'"),
+			Self::OpenBrace => write!(f, "'{{'"),
+			Self::CloseBrace => write!(f, "'}}'"),
+			Self::Plus => write!(f, "'+'"),
+			Self::Minus => write!(f, "'-'"),
+			Self::Star => write!(f, "'*'"),
+			Self::ForwardSlash => write!(f, "'/'"),
+			Self::Percent => write!(f, "'%'"),
+			Self::Comma => write!(f, "','"),
+			Self::Colon => write!(f, "':'"),
+			Self::NewLine => write!(f, "line break ('\\n')"),
+			Self::DoubleEquals => write!(f, "'=='"),
+			Self::NotEquals => write!(f, "'!='"),
+			Self::Equal => write!(f, "'='"),
+			Self::GreaterEquals => write!(f, "'>='"),
+			Self::Greater => write!(f, "'>'"),
+			Self::LessEquals => write!(f, "'<='"),
+			Self::Less => write!(f, "'<'"),
+			Self::And => write!(f, "'and'"),
+			Self::Or => write!(f, "'or'"),
+			Self::Not => write!(f, "'not'"),
+			Self::True => write!(f, "'true'"),
+			Self::False => write!(f, "'false'"),
+			Self::If => write!(f, "'if'"),
+			Self::Else => write!(f, "'else'"),
+			Self::While => write!(f, "'while'"),
+			Self::Break => write!(f, "'break'"),
+			Self::Return => write!(f, "'return'"),
+			Self::Continue => write!(f, "'continue'"),
+			Self::Space => write!(f, "space (' ')"),
+			Self::Indentation => write!(f, "indentation"),
+			Self::String => write!(f, "string"),
+			Self::Word => write!(f, "word"),
+			Self::Int32 => write!(f, "number"),
+			Self::Float32 => write!(f, "number"),
+			Self::Comment => write!(f, "comment"),
+			Self::Resource => write!(f, "resource string"),
+			Self::Entity => write!(f, "entity string"),
 		}
 	}
 }
@@ -198,8 +198,8 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 					"member scope", 
 					file_path, 
 					file_text_str,
-					SourceSpan{offset: i, line: cur_line},
-					format_args!("Encountered {} spaces, while indentation expects multiples of {} spaces, on line {}", num_spaces, SPACES_PER_INDENT, cur_line)
+					SourceSpan{offset: i - num_spaces, line: cur_line},
+					format_args!("Expected multiple of {} spaces but found {} spaces", SPACES_PER_INDENT, num_spaces)
 				));
 			}
 
@@ -259,7 +259,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 						"member scope", 
 						file_path, 
 						file_text_str,
-						SourceSpan{offset: i, line: cur_line},
+						SourceSpan{offset: quote_start_index, line: start_line},
 						format_args!("Unclosed \" on line {}", start_line), 
 					));
 				}
@@ -357,7 +357,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 					file_path, 
 					file_text_str,
 					SourceSpan{offset: i, line: cur_line},
-					format_args!("Expected a single space after the '#' on line {}", cur_line), 
+					format_args!("Expected space (' ') after '#'"), 
 				));
 			}
 			i += 1;
@@ -382,8 +382,8 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 					"member scope", 
 					file_path, 
 					file_text_str,
-					SourceSpan{offset: i, line: cur_line},
-					format_args!("Expected the comment to contain some text on line {}", cur_line)
+					SourceSpan{offset: i - 1, line: cur_line},
+					format_args!("Expected comment to contain some text")
 				));
 			} else if (file_text[i - 1] as char).is_ascii_whitespace() {
 				return Err(GrugError::new_error(
@@ -412,7 +412,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 			file_path, 
 			file_text_str,
 			SourceSpan{offset: i, line: cur_line},
-			format_args!("Unrecognized character '{}' on line {}", file_text_str[i..].chars().next().expect("There is atleast one more character"), cur_line), 
+			format_args!("Unrecognized character '{}'", file_text_str[i..].chars().next().expect("There is atleast one more character")), 
 		));
 	}
 	

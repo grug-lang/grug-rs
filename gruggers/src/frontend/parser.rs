@@ -23,6 +23,9 @@ pub enum ParserError<'a> {
 	UnexpectedToken {
 		token: Token<'a>,
 	},
+	UnexpectedEof {
+		expected: TokenType,
+	},
 	GotWrongToken {
 		expected: TokenType,
 		got: Token<'a>,
@@ -62,16 +65,15 @@ impl<'a> ParserError<'a> {
 				token.span,
 				format_args!("Unexpected token '{}' on line {}", token.value, token.span.line),
 			),
-			Self::GotWrongToken {
-				expected: _,
-				got: Token{ty: TokenType::OpenParenthesis, span, ..},
+			Self::UnexpectedEof {
+				expected,
 			} => GrugError::new_error(
 				ErrorKind::PARSER_ERROR,
 				ast.current_function,
 				ast.file_path,
 				ast.file_text,
-				span,
-				format_args!("Unexpected '(' after non-identifier at line {}", span.line),
+				ast.last_token_span,
+				format_args!("Expected {} but got end of file", expected),
 			),
 			Self::GotWrongToken {
 				expected,
@@ -82,7 +84,7 @@ impl<'a> ParserError<'a> {
 				ast.file_path,
 				ast.file_text,
 				got.span,
-				format_args!("Expected token type {}, but got {} on line {}", expected, got.ty, got.span.line),
+				format_args!("Expected {} but got {}", expected, got.ty),
 			),
 			Self::ExpectedSpace {
 				got
@@ -102,7 +104,7 @@ impl<'a> ParserError<'a> {
 				ast.file_path,
 				ast.file_text,
 				ast.last_token_span,
-				format_args!("token_index 1 was out of bounds in peek_token()"),
+				format_args!("unexpected end of file"),
 			),
 			Self::ExceededMaxParsingDepth => GrugError::new_error(
 				ErrorKind::PARSER_ERROR,
@@ -121,7 +123,7 @@ impl<'a> ParserError<'a> {
 				ast.file_path,
 				ast.file_text,
 				token.span,
-				format_args!("Expected {} spaces, but got {} spaces on line {}", expected_spaces, token.value.len(), token.span.line),
+				format_args!("Expected {} spaces, but got {} spaces", expected_spaces, token.value.len())
 			),
 			Self::ExpectedIndentation{
 				got,
@@ -131,54 +133,10 @@ impl<'a> ParserError<'a> {
 				ast.file_path,
 				ast.file_text,
 				got.span,
-				format_args!("Expected indentation, newline, or '}}', but got '{}' on line {}", got.value, got.span.line),
+				format_args!("Expected indentation, line break, or '}}' but got '{}'", got.value),
 			),
 			err => unimplemented!("{:?}", err)
 		}
-	}
-}
-
-
-impl<'a> std::fmt::Display for ParserError<'a> {
-	fn fmt (&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		match self {
-			Self::GrugError(err) => write!(f, "{}", err),
-			// grug_error("Unexpected token '%s' on line %zu", token.str, get_token_line_number(i));
-			Self::UnexpectedToken {
-				token,
-			} => write!(f, "Unexpected token '{}' on line {}", token.value, token.span.line),
-			Self::GotWrongToken{
-				expected: _,
-				got,
-			} if got.ty == TokenType::OpenParenthesis => write!(f, "Unexpected '(' after non-identifier at line {}", got.span.line),
-			Self::GotWrongToken{
-				expected,
-				got,
-			} => write!(f, "Expected token type {}, but got {} on line {}", expected, got.ty, got.span.line),
-			Self::OutOfTokensError => 
-				write!(f, "token_index 1 was out of bounds in peek_token()"),
-			Self::ExceededMaxParsingDepth => write!(f, "There is a function that contains more than {} levels of nested expressions", MAX_PARSING_DEPTH),
-			Self::ExpectedStatement{
-				prev_token,
-				line,
-			} => write!(f, "Expected '(', or ':', or ' =' after the word '{}' on line {}", prev_token, line),
-			Self::ExpectedIndentation{
-				got,
-			} => write!(f, "Expected indentation, newline, or '}}', but got '{}' on line {}", got.value, got.span.line),
-			Self::IndentationMismatch{
-				expected_spaces,
-				token,
-			} => write!(f, "Expected {} spaces, but got {} spaces on line {}", expected_spaces, token.value.len(), token.span.line),
-			Self::ExpectedSpace{
-				got,
-			} => write!(f, "Expected space (' '), but got {} at line {}", got.ty, got.span.line),
-		}
-	}
-}
-
-impl<'a> From<GrugError<Arena>> for ParserError<'a> {
-	fn from(other: GrugError<Arena>) -> Self {
-		Self::GrugError(other)
 	}
 }
 
@@ -218,7 +176,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				if seen_on_fn {
 					return ast.new_parse_error(
 						name_token.span,
-						format_args!("Move the global variable '{}' so it is above the on_ functions", name_token.value)
+						format_args!("Cannot declare member variables after on_ functions")
 					);
 				}
 
@@ -227,7 +185,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				if global_name == "me" {
 					return ast.new_parse_error(
 						name_token.span,
-						format_args!("The global variable 'me' has to have its name changed to something else, since grug already declares that variable")
+						format_args!("variable cannot be named 'me'")
 					);
 				}
 				consume_space(&mut tokens)?;
@@ -254,11 +212,12 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				// `x: number =25`
 				//
 				// The error message is not going to be helpful in that case
-				if peek_next_token(&tokens)?.ty != TokenType::Space {
-					return ast.new_parse_error(
-						name_token.span,
-						format_args!("The global variable '{}' was not assigned a value on line {}", global_name, name_token.span.line)
-					);
+				match peek_next_token(&tokens)? {
+					Token{ty: TokenType::Space, ..} => (),
+					Token{span, ..} => return ast.new_parse_error(
+						*span,
+						format_args!("The global variable '{}' was not assigned a value", global_name)
+					),
 				}
 
 				consume_space(&mut tokens)?;
@@ -282,6 +241,15 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 			} else if let Ok([name_token]) = assert_next_token_types(&tokens, &[TokenType::Word]) && name_token.value.starts_with("on_") {
 				let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word]).unwrap();
 				let fn_name = name_token.value;
+				
+				// expect newline after each item
+				if newline_required {
+					return ast.new_parse_error(
+						name_token.span,
+						format_args!("Expected an empty line")
+					);
+				}
+
 				ast.current_function = fn_name;
 
 				// Cannot have global function after helper function
@@ -291,14 +259,6 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 						format_args!("{}() must be defined before all helper_ functions", fn_name)
 					);
 				}
-				// expect newline after each item
-				if newline_required {
-					return ast.new_parse_error(
-						name_token.span,
-						format_args!("Expected an empty line, on line {}", name_token.span.line)
-					);
-				}
-
 				consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
 
 				let parameters = if assert_next_token_types(&mut tokens, &[TokenType::Word]).is_ok() {
@@ -316,7 +276,6 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 						format_args!("{}() can't be empty", fn_name),
 					);
 				}
-				ast.current_function = "member scope";
 
 				let on_fn = OnFunction{
 					name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
@@ -331,6 +290,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 						format_args!("The function '{}' was defined several times in the same file", fn_name),
 					);
 				}
+				ast.current_function = "member scope";
 				
 				ast.on_fn_signatures.push((fn_name, on_fn.parameters));
 				ast.global_statements.push(GlobalStatement::OnFunction(on_fn));
@@ -346,14 +306,15 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 			} else if let Ok([name_token]) = assert_next_token_types(&tokens, &[TokenType::Word]) && name_token.value.starts_with("helper_") {
 				let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word]).unwrap();
 				let fn_name = name_token.value;
-				ast.current_function = fn_name;
 				// expect newline after each item
 				if newline_required {
 					return ast.new_parse_error(
 						name_token.span,
-						format_args!("Expected an empty line, on line {}", name_token.span.line)
+						format_args!("Expected an empty line")
 					);
 				}
+
+				ast.current_function = fn_name;
 
 				if ast.called_helper_fns.iter().find(|val| **val == fn_name).is_none() {
 					return ast.new_parse_error(
@@ -400,7 +361,6 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 						format_args!("{}() can't be empty", fn_name),
 					);
 				}
-				ast.current_function = "member scope";
 
 				let helper_fn = HelperFunction{
 					name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
@@ -418,6 +378,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 						format_args!("The function '{}' was defined several times in the same file", fn_name),
 					);
 				}
+				ast.current_function = "member scope";
 
 				ast.helper_fn_signatures.push((fn_name, (helper_fn.return_type, helper_fn.parameters)));
 				ast.global_statements.push(GlobalStatement::HelperFunction(helper_fn));
@@ -431,7 +392,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				if !newline_allowed {
 					return ast.new_parse_error(
 						token.span,
-						format_args!("Unexpected empty line, on line {}", token.span.line)
+						format_args!("Unexpected empty line")
 					);
 				}
 
@@ -461,7 +422,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 			// but we want the line number of the previous line
 			return ast.new_parse_error(
 				last_newline_token_span,
-				format_args!("Unexpected empty line, on line {}", last_newline_token_span.line)
+				format_args!("Unexpected empty line")
 			);
 		}
 		Ok(())
@@ -486,6 +447,7 @@ impl<'a> AST<'a> {
 		}
 	}
 
+	#[track_caller]
 	#[inline]
 	fn new_parse_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, ParserError<'static>> {
 		Err(ParserError::GrugError(GrugError::new_error(
@@ -545,7 +507,7 @@ impl<'a> AST<'a> {
 	// This parser consumes a space before consuming the curly braces
 	fn parse_statements(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<&'a mut [Statement<'a>], ParserError<'a>> {
 		assert_parsing_depth(parsing_depth)?;
-		consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
+		let &[_, _, mut last_new_line] = consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
 
 		let mut newline_allowed = false;
 		let mut newline_seen = false;
@@ -555,17 +517,18 @@ impl<'a> AST<'a> {
 		while !is_end_of_block(tokens, indentation)? {
 			// newlines
 			if let Ok([token]) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
+				last_new_line = *token;
 				if !newline_allowed {
 					return self.new_parse_error(
 						token.span,
-						format_args!("Unexpected empty line, on line {}", token.span.line)
+						format_args!("Unexpected empty line")
 					);
 				}
 				// cannot have consecutive newlines
 				newline_allowed = false;
 				newline_seen = true;
 
-				statements.push(Statement::EmptyLine.into());
+				statements.push(Statement::EmptyLine);
 			} else {
 				newline_allowed = true;
 				newline_seen = false;
@@ -577,12 +540,11 @@ impl<'a> AST<'a> {
 		}
 
 		if !newline_allowed && newline_seen {
-			let [next_token] = peek_next_tokens(tokens)?;
 			// a newline has been seen so the line number will be incremented by one
 			// but we want the line number of the previous line
 			return self.new_parse_error(
-				next_token.span,
-				format_args!("Unexpected empty line, on line {}", next_token.span.line - 1)
+				last_new_line.span,
+				format_args!("Unexpected empty line")
 			);
 		}
 
@@ -710,8 +672,10 @@ impl<'a> AST<'a> {
 				Ok(Statement::Continue(next_tokens[0].span))
 			}
 			TokenType::NewLine => {
-				tokens.next();
-				Ok(Statement::EmptyLine)
+				return self.new_parse_error(
+					next_tokens[0].span,
+					format_args!("Unexpected empty line")
+				);
 			}
 			TokenType::Comment => {
 				tokens.next();
@@ -723,7 +687,7 @@ impl<'a> AST<'a> {
 			got_token => {
 				return self.new_parse_error(
 					next_tokens[0].span,
-					format_args!("Expected a statement token, but got token type {} on line {}", got_token, next_tokens[0].span.line)
+					format_args!("Expected a statement token, but got {} on line {}", got_token, next_tokens[0].span.line)
 				);
 			},
 		}
@@ -740,7 +704,7 @@ impl<'a> AST<'a> {
 			if local_name == "me" {
 				return self.new_parse_error(
 					name_token.span,
-					format_args!("The local variable 'me' has to have its name changed to something else, since grug already declares that variable"),
+					format_args!("variable cannot be named 'me'"),
 				);
 			}
 			consume_space(tokens)?;
@@ -769,7 +733,7 @@ impl<'a> AST<'a> {
 			Ok(_) => (),
 			Err(ParserError::ExpectedSpace{got}) => return self.new_parse_error(
 				got.span,
-				format_args!("The variable '{}' was not assigned a value on line {}", local_name, got.span.line),
+				format_args!("Variable '{}' was not assigned a value", local_name),
 			),
 			Err(ParserError::OutOfTokensError) => return Err(ParserError::OutOfTokensError),
 			_ => unreachable!(),
@@ -952,7 +916,7 @@ impl<'a> AST<'a> {
 				_ =>  {
 					return self.new_parse_error(
 						*span,
-						format_args!("Expected a primary expression token, but got token type {} on line {}", ty, span.line)
+						format_args!("Expected a primary expression token but got {}", ty)
 					);
 				}
 			}
@@ -1119,7 +1083,7 @@ fn assert_parsing_depth(parsing_depth: usize) -> Result<(), ParserError<'static>
 #[track_caller]
 fn assert_next_token_types<'a, const N: usize>(tokens: &std::slice::Iter<'a, Token<'a>>, expected: &[TokenType; N]) -> Result<&'a [Token<'a>;N], ParserError<'a>> {
 	if tokens.len() < expected.len() {
-		return Err(ParserError::OutOfTokensError);
+		return Err(ParserError::UnexpectedEof{expected: expected[tokens.len()]});
 	}
 	for (got, expected) in tokens.clone().zip(expected) {
 		if got.ty != *expected {

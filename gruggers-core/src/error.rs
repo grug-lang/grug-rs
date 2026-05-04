@@ -20,14 +20,17 @@ impl SourceSpan {
 	/// if the source offset is out of bounds of the text
 	// TODO: Make this SIMD Optimized
 	pub fn get_col(self, text: &str) -> usize {
-		let mut last_new_line = 0;
+		// This is for if the error is in the first line. The loop wont find a
+		// '\n' so `column` will not get reinitialized
+		let mut column = self.offset + 1;
 		let text = text.as_bytes();
-		for (i, ch) in text.get(..self.offset).expect("span within source code bounds").iter().enumerate() {
+		for (i, ch) in text.get(..self.offset).expect("span within source code bounds").iter().rev().enumerate() {
 			if *ch == b'\n' {
-				last_new_line = i;
+				column = i + 1;
+				break;
 			}
 		}
-		self.offset - last_new_line
+		column
 	}
 
 	/// Get the full source line that contains the start of the source span in
@@ -45,10 +48,10 @@ impl SourceSpan {
 				break;
 			}
 		}
-		let line_end = text.len();
+		let mut line_end = text.len();
 		for (i, ch) in text.get(self.offset..).expect("span within source code bounds").iter().enumerate() {
-			if *ch == b'\n' {
-				line_start = self.offset + i;
+			if *ch == b'\n' || *ch == b'\r'{
+				line_end = self.offset + i;
 				break;
 			}
 		}
@@ -136,7 +139,7 @@ pub struct GrugError<A> {
 	/// Path to the file with the error
 	file_path: NTBytes<'static>,
 	/// Source line that contains the error
-	source_line: NTStrPtr<'static>,
+	source_line: &'static str,
 	/// Location of the error
 	span: SourceSpan,
 	/// Single line error message
@@ -163,6 +166,7 @@ impl<A> std::fmt::Debug for GrugError<A> {
 			.field("line", &self.span.line)
 			.field("offset", &self.span.offset)
 			.field("error_message", &self.error_message)
+			.field("error_string", &self.error_string)
 			.finish_non_exhaustive()
 	}
 }
@@ -174,7 +178,7 @@ impl<A> GrugError<A> {
 	/// The path to the file with the error
 	pub fn file_path(&self) -> &OsStr {unsafe{OsStr::from_encoded_bytes_unchecked(self.file_path.to_bytes())}}
 	/// The source line that contains the error
-	pub fn source_line(&self) -> &str {self.source_line.to_str()}
+	pub fn source_line(&self) -> &str {self.source_line}
 	/// The location that the error occurred at
 	pub fn span(&self) -> SourceSpan {self.span}
 	/// A single line message that describes the error
@@ -195,19 +199,37 @@ impl<A: Allocator> GrugError<A> {
 	pub fn new_error_in(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments, alloc: A) -> Self {
 		let line = err_span.line;
 		let column = err_span.get_col(source_text);
-		let source_line = err_span.get_source_line(source_text);
+		let source_line = err_span.get_source_line(source_text).trim_start();
 
 		let mut err_string = Vec::new_in(&alloc);
 		if error_kind.matches(&ErrorKind::FILE_NAME_ERROR) {
 			write!(err_string, 
-				"Error: {error_message}\n\
-				  {}\0",
+				"Error: {error_message}:\n\
+				$  {}\0",
 				file_path.display()
 			).expect("writing into a vec should never fail");
 		} else if error_kind.matches(&ErrorKind::TOKENIZER_ERROR) {
 			write!(err_string, 
 				"  in ({}:{line}:{column})\n\
-				Error: {error_message}\n\
+				Error: {error_message}:\n\
+				{line} $ {source_line}\0",
+				file_path.display()
+			).expect("writing into a vec should never fail");
+		} else if error_kind.matches(&ErrorKind::MOD_API_ERROR) {
+			write!(err_string, 
+				"  in mod_api ({})\n\
+				Error: {error_message}:\0",
+				file_path.display()
+			).expect("writing into a vec should never fail");
+		} else if error_kind.matches(&ErrorKind::INIT_ERROR) {
+			write!(err_string, 
+				"  while initializing state
+				Error: {error_message}:\0"
+			).expect("writing into a vec should never fail");
+		} else {
+			write!(err_string, 
+				"  in {function_name} ({}:{line}:{column})\n\
+				Error: {error_message}:\n\
 				{line} $ {source_line}\0",
 				file_path.display()
 			).expect("writing into a vec should never fail");
@@ -215,8 +237,23 @@ impl<A: Allocator> GrugError<A> {
 
 		// SAFETY: We never give out a `'static` pointer to this string from safe code
 		let function_name = unsafe{Box::leak(NTStr::box_from_str_in(function_name, &alloc)).as_ntstrptr().detach_lifetime()};
-		// SAFETY: We never give out a `'static` pointer to this string from safe code
-		let source_line = unsafe{Box::leak(NTStr::box_from_str_in(source_line, &alloc)).as_ntstrptr().detach_lifetime()};
+
+		// Copy source_line into an allocator and return a reference to the new string
+		// Equivalent to Box::leak(Box::from(str)) except the box is allocated in a custom allocator
+		let source_line = {
+			let mut slice = Box::<[u8], _>::new_uninit_slice_in(source_line.len(), &alloc);
+			// SAFETY: `slice` was just allocated within `alloc` with length `souce_line.len()`
+			unsafe{slice.as_mut_ptr().cast::<u8>().copy_from(source_line.as_ptr(), source_line.len())};
+			// SAFETY: Slice is fully initialized in the above line
+			let slice = Box::leak(unsafe{slice.assume_init()});
+
+			// - SAFETY: [u8] to str is valid because the slice is guaranteed to
+			// be utf8 because it was copied from a str
+			//
+			// - SAFETY: lifetime transmute is safe because we never give out a
+			// `'static` pointer to this string from safe code
+			unsafe{std::mem::transmute::<&mut [u8], &'static str>(slice)}
+		};
 		// SAFETY: We never give out a `'static` pointer to this string from safe code
 		let file_path = unsafe{NTBytes::from_bytes_unchecked(Box::leak(copy_box_nt_bytes_in(file_path.as_encoded_bytes(), &alloc))).detach_lifetime()};
 
@@ -236,6 +273,9 @@ impl<A: Allocator> GrugError<A> {
 		write!(err_message, "{}\0", error_message)
 			.expect("writing into a vec should never fail");
 
+		// SAFETY: err_string only contains utf8 strings, and is null terminated
+		// The string can last as long as the allocator exists, and we never give
+		// out a 'static pointer to the string
 		let error_message = unsafe{
 			NTStr::from_str_unchecked(
 				str::from_utf8_unchecked(err_message.leak())
@@ -260,7 +300,7 @@ impl<A> std::fmt::Display for GrugError<A> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		// TODO: This should be changed to self.error_string later
 		// TODO: Each different top level error kind should have a different format
-		f.write_str(self.error_message.to_str())
+		f.write_str(self.error_string.to_str())
 	}
 }
 

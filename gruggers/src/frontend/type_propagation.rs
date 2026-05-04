@@ -24,7 +24,6 @@ use allocator_api2::boxed::Box;
 pub(super) struct TypePropogator<'mod_api, 'arena> {
 	file_text: &'arena str,
 	file_path: &'arena OsStr,
-	current_function: &'arena str,
 	entity: &'mod_api ModApiEntity<'mod_api>,
 	game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiGameFn<'mod_api>>,
 	game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>,
@@ -35,68 +34,6 @@ pub(super) struct TypePropogator<'mod_api, 'arena> {
 	local_variables: Vec<HashMap<&'arena str, GrugType<'arena>>>,
 	num_while_loops_deep: usize,
 	current_fn_name: Option<&'arena str>,
-}
-
-#[derive(Debug, Clone)]
-pub enum OwnedGrugType {
-	Void,
-	Bool,
-	Number,
-	String,
-	Id{custom_name: Option<Box<str>>},
-	Resource{extension: Box<str>},
-	Entity{entity_type: Option<Box<str>>},
-}
-impl From<&mut GrugType<'_>> for OwnedGrugType {
-	fn from(other: &mut GrugType<'_>) -> Self {
-		(*other).into()
-	}
-}
-
-impl From<&GrugType<'_>> for OwnedGrugType {
-	fn from(other: &GrugType<'_>) -> Self {
-		(*other).into()
-	}
-}
-
-impl From<GrugType<'_>> for OwnedGrugType {
-	fn from(other: GrugType<'_>) -> Self {
-		match other {
-			GrugType::Void => OwnedGrugType::Void,
-			GrugType::Bool => OwnedGrugType::Bool,
-			GrugType::Number => OwnedGrugType::Number,
-			GrugType::String => OwnedGrugType::String,
-			GrugType::Id{custom_name} => OwnedGrugType::Id{custom_name: custom_name.map(|name| Box::from(name.to_str()))},
-			GrugType::Resource{extension} => OwnedGrugType::Resource{extension: Box::from(extension.to_str())},
-			GrugType::Entity{entity_type} => OwnedGrugType::Entity{entity_type: entity_type.map(|entity_type| Box::from(entity_type.to_str()))},
-		}
-	}
-}
-
-impl std::fmt::Display for OwnedGrugType {
-	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		match self {
-			Self::Void => write!(f, "void"),
-			Self::Bool => write!(f, "bool"),
-			Self::Number => write!(f, "number"),
-			Self::String => write!(f, "string"),
-			Self::Id{
-				custom_name: None,
-			} => write!(f, "id"),
-			Self::Id{
-				custom_name: Some(custom_name),
-			} => write!(f, "{}", custom_name),
-			Self::Resource {
-				extension: _,
-			} => write!(f, "resource"),
-			Self::Entity {
-				entity_type: Some(name),
-			} => write!(f, "{}", name),
-			Self::Entity {
-				entity_type: None,
-			} => write!(f, "entity"),
-		}
-	}
 }
 
 impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
@@ -112,7 +49,6 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		Self {
 			file_text,
 			file_path,
-			current_function: "member scope",
 			entity,
 			game_fns,
 			game_fn_ptrs,
@@ -126,10 +62,11 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		}
 	}
 
+	#[track_caller]
 	fn new_type_propagator_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, GrugError<Arena>> {
 		Err(GrugError::new_error(
 			ErrorKind::TYPE_CHECKER_ERROR,
-			self.current_function,
+			self.current_fn_name.unwrap_or("member scope"),
 			self.file_path,
 			self.file_text, 
 			span,
@@ -153,13 +90,13 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			if let ExprData::Identifier(name) = &variable.assignment_expr.data 
 				&& name.to_str() == "me" {
 				return self.new_type_propagator_error(
-					variable.span,
+					variable.assignment_expr.span,
 					format_args!("Global variables can't be assigned 'me'")
 				);
 			}
 			if !(variable.ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && result_ty != variable.ty {
 				return self.new_type_propagator_error(
-					variable.span,
+					variable.assignment_expr.span,
 					format_args!("Can't assign {} to '{}', which has type {}", result_ty, variable.name, variable.ty)
 				);
 			}
@@ -180,13 +117,22 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			{
 				continue;
 			};
+
+			// These should only be set inside self.fill_statements
+			debug_assert!(self.local_variables.is_empty());
+			debug_assert!(self.num_while_loops_deep == 0);
+			debug_assert!(self.current_fn_name.is_none());
+
 			if previous_on_fn_index > current_index {
+				self.current_fn_name = Some(on_fn_name);
 				return self.new_type_propagator_error(
 					current_on_fn.span,
-					format_args!("The function '{}' needs to be moved before/after a different on_ function, according to the entity '{}' in mod_api.json", current_on_fn.name.to_str(), entity_name)
+					format_args!("The function '{}' needs to be moved before or after a different on_ function, according to the entity '{}' in mod_api.json", current_on_fn.name.to_str(), entity_name)
 				);
 			}
 			previous_on_fn_index = current_index;
+
+			self.current_fn_name = Some(current_on_fn.name.to_str());
 			
 			if mod_api_on_fn.parameters.len() > current_on_fn.parameters.len() {
 				let param = &mod_api_on_fn.parameters[current_on_fn.parameters.len()];
@@ -204,7 +150,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			for (param, arg) in mod_api_on_fn.parameters.iter().zip(current_on_fn.parameters.iter()) {
 				if param.name != arg.name {
 					return self.new_type_propagator_error(
-						arg.type_span,
+						arg.name_span,
 						format_args!("Function '{}' its '{}' parameter was supposed to be named '{}'", current_on_fn.name.to_str(), arg.name.to_str(), param.name.to_str())
 					);
 				}
@@ -215,12 +161,6 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					);
 				}
 			}
-			// These should only be set inside self.fill_statements
-			debug_assert!(self.local_variables.is_empty());
-			debug_assert!(self.num_while_loops_deep == 0);
-			debug_assert!(self.current_fn_name.is_none());
-
-			self.current_fn_name = Some(current_on_fn.name.to_str());
 			self.push_scope();
 			for param in current_on_fn.parameters {
 				self.add_local_variable(param.name.to_str(), param.ty.into(), param.name_span)?;
@@ -235,6 +175,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		for on_fn in on_functions {
 			let on_fn_name = on_fn.name.to_ntstr();
 			if !entity_on_functions.iter().any(|(name, _)| *name == on_fn_name) {
+				self.current_fn_name = Some(on_fn_name.as_str());
 				return self.new_type_propagator_error(
 					on_fn.span,
 					format_args!("The function '{}' was not declared by entity '{}' in mod_api.json", on_fn_name, entity_name)
@@ -318,7 +259,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 							ty
 						} else {
 							return self.new_type_propagator_error(
-								assignment_expr.span,
+								*name_span,
 								format_args!("Can't assign to the variable '{}', since it does not exist", name)
 							);
 						};
@@ -391,23 +332,23 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					return_span,
 					expr,
 				} => {
-					let return_ty = expr.as_mut()
-						.map(|expr| self.fill_expr(helper_fns, expr, arena))
-						.unwrap_or(Ok(GrugType::Void))?;
+					let (return_ty, span) = expr.as_mut()
+						.map(|expr| Ok((self.fill_expr(helper_fns, expr, arena)?, expr.span)))
+						.unwrap_or(Ok((GrugType::Void, *return_span)))?;
 					if *expected_return_type != (GrugType::Id{custom_name: None}) && *expected_return_type != return_ty {
 						if return_ty == GrugType::Void {
 							return self.new_type_propagator_error(
-								*return_span,
+								span,
 								format_args!("Function '{}' is supposed to return a value of type {}", self.current_fn_name.unwrap(), expected_return_type)
 							);
 						} else if *expected_return_type == GrugType::Void {
 							return self.new_type_propagator_error(
-								*return_span,
+								span,
 								format_args!("Function '{}' wasn't supposed to return any value", self.current_fn_name.unwrap())
 							);
 						} else {
 							return self.new_type_propagator_error(
-								*return_span,
+								span,
 								format_args!("Function '{}' is supposed to return {}, not {}", self.current_fn_name.unwrap(), expected_return_type, return_ty)
 							);
 						}
@@ -541,6 +482,12 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				match (&result_1, *op) {
 					(GrugType::String, BinaryOperator::DoubleEquals) | 
 					(GrugType::String, BinaryOperator::NotEquals) => (),
+					(GrugType::String, BinaryOperator::Plus) => {
+						return self.new_type_propagator_error(
+							*op_span,
+							format_args!("cannot add strings with '+'")
+						);
+					},
 					(GrugType::String, _) => {
 						return self.new_type_propagator_error(
 							*op_span,
@@ -553,7 +500,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					if result_0 == GrugType::String || result_1 == GrugType::String{
 						return self.new_type_propagator_error(
 							*op_span,
-							format_args!("You can't use the {} operator on a string", op)
+							format_args!("You can't use the '{}' operator on a string", op)
 						);
 					} else {
 						return self.new_type_propagator_error(
@@ -639,7 +586,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				} else if fn_name.starts_with("on_") {
 					return self.new_type_propagator_error(
 						*name_span,
-						format_args!("Mods aren't allowed to call their own on_ functions, but '{}' was called", fn_name)
+						format_args!("Mods aren't allowed to call their own on_ functions")
 					);
 				} else {
 					if fn_name.starts_with("helper_") {
@@ -829,13 +776,13 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			if entity_name.is_empty() {
 				return self.new_type_propagator_error(
 					span,
-					format_args!("Entity '{}' specifies the mod name '{}', but it is missing an entity name after the ':'", entity_string, mod_name)
+					format_args!("Entity '{}' missing entity name", entity_string)
 				);
 			}
 			if mod_name == self.current_mod_name {
 				return self.new_type_propagator_error(
 					span,
-					format_args!("Entity '{}' its mod name '{}' is invalid, since the file it is in refers to its own mod; just change it to '{}'", entity_string, mod_name, entity_name)
+					format_args!("Entity string ('{}') cannot refer to its own mod", entity_string)
 				);
 			}
 			(mod_name, entity_name)
