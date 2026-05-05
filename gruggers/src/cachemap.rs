@@ -110,7 +110,7 @@ impl<K: Hash + Eq, V: PartialEq> PartialEq for CacheMap<K, V> {
 				_ => (),
 			}
 		}
-		return true
+		true
 	}
 }
 

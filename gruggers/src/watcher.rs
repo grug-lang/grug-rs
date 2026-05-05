@@ -1,4 +1,4 @@
-pub use watcher::*;
+pub use inner::*;
 use std::ffi::{OsStr, OsString};
 
 #[allow(unused)]
@@ -22,10 +22,7 @@ pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<
 	}
 	std::thread::spawn(move || {
 		fn is_newer_than(first: std::time::SystemTime, second: std::time::SystemTime) -> bool {
-			match first.duration_since(second) {
-				Ok(diff) if diff != std::time::Duration::ZERO => true,
-				_ => false
-			}
+			matches!(first.duration_since(second), Ok(diff) if diff != std::time::Duration::ZERO)
 		}
 		loop {
 			// Replacement for try blocks
@@ -67,7 +64,7 @@ pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<
 }
 
 #[cfg(target_os="windows")]
-mod watcher {
+mod inner {
 	#![allow(unused)]
 	#![allow(non_camel_case_types)]
 	use std::ffi::{c_void, c_int, OsStr, OsString};
@@ -345,7 +342,7 @@ mod watcher {
 }
 
 #[cfg(target_os="linux")]
-mod watcher {
+mod inner {
 	use std::ffi::{OsStr, OsString};
 	pub fn watch_changes(mods_dir: impl AsRef<OsStr>, f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error> {
 		super::poll_watch_changes(mods_dir, f)

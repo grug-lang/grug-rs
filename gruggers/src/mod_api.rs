@@ -140,7 +140,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				on_fns
 			}
 		};
-		let on_fns = on_fns.into_iter().enumerate().map(|(i, function)| {
+		let on_fns = on_fns.iter().enumerate().map(|(i, function)| {
 			let JsonValue::Object(function) = function else {
 				return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[{i}] is not an object"));
 			};
@@ -175,7 +175,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 					parameters
 				}
 			};
-			let parameters = parameters.into_iter().enumerate().map(|(j, param_values)| {
+			let parameters = parameters.iter().enumerate().map(|(j, param_values)| {
 				let JsonValue::Object(param_values) = param_values else {
 					return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[\"{fn_name}\"].arguments[{j}] is not an object"))
 				};
@@ -196,7 +196,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 						let Some(str) = str.as_str() else {
 							return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.on_functions[{i}].arguments[{j}].type is not a string"));
 						};
-						&*Box::leak(NTStr::box_from_str_in(str, &arena)).as_str()
+						Box::leak(NTStr::box_from_str_in(str, &arena)).as_str()
 					}
 				};
 				let ty = match ty {
@@ -310,7 +310,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 					let Some(str) = str.as_str() else {
 						return Err(mod_api_err!(fn_name => "root.game_functions.{fn_name}.arguments[\"{param_name}\"].type is not a string"));
 					};
-					&*Box::leak(NTStr::box_from_str_in(str, &arena)).as_str()
+					Box::leak(NTStr::box_from_str_in(str, &arena)).as_str()
 				}
 			};
 			let ty = match ty {

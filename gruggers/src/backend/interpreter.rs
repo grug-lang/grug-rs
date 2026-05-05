@@ -266,7 +266,7 @@ impl CompiledFile {
 		let arena = Arena::new();
 		let file = unsafe{std::mem::transmute::<GrugAst<'_>, GrugAst<'static>>(copy_into_arena(&file, &arena))};
 		Self {
-			file: file,
+			file,
 			entities: RefCell::new(std::vec::Vec::new()),
 			data: Xar::new(),
 			_arena: arena,
@@ -342,6 +342,7 @@ impl Interpreter {
 		}
 	}
 
+	#[expect(clippy::too_many_arguments)]
 	fn run_function<GrugState: State>(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &'static [Parameter], values: &[GrugValue], statements: &'static [Statement]) -> Option<GrugValue> {
 		if call_stack.local_variables.len() > MAX_RECURSION_LIMIT {
 			state.set_runtime_error(RuntimeError::StackOverflow);
@@ -382,16 +383,14 @@ impl Interpreter {
 				} => {
 					let name = name.to_str();
 					let assignment_expr = self.run_expr(call_stack, state, file, entity, assignment_expr)?;
-					if let Some(_) = ty {
+					if ty.is_some() {
 						call_stack.add_local_variable(name, assignment_expr);
+					} else if let Some(var) = call_stack.get_local_variable(name) {
+						*var = assignment_expr;
+					} else if let Some(var) = entity.get_global_variable(name) {
+						var.set(assignment_expr);
 					} else {
-						if let Some(var) = call_stack.get_local_variable(name) {
-							*var = assignment_expr;
-						} else if let Some(var) = entity.get_global_variable(name) {
-							var.set(assignment_expr);
-						} else {
-							panic!("variable not found");
-						}
+						panic!("variable not found");
 					}
 				},
 				Statement::Call(expr) => {
@@ -511,7 +510,7 @@ impl Interpreter {
 				expr,
 				..
 			} => {
-				let mut value = self.run_expr(call_stack, state, file, entity, &expr)?;
+				let mut value = self.run_expr(call_stack, state, file, entity, expr)?;
 				match (op, &expr.result_type) {
 					(UnaryOperator::Not, Some(GrugType::Bool)) => unsafe{value.bool = (value.bool == 0) as u8},
 					(UnaryOperator::Minus, Some(GrugType::Number)) => unsafe{value.number = -value.number},
@@ -525,8 +524,8 @@ impl Interpreter {
 				right,
 				..
 			} => {
-				let first_value = self.run_expr(call_stack, state, file, entity, &left)?; 
-				let mut second_value = || self.run_expr(call_stack, state, file, entity, &right);
+				let first_value = self.run_expr(call_stack, state, file, entity, left)?; 
+				let mut second_value = || self.run_expr(call_stack, state, file, entity, right);
 				// debug_assert!(left.result_ty == right.result_ty || matches!((&left.result_ty, &right.result_ty), (Some(GrugType::Id{custom_name: None}), Some(GrugType::Id{..})) | (Some(GrugType::Id{..}), Some(GrugType::Id{custom_name: None}))));
 				match (op, &left.result_type) {
 					(BinaryOperator::Or,             Some(GrugType::Bool  ))  => GrugValue{bool: unsafe{first_value.bool | second_value()?.bool}},
@@ -579,7 +578,7 @@ impl Interpreter {
 					if helper_fn.name.to_str() != name {
 						continue;
 					}
-					return Some(self.run_function(call_stack, state, file, entity, &*helper_fn.parameters, &values, &*helper_fn.body_statements)?);
+					return self.run_function(call_stack, state, file, entity, helper_fn.parameters, &values, &*helper_fn.body_statements);
 				}
 				unreachable!("helper function not found");
 			}
@@ -620,13 +619,19 @@ impl Interpreter {
 	}
 }
 
+impl Default for Interpreter {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
 impl Backend for Interpreter {
 	#[inline]
 	fn insert_file<GrugState: State>(&self, state: &GrugState, id: GrugFileId, file: GrugAst) {
 		let mut compiled_file = CompiledFile::new(file);
 		let mut files = self.files.borrow_mut();
 		if let Some(old_file) = files.get_mut(id.0 as usize) {
-			let mut old_entities = std::mem::replace(&mut *old_file.entities.borrow_mut(), std::vec::Vec::new());
+			let mut old_entities = std::mem::take(&mut *old_file.entities.borrow_mut());
 			old_entities.extract_if(.., |old_entity| {
 				let mut data = GrugEntityData {
 					global_variables: HashMap::from([("me", Cell::new(GrugValue{id:unsafe{(*old_entity.as_ptr()).id}}))]),
@@ -693,7 +698,7 @@ impl Backend for Interpreter {
 			return false;
 		};
 
-		let values = if on_function.parameters.len() == 0 {
+		let values = if on_function.parameters.is_empty() {
 			&[]
 		} else {
 			unsafe{std::slice::from_raw_parts(values, on_function.parameters.len())}
@@ -704,9 +709,9 @@ impl Backend for Interpreter {
 			state,
 			file,
 			unsafe{entity.members.get().cast::<GrugEntityData>().as_ref()}, 
-			&on_function.parameters, 
+			on_function.parameters, 
 			values,
-			&on_function.body_statements
+			on_function.body_statements
 		).is_some()
 	}
 
@@ -725,9 +730,9 @@ impl Backend for Interpreter {
 			state,
 			file,
 			unsafe{entity.members.get().cast::<GrugEntityData>().as_ref()}, 
-			&on_function.parameters, 
+			on_function.parameters, 
 			values,
-			&on_function.body_statements
+			on_function.body_statements
 		).is_some()
 	}
 }

@@ -58,7 +58,7 @@ mod test_bindings {
 					Err(err) => {
 						let mut string = format!("{}", err);
 						string.push('\0');
-						*err_out = Some(NTStr::from_str(String::leak(string)).unwrap().as_ntstrptr());
+						*err_out = Some(NTStr::try_from_str(String::leak(string)).unwrap().as_ntstrptr());
 						return GrugFileId::new(u64::MAX);
 					}
 				}
@@ -72,7 +72,7 @@ mod test_bindings {
 			Err(err) => {
 				let mut string = format!("{}", err);
 				string.push('\0');
-				*err_out = Some(NTStr::from_str(String::leak(string)).unwrap().as_ntstrptr());
+				*err_out = Some(NTStr::try_from_str(String::leak(string)).unwrap().as_ntstrptr());
 				return GrugFileId::new(u64::MAX);
 			}
 		}

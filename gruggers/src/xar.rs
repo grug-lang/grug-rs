@@ -4,7 +4,7 @@ use std::mem::{size_of, ManuallyDrop};
 use std::alloc::{alloc, Layout, handle_alloc_error, dealloc};
 use std::cell::Cell;
 
-mod xar {
+mod typed_xar {
 	use super::*;
 
 	// TODO: Test get_mut of XarHandle
@@ -53,8 +53,7 @@ mod xar {
 		const _ASSERT_1: () = assert!(size_of::<XarHandle<'static, T>>() == size_of::<XarHandle<'static, Option<T>>>());
 		pub const FIRST_SIZE: usize = const {
 			let size = size_of::<XarStorage<T>>();
-			let size = if 64 / size > 8 {64 / size} else {8};
-			size
+			if 64 / size > 8 {64 / size} else {8}
 		};
 		pub fn new() -> Self {
 			Self {
@@ -131,7 +130,7 @@ mod xar {
 				}
 				current_bucket_size *= 2;
 			}
-			return false;
+			false
 		}
 
 		/// # SAFETY
@@ -221,7 +220,7 @@ mod xar {
 	pub struct XarHandle<'a, T> (NonNull<XarStorage<T>>, PhantomData<&'a ()>);
 	impl<'a, T> Clone for XarHandle<'a, T> {
 		fn clone(&self) -> Self {
-			Self::new(self.0)
+			*self
 		}
 	}
 	impl<'a, T> Copy for XarHandle<'a, T> {}
@@ -326,7 +325,7 @@ mod xar {
 		}
 	}
 }
-pub use xar::*;
+pub use typed_xar::*;
 
 mod erased_xar {
 	use super::*;
@@ -464,8 +463,7 @@ mod erased_xar {
 
 		fn first_chunk_size(&self) -> usize {
 			let chunk_size = self.item_size();
-			let chunk_size = if 64 / chunk_size > 8 {64 / chunk_size} else {8};
-			chunk_size
+			if 64 / chunk_size > 8 {64 / chunk_size} else {8}
 		}
 
 		fn alloc_chunk(&self, bucket_idx: usize) -> ErasedPtr<'_> {

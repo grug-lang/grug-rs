@@ -16,7 +16,7 @@ pub fn dump_file_to_json (grug_text: &str, file_path: impl AsRef<OsStr>) -> Resu
 }
 
 pub fn generate_file_from_json (input_json: &str) -> Result<String, GrugError<Arena>> {
-	let json_value = json::parse(&input_json).unwrap();
+	let json_value = json::parse(input_json).unwrap();
 	Ok(json_to_text(&json_value).unwrap())
 }
 
@@ -551,7 +551,7 @@ mod de {
 									if kind != "IF_STATEMENT" {
 										break 'chained;
 									}
-									statement = &first_statement;
+									statement = first_statement;
 									continue 'outer;
 								} 
 							}

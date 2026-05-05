@@ -23,6 +23,7 @@
 use std::sync::Arc;
 use std::ops::Deref;
 use std::ffi::{CStr, c_char};
+use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use std::marker::PhantomData;
 use std::borrow::Borrow;
@@ -76,12 +77,19 @@ mod str {
 			unsafe{
 				std::ptr::copy(value.as_ptr(), ptr.cast(), value.len());
 				ptr.cast::<u8>().add(value.len()).write(b'\0');
-				let ptr = std::mem::transmute::<*mut u8, *mut NTStr>(ptr);
+				let ptr = std::mem::transmute::<*mut [MaybeUninit<u8>], *mut NTStr>(ptr);
 				Box::from_raw_in(ptr, a)
 			}
 		}
 
-		// Does not include the null byte
+		/// Equivalent to `self.is_len == 0`
+		pub const fn is_empty(&self) -> bool {
+			self.len() == 0
+		}
+
+		/// Returns the number of bytes until the null byte is encountered
+		///
+		/// Equivalent of `strlen` in the c standard library
 		pub const fn len(&self) -> usize {
 			self.0.len() - 1
 		}
@@ -101,7 +109,7 @@ mod str {
 			unsafe {std::mem::transmute::<&str, &NTStr>(value)}
 		}
 		
-		pub fn from_str(value: &str) -> Option<&NTStr> {
+		pub fn try_from_str(value: &str) -> Option<&NTStr> {
 			if let Some(last) = value.as_bytes().last() && *last == b'\0' {
 				for byte in &value.as_bytes()[0..value.len()-1] {
 					if *byte == b'\0' {return None}
@@ -138,7 +146,7 @@ mod str {
 	impl<'a> TryFrom<&'a str> for &'a NTStr {
 		type Error = ();
 		fn try_from(value: &str) -> Result<&NTStr, Self::Error> {
-			NTStr::from_str(value).ok_or(())
+			NTStr::try_from_str(value).ok_or(())
 		}
 	}
 
@@ -225,7 +233,7 @@ mod str {
 		pub const fn const_len(self) -> usize {
 			let mut len = 0;
 			while unsafe{self.0.add(len).read() as u8} != b'\0' {len += 1;}
-			return len;
+			len
 		}
 
 		// This causes asan errors
@@ -234,7 +242,7 @@ mod str {
 			fn len_default(val: NTStrPtr) -> usize {
 				let mut len = 0;
 				while unsafe{val.0.add(len).read() as u8} != b'\0' {len += 1;}
-				return len;
+				len
 			}
 			#[cfg(target_arch="x86_64")]
 			{
@@ -271,7 +279,7 @@ mod str {
 
 					let ptr = val.0.cast::<u8>().as_ptr();
 					const _: () = const {assert!(size_of::<__m256i>() == align_of::<__m256i>());};
-					let diff = (ptr.addr() as usize) & (size_of::<__m256i>() - 1);
+					let diff = (ptr.addr()) & (size_of::<__m256i>() - 1);
 					let ptr = ptr.wrapping_sub(diff).cast::<__m256i>();
 
 					let zeros: __m256i = _mm256_set1_epi8(0);
@@ -308,6 +316,11 @@ mod str {
 			unsafe{self.0.cast::<u8>().read() == b'\0'}
 		}
 
+		/// # Safety
+		/// `ptr` must point at a buffer that is valid to read until the next
+		/// null byte
+		/// The memory pointed to by `ptr` must not be modified as long as the
+		/// returned string exists
 		pub const unsafe fn from_ptr (ptr: NonNull<c_char>) -> Self {
 			Self(ptr, PhantomData)
 		}
@@ -325,7 +338,7 @@ mod str {
 			// SAFETY: NTStrPtr points to a utf8 encoded buffer
 			let slice = unsafe{std::str::from_utf8_unchecked(slice)};
 			// SAFETY: Last byte is null
-			return unsafe{NTStr::from_str_unchecked(slice)};
+			unsafe{NTStr::from_str_unchecked(slice)}
 		}
 
 		/// Returns a `&str` to the string excluding the null byte
@@ -342,8 +355,8 @@ mod str {
 		
 		/// Expects a single null byte at the end of the string and no null bytes
 		/// in the rest of the string
-		pub fn from_str(value: &'a str) -> Option<Self> {
-			Some(NTStr::from_str(value)?.as_ntstrptr())
+		pub fn try_from_str(value: &'a str) -> Option<Self> {
+			Some(NTStr::try_from_str(value)?.as_ntstrptr())
 		}
 		
 		/// Returns a pointer with a static lifetime. 
@@ -441,7 +454,7 @@ mod bytes {
 		pub const fn const_len(self) -> usize {
 			let mut len = 0;
 			while unsafe{self.0.add(len).read() as u8} != b'\0' {len += 1;}
-			return len;
+			len
 		}
 
 		// This causes asan errors
@@ -454,7 +467,7 @@ mod bytes {
 			fn len_default(val: NTBytes) -> usize {
 				let mut len = 0;
 				while unsafe{val.0.add(len).read() as u8} != b'\0' {len += 1;}
-				return len;
+				len
 			}
 			#[cfg(target_arch="x86_64")]
 			{
@@ -502,7 +515,7 @@ mod bytes {
 
 					let ptr = val.0.cast::<u8>().as_ptr();
 					const _: () = const {assert!(size_of::<__m256i>() == align_of::<__m256i>());};
-					let diff = (ptr.addr() as usize) & (size_of::<__m256i>() - 1);
+					let diff = (ptr.addr()) & (size_of::<__m256i>() - 1);
 					let ptr = ptr.wrapping_sub(diff).cast::<__m256i>();
 
 					let zeros: __m256i = _mm256_set1_epi8(0);

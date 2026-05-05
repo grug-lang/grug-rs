@@ -50,7 +50,7 @@ impl GrugState {
 		let mod_name = get_mod_name(path);
 		let entity_type = get_entity_type(path)?;
 
-		let mut arena = self.arenas.borrow_mut().pop().unwrap_or_else(|| Arena::new());
+		let mut arena = self.arenas.borrow_mut().pop().unwrap_or_default();
 		// immediately invoked closure so we get try {} finally {}
 		let id = (|| {
 			let tokens = tokenizer::tokenize(file_text, &arena, path)?;
@@ -74,7 +74,7 @@ impl GrugState {
 				entity, 
 				game_functions, 
 				&self.game_functions, 
-				mod_name.into(), 
+				mod_name, 
 				&self.mods_dir_path, 
 				file_text, 
 				path
@@ -89,12 +89,12 @@ impl GrugState {
 
 			ast.global_statements.into_iter().for_each(|statement| {
 				match statement {
-					GlobalStatement::Variable(st@MemberVariable      {..}) => member_variables.push(st.into()),
+					GlobalStatement::Variable(st@MemberVariable      {..}) => member_variables.push(st),
 					GlobalStatement::OnFunction(st@OnFunction        {..}) => {
 						let (i, _) = entity.get_on_fn(st.name.to_str()).unwrap();
-						on_functions[i] = Some(&*Box2::leak(Box2::new_in(st.into(), &arena)));
+						on_functions[i] = Some(&*Box2::leak(Box2::new_in(st, &arena)));
 					}
-					GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st.into()),
+					GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),
 					_ => (),
 				}
 			});
@@ -149,7 +149,7 @@ impl GrugState {
 					let rel_path = &rel_path[mods_dir_len..];
 					let rel_path = <OsStr as AsRef<Path>>::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)});
 
-					if let Some(extension) = Path::extension(rel_path.as_ref()) && extension == "grug" {
+					if let Some(extension) = Path::extension(rel_path) && extension == "grug" {
 						let result = self.compile_grug_file(rel_path);
 						let info = FileInfo {
 							path: Box::from(rel_path),
@@ -174,7 +174,7 @@ impl GrugState {
 			let file_name = change.expect("File IO error");
 			{
 				let file_name: &Path = file_name.as_ref();
-				if let Some(extension) = Path::extension(file_name.as_ref()) && extension == "grug" {
+				if let Some(extension) = Path::extension(file_name) && extension == "grug" {
 					let mod_dir_path = file_name.parent().expect("mod must have parent for successful compilation");
 					let result = self.compile_grug_file(file_name);
 					let info = FileInfo {
@@ -251,7 +251,7 @@ fn get_mod_name (path: &OsStr) -> &OsStr {
 		if *ch == b'/' || *ch == b'\\' {slash_len = i; break;}
 	}
 	// SAFETY: Next byte is b'/' which is valid utf8 or the length is 0.
-	return unsafe{OsStr::from_encoded_bytes_unchecked(&path[..slash_len])};
+	unsafe{OsStr::from_encoded_bytes_unchecked(&path[..slash_len])}
 	
 	// This restrict isn't checked in grug_tests and it gets in the way of
 	// implementing the compiler in the simplest way

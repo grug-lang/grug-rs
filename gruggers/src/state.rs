@@ -137,7 +137,7 @@ impl<'a> GrugInitSettings<'a> {
 	}
 
 	pub fn set_mods_dir(mut self, dir: &'a str) -> Self {
-		if dir.len() == 0 {
+		if dir.is_empty() {
 			self.mods_dir_path = None;
 			self.mods_dir_path_len = 0;
 		} else {
@@ -148,7 +148,7 @@ impl<'a> GrugInitSettings<'a> {
 	}
 
 	pub fn set_mod_api_path(mut self, mod_api: &'a str) -> Self {
-		if mod_api.len() == 0 {
+		if mod_api.is_empty() {
 			self.mod_api_path = None;
 			self.mod_api_path_len = 0;
 		} else {
@@ -177,7 +177,7 @@ impl<'a> GrugInitSettings<'a> {
 		GrugState::new(
 			mod_api_path,
 			mods_dir_path,
-			self.runtime_error_handler.unwrap_or_else(|| RuntimeErrorHandler::new_default()), 
+			self.runtime_error_handler.unwrap_or_else(RuntimeErrorHandler::new_default), 
 			self.backend.unwrap_or_else(|| BytecodeBackend::new().into())
 		)
 	}
@@ -318,7 +318,7 @@ impl GrugState {
 			path_to_script_ids: RefCell::new(HashMap::new()),
 			next_script_id: AtomicU64::new(0),
 			arenas: RefCell::new(Vec::new()),
-			backend: backend.into(),
+			backend,
 			current_script: Cell::new(None),
 			current_on_fn_id: Cell::new(None),
 			is_errorring: Cell::new(false),
@@ -348,7 +348,7 @@ impl GrugState {
 	}
 	
 	pub fn get_on_fn_name(&self, on_fn_id: GrugOnFnId) -> Option<&str> {
-		return self.on_functions.get(on_fn_id as usize).map(|entry| entry.event_fn_name())
+		self.on_functions.get(on_fn_id as usize).map(|entry| entry.event_fn_name())
 	}
 
 	pub fn get_on_functions(&self) -> &[EventFnEntry<'_>] {
@@ -372,6 +372,9 @@ impl GrugState {
 		Ok(&self.on_functions[start..end])
 	}
 
+	/// # Safety
+	/// The actual signature of the returned function should match the
+	/// signature in the mod_api
 	pub unsafe fn register_game_fn(&mut self, name: &'static str, ptr: GameFnPtrState<Self>) -> Result<(), StateError> {
 		if !self.mod_api.game_functions().contains_key(name) {
 			Err(StateError::UnknownGameFunction{
@@ -390,17 +393,20 @@ impl GrugState {
 		}
 	}
 
-	// Register a dummy function for each game function defined in the mod_api
-	// NOTE: This function only exists to allow the cli compiler to function.
-	// It is immediate UB to run any grug script created with this grug_state afterwards.
-	//
-	// You are only allowed to compile scripts from this state.
+	/// Register a dummy function for each game function defined in the mod_api
+	///
+	/// # Safety
+	///
+	/// It is immediate UB to run any grug script created with this grug_state afterwards.
+	///
+	/// You are only allowed to compile scripts from this state.
+	/// This function only exists to allow the cli compiler to function.
 	pub unsafe fn register_dummies(&mut self) {
 		extern "C" fn dummy_host_fn(_state: &GrugState, _arguments: *const GrugValue) -> GrugValue {
 			GrugValue{void: ()}
 		}
 
-		for (name, _) in self.mod_api.game_functions() {
+		for name in self.mod_api.game_functions().keys() {
 			self.game_functions.entry(Box::leak(Box::from(name.as_str()))).or_insert(GameFnPtr::from_ptr(dummy_host_fn));
 		}
 	}
@@ -472,7 +478,7 @@ impl GrugState {
 	pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) {
 		// TODO: Implement Xar::contained_within and perform this check yourself
 		if self.entities.is_contained_within(entity.0) {
-			self.backend.destroy_entity_data(&*entity);
+			self.backend.destroy_entity_data(&entity);
 			// `self.entities.contained_within` returns true so this entity must exist within self
 			unsafe{self.entities.delete(entity.into_inner())};
 		}
@@ -606,7 +612,8 @@ const _: () = const{
 pub struct GrugEntityHandle<'a>(XarHandle<'a, GrugEntity>);
 
 impl<'a> GrugEntityHandle<'a> {
-	/// SAFETY: inner can only be deleted by deleting the returned value
+	/// # SAFETY
+	/// inner can only be deleted by deleting the returned value
 	/// The returned value is allowed to create a shared reference to the data at any time 
 	pub unsafe fn new(inner: XarHandle<'a, GrugEntity>) -> Self {
 		Self(inner)

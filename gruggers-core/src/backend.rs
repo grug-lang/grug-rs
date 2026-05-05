@@ -230,11 +230,11 @@ impl State for CStateWithHandler {
 			RuntimeError::ExceededTimeLimit => (self.set_runtime_error)(self.state, error.code(), None),
 			RuntimeError::GameFunctionError{message} => {
 				let string;
-				let message = if let Some(message) = NTStr::from_str(message) {
+				let message = if let Some(message) = NTStr::try_from_str(message) {
 					message
 				} else {
 					string = format!("{}\n", message);
-					NTStr::from_str(&string).unwrap()
+					NTStr::try_from_str(&string).unwrap()
 				};
 				(self.set_runtime_error)(self.state, error.code(), Some(message.as_ntstrptr()));
 			}

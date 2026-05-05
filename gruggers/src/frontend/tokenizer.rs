@@ -238,7 +238,7 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 							format_args!("Unexpected null byte on line {}", cur_line)
 						));
 					}
-					if i + 2 < file_text.len() && (&file_text[i..=(i+1)] == &[b'\\', b'\r'] || &file_text[i..=(i+1)] == &[b'\\', b'\n']) {
+					if i + 2 < file_text.len() && (&file_text[i..=(i+2)] == b"\\\r\n" || &file_text[i..=(i+1)] == b"\\\n") {
 						return Err(GrugError::new_error(
 							ErrorKind::TOKENIZER_ERROR, 
 							"member scope", 

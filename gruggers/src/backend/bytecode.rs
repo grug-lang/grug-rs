@@ -53,23 +53,23 @@ impl<'a> Compiler<'a> {
 		instructions.insert_on_fn("init_globals", 0, 0, 1, 0);
 		let me_location = compiler.insert_global_variable("me");
 		instructions.stream.push(Op::StoreGlobal{index: me_location});
-		for global in ast.members.into_iter() {
+		for global in ast.members.iter() {
 			compiler.compile_expr(&mut instructions, &global.assignment_expr);
 			let i = compiler.insert_global_variable(global.name.to_str());
 			instructions.stream.push(Op::StoreGlobal{index: i});
 		}
 		instructions.stream.push(Op::ReturnVoid);
 
-		for (i, on_function) in ast.on_functions.into_iter().enumerate() {
+		for (i, on_function) in ast.on_functions.iter().enumerate() {
 			let Some(on_function) = on_function else {continue};
-			compiler.compile_on_fn(&mut instructions, *on_function, i + 1);
+			compiler.compile_on_fn(&mut instructions, on_function, i + 1);
 		}
 
 		for helper_function in ast.helper_functions {
 			compiler.compile_helper_fn(&mut instructions, helper_function);
 		}
 		for (patch_loc, name) in compiler.helper_fn_patches {
-			let data_loc = instructions.get_helper_fn_info(&name)
+			let data_loc = instructions.get_helper_fn_info(name)
 				.expect("helper function exists");
 			instructions.try_patch(Op::CallHelperFunction{data_loc}, patch_loc).unwrap();
 		}
@@ -133,17 +133,15 @@ impl<'a> Compiler<'a> {
 			} => {
 				let name = name.to_str();
 				self.compile_expr(instructions, assignment_expr);
-				if let Some(_) = ty {
+				if ty.is_some() {
 					let loc = self.insert_local_variable(name);
 					instructions.stream.push(Op::StoreLocal{index: loc});
+				} else if let Some(loc) = self.get_local_location(name) {
+					instructions.stream.push(Op::StoreLocal{index: loc});
+				} else if let Some(loc) = self.get_global_location(name) {
+					instructions.stream.push(Op::StoreGlobal{index: loc});
 				} else {
-					if let Some(loc) = self.get_local_location(name) {
-						instructions.stream.push(Op::StoreLocal{index: loc});
-					} else if let Some(loc) = self.get_global_location(name) {
-						instructions.stream.push(Op::StoreGlobal{index: loc});
-					} else {
-						unreachable!();
-					}
+					unreachable!();
 				}
 			}
 			Statement::If {
@@ -471,11 +469,16 @@ pub struct BytecodeBackend {
 }
 
 impl BytecodeBackend {
-	pub fn new() -> Self {
+	pub const fn new() -> Self {
 		Self {
 			files: RefCell::new(Vec::new()),
 			stacks: RefCell::new(Vec::new()),
 		}
+	}
+}
+impl Default for BytecodeBackend {
+	fn default () -> Self {
+		Self::new()
 	}
 }
 
@@ -485,12 +488,12 @@ impl Backend for BytecodeBackend {
 		let mut compiled_file = Compiler::compile(file);
 		let mut files = self.files.borrow_mut();
 		if let Some(old_file) = files.get_mut(id.0 as usize) {
-			let mut old_entities = std::mem::replace(&mut *old_file.entities.borrow_mut(), std::vec::Vec::new());
+			let mut old_entities = std::mem::take(&mut *old_file.entities.borrow_mut());
 			
 			old_entities.extract_if(.., |old_entity| {
 				debug_assert!(id == unsafe{(*old_entity.as_ptr()).file_id});
 				let globals = unsafe{&*compiled_file.data.get_slot().write_slice(compiled_file.globals_size, Cell::new(GrugValue{void: ()}))};
-				let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
+				let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
 
 				stack.stack.push(GrugValue{id: unsafe{(*old_entity.as_ptr()).id}});
 				let ret_val = unsafe{stack.run(state, globals, &compiled_file.instructions, 1, 0)}.is_some();
@@ -515,7 +518,7 @@ impl Backend for BytecodeBackend {
 			.expect("file already compiled");
 		
 		let globals = unsafe{&*file.data.get_slot().write_slice(file.globals_size, Cell::new(GrugValue{void: ()}))};
-		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
+		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
 		stack.stack.push(GrugValue{id: entity.id});
 		let ret_val = unsafe{stack.run(state, globals, &file.instructions, 1, 0)}.is_some();
 		entity.members.set(NonNull::from_ref(globals).cast::<()>());
@@ -548,7 +551,7 @@ impl Backend for BytecodeBackend {
 			.expect("file already compiled");
 
 		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<GrugValue>>().as_ptr(), file.globals_size)};
-		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
+		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
 		let Some((start_loc, argument_count, locals_size)) = file.instructions.on_fn_locations[on_fn_index + 1] else {
 			return false;
 		};
@@ -568,7 +571,7 @@ impl Backend for BytecodeBackend {
 			.expect("file already compiled");
 
 		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<GrugValue>>().as_ptr(), file.globals_size)};
-		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(|| Stack::new());
+		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
 		let Some(&Some((start_loc, argument_count, locals_size))) = file.instructions.on_fn_locations.get(on_fn_index + 1) else {
 			return false;
 		};
@@ -780,21 +783,6 @@ impl Instructions {
 		})
 	}
 
-	/// SAFETY:
-	/// `location` must be at the end of an instruction and the beginning of
-	/// the next one
-	/// Invalidates all instructions upto `location`.
-	/// Any jumps that ends up past `location` needs to be redone
-	///
-	// pub unsafe fn rewind_to(&mut self, location: usize) {
-	// 	self.stream.truncate(location);
-	// 	for (start, end) in self.jumps_start.iter() {
-	// 		if *start > location || *end > location {
-	// 			self.jumps_end.get_mut(end).unwrap().0.retain(|x| x != start);
-	// 		}
-	// 	}
-	// }
-
 	pub fn get_loc(&self) -> usize {
 		self.stream.len()
 	}
@@ -910,7 +898,7 @@ impl std::fmt::Display for Instructions {
 				}
 			}?;
 			// print labels: 
-			write!(f, "\n")?;
+			writeln!(f)?;
 		}
 		Ok(())
 	}
@@ -951,7 +939,7 @@ impl Stack {
 					self.stack.truncate(self.rbp);
 					if let Some((rbp, ip)) = self.stack_frames.pop() {
 						self.rbp = rbp;
-						stream = unsafe{&mut &*instructions.stream.get(ip..).unwrap_unchecked()};
+						stream = unsafe{instructions.stream.get(ip..).unwrap_unchecked()};
 					} else {
 						return Some(GrugValue{void: ()});
 					}
@@ -962,7 +950,7 @@ impl Stack {
 					if let Some((rbp, ip)) = self.stack_frames.pop() {
 						self.stack.push(ret_val);
 						self.rbp = rbp;
-						stream = unsafe{&mut &*instructions.stream.get(ip..).unwrap_unchecked()};
+						stream = unsafe{instructions.stream.get(ip..).unwrap_unchecked()};
 					} else {
 						return Some(ret_val);
 					}
@@ -1100,7 +1088,7 @@ impl Stack {
 					));
 					self.rbp = self.stack.len() - args as usize;
 					self.stack.resize(self.rbp + locals_size as usize, GrugValue{void: ()});
-					stream = unsafe{instructions.stream.get(location as usize..).unwrap_unchecked()};
+					stream = unsafe{instructions.stream.get(location..).unwrap_unchecked()};
 				}
 				Op::CallGameFunction {
 					has_return,
@@ -1117,11 +1105,9 @@ impl Stack {
 					}
 				}
 			}
-			if i_count & 0xFFFFF == 0 {
-				if start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
-					state.set_runtime_error(RuntimeError::ExceededTimeLimit);
-					return None;
-				}
+			if i_count & 0xFFFFF == 0 && start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
+				state.set_runtime_error(RuntimeError::ExceededTimeLimit);
+				return None;
 			}
 			i_count += 1;
 			if self.stack_frames.len() >= MAX_RECURSION_LIMIT {

@@ -51,7 +51,7 @@ pub enum ParserError<'a> {
 }
 
 impl<'a> ParserError<'a> {
-	fn into_grug_error(self, ast: &AST) -> GrugError<Arena> {
+	fn into_grug_error(self, ast: &Ast) -> GrugError<Arena> {
 		match self {
 			Self::GrugError(err) => err,
 			// grug_error("Unexpected token '%s' on line %zu", token.str, get_token_line_number(i));
@@ -142,7 +142,7 @@ impl<'a> ParserError<'a> {
 
 const MAX_PARSING_DEPTH: usize = 100;
 
-pub(crate) struct AST<'arena> {
+pub(crate) struct Ast<'arena> {
 	// needed for error reporting
 	pub(crate) file_text: &'arena str,
 	// needed for error reporting
@@ -157,9 +157,9 @@ pub(crate) struct AST<'arena> {
 	pub(crate) on_fn_signatures: Vec<(&'arena str, &'arena [Parameter<'arena>]), &'arena Arena>,
 }
 
-pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a str, file_path: &'a OsStr) -> Result<AST<'a>, GrugError<Arena>> {
+pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a str, file_path: &'a OsStr) -> Result<Ast<'a>, GrugError<Arena>> {
 	let final_token = tokens.last().map(|token| token.span).unwrap_or(SourceSpan{offset: 0, line: 0});
-	let mut ast = AST::new_in(final_token, file_text, file_path, arena);
+	let mut ast = Ast::new_in(final_token, file_text, file_path, arena);
 	let mut seen_helper_fn = false;
 
 	let mut seen_on_fn = false;
@@ -170,7 +170,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 
 	let mut tokens = tokens.iter();
 
-	let result = (|ast: &mut AST<'a>| -> Result<(), ParserError<'a>> {
+	let result = (|ast: &mut Ast<'a>| -> Result<(), ParserError<'a>> {
 		while let Ok(token) = peek_next_token(&tokens) {
 			if let Ok([name_token, _]) = consume_next_token_types(&mut tokens, &[TokenType::Word, TokenType::Colon]) {
 				if seen_on_fn {
@@ -230,7 +230,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				ast.global_statements.push(GlobalStatement::Variable(MemberVariable{
 					name: Box::leak(NTStr::box_from_str_in(global_name, arena)).as_ntstrptr(),
 					ty: global_type,
-					assignment_expr: assignment_expr.into(),
+					assignment_expr,
 					span: name_token.span
 				}));
 
@@ -261,7 +261,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				}
 				consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
 
-				let parameters = if assert_next_token_types(&mut tokens, &[TokenType::Word]).is_ok() {
+				let parameters = if assert_next_token_types(&tokens, &[TokenType::Word]).is_ok() {
 					ast.parse_parameters(&mut tokens, arena)?
 				} else {
 					&[]
@@ -284,7 +284,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 					span: name_token.span
 				};
 
-				if ast.on_fn_signatures.iter().find(|(name, _)| *name == fn_name).is_some() {
+				if ast.on_fn_signatures.iter().any(|(name, _)| *name == fn_name) {
 					return ast.new_parse_error(
 						name_token.span,
 						format_args!("The function '{}' was defined several times in the same file", fn_name),
@@ -316,7 +316,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 
 				ast.current_function = fn_name;
 
-				if ast.called_helper_fns.iter().find(|val| **val == fn_name).is_none() {
+				if !ast.called_helper_fns.contains(&fn_name) {
 					return ast.new_parse_error(
 						name_token.span,
 						format_args!("{}() is defined before the first time it gets called", fn_name)
@@ -325,7 +325,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 
 				consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
 
-				let parameters = if assert_next_token_types(&mut tokens, &[TokenType::Word]).is_ok() {
+				let parameters = if assert_next_token_types(&tokens, &[TokenType::Word]).is_ok() {
 					ast.parse_parameters(&mut tokens, arena)?
 				} else {
 					&[]
@@ -372,7 +372,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 
 				seen_helper_fn = true;
 
-				if ast.helper_fn_signatures.iter().find(|(name, _)| *name == fn_name).is_some() {
+				if ast.helper_fn_signatures.iter().any(|(name, _)| *name == fn_name) {
 					return ast.new_parse_error(
 						name_token.span,
 						format_args!("The function '{}' was defined several times in the same file", fn_name),
@@ -433,7 +433,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 	}
 }
 
-impl<'a> AST<'a> {
+impl<'a> Ast<'a> {
 	fn new_in(last_token_span: SourceSpan, file_text: &'a str, file_path: &'a OsStr, arena: &'a Arena) -> Self {
 		Self {
 			file_text,
@@ -492,7 +492,7 @@ impl<'a> AST<'a> {
 				ty: param_type,
 				name_span: name_token.span,
 				type_span: type_token.span
-			}.into());
+			});
 			
 			if consume_next_token_types(tokens, &[TokenType::Comma]).is_err() {
 				break;
@@ -539,7 +539,7 @@ impl<'a> AST<'a> {
 				newline_seen = false;
 				consume_indentation(tokens, indentation)?;
 
-				statements.push(self.parse_statement(tokens, parsing_depth + 1, indentation, arena)?.into());
+				statements.push(self.parse_statement(tokens, parsing_depth + 1, indentation, arena)?);
 				consume_next_token_types(tokens, &[TokenType::NewLine])?;
 			}
 		}
@@ -574,10 +574,10 @@ impl<'a> AST<'a> {
 						self.parse_local_variable(tokens, parsing_depth + 1, arena)
 					}
 					_ => {
-						return self.new_parse_error(
+						self.new_parse_error(
 							next_tokens[1].span,
 							format_args!("Expected '(', or ':', or ' =' after the word '{}' on line {}", next_tokens[0].value, next_tokens[0].span.line),
-						);
+						)
 					}
 				}
 			}
@@ -684,10 +684,10 @@ impl<'a> AST<'a> {
 				})
 			}
 			got_token => {
-				return self.new_parse_error(
+				self.new_parse_error(
 					next_tokens[0].span,
 					format_args!("Expected a statement token, but got {} on line {}", got_token, next_tokens[0].span.line)
-				);
+				)
 			},
 		}
 	}
@@ -813,11 +813,12 @@ impl<'a> AST<'a> {
 					let value: &'a NTStr  = Box::leak(NTStr::box_from_str_in(value, arena));
 					// a word token can actually be a function call
 					if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenParenthesis]) {
-						if value.as_str().starts_with("helper_") {
-							if self.called_helper_fns.iter().find(|name| **name == &*value.as_str()).is_none() {
-								self.called_helper_fns.push(value);
-							}
+						if value.as_str().starts_with("helper_")
+							&& !self.called_helper_fns.contains(&value.as_str())
+						{
+							self.called_helper_fns.push(value);
 						}
+						
 						// immediate ")" | (expr + ("," + " " + expr)*) + ")"
 						
 						if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
@@ -834,8 +835,8 @@ impl<'a> AST<'a> {
 						} else {
 							let mut arguments = Vec::new_in(arena);
 							loop {
-								arguments.push(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?.into());
-								if let Ok(_) = consume_next_token_types(tokens, &[TokenType::Comma, TokenType::Space]) {
+								arguments.push(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?);
+								if let Ok([_, _]) = consume_next_token_types(tokens, &[TokenType::Comma, TokenType::Space]) {
 									
 								} else {
 									let [_] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
@@ -906,7 +907,7 @@ impl<'a> AST<'a> {
 						result_type: None,
 						data: ExprData::Unary{
 							op: unary_op,
-							expr: Box::leak(Box::new_in(expr.into(), arena)),
+							expr: Box::leak(Box::new_in(expr, arena)),
 							op_span: *span,
 						},
 						span: *span,
@@ -980,13 +981,13 @@ impl<'a> AST<'a> {
 				result_type: None,
 				data: ExprData::Binary {
 					op: bin_op,
-					left : Box::leak(Box::new_in(current.into(), arena)),
-					right: Box::leak(Box::new_in(next   .into(), arena)),
+					left : Box::leak(Box::new_in(current, arena)),
+					right: Box::leak(Box::new_in(next   , arena)),
 					op_span: op.span,
 				},
 			};
 		}
-		Ok(current.into())
+		Ok(current)
 	}
 
 	fn get_prefix_precedence(op: UnaryOperator) -> ((), f32) {
@@ -1125,7 +1126,7 @@ fn consume_space<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a
 	if token.ty != TokenType::Space {
 		return Err(ParserError::ExpectedSpace{got: *token});
 	}
-	return Ok(token)
+	Ok(token)
 }
 
 #[track_caller]

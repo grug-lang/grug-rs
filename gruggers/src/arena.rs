@@ -56,7 +56,7 @@ mod page_alloc {
 		const PAGE_READ_WRITE: DWORD = 0x04;
 		const PAGE_NOACCESS: DWORD = 0x01;
 
-		pub static PAGE_SIZE: std::sync::LazyLock<u32> = std::sync::LazyLock::new(|| PageAllocator::page_size());
+		pub static PAGE_SIZE: std::sync::LazyLock<u32> = std::sync::LazyLock::new(PageAllocator::page_size);
 
 		impl PageAllocator {
 			pub fn page_size () -> u32 {
@@ -251,7 +251,7 @@ mod page_alloc {
 	pub use otherwise::*;
 }
 
-mod arena {
+mod arena_impl {
 	use std::alloc::Layout;
 	use std::ptr::NonNull;
 	use std::cell::Cell;
@@ -267,7 +267,7 @@ mod arena {
 	struct ArenaHeader {
 		// start is stored implicitly
 		/* start  : *mut u8, */
-		current: *mut u8,
+		current: Cell<*mut u8>,
 		end    : *mut u8,
 		prev   : *mut ArenaHeader,
 	}
@@ -281,15 +281,15 @@ mod arena {
 				let current = location.cast::<u8>().add(std::mem::size_of::<Self>());
 				let end = location.cast::<u8>().add(size_bytes);
 				*location = Self {
-					current,
+					current: Cell::new(current),
 					end,
 					prev,
 				}
 			}
 		}
 
-		fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			let align_offset = self.current.align_offset(layout.align());
+		fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+			let align_offset = self.current.get().align_offset(layout.align());
 			let space_required = align_offset + layout.size();
 
 			if space_required > self.remaining_space() {
@@ -297,24 +297,24 @@ mod arena {
 			} else {
 				let ret_val = unsafe {NonNull::new_unchecked(
 					std::ptr::slice_from_raw_parts_mut(
-						self.current.add(align_offset),
+						self.current.get().add(align_offset),
 						layout.size(),
 					)
 				)};
-				self.current = unsafe{self.current.add(space_required)};
+				self.current.set(unsafe{self.current.get().add(space_required)});
 				Ok(ret_val)
 			}
 		}
 
 		// Returns a pointer with the same address as self but with provenance over the entire block
 		fn start(&self) -> *mut u8 {
-			self.current.with_addr((self as *const Self).addr() + std::mem::size_of::<Self>())
+			self.current.get().with_addr((self as *const Self).addr() + std::mem::size_of::<Self>())
 		}
 
 		fn remaining_space(&self) -> usize {
 			// SAFETY: end is always >= current
 			unsafe {
-				self.end.cast_const().offset_from_unsigned(self.current.cast_const())
+				self.end.cast_const().offset_from_unsigned(self.current.get().cast_const())
 			}
 		}
 
@@ -328,7 +328,7 @@ mod arena {
 
 		// number of pages taken by the current block
 		fn cur_block_size(&self) -> usize {
-			let st = self.current.with_addr((self as *const Self).addr());
+			let st = self.current.get().with_addr((self as *const Self).addr());
 			(unsafe {
 				self.end.offset_from_unsigned(st)
 			}) / (*PAGE_SIZE as usize)
@@ -356,6 +356,7 @@ mod arena {
 			}
 		}
 
+		#[expect(clippy::mut_from_ref)]
 		fn alloc_new_block(&self, min_size_bytes: usize) -> &mut ArenaHeader {
 			// at least 1 page is allocated
 			let page_size = *PAGE_SIZE as usize;
@@ -367,7 +368,7 @@ mod arena {
 			}
 			let block = PageAllocator::alloc_pages(num_pages)
 				.expect("Could not allocate pages");
-			debug_assert!(ptr_is_aligned_to(block.as_ptr() as *mut u8, 4096));
+			debug_assert!(block.as_ptr().addr().is_multiple_of(4096));
 			
 			// SAFETY: Block was just successfully allocated and the start of a
 			// block is where an ArenaHeader should be written to 
@@ -427,23 +428,31 @@ mod arena {
 			Ok(ptr)
 		}
 
-		fn current_block(&self) -> Option<&mut ArenaHeader> {
+		fn current_block_mut(&mut self) -> Option<&mut ArenaHeader> {
 			// SAFETY: self.current is always written to before being assigned 
 			unsafe {
 				self.current.get().as_mut()
 			}
 		}
 
-		/// Resets the memory allocated into this arena
+		fn current_block(&self) -> Option<&ArenaHeader> {
+			// SAFETY: self.current is always written to before being assigned 
+			unsafe {
+				self.current.get().as_ref()
+			}
+		}
+
+		/// Resets the memory allocated into this arena.
+		///
 		/// Does not free all memory requested from OS, the largest block will still be held.
 		///
 		/// use `Self::free` to free all held memory
 		pub fn clear(&mut self) {
-			if let Some(first_block) = self.current_block() {
+			if let Some(first_block) = self.current_block_mut() {
 				// SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
 				let mut current = first_block.prev;
 				first_block.prev = std::ptr::null_mut();
-				first_block.current = first_block.start();
+				*first_block.current.get_mut() = first_block.start();
 
 				while !current.is_null() {
 					// SAFETY: dereferencing current is safe because if it is non-null, it is initialized
@@ -493,10 +502,6 @@ mod arena {
 		// }
 	}
 
-	fn ptr_is_aligned_to<T>(ptr: *mut T, align: usize) -> bool {
-		ptr.addr() % align == 0
-	}
-
 	#[cfg(test)]
 	mod test {
 		use super::*;
@@ -536,4 +541,4 @@ mod arena {
 	}
 }
 
-pub use arena::Arena;
+pub use arena_impl::Arena;

@@ -11,6 +11,8 @@ pub extern "C" fn grug_init(settings: GrugInitSettings) -> Option<Box<GrugState>
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_deinit(_: Option<Box<GrugState>>) {}
 
+/// # SAFETY
+/// same as [`GrugState::register_game_fn`]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn grug_register_game_fn(state: &mut GrugState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrState<GrugState>) -> bool {
 	// SAFETY: This function is exposed to C and is inherently unsafe
@@ -54,8 +56,11 @@ pub extern "C" fn grug_get_on_fn_id(state: &GrugState, entity_type: NTStrPtr<'_>
 	state.get_on_fn_id(entity_type.to_str(), on_fn_name.to_str()).unwrap_or(INVALID_GRUG_ON_FN_ID)
 }
 
+/// # Safety
+/// `values` must point to a buffer that contains at least `values_len`
+/// elements
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_call_on_function(state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue, values_len: usize) -> bool {
+pub unsafe extern "C" fn grug_call_on_function(state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue, values_len: usize) -> bool {
 	unsafe{state.call_on_function(entity, on_fn_id, std::slice::from_raw_parts(values, values_len))}
 }
 
