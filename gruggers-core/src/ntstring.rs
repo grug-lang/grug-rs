@@ -76,7 +76,7 @@ mod str {
 			unsafe{
 				std::ptr::copy(value.as_ptr(), ptr.cast(), value.len());
 				ptr.cast::<u8>().add(value.len()).write(b'\0');
-				let ptr = std::mem::transmute::<_, *mut NTStr>(ptr);
+				let ptr = std::mem::transmute::<*mut u8, *mut NTStr>(ptr);
 				Box::from_raw_in(ptr, a)
 			}
 		}

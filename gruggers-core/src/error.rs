@@ -58,7 +58,7 @@ impl SourceSpan {
 		// SAFETY: 
 		// 		line_start is either the start of the input or right after a b'\n'
 		// 		line_end is either the end of the input or right before a b'\n'
-		return unsafe{std::str::from_utf8_unchecked(&text[line_start..line_end])};
+		unsafe{std::str::from_utf8_unchecked(&text[line_start..line_end])}
 	}
 }
 
@@ -85,10 +85,11 @@ impl ErrorKind {
 	pub const MOD_API_IO_ERROR:   Self = Self::MOD_API_ERROR.add_component(0x1);
 	pub const MOD_API_JSON_ERROR: Self = Self::MOD_API_ERROR.add_component(0x2);
 
-	pub const FILE_NAME_ERROR:    Self = Self::COMPILE_ERROR.add_component(0x1);
-	pub const TOKENIZER_ERROR:    Self = Self::COMPILE_ERROR.add_component(0x2);
-	pub const PARSER_ERROR:       Self = Self::COMPILE_ERROR.add_component(0x3);
-	pub const TYPE_CHECKER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x4);
+	pub const IO_ERROR:           Self = Self::COMPILE_ERROR.add_component(0x1);
+	pub const FILE_NAME_ERROR:    Self = Self::COMPILE_ERROR.add_component(0x2);
+	pub const TOKENIZER_ERROR:    Self = Self::COMPILE_ERROR.add_component(0x3);
+	pub const PARSER_ERROR:       Self = Self::COMPILE_ERROR.add_component(0x4);
+	pub const TYPE_CHECKER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x5);
 
 	pub const fn add_component(mut self, other: u8) -> Self {
 		let mut i = 0;
@@ -112,7 +113,7 @@ impl ErrorKind {
 			}
 			i += 1;
 		}
-		return true;
+		true
 	}
 
 	pub const fn as_u32(self) -> u32 {
@@ -192,6 +193,7 @@ impl<A: Allocator> GrugError<A> {
 	pub fn new_error(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments) -> Self where
 		A: Default,
 	{
+		// println!("{:?}", std::panic::Location::caller());
 		let alloc = A::default();
 		Self::new_error_in(error_kind, function_name, file_path, source_text, err_span, error_message, alloc)
 	}
@@ -204,32 +206,32 @@ impl<A: Allocator> GrugError<A> {
 		let mut err_string = Vec::new_in(&alloc);
 		if error_kind.matches(&ErrorKind::FILE_NAME_ERROR) {
 			write!(err_string, 
-				"Error: {error_message}:\n\
+				"Error: {error_message}\n\
 				$  {}\0",
 				file_path.display()
 			).expect("writing into a vec should never fail");
 		} else if error_kind.matches(&ErrorKind::TOKENIZER_ERROR) {
 			write!(err_string, 
 				"  in ({}:{line}:{column})\n\
-				Error: {error_message}:\n\
+				Error: {error_message}\n\
 				{line} $ {source_line}\0",
 				file_path.display()
 			).expect("writing into a vec should never fail");
 		} else if error_kind.matches(&ErrorKind::MOD_API_ERROR) {
 			write!(err_string, 
 				"  in mod_api ({})\n\
-				Error: {error_message}:\0",
+				Error: {error_message}\0",
 				file_path.display()
 			).expect("writing into a vec should never fail");
 		} else if error_kind.matches(&ErrorKind::INIT_ERROR) {
 			write!(err_string, 
 				"  while initializing state
-				Error: {error_message}:\0"
+				Error: {error_message}\0"
 			).expect("writing into a vec should never fail");
 		} else {
 			write!(err_string, 
 				"  in {function_name} ({}:{line}:{column})\n\
-				Error: {error_message}:\n\
+				Error: {error_message}\n\
 				{line} $ {source_line}\0",
 				file_path.display()
 			).expect("writing into a vec should never fail");

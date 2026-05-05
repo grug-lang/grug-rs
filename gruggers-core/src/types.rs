@@ -32,13 +32,17 @@ pub type GameFnPtrState<GrugState> = extern "C" fn (&GrugState, *const GrugValue
 
 impl GameFnPtr {
 	/// Casts `self` to a [`GameFnPtrState`] for the input state
+	/// 
+	/// # Safety
+	/// The input type must be compatible with the type used to construct
+	/// `self`
 	pub const unsafe fn as_ptr<GrugState: State>(self) -> GameFnPtrState<GrugState> {
-		unsafe{std::mem::transmute(self.0)}
+		unsafe{std::mem::transmute::<NonNull<()>, GameFnPtrState<GrugState>>(self.0)}
 	}
 
 	/// Type erases a [`GameFnPtrState`]
 	pub const fn from_ptr<GrugState: State>(value: GameFnPtrState<GrugState>) -> Self {
-		Self(unsafe{std::mem::transmute(value)})
+		Self(unsafe{std::mem::transmute::<GameFnPtrState<GrugState>, NonNull<()>>(value)})
 	}
 
 	/// converts the pointer into a usize without exposing provenance
@@ -124,7 +128,8 @@ pub struct GrugEntity {
 }
 
 impl GrugEntity {
-	/// SAFETY: The `members` field of the returned entity are uninitialized
+	/// # SAFETY 
+	/// The `members` field of the returned entity are uninitialized
 	/// This data must be initialized by the backend before it is actually used
 	/// as an entity
 	pub unsafe fn new_uninit(id: GrugId, file_id: GrugFileId) -> Self {

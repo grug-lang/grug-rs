@@ -23,10 +23,22 @@ pub mod parser;
 impl GrugState {
 	// Path is relative to mods directory
 	pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<GrugFileId, GrugError<Arena>> {
+		let path = path.as_ref();
 		let mut path_buf = self.mods_dir_path.clone();
 		path_buf.push("/");
-		path_buf.push(path.as_ref());
-		let file_text = std::fs::read_to_string(path_buf).unwrap();
+		path_buf.push(path);
+		
+		let file_text = match std::fs::read_to_string(path_buf) {
+			Ok(file_text) => file_text,
+			Err(err) => return Err(GrugError::new_error(
+				ErrorKind::IO_ERROR,
+				"",
+				path, 
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("Unable to open file: {}", err)
+			))
+		};
 
 		self.compile_grug_file_from_str(path, &file_text)
 	}

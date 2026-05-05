@@ -46,7 +46,8 @@ pub trait Backend {
 	/// Run the on function at index `on_fn_index` of the script associated
 	/// with `entity`.
 	///
-	/// # SAFETY: `values` must point to an array of GrugValues of at least as
+	/// # SAFETY
+	/// `values` must point to an array of GrugValues of at least as
 	/// many elements as the number of arguments to the on_ function
 	///
 	/// If the number of arguments is 0, then `values` is allowed to be null
@@ -98,7 +99,7 @@ impl<GrugState: State> ErasedBackend<GrugState> {
 	}
 	/// See [`Backend::init_entity`]
 	#[inline]
-	pub fn init_entity<'a>(&self, state: &'a GrugState, entity: Pin<&GrugEntity>) -> bool {
+	pub fn init_entity(&self, state: &GrugState, entity: Pin<&GrugEntity>) -> bool {
 		(self.vtable.init_entity)(self.data, state, entity)
 	}
 	/// See [`Backend::clear_entities`]
@@ -113,7 +114,8 @@ impl<GrugState: State> ErasedBackend<GrugState> {
 	}
 	/// See [`Backend::call_on_function_raw`]
 	///
-	/// SAFETY: `values` must point to a buffer of at least as many values as `on_fn_index` expects
+	/// # SAFETY
+	/// `values` must point to a buffer of at least as many values as `on_fn_index` expects
 	#[inline]
 	pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
 		unsafe{(self.vtable.call_on_function_raw)(self.data, state, entity, on_fn_index, values)}
@@ -151,13 +153,13 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 			)
 		}
 
-		extern "C" fn clear_entities<T: Backend, GrugState: State>(data: NonNull<()>) {
+		extern "C" fn clear_entities<T: Backend>(data: NonNull<()>) {
 			T::clear_entities(
 				unsafe{data.cast::<T>().as_mut()},
 			)
 		}
 
-		extern "C" fn destroy_entity_data<T: Backend, GrugState: State>(data: NonNull<()>, entity: &GrugEntity) {
+		extern "C" fn destroy_entity_data<T: Backend>(data: NonNull<()>, entity: &GrugEntity) {
 			T::destroy_entity_data(
 				unsafe{data.cast::<T>().as_ref()},
 				entity
@@ -183,7 +185,7 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 			)
 		}
 		// destroys the resources owned by the backend
-		extern "C" fn drop<T: Backend, GrugState: State>(data: NonNull<()>) {
+		extern "C" fn drop<T: Backend>(data: NonNull<()>) {
 			_ = unsafe{Box::from_raw(data.cast::<T>().as_ptr())};
 		}
 
@@ -192,11 +194,11 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 			vtable: &BackendVTable {
 				insert_file         : insert_file::<T, GrugState>,
 				init_entity         : init_entity::<T, GrugState>,
-				clear_entities      : clear_entities::<T, GrugState>,
-				destroy_entity_data : destroy_entity_data::<T, GrugState>,
+				clear_entities      : clear_entities::<T>,
+				destroy_entity_data : destroy_entity_data::<T>,
 				call_on_function_raw: call_on_function_raw::<T, GrugState>,
 				call_on_function    : call_on_function::<T, GrugState>,
-				drop                : drop::<T, GrugState>,
+				drop                : drop::<T>,
 			}
 		}
 	}

@@ -3,7 +3,7 @@
 //! All the types defined here are layout compatible with the corresponding
 //! types defined in `grug.h`.
 //!
-//!	Backends recieve a [`GrugAst`] through a call to [`Backend::insert_file`](crate::backend::Backend::insert_file).
+//! Backends recieve a [`GrugAst`] through a call to [`Backend::insert_file`](crate::backend::Backend::insert_file).
 //!
 //! The current api assumes the ast structs do not own the memory they are
 //! allocated in. The gruggers crate allocates these in an arena and
@@ -514,8 +514,8 @@ pub enum Statement<'a> {
 	/// ```text
 	/// my_position: number = 0
 	/// on_tick() {
-	/// 	my_position = my_position + 2
-	/// 	set_position(my_position) # Call statement
+	///     my_position = my_position + 2
+	///     set_position(my_position) # Call statement
 	/// }
 	/// ```
 	///
@@ -525,13 +525,13 @@ pub enum Statement<'a> {
 	///
 	/// ```text
 	/// helper_fib(n: number) number {
-	/// 	if n <= 0 {
-	/// 		return 0
-	/// 	} else if n <= 2 {
-	/// 		return 1
-	/// 	} else {
-	/// 		...
-	/// 	}
+	///     if n <= 0 {
+	///         return 0
+	///     } else if n <= 2 {
+	///         return 1
+	///     } else {
+	///         ...
+	///     }
 	/// }
 	/// ```
 	///
@@ -555,24 +555,24 @@ pub enum Statement<'a> {
 	///
 	/// ```text
 	/// helper_fib(n: number) number {
-	/// 	result: number = 0
-	/// 	if number < 0 {
-	/// 		result = 0
-	/// 	} else if number == 1 {
-	/// 		result = 1
-	/// 	} else {
-	/// 		a: number = 1
-	/// 		b: number = 1
-	/// 		i: number = 2
-	/// 		while i < number {
-	/// 			temp: number = a + b
-	/// 			a = b
-	/// 			b = temp
-	/// 			i = i + 1
-	/// 		}
-	/// 		result = b
-	/// 	}
-	/// 	return result
+	///     result: number = 0
+	///     if number < 0 {
+	///         result = 0
+	///     } else if number == 1 {
+	///         result = 1
+	///     } else {
+	///         a: number = 1
+	///         b: number = 1
+	///         i: number = 2
+	///         while i < number {
+	///             temp: number = a + b
+	///             a = b
+	///             b = temp
+	///             i = i + 1
+	///         }
+	///         result = b
+	///     }
+	///     return result
 	/// }
 	/// ```
 	///
@@ -604,33 +604,33 @@ pub enum Statement<'a> {
 	///
 	/// ```text
 	/// helper_foo() number {
-	///		i: number = 0
-	///		while i < 30000 {
-	///			if helper_bar(i) {
-	///				break
-	///			}
-	///			game_fn_foo(i)
-	///			i = i + 1
-	///		} 
+	///     i: number = 0
+	///     while i < 30000 {
+	///         if helper_bar(i) {
+	///             break
+	///         }
+	///         game_fn_foo(i)
+	///         i = i + 1
+	///     } 
 	/// }
 	/// ```
-	///
+	/// 
 	/// This statement can only occur within a while loop
-	///
+	/// 
 	/// The span points at the location of the `break` keyword
 	Break(SourceSpan),
 	/// A continue statement.
 	///
 	/// ```text
 	/// helper_foo() number {
-	///		i: number = 0
-	///		while i < 30000 {
-	///			if helper_bar(i) {
-	///				continue
-	///			}
-	///			game_fn_foo(i)
-	///			i = i + 1
-	///		} 
+	///     i: number = 0
+	///     while i < 30000 {
+	///         if helper_bar(i) {
+	///             continue
+	///         }
+	///         game_fn_foo(i)
+	///         i = i + 1
+	///     } 
 	/// }
 	/// ```
 	///

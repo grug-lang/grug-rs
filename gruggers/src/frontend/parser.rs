@@ -516,7 +516,12 @@ impl<'a> AST<'a> {
 
 		while !is_end_of_block(tokens, indentation)? {
 			// newlines
-			if let Ok([token]) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
+			if let Ok([indentation_token, _]) = consume_next_token_types(tokens, &[TokenType::Indentation, TokenType::NewLine]) {
+				return self.new_parse_error(
+					indentation_token.span,
+					format_args!("Empty line cannot have indentation")
+				);
+			} else if let Ok([token]) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
 				last_new_line = *token;
 				if !newline_allowed {
 					return self.new_parse_error(
@@ -670,12 +675,6 @@ impl<'a> AST<'a> {
 			TokenType::Continue => {
 				tokens.next();
 				Ok(Statement::Continue(next_tokens[0].span))
-			}
-			TokenType::NewLine => {
-				return self.new_parse_error(
-					next_tokens[0].span,
-					format_args!("Unexpected empty line")
-				);
 			}
 			TokenType::Comment => {
 				tokens.next();
