@@ -90,6 +90,8 @@ impl std::fmt::Display for TokenType {
 			Self::Break => write!(f, "'break'"),
 			Self::Return => write!(f, "'return'"),
 			Self::Continue => write!(f, "'continue'"),
+			Self::Export => write!(f, "'export'"),
+			Self::Local => write!(f, "'local'"),
 			Self::Space => write!(f, "space (' ')"),
 			Self::Indentation => write!(f, "indentation"),
 			Self::String => write!(f, "string"),
