@@ -152,9 +152,9 @@ pub(crate) struct Ast<'arena> {
 	// needed to report error location
 	pub(crate) current_function: &'arena str,
 	pub(crate) global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
-	pub(crate) called_helper_fns: Vec<&'arena str, &'arena Arena>, 
-	pub(crate) helper_fn_signatures: Vec<(&'arena str, (GrugType<'arena>, &'arena [Parameter<'arena>])), &'arena Arena>,
-	pub(crate) on_fn_signatures: Vec<(&'arena str, &'arena [Parameter<'arena>]), &'arena Arena>,
+	pub(crate) called_local_functions: Vec<&'arena str, &'arena Arena>, 
+	pub(crate) local_fn_signatures: Vec<(&'arena str, (GrugType<'arena>, &'arena [Parameter<'arena>])), &'arena Arena>,
+	pub(crate) export_fn_signatures: Vec<(&'arena str, &'arena [Parameter<'arena>]), &'arena Arena>,
 }
 
 pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a str, file_path: &'a OsStr) -> Result<Ast<'a>, GrugError<Arena>> {
@@ -238,8 +238,8 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 
 				newline_allowed = true;
 				newline_required = true;
-			// local fn -> "local" + " " + name + "(" + arguments? + ")" + type + statements 
-			} else if let Ok([_]) = consume_next_token_types(&mut tokens, &[TokenType::Export]) {
+			// export fn -> "export" + " " + name + "(" + arguments? + ")" + statements 
+			} else if let Ok([_, _]) = consume_next_token_types(&mut tokens, &[TokenType::Export, TokenType::Space]) {
 				let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
 				let fn_name = name_token.value;
 				
@@ -257,7 +257,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				if seen_helper_fn {
 					return ast.new_parse_error(
 						name_token.span,
-						format_args!("{}() must be defined before all helper_ functions", fn_name)
+						format_args!("{}() must be defined before all local functions", fn_name)
 					);
 				}
 				consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
@@ -285,7 +285,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 					span: name_token.span
 				};
 
-				if ast.on_fn_signatures.iter().any(|(name, _)| *name == fn_name) {
+				if ast.export_fn_signatures.iter().any(|(name, _)| *name == fn_name) {
 					return ast.new_parse_error(
 						name_token.span,
 						format_args!("The function '{}' was defined several times in the same file", fn_name),
@@ -293,7 +293,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				}
 				ast.current_function = "member scope";
 				
-				ast.on_fn_signatures.push((fn_name, on_fn.parameters));
+				ast.export_fn_signatures.push((fn_name, on_fn.parameters));
 				ast.global_statements.push(GlobalStatement::OnFunction(on_fn));
 
 				seen_on_fn = true;
@@ -303,8 +303,8 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				newline_required = true;
 
 				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
-			// export fn -> "local" + " " + name + "(" + arguments? + ")" + type + statements 
-			} else if let Ok([name_token]) = consume_next_token_types(&mut tokens, &[TokenType::Word]) && name_token.value.starts_with("helper_") {
+			// local fn -> "local" + " " + name + "(" + arguments? + ")" + type + statements 
+			} else if let Ok([_, _]) = consume_next_token_types(&mut tokens, &[TokenType::Local, TokenType::Space]) {
 				let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
 				if !name_token.value.starts_with("_") {
 					return ast.new_parse_error(
@@ -323,7 +323,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 
 				ast.current_function = fn_name;
 
-				if !ast.called_helper_fns.contains(&fn_name) {
+				if !ast.called_local_functions.contains(&fn_name) {
 					return ast.new_parse_error(
 						name_token.span,
 						format_args!("{}() is defined before the first time it gets called", fn_name)
@@ -379,7 +379,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 
 				seen_helper_fn = true;
 
-				if ast.helper_fn_signatures.iter().any(|(name, _)| *name == fn_name) {
+				if ast.local_fn_signatures.iter().any(|(name, _)| *name == fn_name) {
 					return ast.new_parse_error(
 						name_token.span,
 						format_args!("The function '{}' was defined several times in the same file", fn_name),
@@ -387,7 +387,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				}
 				ast.current_function = "member scope";
 
-				ast.helper_fn_signatures.push((fn_name, (helper_fn.return_type, helper_fn.parameters)));
+				ast.local_fn_signatures.push((fn_name, (helper_fn.return_type, helper_fn.parameters)));
 				ast.global_statements.push(GlobalStatement::HelperFunction(helper_fn));
 
 				newline_allowed = true;
@@ -448,9 +448,9 @@ impl<'a> Ast<'a> {
 			last_token_span,
 			current_function: "member scope",
 			global_statements: Vec::new_in(arena),
-			called_helper_fns: Vec::new_in(arena),
-			helper_fn_signatures: Vec::new_in(arena),
-			on_fn_signatures: Vec::new_in(arena),
+			called_local_functions: Vec::new_in(arena),
+			local_fn_signatures: Vec::new_in(arena),
+			export_fn_signatures: Vec::new_in(arena),
 		}
 	}
 
@@ -820,10 +820,10 @@ impl<'a> Ast<'a> {
 					let value: &'a NTStr  = Box::leak(NTStr::box_from_str_in(value, arena));
 					// a word token can actually be a function call
 					if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenParenthesis]) {
-						if value.as_str().starts_with("helper_")
-							&& !self.called_helper_fns.contains(&value.as_str())
+						if value.as_str().starts_with("_")
+							&& !self.called_local_functions.contains(&value.as_str())
 						{
-							self.called_helper_fns.push(value);
+							self.called_local_functions.push(value);
 						}
 						
 						// immediate ")" | (expr + ("," + " " + expr)*) + ")"

@@ -142,29 +142,29 @@ fn main () {
 			.set_mods_dir("gruggers/examples/fibonacci/mods")
 			.build_state().unwrap();
 
-		state.register_game_fn("print_string",       print_string      ).unwrap();
-		state.register_game_fn("print_number",       print_number      ).unwrap();
-		state.register_game_fn("list_number",        list_number       ).unwrap();
-		state.register_game_fn("print_list_number",  print_list_number ).unwrap();
-		state.register_game_fn("list_number_insert", list_number_insert).unwrap();
-		state.register_game_fn("list_number_remove", list_number_remove).unwrap();
-		state.register_game_fn("list_number_push",   list_number_push  ).unwrap();
-		state.register_game_fn("list_number_pop",    list_number_pop   ).unwrap();
-		state.register_game_fn("list_number_len",    list_number_len   ).unwrap();
-		state.register_game_fn("list_number_get",    list_number_get   ).unwrap();
-		state.register_game_fn("list_number_set",    list_number_set   ).unwrap();
+		state.register_host_fn("print_string",       print_string      ).unwrap();
+		state.register_host_fn("print_number",       print_number      ).unwrap();
+		state.register_host_fn("list_number",        list_number       ).unwrap();
+		state.register_host_fn("print_list_number",  print_list_number ).unwrap();
+		state.register_host_fn("list_number_insert", list_number_insert).unwrap();
+		state.register_host_fn("list_number_remove", list_number_remove).unwrap();
+		state.register_host_fn("list_number_push",   list_number_push  ).unwrap();
+		state.register_host_fn("list_number_pop",    list_number_pop   ).unwrap();
+		state.register_host_fn("list_number_len",    list_number_len   ).unwrap();
+		state.register_host_fn("list_number_get",    list_number_get   ).unwrap();
+		state.register_host_fn("list_number_set",    list_number_set   ).unwrap();
 		
-		state.all_game_fns_registered().unwrap();
+		state.all_host_fns_registered().unwrap();
 		STATE.write(state);
 		OBJECTS.write(HashMap::new());
 
 		let script_id = STATE.compile_grug_file("fib_script/entity-Fib.grug").unwrap();
 		let script = STATE.create_entity(script_id).unwrap();
 
-		let naive_id = STATE.get_on_fn_id("Fib", "on_fib_naive").unwrap();
-		let iterative_id = STATE.get_on_fn_id("Fib", "on_fib_iterative").unwrap();
-		let memo_id = STATE.get_on_fn_id("Fib", "on_fib_memoized").unwrap();
-		let memo_print_id = STATE.get_on_fn_id("Fib", "on_print_list").unwrap();
+		let naive_id = STATE.get_export_fn_id("Fib", "on_fib_naive").unwrap();
+		let iterative_id = STATE.get_export_fn_id("Fib", "on_fib_iterative").unwrap();
+		let memo_id = STATE.get_export_fn_id("Fib", "on_fib_memoized").unwrap();
+		let memo_print_id = STATE.get_export_fn_id("Fib", "on_print_list").unwrap();
 
 		println!("Naive implementation");
 		for i in 0..10 {

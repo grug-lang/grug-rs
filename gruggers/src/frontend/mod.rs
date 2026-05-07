@@ -68,7 +68,7 @@ impl GrugState {
 					format_args!("Entity '{}' is not registered in the mod_api.json", entity_type),
 				)
 			)?;
-			let game_functions = self.mod_api.game_functions();
+			let game_functions = self.mod_api.host_fns();
 			
 			let resources = TypePropogator::new(
 				entity, 
@@ -84,14 +84,14 @@ impl GrugState {
 			// let mod_api_entity = self.mod_api.entities.get(entity_type);
 			let mut member_variables = Vec::new_in(&arena);
 			let mut on_functions = Vec::new_in(&arena);
-			on_functions.extend((0..entity.on_fns.len()).map(|_| None));
+			on_functions.extend((0..entity.export_fns.len()).map(|_| None));
 			let mut helper_functions = Vec::new_in(&arena);
 
 			ast.global_statements.into_iter().for_each(|statement| {
 				match statement {
 					GlobalStatement::Variable(st@MemberVariable      {..}) => member_variables.push(st),
 					GlobalStatement::OnFunction(st@OnFunction        {..}) => {
-						let (i, _) = entity.get_on_fn(st.name.to_str()).unwrap();
+						let (i, _) = entity.get_export_fn(st.name.to_str()).unwrap();
 						on_functions[i] = Some(&*Box2::leak(Box2::new_in(st, &arena)));
 					}
 					GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),

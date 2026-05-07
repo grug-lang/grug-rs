@@ -14,9 +14,9 @@ pub extern "C" fn grug_deinit(_: Option<Box<GrugState>>) {}
 /// # SAFETY
 /// same as [`GrugState::register_game_fn`]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_register_game_fn(state: &mut GrugState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrState<GrugState>) -> bool {
+pub unsafe extern "C" fn grug_register_host_fn(state: &mut GrugState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrState<GrugState>) -> bool {
 	// SAFETY: This function is exposed to C and is inherently unsafe
-	unsafe{state.register_game_fn(game_fn_name.to_str(), func).is_ok()}
+	unsafe{state.register_host_fn(game_fn_name.to_str(), func).is_ok()}
 }
 
 #[unsafe(no_mangle)]
@@ -53,7 +53,7 @@ pub extern "C" fn grug_get_on_fn_ids(state: &GrugState) -> &[EventFnEntry<'_>] {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_get_on_fn_id(state: &GrugState, entity_type: NTStrPtr<'_>, on_fn_name: NTStrPtr<'_>) -> GrugOnFnId {
-	state.get_on_fn_id(entity_type.to_str(), on_fn_name.to_str()).unwrap_or(INVALID_GRUG_ON_FN_ID)
+	state.get_export_fn_id(entity_type.to_str(), on_fn_name.to_str()).unwrap_or(INVALID_GRUG_ON_FN_ID)
 }
 
 /// # Safety
@@ -65,6 +65,6 @@ pub unsafe extern "C" fn grug_call_on_function(state: &GrugState, entity: &GrugE
 }
 
 #[unsafe(no_mangle)]
-pub fn grug_all_game_fns_registered(state: &GrugState) -> bool {
-	state.all_game_fns_registered().is_ok()
+pub fn grug_all_host_fns_registered(state: &GrugState) -> bool {
+	state.all_host_fns_registered().is_ok()
 }

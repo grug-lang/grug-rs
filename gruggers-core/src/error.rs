@@ -193,7 +193,7 @@ impl<A: Allocator> GrugError<A> {
 	pub fn new_error(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments) -> Self where
 		A: Default,
 	{
-		// println!("{:?}", std::panic::Location::caller());
+		println!("{:?}", std::panic::Location::caller());
 		let alloc = A::default();
 		Self::new_error_in(error_kind, function_name, file_path, source_text, err_span, error_message, alloc)
 	}

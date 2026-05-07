@@ -41,7 +41,7 @@ mod test_bindings {
 			.build_state()
 			.unwrap();
 		register_game_functions(&mut state);
-		state.all_game_fns_registered().unwrap();
+		state.all_host_fns_registered().unwrap();
 		Box::new(state)
 	}
 
@@ -52,7 +52,7 @@ mod test_bindings {
 	}
 
 	extern "C" fn get_on_fn_id(state: &GrugState, entity_name: NTStrPtr<'_>, on_fn_name: NTStrPtr<'_>) -> GrugOnFnId {
-		state.get_on_fn_id(entity_name.to_str(), on_fn_name.to_str())
+		state.get_export_fn_id(entity_name.to_str(), on_fn_name.to_str())
 			.unwrap()
 	}
 
@@ -122,15 +122,15 @@ mod game_functions {
 	}
 
 	pub fn register_game_functions(state: &mut GrugState) { unsafe {
-		state.register_game_fn("print_number", game_fn_print_number).unwrap();
-		state.register_game_fn("print_bool"  , game_fn_print_bool  ).unwrap();
-		state.register_game_fn("get_1"       , game_fn_get_1       ).unwrap();
-		state.register_game_fn("get_mass"    , game_fn_get_mass    ).unwrap();
-		state.register_game_fn("get_number"  , game_fn_get_number  ).unwrap();
-		state.register_game_fn("x"           , game_fn_x           ).unwrap();
-		state.register_game_fn("y"           , game_fn_y           ).unwrap();
-		state.register_game_fn("sqrt"        , game_fn_sqrt        ).unwrap();
-		state.register_game_fn("set_acc"     , game_fn_set_acc     ).unwrap();
+		state.register_host_fn("print_number", game_fn_print_number).unwrap();
+		state.register_host_fn("print_bool"  , game_fn_print_bool  ).unwrap();
+		state.register_host_fn("get_1"       , game_fn_get_1       ).unwrap();
+		state.register_host_fn("get_mass"    , game_fn_get_mass    ).unwrap();
+		state.register_host_fn("get_number"  , game_fn_get_number  ).unwrap();
+		state.register_host_fn("x"           , game_fn_x           ).unwrap();
+		state.register_host_fn("y"           , game_fn_y           ).unwrap();
+		state.register_host_fn("sqrt"        , game_fn_sqrt        ).unwrap();
+		state.register_host_fn("set_acc"     , game_fn_set_acc     ).unwrap();
 	}}
 }
 

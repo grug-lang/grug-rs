@@ -291,7 +291,7 @@ impl GrugState {
 				event_fn_name : unsafe{init_globals.as_ntstrptr().detach_lifetime()},
 				index      : 0,
 			});
-			for (i, (event_fn_name, _)) in entity.on_fns.iter().enumerate() {
+			for (i, (event_fn_name, _)) in entity.export_fns.iter().enumerate() {
 				on_fns.push(EventFnEntry{
 					// SAFETY: All EventFnEntries we give out have a 'self
 					// lifetime, which is the same as the 'mod_api lifetime they
@@ -330,21 +330,30 @@ impl GrugState {
 		&self.mods_dir_path
 	}
 
-	pub fn get_on_fn_id(&self, entity_type: &str, on_fn_name: &str) -> Result<GrugOnFnId, StateError> {
+	pub fn get_export_fn_id(&self, entity_type: &str, on_fn_name: &str) -> Result<GrugOnFnId, GrugError<Arena>> {
 		if !self.mod_api.entities().contains_key(entity_type) {
-			return Err(StateError::UnknownEntityType{
-				entity_type: String::from(entity_type),
-			});
+			return Err(GrugError::new_error(
+				ErrorKind::INIT_ERROR,
+				"",
+				"".as_ref(),
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("mod api does not define an entity named {}", entity_type),
+			));
 		}
 		for (i, on_fn_entry) in self.on_functions.iter().enumerate() {
 			if on_fn_entry.entity_type() == entity_type && on_fn_entry.event_fn_name() == on_fn_name {
 				return Ok(i as u64)
 			}
 		}
-		Err(StateError::UnknownOnFunction {
-			entity_type: String::from(entity_type),
-			on_function_name : String::from(on_fn_name ),
-		})
+		return Err(GrugError::new_error(
+			ErrorKind::INIT_ERROR,
+			"",
+			"".as_ref(),
+			"",
+			SourceSpan{offset: 0, line: 0},
+			format_args!("'{}' does not export a function named '{}'", entity_type, on_fn_name),
+		));
 	}
 	
 	pub fn get_on_fn_name(&self, on_fn_id: GrugOnFnId) -> Option<&str> {
@@ -355,11 +364,16 @@ impl GrugState {
 		&self.on_functions
 	}
 
-	pub fn get_entity_on_functions(&self, entity_type: &str) -> Result<&[EventFnEntry<'_>], StateError> {
+	pub fn get_entity_on_functions(&self, entity_type: &str) -> Result<&[EventFnEntry<'_>], GrugError<Arena>> {
 		if !self.mod_api.entities().contains_key(entity_type) {
-			return Err(StateError::UnknownEntityType{
-				entity_type: String::from(entity_type),
-			});
+			return Err(GrugError::new_error(
+				ErrorKind::INIT_ERROR,
+				"",
+				"".as_ref(),
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("mod api does not define an entity named {}", entity_type),
+			));
 		}
 		let mut start = 0;
 		while start != self.on_functions.len() && self.on_functions[start].entity_type() != entity_type {
@@ -375,16 +389,26 @@ impl GrugState {
 	/// # Safety
 	/// The actual signature of the returned function should match the
 	/// signature in the mod_api
-	pub unsafe fn register_game_fn(&mut self, name: &'static str, ptr: GameFnPtrState<Self>) -> Result<(), StateError> {
-		if !self.mod_api.game_functions().contains_key(name) {
-			Err(StateError::UnknownGameFunction{
-				game_function_name: name,
-			})
+	pub unsafe fn register_host_fn(&mut self, name: &'static str, ptr: GameFnPtrState<Self>) -> Result<(), GrugError<Arena>> {
+		if !self.mod_api.host_fns().contains_key(name) {
+			return Err(GrugError::new_error(
+				ErrorKind::INIT_ERROR,
+				"",
+				"".as_ref(),
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("Host function named '{}' is not found in mod_api.json", name),
+			));
 		} else {
 			match self.game_functions.entry(name) {
-				Entry::Occupied(_) => Err(StateError::ReregisteringGameFunction{
-					game_function_name: name,
-				}),
+				Entry::Occupied(_) => return Err(GrugError::new_error(
+					ErrorKind::INIT_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host function named '{}' has already been registered", name),
+				)),
 				Entry::Vacant(x) => {
 					x.insert(GameFnPtr::from_ptr(ptr));
 					Ok(())
@@ -406,7 +430,7 @@ impl GrugState {
 			GrugValue{void: ()}
 		}
 
-		for name in self.mod_api.game_functions().keys() {
+		for name in self.mod_api.host_fns().keys() {
 			self.game_functions.entry(Box::leak(Box::from(name.as_str()))).or_insert(GameFnPtr::from_ptr(dummy_host_fn));
 		}
 	}
@@ -421,8 +445,8 @@ impl GrugState {
 		Some(string)
 	}
 
-	pub fn all_game_fns_registered(&self) -> Result<(), GrugError<Arena>> {
-		for game_fn_name in self.mod_api.game_functions().keys() {
+	pub fn all_host_fns_registered(&self) -> Result<(), GrugError<Arena>> {
+		for game_fn_name in self.mod_api.host_fns().keys() {
 			if !self.game_functions.contains_key(game_fn_name.as_str()) {
 				return Err(GrugError::new_error(
 					ErrorKind::INIT_ERROR,
@@ -533,43 +557,6 @@ impl GrugState {
 		self.current_on_fn_id.set(old_on_fn_id);
 
 		ret_val
-	}
-}
-
-#[derive(Debug)]
-pub enum StateError {
-	UnknownEntityType{
-		entity_type: String
-	},
-	UnknownOnFunction {
-		entity_type: String,
-		on_function_name: String,
-	},
-	UnknownGameFunction {
-		game_function_name: &'static str,
-	},
-	ReregisteringGameFunction {
-		game_function_name: &'static str,
-	}
-}
-
-impl std::fmt::Display for StateError {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		match self {
-			Self::UnknownEntityType{
-				entity_type,
-			} => write!(f, "mod api does not define an entity named {}", entity_type),
-			Self::UnknownOnFunction {
-				entity_type,
-				on_function_name,
-			} => write!(f, "'{}' does not contain an on_function named '{}'", entity_type, on_function_name),
-			Self::UnknownGameFunction {
-				game_function_name,
-			} => write!(f, "Game function named '{}' is not found in mod_api.json", game_function_name),
-			Self::ReregisteringGameFunction {
-				game_function_name,
-			} => write!(f, "Game function named '{}' has already been registered", game_function_name),
-		}
 	}
 }
 
