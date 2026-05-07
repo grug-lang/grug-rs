@@ -391,6 +391,7 @@ mod de {
 					let Some(name) = get_object_field(global_statement, "name", "GLOBAL_ON_FN")?.as_str() else {
 						return Err(JsonDeserializeError::OnFunctionNameNotString)
 					};
+					output.push_str("export ");
 					output.push_str(name);
 					output.push_str("(");
 					if let Ok(parameters) = get_object_field(global_statement, "arguments", "GLOBAL_ON_FN") {
@@ -406,6 +407,7 @@ mod de {
 					let Some(name) = get_object_field(global_statement, "name", "GLOBAL_HELPER_FN")?.as_str() else {
 						return Err(JsonDeserializeError::HelperFunctionNameNotString)
 					};
+					output.push_str("local ");
 					output.push_str(name);
 					output.push_str("(");
 					if let Ok(parameters) = get_object_field(global_statement, "arguments", "GLOBAL_HELPER_FN") {

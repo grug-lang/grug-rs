@@ -11,7 +11,7 @@ pub mod state;
 
 pub mod capi;
 mod xar;
-mod arena;
+pub mod arena;
 
 mod cachemap;
 mod watcher;

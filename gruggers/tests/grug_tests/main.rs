@@ -36,7 +36,7 @@ mod test_bindings {
 				)};
 			})
 			.set_backend(BytecodeBackend::new())
-			.build_state().ok()?;
+			.build_state().map_err(|err| println!("{:?}", err)).ok()?;
 		super::game_fn_bindings::register_game_functions(&mut state).ok()?;
 		// let files = state.compile_all_files();
 		let files = Vec::new();
@@ -98,7 +98,7 @@ mod test_bindings {
 			.split_once("-").unwrap()
 			.1;
 
-		let fn_id = state.get_on_fn_id(entity_type, fn_name).unwrap();
+		let fn_id = state.get_export_fn_id(entity_type, fn_name).unwrap();
 		let entity = unsafe{(&*&raw const CURRENT_ENTITY).as_ref()}
 			.expect("called init_globals already");
 		let args = if args_count == 0 {&[]} else {unsafe{std::slice::from_raw_parts(args, args_count)}};
@@ -214,7 +214,9 @@ use test_bindings::*;
 
 mod game_fn_bindings {
 	use gruggers::types::GrugValue;
-	use gruggers::state::{GrugState, StateError};
+	use gruggers::state::GrugState;
+	use gruggers::error::GrugError;
+	use gruggers::arena::Arena;
 	#[link(name = "tests", kind="dylib")]
 	#[allow(improper_ctypes)]
 	unsafe extern "C" {
@@ -258,46 +260,46 @@ mod game_fn_bindings {
         safe fn game_fn_box_number           <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_print_csv            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
 	}
-	pub fn register_game_functions(state: &mut GrugState) -> Result<(), StateError> { unsafe {
-		state.register_game_fn("nothing",              game_fn_nothing             )?; 
-		state.register_game_fn("magic",                game_fn_magic               )?; 
-		state.register_game_fn("initialize",           game_fn_initialize          )?; 
-		state.register_game_fn("initialize_bool",      game_fn_initialize_bool     )?; 
-		state.register_game_fn("identity",             game_fn_identity            )?; 
-		state.register_game_fn("max",                  game_fn_max                 )?; 
-		state.register_game_fn("say",                  game_fn_say                 )?; 
-		state.register_game_fn("sin",                  game_fn_sin                 )?; 
-		state.register_game_fn("cos",                  game_fn_cos                 )?; 
-		state.register_game_fn("mega",                 game_fn_mega                )?; 
-		state.register_game_fn("get_false",            game_fn_get_false           )?; 
-		state.register_game_fn("set_is_happy",         game_fn_set_is_happy        )?; 
-		state.register_game_fn("mega_f32",             game_fn_mega_f32            )?; 
-		state.register_game_fn("mega_i32",             game_fn_mega_i32            )?; 
-		state.register_game_fn("draw",                 game_fn_draw                )?; 
-		state.register_game_fn("blocked_alrm",         game_fn_blocked_alrm        )?; 
-		state.register_game_fn("spawn",                game_fn_spawn               )?; 
-		state.register_game_fn("spawn_d",              game_fn_spawn_d             )?; 
-		state.register_game_fn("has_resource",         game_fn_has_resource        )?; 
-		state.register_game_fn("has_entity",           game_fn_has_entity          )?; 
-		state.register_game_fn("has_string",           game_fn_has_string          )?; 
-		state.register_game_fn("get_opponent",         game_fn_get_opponent        )?; 
-		state.register_game_fn("set_d",                game_fn_set_d               )?; 
-		state.register_game_fn("get_os",               game_fn_get_os              )?; 
-		state.register_game_fn("set_opponent",         game_fn_set_opponent        )?; 
-		state.register_game_fn("motherload",           game_fn_motherload          )?; 
-		state.register_game_fn("motherload_subless",   game_fn_motherload_subless  )?; 
-		state.register_game_fn("offset_32_bit_f32",    game_fn_offset_32_bit_f32   )?; 
-		state.register_game_fn("offset_32_bit_i32",    game_fn_offset_32_bit_i32   )?; 
-		state.register_game_fn("offset_32_bit_string", game_fn_offset_32_bit_string)?; 
-		state.register_game_fn("talk",                 game_fn_talk                )?; 
-		state.register_game_fn("get_position",         game_fn_get_position        )?; 
-		state.register_game_fn("set_position",         game_fn_set_position        )?; 
-		state.register_game_fn("cause_game_fn_error",  game_fn_cause_game_fn_error )?; 
-		state.register_game_fn("call_on_b_fn",         game_fn_call_on_b_fn        )?; 
-		state.register_game_fn("store",                game_fn_store               )?; 
-		state.register_game_fn("retrieve",             game_fn_retrieve            )?; 
-		state.register_game_fn("box_number",           game_fn_box_number          )?; 
-		state.register_game_fn("print_csv",            game_fn_print_csv           )?; 
+	pub fn register_game_functions(state: &mut GrugState) -> Result<(), GrugError<Arena>> { unsafe {
+		state.register_host_fn("nothing",              game_fn_nothing             )?; 
+		state.register_host_fn("magic",                game_fn_magic               )?; 
+		state.register_host_fn("initialize",           game_fn_initialize          )?; 
+		state.register_host_fn("initialize_bool",      game_fn_initialize_bool     )?; 
+		state.register_host_fn("identity",             game_fn_identity            )?; 
+		state.register_host_fn("max",                  game_fn_max                 )?; 
+		state.register_host_fn("say",                  game_fn_say                 )?; 
+		state.register_host_fn("sin",                  game_fn_sin                 )?; 
+		state.register_host_fn("cos",                  game_fn_cos                 )?; 
+		state.register_host_fn("mega",                 game_fn_mega                )?; 
+		state.register_host_fn("get_false",            game_fn_get_false           )?; 
+		state.register_host_fn("set_is_happy",         game_fn_set_is_happy        )?; 
+		state.register_host_fn("mega_f32",             game_fn_mega_f32            )?; 
+		state.register_host_fn("mega_i32",             game_fn_mega_i32            )?; 
+		state.register_host_fn("draw",                 game_fn_draw                )?; 
+		state.register_host_fn("blocked_alrm",         game_fn_blocked_alrm        )?; 
+		state.register_host_fn("spawn",                game_fn_spawn               )?; 
+		state.register_host_fn("spawn_d",              game_fn_spawn_d             )?; 
+		state.register_host_fn("has_resource",         game_fn_has_resource        )?; 
+		state.register_host_fn("has_entity",           game_fn_has_entity          )?; 
+		state.register_host_fn("has_string",           game_fn_has_string          )?; 
+		state.register_host_fn("get_opponent",         game_fn_get_opponent        )?; 
+		state.register_host_fn("set_d",                game_fn_set_d               )?; 
+		state.register_host_fn("get_os",               game_fn_get_os              )?; 
+		state.register_host_fn("set_opponent",         game_fn_set_opponent        )?; 
+		state.register_host_fn("motherload",           game_fn_motherload          )?; 
+		state.register_host_fn("motherload_subless",   game_fn_motherload_subless  )?; 
+		state.register_host_fn("offset_32_bit_f32",    game_fn_offset_32_bit_f32   )?; 
+		state.register_host_fn("offset_32_bit_i32",    game_fn_offset_32_bit_i32   )?; 
+		state.register_host_fn("offset_32_bit_string", game_fn_offset_32_bit_string)?; 
+		state.register_host_fn("talk",                 game_fn_talk                )?; 
+		state.register_host_fn("get_position",         game_fn_get_position        )?; 
+		state.register_host_fn("set_position",         game_fn_set_position        )?; 
+		state.register_host_fn("cause_game_fn_error",  game_fn_cause_game_fn_error )?; 
+		state.register_host_fn("call_on_b_fn",         game_fn_call_on_b_fn        )?; 
+		state.register_host_fn("store",                game_fn_store               )?; 
+		state.register_host_fn("retrieve",             game_fn_retrieve            )?; 
+		state.register_host_fn("box_number",           game_fn_box_number          )?; 
+		state.register_host_fn("print_csv",            game_fn_print_csv           )?; 
 		Ok(())
 	}}
 }
