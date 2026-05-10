@@ -7,7 +7,7 @@ use std::time::Duration;
 
 mod game_fns {
 	use super::*;
-	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
 		unsafe {
 			let string = (*arguments).string.to_str();
 			println!("{}", string);

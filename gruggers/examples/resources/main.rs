@@ -6,14 +6,14 @@ use std::time::Duration;
 
 mod game_fns {
 	use super::*;
-	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
 		unsafe {
 			let string = (*arguments).string.to_str();
 			println!("{}", string);
 		}
 		GrugValue{void: ()}
 	}
-	pub extern "C" fn print_file<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub fn print_file<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
 		unsafe {
 			let file_path = (*arguments).string.to_str();
 			let mut path = std::path::PathBuf::from(_state.mods_dir_path());

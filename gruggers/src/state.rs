@@ -66,6 +66,8 @@ use std::ffi::{OsString, OsStr};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{RwLock, Arc};
 
+use allocator_api2::boxed::Box;
+
 // /// Called by the 
 #[repr(C)]
 pub struct RuntimeErrorHandler {
@@ -264,7 +266,11 @@ pub struct GrugState {
 	pub(crate) mod_api: Arc<ModApi>,
 	pub(crate) mods_dir_path: OsString,
 	next_entity_id: AtomicU64,
-	pub(crate) host_fn_ptrs: Arc<RwLock<HashMap<&'static str, GameFnPtr>>>,
+	// The data associated with these functions are stored in self.data_arena;
+	// This doesn't use Box<dyn Fn(&Self, ...) -> ... to make c interop have
+	// less overhead
+	pub(crate) host_fn_ptrs: Arc<RwLock<HashMap<&'static str, (GameFnPtr, NonNull<()>)>>>,
+	pub(crate) data_arena: Arena,
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
 	pub(crate) entities: Xar<GrugEntity>,
@@ -384,6 +390,7 @@ impl GrugState {
 			mods_dir_path,
 			next_entity_id: AtomicU64::new(0),
 			host_fn_ptrs,
+			data_arena: Arena::new(),
 			runtime_error_handler: handler,
 			resources: RefCell::new(HashSet::new()),
 			entities: Xar::new(),
@@ -482,7 +489,7 @@ impl GrugState {
 					format_args!("Host function named '{}' has already been registered", name),
 				)),
 				Entry::Vacant(x) => {
-					x.insert(GameFnPtr::from_ptr(func));
+					x.insert((GameFnPtr::from_ptr(func), data));
 					Ok(())
 				}
 			}
@@ -498,13 +505,14 @@ impl GrugState {
 	/// You are only allowed to compile scripts from this state.
 	/// This function only exists to allow the cli compiler to function.
 	pub unsafe fn register_dummies(&mut self) {
-		extern "C" fn dummy_host_fn(_state: &GrugState, _arguments: *const GrugValue) -> GrugValue {
+		extern "C" fn dummy_host_fn(_data: NonNull<()>, _state: &GrugState, _arguments: *const GrugValue) -> GrugValue {
 			GrugValue{void: ()}
 		}
 
 		let mut host_fn_ptrs = self.host_fn_ptrs.write().unwrap();
 		for name in self.mod_api.host_fns().keys() {
-			host_fn_ptrs.entry(Box::leak(Box::from(name.as_str()))).or_insert(GameFnPtr::from_ptr(dummy_host_fn));
+			// TODO: allocate these strings within self.data_arena
+			host_fn_ptrs.entry(Box::leak(Box::from(name.as_str()))).or_insert((GameFnPtr::from_ptr(dummy_host_fn), NonNull::dangling()));
 		}
 	}
 	

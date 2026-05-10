@@ -19,6 +19,8 @@ pub extern "C" fn grug_default_settings() -> GrugInitSettings<'static> {
 	GrugInitSettings::new()
 }
 
+use std::ptr::NonNull;
+
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_init(settings: GrugInitSettings, out_err: &mut MaybeUninit<GrugError<'static>>) -> Option<Box<CState>> {
 	match settings.build_state() {

@@ -409,7 +409,7 @@ impl<'a> Compiler<'a> {
 				}
 				
 				let has_return = *expr.result_type.unwrap() != GrugType::Void;
-				let data_loc = instructions.insert_game_fn_data(args_count as u32, *ptr);
+				let data_loc = instructions.insert_game_fn_data(args_count as u32, ptr.0, ptr.1);
 				instructions.stream.push(Op::CallGameFunction {
 					has_return,
 					data_loc
@@ -665,7 +665,7 @@ pub union ConstantData {
 	number: f64,
 	string: NTStrPtr<'static>,
 	helper_fn_data: (/* args: */ u32, /* locals_size: */ u32, /* location: */ usize),
-	game_fn_data: (/* args: */ u32, /* ptr: */ GameFnPtr),
+	game_fn_data: (/* args: */ u32, /* ptr: */ GameFnPtr, NonNull<()>),
 }
 
 struct Instructions{
@@ -774,10 +774,10 @@ impl Instructions {
 		self.fn_labels.insert(location, name);
 	}
 
-	pub fn insert_game_fn_data(&mut self, args: u32, ptr: GameFnPtr) -> u32 {
+	pub fn insert_game_fn_data(&mut self, args: u32, ptr: GameFnPtr, data: NonNull<()>) -> u32 {
 		*self.game_fn_locations.entry(ptr.as_usize()).or_insert_with(|| {
 			let ret_val = self.constants.len();
-			self.constants.push(ConstantData{game_fn_data: (args, ptr)});
+			self.constants.push(ConstantData{game_fn_data: (args, ptr, data)});
 			assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
 			ret_val as u32
 		})
@@ -893,7 +893,7 @@ impl std::fmt::Display for Instructions {
 					has_return,
 					data_loc,
 				} => {
-					let (args, ptr) = unsafe{self.constants[*data_loc as usize].game_fn_data};
+					let (args, ptr, _) = unsafe{self.constants[*data_loc as usize].game_fn_data};
 					write!(f, "CallGameFunction {} {} 0x{:016x}", has_return, args, &unsafe{std::mem::transmute::<GameFnPtr, *const ()>(ptr).addr()})
 				}
 			}?;
@@ -1094,8 +1094,8 @@ impl Stack {
 					has_return,
 					data_loc,
 				} => {
-					let (args, ptr) = unsafe{instructions.constants[data_loc as usize].game_fn_data};
-					let value = unsafe{(ptr.as_ptr())(state, self.stack.as_ptr().add(self.stack.len() - args as usize))};
+					let (args, ptr, data) = unsafe{instructions.constants[data_loc as usize].game_fn_data};
+					let value = unsafe{(ptr.as_ptr())(data, state, self.stack.as_ptr().add(self.stack.len() - args as usize))};
 					self.stack.truncate(self.stack.len() - args as usize);
 					if has_return {
 						self.stack.push(value);

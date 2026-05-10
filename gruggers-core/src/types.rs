@@ -31,7 +31,7 @@ unsafe impl Sync for GameFnPtr {}
 /// 
 /// When Backends are running an export function, [`GameFnPtrState`] should be
 /// cast to the same kind of state used in `call_on_function`.
-pub type GameFnPtrState<GrugState> = extern "C" fn (&GrugState, *const GrugValue) -> GrugValue;
+pub type GameFnPtrState<GrugState> = extern "C" fn (NonNull<()>, &GrugState, *const GrugValue) -> GrugValue;
 
 impl GameFnPtr {
 	/// Casts `self` to a [`GameFnPtrState`] for the input state

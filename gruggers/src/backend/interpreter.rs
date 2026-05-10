@@ -588,9 +588,9 @@ impl Interpreter {
 				ptr: Some(ptr),
 				..
 			} => {
-				let ptr = unsafe{ptr.as_ptr()};
+				let (ptr, data) = unsafe{(ptr.0.as_ptr(), ptr.1)};
 				let values = args.iter().map(|arg| self.run_expr(call_stack, state, file, entity, arg)).collect::<Option<Vec<_>>>()?;
-				let ret_val = ptr(state, values.as_ptr());
+				let ret_val = ptr(data, state, values.as_ptr());
 				let ret_val = if expr.result_type == Some(&GrugType::Void) {GrugValue{void: ()}} else {ret_val};
 				if state.is_errorring() {
 					return None;
