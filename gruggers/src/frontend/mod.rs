@@ -213,6 +213,7 @@ impl GrugState {
 		let mut file_paths = Vec::new_in(&arena);
 		let mut files = std::vec::Vec::new();
 
+		// length of the mod path expect for trailing slash
 		let mods_dir_len = if self.mods_dir_path.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
 		// Iterate through every directory within the mods directory and
 		// collect relative paths to all grug scripts

@@ -198,7 +198,18 @@ impl<'a> GrugError<'a> {
 		let source_line = err_span.get_source_line(source_text).trim_start();
 
 		let mut err_string = Vec::new_in(&alloc);
-		if error_kind.matches(&ErrorKind::FILE_NAME_ERROR) {
+		if error_kind.matches(&ErrorKind::INIT_ERROR) {
+			write!(err_string, 
+				"  while initializing state
+				Error: {error_message}\0"
+			).expect("writing into a vec should never fail");
+		} else if error_kind.matches(&ErrorKind::MOD_API_ERROR) {
+			write!(err_string, 
+				"  in mod_api ({})\n\
+				Error: {error_message}\0",
+				file_path.display()
+			).expect("writing into a vec should never fail");
+		} else if error_kind.matches(&ErrorKind::FILE_NAME_ERROR) {
 			write!(err_string, 
 				"Error: {error_message}\n\
 				$  {}\0",
@@ -225,17 +236,6 @@ impl<'a> GrugError<'a> {
 				Error: {error_message}\n\
 				{line} $ {source_line}\0",
 				file_path.display()
-			).expect("writing into a vec should never fail");
-		} else if error_kind.matches(&ErrorKind::MOD_API_ERROR) {
-			write!(err_string, 
-				"  in mod_api ({})\n\
-				Error: {error_message}\0",
-				file_path.display()
-			).expect("writing into a vec should never fail");
-		} else if error_kind.matches(&ErrorKind::INIT_ERROR) {
-			write!(err_string, 
-				"  while initializing state
-				Error: {error_message}\0"
 			).expect("writing into a vec should never fail");
 		} else {
 			write!(err_string, 
@@ -294,7 +294,6 @@ impl<'a> GrugError<'a> {
 				str::from_utf8_unchecked(err_message.leak())
 			).as_ntstrptr().detach_lifetime()
 		};
-
 
 		Self {
 			error_kind,

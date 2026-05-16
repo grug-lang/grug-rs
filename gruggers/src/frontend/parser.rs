@@ -592,64 +592,55 @@ impl<'a> Ast<'a> {
 			TokenType::If => {
 				// if condition and block
 				let mut ifs = Vec::new();
+				let else_block;
 				loop {
 					consume_next_token_types(tokens, &[TokenType::If, TokenType::Space])?;
 
 					let condition = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
 					let if_block = self.parse_statements(tokens, parsing_depth + 1, indentation + 1, arena)?;
 
-					// else block 
-					
-					let is_chained;
-					let else_block;
-
 					if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]).is_ok() {
 						let [space_token, if_token] = peek_next_tokens(tokens)?;
 						if TokenType::Space == space_token.ty && TokenType::If == if_token.ty {
-							is_chained = true;
 							consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
 							ifs.push((
 								condition,
-								is_chained,
 								if_block,
-								&mut [] as &mut [Statement],
 							));
 							continue;
 						} else {
-							is_chained = false;
 							else_block = self.parse_statements(tokens, parsing_depth, indentation + 1, arena)?;
 						}
 					} else {
-						is_chained = false;
 						else_block = &mut [];
 					}
 					ifs.push((
 						condition,
-						is_chained,
 						if_block,
-						else_block,
 					));
 					break;
 				}
-				let mut current = ifs.pop().expect("We have parsed at least a single if statement");
+				let mut current = {
+					let (condition, if_block) = ifs.pop().expect("We have parsed at least a single if statement");
+					Statement::If{
+						condition,
+						is_chained: false,
+						if_block,
+						else_block,
+					}
+				};
 				for statement in ifs.into_iter().rev() {
-					let else_block = std::slice::from_mut(Box::leak(Box::new_in(
-						Statement::If{
-							condition: current.0,
-							is_chained: current.1,
-							if_block: current.2,
-							else_block: current.3,
-						}, arena,
-					)));
-					current = statement;
-					current.3 = else_block;
+					current = Statement::If{
+						condition: statement.0,
+						is_chained: true,
+						if_block: statement.1,
+						else_block: std::slice::from_mut(Box::leak(Box::new_in(
+							current,
+							arena,
+						))),
+					};
 				}
-				Ok(Statement::If{
-					condition: current.0,
-					is_chained: current.1,
-					if_block: current.2,
-					else_block: current.3,
-				})
+				Ok(current)
 			}
 			TokenType::Return => {
 				tokens.next();
