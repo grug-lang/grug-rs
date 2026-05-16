@@ -1,7 +1,7 @@
 use super::SPACES_PER_INDENT;
 use allocator_api2::vec::Vec;
 use crate::arena::Arena;
-use gruggers_core::error::{ErrorKind, GrugError, SourceSpan};
+use crate::error::{ErrorKind, Error, SourceSpan};
 
 use std::ffi::OsStr;
 
@@ -105,10 +105,19 @@ impl std::fmt::Display for TokenType {
 	}
 }
 
-pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, file_path: P) -> Result<Vec<Token<'b>, &'a Arena>, GrugError<Arena>> {
+pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, file_path: P) -> Result<Vec<Token<'b>, &'a Arena>, Error> {
 	let file_path = file_path.as_ref();
 	let mut tokens = Vec::new_in(arena);
 	let mut cur_line = 1;
+
+	macro_rules! new_tokenizer_error{
+		(($offset: expr, $line: expr) => $format_str: literal $(, $args: expr)*) => {
+			Error::new(ErrorKind::TOKENIZER_ERROR, "", file_path, file_text, SourceSpan{offset: $offset, line: $line}, format_args!($format_str $(,$args)*))
+		};
+		($span: expr => $format_str: literal $(, $args: expr)*) => {
+			Error::new(ErrorKind::TOKENIZER_ERROR, "", file_path, file_text, $span, format_args!($format_str $(,$args)*))
+		}
+	}
 
 	let file_text_str = file_text;
 	let file_text = file_text.as_bytes();
@@ -199,13 +208,9 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 				continue;
 			}
 			if num_spaces % SPACES_PER_INDENT != 0 {
-				return Err(GrugError::new_error(
-					ErrorKind::TOKENIZER_ERROR, 
-					"member scope", 
-					file_path, 
-					file_text_str,
-					SourceSpan{offset: i - num_spaces, line: cur_line},
-					format_args!("Expected multiple of {} spaces but found {} spaces", SPACES_PER_INDENT, num_spaces)
+				return Err(new_tokenizer_error!(
+					(i - num_spaces, cur_line) => 
+					"Expected multiple of {} spaces but found {} spaces", SPACES_PER_INDENT, num_spaces
 				));
 			}
 
@@ -235,23 +240,15 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 				// Just allocate the new string in the arena, you don't even need Cow
 				while i < file_text.len() && file_text[i] != b'"' {
 					if file_text[i] == b'\0' {
-						return Err(GrugError::new_error(
-							ErrorKind::TOKENIZER_ERROR, 
-							"member scope", 
-							file_path, 
-							file_text_str,
-							SourceSpan{offset: i, line: cur_line},
-							format_args!("Unexpected null byte on line {}", cur_line)
+						return Err(new_tokenizer_error!(
+							(i, cur_line) => 
+							"Unexpected null byte on line {}", cur_line
 						));
 					}
 					if i + 2 < file_text.len() && (&file_text[i..=(i+2)] == b"\\\r\n" || &file_text[i..=(i+1)] == b"\\\n") {
-						return Err(GrugError::new_error(
-							ErrorKind::TOKENIZER_ERROR, 
-							"member scope", 
-							file_path, 
-							file_text_str,
-							SourceSpan{offset: i, line: cur_line},
-							format_args!("Unexpected line break in string on line {}", cur_line), 
+						return Err(new_tokenizer_error!(
+							(i, cur_line) => 
+							"Unexpected line break in string on line {}", cur_line
 						));
 					}
 					if file_text[i] == b'\n' {
@@ -260,13 +257,9 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 					i += 1;
 				}
 				if i >= file_text.len() {
-					return Err(GrugError::new_error(
-						ErrorKind::TOKENIZER_ERROR, 
-						"member scope", 
-						file_path, 
-						file_text_str,
-						SourceSpan{offset: quote_start_index, line: start_line},
-						format_args!("Unclosed \" on line {}", start_line), 
+					return Err(new_tokenizer_error!(
+						(quote_start_index, start_line) => 
+						"Unclosed \" on line {}", start_line
 					));
 				}
 				tokens.push(Token{
@@ -304,13 +297,9 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 			while i < file_text.len() && ((file_text[i] as char).is_ascii_digit() || file_text[i] == b'.') {
 				if file_text[i] == b'.'{
 					if seen_period {
-						return Err(GrugError::new_error(
-							ErrorKind::TOKENIZER_ERROR, 
-							"member scope", 
-							file_path, 
-							file_text_str,
-							SourceSpan{offset: i, line: cur_line},
-							format_args!("Encountered two '.' periods in a number on line {}", cur_line), 
+						return Err(new_tokenizer_error!(
+							(i, cur_line) => 
+							"Encountered two '.' periods in a number on line {}", cur_line
 						));
 					}
 					seen_period = true;
@@ -323,15 +312,9 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 					// NOTE: I think floats with trailing periods
 					// should be allowed but i can understand why
 					// they're not
-					return Err(GrugError::new_error(
-						ErrorKind::TOKENIZER_ERROR, 
-						"member scope", 
-						file_path, 
-						file_text_str,
-						SourceSpan{offset: i, line: cur_line},
-						format_args!("Missing digit after decimal point in '{}'", 
-							&file_text_str[start..i]
-						), 
+					return Err(new_tokenizer_error!(
+						(i, cur_line) => 
+						"Missing digit after decimal point in '{}'", &file_text_str[start..i]
 					));
 				}
 				// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
@@ -357,48 +340,32 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 			let old_i = i;
 			i += 1;
 			if i >= file_text.len() || file_text[i] != b' ' {
-				return Err(GrugError::new_error(
-					ErrorKind::TOKENIZER_ERROR, 
-					"member scope", 
-					file_path, 
-					file_text_str,
-					SourceSpan{offset: i, line: cur_line},
-					format_args!("Expected space (' ') after '#'"), 
+				return Err(new_tokenizer_error!(
+					(i, cur_line) => 
+					"Expected space (' ') after '#'"
 				));
 			}
 			i += 1;
 			let start = i;
 			while i < file_text.len() && file_text[i] != b'\r' && file_text[i] != b'\n' {
 				if file_text[i] == b'\0' {
-					return Err(GrugError::new_error(
-						ErrorKind::TOKENIZER_ERROR, 
-						"member scope", 
-						file_path, 
-						file_text_str,
-						SourceSpan{offset: i, line: cur_line},
-						format_args!("Unexpected null byte on line {}", cur_line)
+					return Err(new_tokenizer_error!(
+						(i, cur_line) => 
+						"Unexpected null byte on line {}", cur_line
 					));
 				}
 				i += 1;
 			}
 			
 			if (i - start) == 0 {
-				return Err(GrugError::new_error(
-					ErrorKind::TOKENIZER_ERROR, 
-					"member scope", 
-					file_path, 
-					file_text_str,
-					SourceSpan{offset: i - 1, line: cur_line},
-					format_args!("Expected comment to contain some text")
+				return Err(new_tokenizer_error!(
+					(i - 1, cur_line) => 
+					"Expected comment to contain some text"
 				));
 			} else if (file_text[i - 1] as char).is_ascii_whitespace() {
-				return Err(GrugError::new_error(
-					ErrorKind::TOKENIZER_ERROR, 
-					"member scope", 
-					file_path, 
-					file_text_str,
-					SourceSpan{offset: i, line: cur_line},
-					format_args!("A comment has trailing whitespace on line {}", cur_line)
+				return Err(new_tokenizer_error!(
+					(i, cur_line) => 
+					"A comment has trailing whitespace on line {}", cur_line
 				));
 			}
 			cur_line += 1;
@@ -412,13 +379,9 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 			continue;
 		}
 
-		return Err(GrugError::new_error(
-			ErrorKind::TOKENIZER_ERROR, 
-			"member scope", 
-			file_path, 
-			file_text_str,
-			SourceSpan{offset: i, line: cur_line},
-			format_args!("Unrecognized character '{}'", file_text_str[i..].chars().next().expect("There is atleast one more character")), 
+		return Err(new_tokenizer_error!(
+			(i, cur_line) => 
+			"Unrecognized character '{}'", file_text_str[i..].chars().next().expect("There is atleast one more character")
 		));
 	}
 	

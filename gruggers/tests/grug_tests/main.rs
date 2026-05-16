@@ -215,8 +215,8 @@ use test_bindings::*;
 mod game_fn_bindings {
 	use gruggers::types::GrugValue;
 	use gruggers::state::GrugState;
-	use gruggers::error::GrugError;
-	use gruggers::arena::Arena;
+	use gruggers::error::Error;
+	use std::ptr::NonNull;
 	#[link(name = "tests", kind="dylib")]
 	#[allow(improper_ctypes)]
 	unsafe extern "C" {
@@ -260,46 +260,46 @@ mod game_fn_bindings {
         safe fn game_fn_box_number           <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_print_csv            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
 	}
-	pub fn register_game_functions(state: &mut GrugState) -> Result<(), GrugError<Arena>> { unsafe {
-		state.register_host_fn("nothing",              game_fn_nothing             )?; 
-		state.register_host_fn("magic",                game_fn_magic               )?; 
-		state.register_host_fn("initialize",           game_fn_initialize          )?; 
-		state.register_host_fn("initialize_bool",      game_fn_initialize_bool     )?; 
-		state.register_host_fn("identity",             game_fn_identity            )?; 
-		state.register_host_fn("max",                  game_fn_max                 )?; 
-		state.register_host_fn("say",                  game_fn_say                 )?; 
-		state.register_host_fn("sin",                  game_fn_sin                 )?; 
-		state.register_host_fn("cos",                  game_fn_cos                 )?; 
-		state.register_host_fn("mega",                 game_fn_mega                )?; 
-		state.register_host_fn("get_false",            game_fn_get_false           )?; 
-		state.register_host_fn("set_is_happy",         game_fn_set_is_happy        )?; 
-		state.register_host_fn("mega_f32",             game_fn_mega_f32            )?; 
-		state.register_host_fn("mega_i32",             game_fn_mega_i32            )?; 
-		state.register_host_fn("draw",                 game_fn_draw                )?; 
-		state.register_host_fn("blocked_alrm",         game_fn_blocked_alrm        )?; 
-		state.register_host_fn("spawn",                game_fn_spawn               )?; 
-		state.register_host_fn("spawn_d",              game_fn_spawn_d             )?; 
-		state.register_host_fn("has_resource",         game_fn_has_resource        )?; 
-		state.register_host_fn("has_entity",           game_fn_has_entity          )?; 
-		state.register_host_fn("has_string",           game_fn_has_string          )?; 
-		state.register_host_fn("get_opponent",         game_fn_get_opponent        )?; 
-		state.register_host_fn("set_d",                game_fn_set_d               )?; 
-		state.register_host_fn("get_os",               game_fn_get_os              )?; 
-		state.register_host_fn("set_opponent",         game_fn_set_opponent        )?; 
-		state.register_host_fn("motherload",           game_fn_motherload          )?; 
-		state.register_host_fn("motherload_subless",   game_fn_motherload_subless  )?; 
-		state.register_host_fn("offset_32_bit_f32",    game_fn_offset_32_bit_f32   )?; 
-		state.register_host_fn("offset_32_bit_i32",    game_fn_offset_32_bit_i32   )?; 
-		state.register_host_fn("offset_32_bit_string", game_fn_offset_32_bit_string)?; 
-		state.register_host_fn("talk",                 game_fn_talk                )?; 
-		state.register_host_fn("get_position",         game_fn_get_position        )?; 
-		state.register_host_fn("set_position",         game_fn_set_position        )?; 
-		state.register_host_fn("cause_game_fn_error",  game_fn_cause_game_fn_error )?; 
-		state.register_host_fn("call_on_b_fn",         game_fn_call_on_b_fn        )?; 
-		state.register_host_fn("store",                game_fn_store               )?; 
-		state.register_host_fn("retrieve",             game_fn_retrieve            )?; 
-		state.register_host_fn("box_number",           game_fn_box_number          )?; 
-		state.register_host_fn("print_csv",            game_fn_print_csv           )?; 
+	pub fn register_game_functions(state: &mut GrugState) -> Result<(), Error> { unsafe {
+		state.register_host_fn_raw("nothing",              game_fn_nothing             , NonNull::dangling())?; 
+		state.register_host_fn_raw("magic",                game_fn_magic               , NonNull::dangling())?; 
+		state.register_host_fn_raw("initialize",           game_fn_initialize          , NonNull::dangling())?; 
+		state.register_host_fn_raw("initialize_bool",      game_fn_initialize_bool     , NonNull::dangling())?; 
+		state.register_host_fn_raw("identity",             game_fn_identity            , NonNull::dangling())?; 
+		state.register_host_fn_raw("max",                  game_fn_max                 , NonNull::dangling())?; 
+		state.register_host_fn_raw("say",                  game_fn_say                 , NonNull::dangling())?; 
+		state.register_host_fn_raw("sin",                  game_fn_sin                 , NonNull::dangling())?; 
+		state.register_host_fn_raw("cos",                  game_fn_cos                 , NonNull::dangling())?; 
+		state.register_host_fn_raw("mega",                 game_fn_mega                , NonNull::dangling())?; 
+		state.register_host_fn_raw("get_false",            game_fn_get_false           , NonNull::dangling())?; 
+		state.register_host_fn_raw("set_is_happy",         game_fn_set_is_happy        , NonNull::dangling())?; 
+		state.register_host_fn_raw("mega_f32",             game_fn_mega_f32            , NonNull::dangling())?; 
+		state.register_host_fn_raw("mega_i32",             game_fn_mega_i32            , NonNull::dangling())?; 
+		state.register_host_fn_raw("draw",                 game_fn_draw                , NonNull::dangling())?; 
+		state.register_host_fn_raw("blocked_alrm",         game_fn_blocked_alrm        , NonNull::dangling())?; 
+		state.register_host_fn_raw("spawn",                game_fn_spawn               , NonNull::dangling())?; 
+		state.register_host_fn_raw("spawn_d",              game_fn_spawn_d             , NonNull::dangling())?; 
+		state.register_host_fn_raw("has_resource",         game_fn_has_resource        , NonNull::dangling())?; 
+		state.register_host_fn_raw("has_entity",           game_fn_has_entity          , NonNull::dangling())?; 
+		state.register_host_fn_raw("has_string",           game_fn_has_string          , NonNull::dangling())?; 
+		state.register_host_fn_raw("get_opponent",         game_fn_get_opponent        , NonNull::dangling())?; 
+		state.register_host_fn_raw("set_d",                game_fn_set_d               , NonNull::dangling())?; 
+		state.register_host_fn_raw("get_os",               game_fn_get_os              , NonNull::dangling())?; 
+		state.register_host_fn_raw("set_opponent",         game_fn_set_opponent        , NonNull::dangling())?; 
+		state.register_host_fn_raw("motherload",           game_fn_motherload          , NonNull::dangling())?; 
+		state.register_host_fn_raw("motherload_subless",   game_fn_motherload_subless  , NonNull::dangling())?; 
+		state.register_host_fn_raw("offset_32_bit_f32",    game_fn_offset_32_bit_f32   , NonNull::dangling())?; 
+		state.register_host_fn_raw("offset_32_bit_i32",    game_fn_offset_32_bit_i32   , NonNull::dangling())?; 
+		state.register_host_fn_raw("offset_32_bit_string", game_fn_offset_32_bit_string, NonNull::dangling())?; 
+		state.register_host_fn_raw("talk",                 game_fn_talk                , NonNull::dangling())?; 
+		state.register_host_fn_raw("get_position",         game_fn_get_position        , NonNull::dangling())?; 
+		state.register_host_fn_raw("set_position",         game_fn_set_position        , NonNull::dangling())?; 
+		state.register_host_fn_raw("cause_game_fn_error",  game_fn_cause_game_fn_error , NonNull::dangling())?; 
+		state.register_host_fn_raw("call_on_b_fn",         game_fn_call_on_b_fn        , NonNull::dangling())?; 
+		state.register_host_fn_raw("store",                game_fn_store               , NonNull::dangling())?; 
+		state.register_host_fn_raw("retrieve",             game_fn_retrieve            , NonNull::dangling())?; 
+		state.register_host_fn_raw("box_number",           game_fn_box_number          , NonNull::dangling())?; 
+		state.register_host_fn_raw("print_csv",            game_fn_print_csv           , NonNull::dangling())?; 
 		Ok(())
 	}}
 }

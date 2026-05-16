@@ -127,42 +127,44 @@ impl Eq for ErrorKind { }
 /// 
 /// In order to maintain c compatibility, all string fields are represented as
 /// null terminated pointers. 
+/// 
+/// This error API does not allow for an owned GrugError within safe rust. 
+///
+/// Downstream crates should provide owned versions of the error using an
+/// allocator that frees all memory owned by these strings on drop.
 #[allow(non_camel_case_types)]
 #[allow(dead_code)]
 #[repr(C)]
-pub struct GrugError<A> {
+pub struct GrugError<'a> {
 	/// A unique integer identifier for the error that represents the
 	/// kind of error that occurred and which specific error
 	pub error_kind: ErrorKind,
 	/// name of the function the error occurred in. If the error is the member
-	/// scope, this string is `member scope`, 
-	function_name: NTStrPtr<'static>,
-	/// Path to the file with the error
-	file_path: NTBytes<'static>,
-	/// Source line that contains the error
-	source_line: &'static str,
-	/// Location of the error
-	span: SourceSpan,
-	/// Single line error message
-	error_message: NTStrPtr<'static>,
-	/// A string that can be directly printed to the screen
-	error_string: NTStrPtr<'static>,
-	/// All the other fields of the error are allocated in this allocator To
-	/// prevent leaks, this allocator needs to be able to free all memory it
-	/// owns on drop
+	/// scope, this string is `member scope`. 
 	///
-	/// This is best done with an arena allocator
-	/// 
-	/// Keep in mind though, that the allocator is itself allocated in the global allocator
-	allocator: Box<A>,
+	/// This field may be an empty string if a function name is not meaningful
+	/// for the error kind
+	pub function_name: NTStrPtr<'a>,
+	/// Path to the file with the error
+	pub file_path: NTBytes<'a>,
+	/// Source line that contains the error
+	pub source_line: &'static str,
+	/// Location of the error. This span may point to (0, 0) if the error is
+	/// not within a file
+	pub span: SourceSpan,
+	/// Single line error message
+	pub error_message: NTStrPtr<'a>,
+	/// A string that can be directly printed to the screen. The format of the
+	/// error depends on the exact error kind.
+	pub error_string: NTStrPtr<'a>,
 }
 
-impl<A> std::fmt::Debug for GrugError<A> {
+impl<'a> std::fmt::Debug for GrugError<'a> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		f.debug_struct("Error")
 			.field("errorkind", &self.error_kind)
 			.field("function_name", &self.function_name)
-			.field("file_path", &self.file_path().display())
+			.field("file_path", &self.file_path_as_os_str().display())
 			.field("source_line", &self.source_line)
 			.field("line", &self.span.line)
 			.field("offset", &self.span.offset)
@@ -172,33 +174,13 @@ impl<A> std::fmt::Debug for GrugError<A> {
 	}
 }
 
-impl<A> GrugError<A> {
-	/// The name of the function the error occurred in. returns `member scope`
-	/// if the error was not in a function 
-	pub fn function_name(&self) -> &str {self.function_name.to_str()}
+impl<'a> GrugError<'a> {
 	/// The path to the file with the error
-	pub fn file_path(&self) -> &OsStr {unsafe{OsStr::from_encoded_bytes_unchecked(self.file_path.to_bytes())}}
-	/// The source line that contains the error
-	pub fn source_line(&self) -> &str {self.source_line}
-	/// The location that the error occurred at
-	pub fn span(&self) -> SourceSpan {self.span}
-	/// A single line message that describes the error
-	pub fn error_message(&self) -> &str {self.error_message.to_str()}
-	/// A string that can be directly printed to the screen
-	pub fn error_string(&self) -> &str {self.error_string.to_str()}
+	pub fn file_path_as_os_str(&self) -> &OsStr {unsafe{OsStr::from_encoded_bytes_unchecked(self.file_path.to_bytes())}}
 }
 
-impl<A: Allocator> GrugError<A> {
-	#[track_caller]
-	pub fn new_error(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments) -> Self where
-		A: Default,
-	{
-		// println!("{:?}", std::panic::Location::caller());
-		let alloc = A::default();
-		Self::new_error_in(error_kind, function_name, file_path, source_text, err_span, error_message, alloc)
-	}
-
-	pub fn new_error_in(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments, alloc: A) -> Self {
+impl<'a> GrugError<'a> {
+	pub fn new_error_in<A: Allocator>(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments, alloc: &'a A) -> Self {
 		let line = err_span.line;
 		let column = err_span.get_col(source_text);
 		let source_line = err_span.get_source_line(source_text).trim_start();
@@ -293,12 +275,11 @@ impl<A: Allocator> GrugError<A> {
 			span: err_span,
 			error_message,
 			error_string,
-			allocator: Box::new(alloc),
 		}
 	}
 }
 
-impl<A> std::fmt::Display for GrugError<A> {
+impl<'a> std::fmt::Display for GrugError<'a> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		// TODO: This should be changed to self.error_string later
 		// TODO: Each different top level error kind should have a different format

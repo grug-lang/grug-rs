@@ -2,9 +2,8 @@ use crate::state::{GrugState, FileInfo};
 // use crate::backend::GrugAst;
 use crate::types::GrugFileId;
 use crate::ast::*;
-use crate::arena::Arena;
 use crate::ntstring::NTStrPtr;
-use crate::error::{GrugError, ErrorKind, SourceSpan};
+use crate::error::{Error, ErrorKind, SourceSpan};
 
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box as Box2;
@@ -20,9 +19,10 @@ pub mod tokenizer;
 
 pub mod parser;
 
+// Compilation functions
 impl GrugState {
 	// Path is relative to mods directory
-	pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<GrugFileId, GrugError<Arena>> {
+	pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<GrugFileId, Error> {
 		let path = path.as_ref();
 		let mut path_buf = self.mods_dir_path.clone();
 		path_buf.push("/");
@@ -30,7 +30,7 @@ impl GrugState {
 		
 		let file_text = match std::fs::read_to_string(path_buf) {
 			Ok(file_text) => file_text,
-			Err(err) => return Err(GrugError::new_error(
+			Err(err) => return Err(Error::new(
 				ErrorKind::IO_ERROR,
 				"",
 				path, 
@@ -44,7 +44,8 @@ impl GrugState {
 	}
 
 	// Path is relative to mods directory or an absolute path
-	pub fn compile_grug_file_from_str(&self, path: impl AsRef<OsStr>, file_text: &str) -> Result<GrugFileId, GrugError<Arena>> {
+	pub fn compile_grug_file_from_str(&self, path: impl AsRef<OsStr>, file_text: &str) -> Result<GrugFileId, Error> {
+		use super::frontend::*;
 		let path = path.as_ref();
 
 		let mod_name = get_mod_name(path);
@@ -59,7 +60,7 @@ impl GrugState {
 
 			let entity = self.mod_api.entities().get(entity_type).ok_or_else(|| 
 				// TODO: This is not handled by grug_tests
-				GrugError::new_error(
+				Error::new(
 					ErrorKind::FILE_NAME_ERROR,
 					"",
 					path, 
@@ -258,7 +259,7 @@ fn get_mod_name (path: &OsStr) -> &OsStr {
 	// path.split_once('/').map(|x| x.0).ok_or(GrugError::FileError(FileError::FilePathDoesNotContainForwardSlash{path: String::from(path)}))
 }
 
-fn get_entity_type(path: &OsStr) -> Result<&str, GrugError<Arena>> {
+fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
 	let mut dot_pos = None;
 	let mut dash_pos = None;
 	let path_bytes = path.as_encoded_bytes();
@@ -267,7 +268,7 @@ fn get_entity_type(path: &OsStr) -> Result<&str, GrugError<Arena>> {
 		match (ch, dot_pos, dash_pos) {
 			(b'.', None, None) => dot_pos = Some(i),
 			(b'-', None, None) => 
-				return Err(GrugError::new_error(
+				return Err(Error::new(
 					ErrorKind::FILE_NAME_ERROR,
 					"",
 					path, 
@@ -281,7 +282,7 @@ fn get_entity_type(path: &OsStr) -> Result<&str, GrugError<Arena>> {
 	}
 	let (dot_pos, dash_pos) = match (dot_pos, dash_pos) {
 		(Some(dot_pos), Some(dash_pos)) if dot_pos == dash_pos + 1 => {
-			return Err(GrugError::new_error(
+			return Err(Error::new(
 				ErrorKind::FILE_NAME_ERROR,
 				"",
 				path, 
@@ -292,7 +293,7 @@ fn get_entity_type(path: &OsStr) -> Result<&str, GrugError<Arena>> {
 		}
 		(Some(dot_pos), Some(dash_pos)) => (dot_pos, dash_pos),
 		_ => {
-			return Err(GrugError::new_error(
+			return Err(Error::new(
 				ErrorKind::FILE_NAME_ERROR,
 				"",
 				path, 
@@ -306,7 +307,7 @@ fn get_entity_type(path: &OsStr) -> Result<&str, GrugError<Arena>> {
 	// is also utf8 so (dash_pos+1)..dot_pos will not truncate a utf8 codepoint
 	let entity_type = unsafe{OsStr::from_encoded_bytes_unchecked(&path_bytes[(dash_pos + 1)..dot_pos])};
 	if entity_type.len() > MAX_FILE_ENTITY_TYPE_LENGTH {
-		return Err(GrugError::new_error(
+		return Err(Error::new(
 			ErrorKind::FILE_NAME_ERROR,
 			"",
 			path, 
@@ -321,9 +322,9 @@ fn get_entity_type(path: &OsStr) -> Result<&str, GrugError<Arena>> {
 	check_custom_id_is_pascal(entity_type, path)
 }
 
-fn check_custom_id_is_pascal<'a>(entity_type: &'a OsStr, path: &'_ OsStr) -> Result<&'a str, GrugError<Arena>> {
+fn check_custom_id_is_pascal<'a>(entity_type: &'a OsStr, path: &'_ OsStr) -> Result<&'a str, Error> {
 	let entity_type = entity_type.to_str().ok_or_else(|| 
-		GrugError::new_error(
+		Error::new(
 			ErrorKind::FILE_NAME_ERROR,
 			"",
 			entity_type, 
@@ -337,7 +338,7 @@ fn check_custom_id_is_pascal<'a>(entity_type: &'a OsStr, path: &'_ OsStr) -> Res
 	let mut chars = entity_type.chars();
 	// TODO: This only triggers if entity_type is empty, which should never happen?
 	if let Some(first) = chars.next() && !first.is_uppercase() {
-		return Err(GrugError::new_error(
+		return Err(Error::new(
 			ErrorKind::FILE_NAME_ERROR,
 			"",
 			path, 
@@ -348,7 +349,7 @@ fn check_custom_id_is_pascal<'a>(entity_type: &'a OsStr, path: &'_ OsStr) -> Res
 	}
 	for ch in chars {
 		if !(ch.is_uppercase() || ch.is_lowercase() || ch.is_ascii_digit()) {
-			return Err(GrugError::new_error(
+			return Err(Error::new(
 				ErrorKind::FILE_NAME_ERROR,
 				"",
 				path, 

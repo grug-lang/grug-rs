@@ -3,8 +3,7 @@ use std::collections::hash_map::Entry;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
-use gruggers_core::error::{GrugError, ErrorKind, SourceSpan};
-
+use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::types::GameFnPtr;
 use crate::ntstring::{NTStr, NTStrPtr};
 use crate::ast::{
@@ -63,8 +62,8 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 
 	#[track_caller]
-	fn new_type_propagator_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, GrugError<Arena>> {
-		Err(GrugError::new_error(
+	fn new_type_propagator_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, Error> {
+		Err(Error::new(
 			ErrorKind::TYPE_CHECKER_ERROR,
 			self.current_fn_name.unwrap_or("member scope"),
 			self.file_path,
@@ -74,7 +73,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		))
 	}
 
-	pub fn fill_result_types(mut self, entity_name: &str, ast: &mut Ast<'arena>, arena: &'arena Arena) -> Result<HashSet<OsString>, GrugError<Arena>> {
+	pub fn fill_result_types(mut self, entity_name: &str, ast: &mut Ast<'arena>, arena: &'arena Arena) -> Result<HashSet<OsString>, Error> {
 		self.add_global_variable(
 			nt!("me"), 
 			GrugType::Id{custom_name: Some(Box::leak(NTStr::box_from_str_in(entity_name, arena)).as_ntstrptr())},
@@ -226,7 +225,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 	
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_statements(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], export_fns: &[(&str, &[Parameter<'arena>])], statements: &mut [Statement<'arena>], expected_return_type: &GrugType<'arena>, arena: &'arena Arena) -> Result<(), GrugError<Arena>> {
+	fn fill_statements(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], export_fns: &[(&str, &[Parameter<'arena>])], statements: &mut [Statement<'arena>], expected_return_type: &GrugType<'arena>, arena: &'arena Arena) -> Result<(), Error> {
 		self.push_scope();
 		for statement in statements {
 			match statement {
@@ -378,7 +377,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 
 	// Check that the global variable's assigned value doesn't contain a call_to a helper function nor identifier
-	fn check_global_expr(&mut self, assignment_expr: &Expr<'_>, name: &str) -> Result<(), GrugError<Arena>> {
+	fn check_global_expr(&mut self, assignment_expr: &Expr<'_>, name: &str) -> Result<(), Error> {
 		match &assignment_expr.data {
 			ExprData::Entity(_) => unreachable!(),
 			ExprData::Resource(_) => unreachable!(),
@@ -423,7 +422,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_expr(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], export_fns: &[(&str, &[Parameter<'arena>])], assignment_expr: &mut Expr<'arena>, arena: &'arena Arena) -> Result<GrugType<'arena>, GrugError<Arena>> {
+	fn fill_expr(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], export_fns: &[(&str, &[Parameter<'arena>])], assignment_expr: &mut Expr<'arena>, arena: &'arena Arena) -> Result<GrugType<'arena>, Error> {
 		// MUST be None before type propogation
 		assert!(assignment_expr.result_type.is_none());
 		let result_ty = match &mut assignment_expr.data {
@@ -616,7 +615,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		signature: &[Parameter<'_>], 
 		arguments: &mut [Expr<'arena>], 
 		arena: &'arena Arena
-	) -> Result<(), GrugError<Arena>> {
+	) -> Result<(), Error> {
 		if signature.len() > arguments.len() {
 			let param = signature[arguments.len()];
 			return self.new_type_propagator_error(
@@ -676,7 +675,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		Ok(())
 	}
 
-	fn validate_and_fix_resource_string(&mut self, value: &str, extension: &str, span: SourceSpan, arena: &'arena Arena) -> Result<&'arena NTStr, GrugError<Arena>> {
+	fn validate_and_fix_resource_string(&mut self, value: &str, extension: &str, span: SourceSpan, arena: &'arena Arena) -> Result<&'arena NTStr, Error> {
 		if value.is_empty() {
 			return self.new_type_propagator_error(
 				span,
@@ -747,7 +746,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		}
 	}
 
-	fn validate_and_fix_entity_string(&mut self, entity_string_old: &mut NTStrPtr<'arena>, span: SourceSpan, arena: &'arena Arena) -> Result<(), GrugError<Arena>> {
+	fn validate_and_fix_entity_string(&mut self, entity_string_old: &mut NTStrPtr<'arena>, span: SourceSpan, arena: &'arena Arena) -> Result<(), Error> {
 		let entity_string = entity_string_old.to_str();
 		// Validate string
 		if entity_string.is_empty() {
@@ -832,7 +831,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		self.global_variables.get(var_name).cloned()
 	}
 
-	fn add_local_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), GrugError<Arena>> {
+	fn add_local_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), Error> {
 		if self.get_global_variable_type(name).is_some() {
 			return self.new_type_propagator_error(
 				name_span,
@@ -850,7 +849,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		Ok(())
 	}
 
-	fn add_global_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), GrugError<Arena>> {
+	fn add_global_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), Error> {
 		match self.global_variables.entry(name) {
 			Entry::Occupied(_) => return self.new_type_propagator_error(
 				name_span,

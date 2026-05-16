@@ -1,6 +1,6 @@
 use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
-use crate::error::{GrugError, ErrorKind, SourceSpan};
+use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, GameFnPtrState, INVALID_GRUG_SCRIPT_ID};
 use crate::xar::Xar;
@@ -168,7 +168,7 @@ impl<'a> GrugInitSettings<'a> {
 		self
 	}
 
-	pub fn build_state(self) -> Result<GrugState, GrugError<Arena>> {
+	pub fn build_state(self) -> Result<GrugState, Error> {
 		let mod_api_path = unsafe{Self::maybe_nt_or_length(self.mod_api_path, self.mod_api_path_len)}
 			.unwrap_or("./mod_api.json");
 		let mods_dir_path = unsafe{Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)}
@@ -269,17 +269,17 @@ impl State for GrugState {
 }
 
 impl GrugState {
-	fn new (mod_api_path: impl AsRef<OsStr>, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError<Arena>> {
+	fn new (mod_api_path: impl AsRef<OsStr>, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, Error> {
 		let mod_api = get_mod_api(mod_api_path.as_ref())?;
 		Self::new_inner(mod_api, mods_dir_path, handler, backend)
 	}
 
-	pub fn new_from_text (mod_api_text: &str, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, GrugError<Arena>> {
+	pub fn new_from_text (mod_api_text: &str, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, Error> {
 		let mod_api = get_mod_api_from_text("<Mod API Source>", mod_api_text)?;
 		Self::new_inner(mod_api, mods_dir_path, handler, backend.into())
 	}
 
-	fn new_inner (mod_api: ModApi, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, GrugError<Arena>> {
+	fn new_inner (mod_api: ModApi, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, Error> {
 		let mut on_fns = Vec::new();
 		let init_globals = nt!("init_globals");
 		for (entity_type, entity) in mod_api.entities() {
@@ -330,9 +330,9 @@ impl GrugState {
 		&self.mods_dir_path
 	}
 
-	pub fn get_export_fn_id(&self, entity_type: &str, on_fn_name: &str) -> Result<GrugOnFnId, GrugError<Arena>> {
+	pub fn get_export_fn_id(&self, entity_type: &str, on_fn_name: &str) -> Result<GrugOnFnId, Error> {
 		if !self.mod_api.entities().contains_key(entity_type) {
-			return Err(GrugError::new_error(
+			return Err(Error::new(
 				ErrorKind::INIT_ERROR,
 				"",
 				"".as_ref(),
@@ -346,7 +346,7 @@ impl GrugState {
 				return Ok(i as u64)
 			}
 		}
-		return Err(GrugError::new_error(
+		return Err(Error::new(
 			ErrorKind::INIT_ERROR,
 			"",
 			"".as_ref(),
@@ -364,9 +364,9 @@ impl GrugState {
 		&self.on_functions
 	}
 
-	pub fn get_entity_on_functions(&self, entity_type: &str) -> Result<&[EventFnEntry<'_>], GrugError<Arena>> {
+	pub fn get_entity_on_functions(&self, entity_type: &str) -> Result<&[EventFnEntry<'_>], Error> {
 		if !self.mod_api.entities().contains_key(entity_type) {
-			return Err(GrugError::new_error(
+			return Err(Error::new(
 				ErrorKind::INIT_ERROR,
 				"",
 				"".as_ref(),
@@ -389,9 +389,18 @@ impl GrugState {
 	/// # Safety
 	/// The actual signature of the returned function should match the
 	/// signature in the mod_api
-	pub unsafe fn register_host_fn(&mut self, name: &'static str, ptr: GameFnPtrState<Self>) -> Result<(), GrugError<Arena>> {
+	pub unsafe fn register_host_fn<F: Fn(&Self, *const GrugValue) -> GrugValue>(&mut self, name: &'static str, f: F) -> Result<(), Error> {
+		let data = NonNull::from_ref(Box::leak(Box::new_in(f, &self.data_arena))).cast::<()>();
+		extern "C" fn adapter_fn<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(data: NonNull<()>, state: &GrugState, values: *const GrugValue) -> GrugValue {
+			unsafe{std::mem::transmute::<NonNull<()>, &F>(data)(state, values)}
+		}
+		// SAFETY: preconditions
+		unsafe{self.register_host_fn_raw(name, adapter_fn::<F>, data)}
+	}
+
+	pub unsafe fn register_host_fn_raw(&mut self, name: &'static str, func: extern "C" fn (NonNull<()>, &GrugState, *const GrugValue) -> GrugValue, data: NonNull<()>) -> Result<(), Error> {
 		if !self.mod_api.host_fns().contains_key(name) {
-			return Err(GrugError::new_error(
+			return Err(Error::new(
 				ErrorKind::INIT_ERROR,
 				"",
 				"".as_ref(),
@@ -401,7 +410,7 @@ impl GrugState {
 			));
 		} else {
 			match self.game_functions.entry(name) {
-				Entry::Occupied(_) => return Err(GrugError::new_error(
+				Entry::Occupied(_) => return Err(Error::new(
 					ErrorKind::INIT_ERROR,
 					"",
 					"".as_ref(),
@@ -445,10 +454,10 @@ impl GrugState {
 		Some(string)
 	}
 
-	pub fn all_host_fns_registered(&self) -> Result<(), GrugError<Arena>> {
+	pub fn all_host_fns_registered(&self) -> Result<(), Error> {
 		for game_fn_name in self.mod_api.host_fns().keys() {
 			if !self.game_functions.contains_key(game_fn_name.as_str()) {
-				return Err(GrugError::new_error(
+				return Err(Error::new(
 					ErrorKind::INIT_ERROR,
 					"",
 					"".as_ref(),
@@ -626,12 +635,12 @@ impl<'a> std::ops::Deref for GrugEntityHandle<'a> {
 
 #[derive(Debug)]
 pub struct FileInfo {
-	pub path: Box<Path>,
-	pub file_name: Box<OsStr>,
-	pub mod_name: Box<OsStr>,
-	pub entity_type: Box<str>,
-	pub entity_name: Box<OsStr>,
-	pub result: Result<GrugFileId, GrugError<Arena>>,
+	pub path: std::boxed::Box<Path>,
+	pub file_name: std::boxed::Box<OsStr>,
+	pub mod_name: std::boxed::Box<OsStr>,
+	pub entity_type: std::boxed::Box<str>,
+	pub entity_name: std::boxed::Box<OsStr>,
+	pub result: Result<GrugFileId, Error>,
 }
 
 // Test struct for c api
@@ -644,7 +653,7 @@ pub struct FileInfo2<'a> {
 	pub(crate) entity_type: NTStrPtr<'a>,
 	pub(crate) entity_name: NTBytes<'a>,
 	pub(crate) file_id: GrugFileId,
-	pub(crate) error: MaybeUninit<GrugError<Arena>>,
+	pub(crate) error: MaybeUninit<Error>,
 }
 
 impl<'a> FileInfo2<'a> {
@@ -663,7 +672,7 @@ impl<'a> FileInfo2<'a> {
 	pub fn entity_name (&self) -> &OsStr {
 		unsafe{OsStr::from_encoded_bytes_unchecked(self.entity_name.to_bytes())}
 	}
-	pub fn result (&self) -> Result<GrugFileId, &GrugError<Arena>> {
+	pub fn result (&self) -> Result<GrugFileId, &Error> {
 		if self.file_id == INVALID_GRUG_SCRIPT_ID {unsafe{Err(self.error.assume_init_ref())}}
 		else {Ok(self.file_id)}
 	}

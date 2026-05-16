@@ -1,11 +1,12 @@
 #![doc = include_str!("../README.md")]
 #![deny(warnings)]
+// #![deny(missing_docs)]
 #![allow(clippy::single_char_add_str, clippy::bool_comparison)]
 
-pub mod frontend;
+mod frontend;
 pub mod backend;
 
-pub mod mod_api;
+mod mod_api;
 pub mod serde;
 pub mod state;
 
@@ -15,8 +16,8 @@ pub mod arena;
 
 mod cachemap;
 mod watcher;
+pub mod error;
 
-pub use gruggers_core::error;
 pub use gruggers_core::types;
 pub use gruggers_core::ast;
 

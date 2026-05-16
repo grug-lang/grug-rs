@@ -12,7 +12,7 @@ pub extern "C" fn grug_init(settings: GrugInitSettings) -> Option<Box<GrugState>
 pub extern "C" fn grug_deinit(_: Option<Box<GrugState>>) {}
 
 /// # SAFETY
-/// same as [`GrugState::register_game_fn`]
+/// same as [`GrugState::register_host_fn`]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn grug_register_host_fn(state: &mut GrugState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrState<GrugState>) -> bool {
 	// SAFETY: This function is exposed to C and is inherently unsafe

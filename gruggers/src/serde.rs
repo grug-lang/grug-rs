@@ -1,10 +1,10 @@
-use crate::error::GrugError;
+use crate::error::Error;
 use crate::frontend::*;
 use crate::arena::Arena;
 
 use std::ffi::OsStr;
 
-pub fn dump_file_to_json (grug_text: &str, file_path: impl AsRef<OsStr>) -> Result<String, GrugError<Arena>> {
+pub fn dump_file_to_json (grug_text: &str, file_path: impl AsRef<OsStr>) -> Result<String, Error> {
 	let arena = Arena::new();
 
 	let tokens = tokenizer::tokenize(grug_text, &arena, "")?;
@@ -15,7 +15,7 @@ pub fn dump_file_to_json (grug_text: &str, file_path: impl AsRef<OsStr>) -> Resu
 	Ok(json)
 }
 
-pub fn generate_file_from_json (input_json: &str) -> Result<String, GrugError<Arena>> {
+pub fn generate_file_from_json (input_json: &str) -> Result<String, Error> {
 	let json_value = json::parse(input_json).unwrap();
 	Ok(json_to_text(&json_value).unwrap())
 }

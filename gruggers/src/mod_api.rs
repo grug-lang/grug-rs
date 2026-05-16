@@ -5,7 +5,7 @@ use crate::ntstring::NTStr;
 use crate::ast::{Parameter, GrugType};
 use crate::arena::Arena;
 
-use gruggers_core::error::{ErrorKind, GrugError, SourceSpan};
+use crate::error::{ErrorKind, Error, SourceSpan};
 
 use allocator_api2::boxed::Box;
 use allocator_api2::vec::Vec;
@@ -21,10 +21,10 @@ pub(crate) struct ModApi {
 }
 
 impl ModApi {
-	pub fn entities<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiEntity<'a>> {
+	pub(crate) fn entities<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiEntity<'a>> {
 		&self.entities
 	}
-	pub fn host_fns<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiHostFn<'a>> {
+	pub(crate) fn host_fns<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiHostFn<'a>> {
 		&self.host_fns
 	}
 }
@@ -57,10 +57,10 @@ pub(crate) struct ModApiHostFn<'a> {
 	pub(crate) parameters: &'a [Parameter<'a>],
 }
 
-pub(crate) fn get_mod_api(mod_api_path: impl AsRef<Path>) -> Result<ModApi, GrugError<Arena>> {
+pub(crate) fn get_mod_api(mod_api_path: impl AsRef<Path>) -> Result<ModApi, Error> {
 	let mod_api_path = mod_api_path.as_ref();
 	let mod_api_text = std::fs::read_to_string(mod_api_path).map_err(|err| 
-		GrugError::new_error(
+		Error::new(
 			ErrorKind::MOD_API_IO_ERROR,
 			"",
 			mod_api_path.as_ref(), 
@@ -72,12 +72,12 @@ pub(crate) fn get_mod_api(mod_api_path: impl AsRef<Path>) -> Result<ModApi, Grug
 	get_mod_api_from_text(mod_api_path, &mod_api_text)
 }
 
-pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text: &str) -> Result<ModApi, GrugError<Arena>> {
+pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text: &str) -> Result<ModApi, Error> {
 	let arena = Arena::new();
 
 	macro_rules! mod_api_err{
 		(root => $fmt: literal $(, $args: expr)*) => {
-			GrugError::new_error(
+			Error::new(
 				ErrorKind::MOD_API_JSON_ERROR,
 				"",
 				mod_api_path.as_ref().as_ref(), 
@@ -87,7 +87,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			)
 		};
 		($source: expr => $fmt: literal) => {
-			GrugError::new_error(
+			Error::new(
 				ErrorKind::MOD_API_JSON_ERROR,
 				$source,
 				mod_api_path.as_ref().as_ref(), 
