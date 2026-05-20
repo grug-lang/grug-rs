@@ -5,6 +5,7 @@ use std::ptr::NonNull;
 use std::marker::PhantomPinned;
 use crate::ntstring::NTStrPtr;
 use crate::state::State;
+use crate::ast::GrugType;
 
 // TODO: Remove the "Grug" prefix from these types
 
@@ -32,6 +33,130 @@ unsafe impl Sync for GameFnPtr {}
 /// When Backends are running an export function, [`GameFnPtrState`] should be
 /// cast to the same kind of state used in `call_on_function`.
 pub type GameFnPtrState<GrugState> = extern "C" fn (NonNull<()>, &GrugState, *const GrugValue) -> GrugValue;
+
+pub struct HostFnStruct<F, Inputs, Output, State>(F, std::marker::PhantomData<(Inputs, Output, State)>);
+#[diagnostic::on_unimplemented(
+	message = "{Self} does not contain a valid host function",
+	label = "this function",
+	note = "the function signature should be of the form fn(&GrugState, ...impl FromGrugValue) -> impl IntoGrugValue",
+	note = "the remaining arguments need to implement FromGrugValue"
+)]
+pub trait IntoHostFn<GrugState: State> {
+	const PARAMETERS: &'static [GrugType<'static>];
+	const RETURN_TYPE: GrugType<'static>;
+	fn into_host_fn(self) -> impl Fn(&GrugState, *const GrugValue) -> GrugValue;
+}
+
+pub trait IntoGrugValue {
+	const TYPE: GrugType<'static>;
+	fn into(self) -> GrugValue;
+}
+pub trait FromGrugValue {
+	const TYPE: GrugType<'static>;
+	unsafe fn from(ptr: &mut *const GrugValue) -> Self;
+}
+mod trait_impls {
+	#![allow(non_snake_case)]
+	use super::*;
+	use crate::ntstring::NTStr;
+	impl IntoGrugValue for () {
+		const TYPE: GrugType<'static> = GrugType::Void;
+		fn into(self) -> GrugValue {
+			GrugValue{void: ()}
+		}
+	}
+	impl IntoGrugValue for &'static NTStr {
+		const TYPE: GrugType<'static> = GrugType::String;
+		fn into(self) -> GrugValue {
+			GrugValue{string: self.as_ntstrptr()}
+		}
+	}
+	impl IntoGrugValue for f64 {
+		const TYPE: GrugType<'static> = GrugType::Number;
+		fn into(self) -> GrugValue {
+			GrugValue{number: self}
+		}
+	}
+	impl IntoGrugValue for f32 {
+		const TYPE: GrugType<'static> = GrugType::Number;
+		fn into(self) -> GrugValue {
+			GrugValue{number: self as f64}
+		}
+	}
+	impl IntoGrugValue for bool {
+		const TYPE: GrugType<'static> = GrugType::Bool;
+		fn into(self) -> GrugValue {
+			GrugValue{bool: self as u8}
+		}
+	}
+
+	impl<'a> FromGrugValue for &'a str {
+		const TYPE: GrugType<'static> = GrugType::String;
+		unsafe fn from(ptr: &mut *const GrugValue) -> Self {
+			let value = unsafe{ptr.read().string.to_str()};
+			*ptr = unsafe{ptr.add(1)};
+			value
+		}
+	}
+	impl<'a> FromGrugValue for &'a NTStr {
+		const TYPE: GrugType<'static> = GrugType::String;
+		unsafe fn from(ptr: &mut *const GrugValue) -> Self {
+			let value = unsafe{ptr.read().string.to_ntstr()};
+			*ptr = unsafe{ptr.add(1)};
+			value
+		}
+	}
+	impl<'a> FromGrugValue for f64 {
+		const TYPE: GrugType<'static> = GrugType::Number;
+		unsafe fn from(ptr: &mut *const GrugValue) -> Self {
+			let value = unsafe{ptr.read().number};
+			*ptr = unsafe{ptr.add(1)};
+			value
+		}
+	}
+	impl<'a> FromGrugValue for bool {
+		const TYPE: GrugType<'static> = GrugType::Bool;
+		unsafe fn from(ptr: &mut *const GrugValue) -> Self {
+			let value = unsafe{ptr.read().bool} != 0;
+			*ptr = unsafe{ptr.add(1)};
+			value
+		}
+	}
+
+	macro_rules! impl_host_fn_traits {
+		($($inputs: ident),*, -> O) => {
+			#[diagnostic::do_not_recommend]
+			impl<F: Fn(&GrugState, $($inputs),*) -> O, $($inputs: FromGrugValue,)* GrugState: State, O: IntoGrugValue> From<F> for HostFnStruct<F, ($($inputs,)*), O, GrugState>{
+				fn from (other: F) -> Self {
+					Self(other, std::marker::PhantomData)
+				}
+			}
+			#[diagnostic::do_not_recommend]
+			impl<F: Fn(&GrugState, $($inputs),*) -> O, $($inputs: FromGrugValue,)* GrugState: State, O: IntoGrugValue> IntoHostFn<GrugState> for HostFnStruct<F, ($($inputs, )*), O, GrugState> {
+				const PARAMETERS: &'static [GrugType<'static>] = &[];
+				const RETURN_TYPE: GrugType<'static> = O::TYPE;
+				fn into_host_fn(self) -> impl Fn(&GrugState, *const GrugValue) -> GrugValue {
+					move |state, mut _args| {
+						$(
+							let $inputs = unsafe{$inputs::from(&mut _args)};
+						)*
+						self.0(state, $($inputs),*).into()
+					}
+				}
+			}
+		}
+	}
+
+	impl_host_fn_traits!(, -> O);
+	impl_host_fn_traits!(I0, -> O);
+	impl_host_fn_traits!(I0, I1, -> O);
+	impl_host_fn_traits!(I0, I1, I2, -> O);
+	impl_host_fn_traits!(I0, I1, I2, I3, -> O);
+	impl_host_fn_traits!(I0, I1, I2, I3, I4, -> O);
+	impl_host_fn_traits!(I0, I1, I2, I3, I4, I5, -> O);
+	impl_host_fn_traits!(I0, I1, I2, I3, I4, I5, I6, -> O);
+	impl_host_fn_traits!(I0, I1, I2, I3, I4, I5, I6, I7, -> O);
+}
 
 impl GameFnPtr {
 	/// Casts `self` to a [`GameFnPtrState`] for the input state

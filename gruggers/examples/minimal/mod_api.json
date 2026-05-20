@@ -2,8 +2,9 @@
 	"entities": {
 		"Dog": {
 			"description": "A dog.",
-			"on_functions": {
-				"on_bark": {
+			"export_functions": [
+				{
+					"name": "on_bark",
 					"description": "Called when the entity is supposed to bark",
 					"arguments": [
 						{
@@ -12,10 +13,10 @@
 						}
 					]
 				}
-			}
+			]
 		}
 	},
-	"game_functions": {
+	"host_functions": {
 		"print_string": {
 			"description": "Prints a string",
 			"arguments": [

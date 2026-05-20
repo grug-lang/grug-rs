@@ -44,9 +44,10 @@ use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, INVALID_GRUG_SCRIPT_ID};
+use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, INVALID_GRUG_SCRIPT_ID, HostFnStruct, IntoHostFn};
 use crate::xar::Xar;
-use crate::ntstring::{NTStrPtr};
+use crate::ast::Parameter;
+use crate::ntstring::{NTStrPtr, NTBytes};
 use crate::arena::Arena;
 use crate::own_ptr::OwnPtr;
 use crate::nt;
@@ -468,7 +469,7 @@ impl GrugState {
 		Ok(&self.on_functions[start..end])
 	}
 
-	pub unsafe fn register_host_fn(&mut self, name: &'static str, func: extern "C" fn (&GrugState, *const GrugValue) -> GrugValue) -> Result<(), Error> {
+	pub unsafe fn register_host_fn_raw(&mut self, name: &'static str, func: extern "C" fn (NonNull<()>, &GrugState, *const GrugValue) -> GrugValue, data: NonNull<()>) -> Result<(), Error> {
 		if !self.mod_api.host_fns().contains_key(name) {
 			return Err(Error::new(
 				ErrorKind::INIT_ERROR,
@@ -494,6 +495,49 @@ impl GrugState {
 				}
 			}
 		}
+	}
+
+	pub fn register_host_fn<F: Into<HostFnStruct<F, I, O, Self>>, I, O>(&mut self, name: &'static str, f: F) -> Result<(), Error> where
+		HostFnStruct<F, I, O, Self>: IntoHostFn<Self>,
+	{
+		let host_fn = f.into().into_host_fn();
+		let input_params = HostFnStruct::<F, I, O, Self>::PARAMETERS;
+		let input_return_type = HostFnStruct::<F, I, O, Self>::RETURN_TYPE;
+
+		let Some(mod_api_host_function) = self.mod_api.host_fns().get(name) else {
+			return Err(Error::new(
+				ErrorKind::INIT_ERROR,
+				"",
+				"".as_ref(),
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("Host function named '{}' is not found in mod_api.json", name),
+			));
+		};
+		for (input_type, Parameter{ty: expected_type, ..}) in input_params.iter().zip(mod_api_host_function.parameters) {
+			if input_type != expected_type {
+				panic!("Invalid parameter type for host function");
+			}
+		}
+		if input_return_type != mod_api_host_function.return_ty {
+			panic!("Invalid return type for host function");
+		}
+		
+		fn return_data_and_ptr<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(
+			f: F, 
+			arena: &Arena
+		) -> (NonNull<()>, extern "C" fn (NonNull<()>, &GrugState, *const GrugValue) -> GrugValue) {
+			let data = NonNull::from_ref(Box::leak(Box::new_in(f, arena))).cast::<()>();
+
+			extern "C" fn adapter_fn<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(data: NonNull<()>, state: &GrugState, values: *const GrugValue) -> GrugValue {
+				// SAFETY: Function signature is checked
+				unsafe{std::mem::transmute::<NonNull<()>, &F>(data)(state, values)}
+			}
+			(data, adapter_fn::<F>)
+		}
+		let (data, ptr) = return_data_and_ptr(host_fn, &self.data_arena);
+		// SAFETY: preconditions
+		unsafe{self.register_host_fn_raw(name, ptr, data)}
 	}
 
 	/// Register a dummy function for each game function defined in the mod_api
