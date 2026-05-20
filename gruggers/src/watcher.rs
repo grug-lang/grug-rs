@@ -65,66 +65,61 @@ pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<
 
 #[cfg(target_os="windows")]
 mod inner {
-	#![allow(unused)]
-	#![allow(non_camel_case_types)]
-	use std::ffi::{c_void, c_int, OsStr, OsString};
+	use crate::pal::windows::*;
+	use std::ffi::{OsStr, OsString};
 	use std::mem::MaybeUninit;
 	use std::os::windows::ffi::OsStringExt;
-	use crate::ntstring::{NTStr, NTStrPtr};
-	use allocator_api2::alloc::Global;
 
-	struct OwnedHandle(HANDLE);
-	unsafe impl Send for OwnedHandle {}
-	unsafe impl Sync for OwnedHandle {}
-	impl OwnedHandle {
-		/// SAFETY: `handle` must be a valid handle
-		unsafe fn new(handle: HANDLE) -> Self {
-			Self(handle)
-		}
+	#[link(name = "kernel32")]
+	unsafe extern "system" {
+		fn CreateFileA(
+			file_name: *const u8,
+			desired_access: DWORD,
+			share_mode: DWORD,
+			security_attributes: Option<&mut ()>,
+			creation_disposition: DWORD,
+			flags_and_attributes: DWORD,
+			template_file: HANDLE,
+		) -> HANDLE;
+		fn ReadDirectoryChangesW(
+			directory: HANDLE,
+			buffer: *mut MaybeUninit<u32>,
+			buffer_len: DWORD,
+			watch_subtree: BOOL,
+			notify_filter: DWORD,
+			bytes_returned: Option<&mut DWORD>,
+			overlapped: Option<&mut Overlapped>,
+			completion_routine: Option<OverlappedCompletionRoutine>
+		) -> BOOL;
 	}
-	impl Drop for OwnedHandle {
-		fn drop(&mut self) {
-			unsafe {CloseHandle(self.0)};
-		}
-	}
-
-	type HANDLE = *mut c_void;
-	const INVALID_HANDLE_VALUE: HANDLE = std::ptr::with_exposed_provenance_mut(-1_isize as usize);
-
-	const TRUE : BOOL = 1;
-	const FALSE: BOOL = 0;
-
-	type DWORD = u32;
-	type ULONG_PTR = usize;
-	type BOOL = c_int;
 	type OverlappedCompletionRoutine = extern "C" fn(DWORD, DWORD, &mut Overlapped);
 
 	struct AccessMask;
 	impl AccessMask {
 		// https://learn.microsoft.com/en-us/windows/win32/secauthz/access-mask
-		const SYNCHRONIZE     : DWORD = 1 << 20;
+		// const SYNCHRONIZE     : DWORD = 1 << 20;
 
-		const GENERIC_ALL     : DWORD = 1 << 28;
-		const GENERIC_EXECUTE : DWORD = 1 << 29;
-		const GENERIC_WRITE   : DWORD = 1 << 30;
+		// const GENERIC_ALL     : DWORD = 1 << 28;
+		// const GENERIC_EXECUTE : DWORD = 1 << 29;
+		// const GENERIC_WRITE   : DWORD = 1 << 30;
 		const GENERIC_READ    : DWORD = 1 << 31;
 	}
 
 	struct ShareMode;
 	impl ShareMode {
-		const NO_SHARING       : DWORD = 0x0;
+		// const NO_SHARING       : DWORD = 0x0;
 		const FILE_SHARE_READ  : DWORD = 0x1;
-		const FILE_SHARE_WRITE : DWORD = 0x2;
-		const FILE_SHARE_DELETE: DWORD = 0x4;
+		// const FILE_SHARE_WRITE : DWORD = 0x2;
+		// const FILE_SHARE_DELETE: DWORD = 0x4;
 	}
 
 	struct CreateDisposition;
 	impl CreateDisposition {
-		const CREATE_NEW       : DWORD = 1;
-		const CREATE_ALWAYS    : DWORD = 2;
+		// const CREATE_NEW       : DWORD = 1;
+		// const CREATE_ALWAYS    : DWORD = 2;
 		const OPEN_EXISTING    : DWORD = 3;
-		const OPEN_ALWAYS      : DWORD = 4;
-		const TRUNCATE_EXISTING: DWORD = 5;
+		// const OPEN_ALWAYS      : DWORD = 4;
+		// const TRUNCATE_EXISTING: DWORD = 5;
 	}
 
 	struct FlagsAndAttributes;
@@ -138,12 +133,12 @@ mod inner {
 	impl NotifyFilter {
 		const CHANGE_FILE_NAME  : DWORD = 0x00000001;
 		const CHANGE_DIR_NAME   : DWORD = 0x00000002;
-		const CHANGE_ATTRIBUTES : DWORD = 0x00000004;
-		const CHANGE_SIZE       : DWORD = 0x00000008;
+		// const CHANGE_ATTRIBUTES : DWORD = 0x00000004;
+		// const CHANGE_SIZE       : DWORD = 0x00000008;
 		const CHANGE_LAST_WRITE : DWORD = 0x00000010;
-		const CHANGE_LAST_ACCESS: DWORD = 0x00000020;
-		const CHANGE_CREATION   : DWORD = 0x00000040;
-		const CHANGE_SECURITY   : DWORD = 0x00000100;
+		// const CHANGE_LAST_ACCESS: DWORD = 0x00000020;
+		// const CHANGE_CREATION   : DWORD = 0x00000040;
+		// const CHANGE_SECURITY   : DWORD = 0x00000100;
 	}
 
 	#[repr(C)]
@@ -244,32 +239,6 @@ mod inner {
 			self.current = if next_offset == 0 {std::ptr::null()} else {unsafe{self.current.byte_add(next_offset)}};
 			Some(current)
 		}
-	}
-
-	#[link(name = "kernel32", kind="dylib")]
-	unsafe extern "C" {
-		fn CreateFileA(
-			file_name: *const u8,
-			desired_access: DWORD,
-			share_mode: DWORD,
-			security_attributes: Option<&mut ()>,
-			creation_disposition: DWORD,
-			flags_and_attributes: DWORD,
-			template_file: HANDLE,
-		) -> HANDLE;
-		fn ReadDirectoryChangesW(
-			directory: HANDLE,
-			buffer: *mut MaybeUninit<u32>,
-			buffer_len: DWORD,
-			watch_subtree: BOOL,
-			notify_filter: DWORD,
-			bytes_returned: Option<&mut DWORD>,
-			overlapped: Option<&mut Overlapped>,
-			completion_routine: Option<OverlappedCompletionRoutine>
-		) -> BOOL;
-		fn CloseHandle(
-			object: HANDLE
-		) -> BOOL;
 	}
 
 	/// SAFETY: path should be null terminated

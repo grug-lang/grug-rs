@@ -1,62 +1,13 @@
 mod page_alloc {
+	#![allow(non_snake_case)]
 	// directly use VirtualAlloc and VirtualFree on windows
 	#[cfg(all(not(miri), windows))]
 	pub mod windows {
-		#![allow(non_camel_case_types)]
-		#![allow(non_snake_case)]
-		pub struct PageAllocator;
-
+		use crate::pal::windows::*;
 		use std::ptr::NonNull;
-		use core::ffi::{c_void, c_int};
 		use allocator_api2::alloc::AllocError;
-
-		type HANDLE = *mut c_void;
-		type LPVOID = *mut c_void;
-		type SIZE_T = usize;
-		type DWORD = u32;
-		type WORD = u16;
-		type DWORD_PTR = *mut DWORD;
-		type BOOL = c_int;
-
-
-		#[link(name = "kernel32")]
-		unsafe extern "system" {
-			fn VirtualAllocEx (
-				hProcess: HANDLE,
-				lpAddress: LPVOID,
-				dwSize: SIZE_T,
-				flAllocationType: DWORD,
-				flProtect : DWORD,
-			) -> *mut c_void;
-
-			fn VirtualProtectEx (
-				process: HANDLE,
-				Address: LPVOID,
-				Size: DWORD,
-				newProtect: DWORD,
-				oldProtect: &mut DWORD,
-			) -> BOOL;
-
-			fn VirtualFreeEx (
-				process: HANDLE,
-				Address: LPVOID,
-				Size: DWORD,
-				FreeType: DWORD,
-			) -> BOOL;
-
-			fn GetCurrentProcess() -> HANDLE;
-		}
-
-		const MEM_COMMIT: DWORD = 0x00001000;
-		const MEM_RESERVE: DWORD = 0x00002000;
-
-		// const MEM_DECOMMIT: DWORD = 0x00004000;
-		const MEM_RELEASE: DWORD = 0x00008000;
-
-		const PAGE_READ_WRITE: DWORD = 0x04;
-		const PAGE_NOACCESS: DWORD = 0x01;
-
 		pub static PAGE_SIZE: std::sync::LazyLock<u32> = std::sync::LazyLock::new(PageAllocator::page_size);
+		pub struct PageAllocator;
 
 		impl PageAllocator {
 			pub fn page_size () -> u32 {

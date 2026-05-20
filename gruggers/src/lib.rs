@@ -18,6 +18,8 @@ mod cachemap;
 mod watcher;
 pub mod error;
 
+mod pal;
+
 pub use gruggers_core::types;
 pub use gruggers_core::ast;
 
