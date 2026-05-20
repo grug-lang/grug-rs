@@ -1,9 +1,17 @@
+//! Contains functions to convert a grug file to/from its json representation.
+//!
+//! Grug files can be losslessly converted to and from json. This allows for
+//! easy ast transformations for upgrades and downgrades
 use crate::error::Error;
 use crate::frontend::*;
 use crate::arena::Arena;
 
 use std::ffi::OsStr;
 
+//! Converts a grug file into its json ast if it is valid. 
+//!
+//! `file path` is only required for error reporting. A dummy file name can be
+//! provided
 pub fn dump_file_to_json (grug_text: &str, file_path: impl AsRef<OsStr>) -> Result<String, Error> {
 	let arena = Arena::new();
 
@@ -15,6 +23,7 @@ pub fn dump_file_to_json (grug_text: &str, file_path: impl AsRef<OsStr>) -> Resu
 	Ok(json)
 }
 
+//! Converts a grug json ast into a grug file if there are no errors.
 pub fn generate_file_from_json (input_json: &str) -> Result<String, Error> {
 	let json_value = json::parse(input_json).unwrap();
 	Ok(json_to_text(&json_value).unwrap())

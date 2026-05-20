@@ -17,7 +17,8 @@ use allocator_api2::boxed::Box;
 
 #[allow(unused)]
 #[derive(Debug)]
-pub enum ParserError<'a> {
+/// Lightweight error for structural parsing error
+enum ParserError<'a> {
 	GrugError(Error),
 	// grug_error("Unexpected token '%s' on line %zu", token.str, get_token_line_number(i));
 	UnexpectedToken {

@@ -1,3 +1,7 @@
+//! Provides a public c api for use when compiling as a static library. 
+//!
+//! These functions have the same safety requirements as the equivalent
+//! functions in state.rs
 #![allow(improper_ctypes_definitions)]
 use crate::state::{EventFnEntry, FileInfo, GrugEntityHandle, GrugInitSettings, GrugState};
 use crate::ntstring::NTStrPtr;

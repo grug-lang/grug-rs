@@ -21,7 +21,9 @@ pub mod parser;
 
 // Compilation functions
 impl GrugState {
-	// Path is relative to mods directory
+	/// Compile a grug file at a relative path within the mods directory. Once
+	/// compiled directly once, the file will be automatically hot reloaded by
+	/// the state. 
 	pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<GrugFileId, Error> {
 		let path = path.as_ref();
 		let mut path_buf = self.mods_dir_path.clone();
@@ -43,7 +45,15 @@ impl GrugState {
 		self.compile_grug_file_from_str(path, &file_text)
 	}
 
-	// Path is relative to mods directory or an absolute path
+	/// Compile a grug file directly from a string. The path is required to
+	/// identify the entity type and to uniquely identify a particular script
+	/// for hot reloading.
+	///
+	/// If the path is the same as a path within the mods directory, when the
+	/// actual file changes, the script will be hot reloaded. 
+	///
+	/// If a file has already been compiled with the same path, the script will
+	/// be hot reloaded.
 	pub fn compile_grug_file_from_str(&self, path: impl AsRef<OsStr>, file_text: &str) -> Result<GrugFileId, Error> {
 		use super::frontend::*;
 		let path = path.as_ref();
@@ -123,6 +133,7 @@ impl GrugState {
 		id
 	}
 	
+	/// Compile all the files within the mods directory. 
 	pub fn compile_all_files(&self) -> std::vec::Vec<FileInfo> {
 		let mut files = std::vec::Vec::new();
 		let mods_dir_len = if self.mods_dir_path.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
@@ -167,7 +178,9 @@ impl GrugState {
 		}
 		files
 	}
-	
+
+	/// Check if there are any files in the mods directory that need to be hot reloaded. 
+	/// Also returns any resources that need to be reloaded
 	pub fn update_files(&self) -> (std::vec::Vec<OsString>, std::vec::Vec<FileInfo>) {
 		let mut resource_files = std::vec::Vec::new();
 		let mut grug_files = std::vec::Vec::new();
