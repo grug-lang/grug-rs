@@ -119,6 +119,7 @@ mod game_functions {
 		safe fn game_fn_y           <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 		safe fn game_fn_sqrt        <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 		safe fn game_fn_set_acc     <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_fmod        <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 	}
 
 	pub fn register_game_functions(state: &mut GrugState) { unsafe {
@@ -131,6 +132,7 @@ mod game_functions {
 		state.register_host_fn_raw("y"           , game_fn_y           , std::ptr::NonNull::dangling()).unwrap();
 		state.register_host_fn_raw("sqrt"        , game_fn_sqrt        , std::ptr::NonNull::dangling()).unwrap();
 		state.register_host_fn_raw("set_acc"     , game_fn_set_acc     , std::ptr::NonNull::dangling()).unwrap();
+		state.register_host_fn_raw("fmod"        , game_fn_fmod        , std::ptr::NonNull::dangling()).unwrap();
 	}}
 }
 

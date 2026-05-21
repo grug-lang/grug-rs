@@ -497,6 +497,15 @@ impl GrugState {
 		}
 	}
 
+	pub unsafe fn register_host_fn_raw_rust<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(&mut self, name: &'static str, func: F) -> Result<(), Error> {
+		let data = NonNull::from_ref(Box::leak(Box::new_in(func, &self.data_arena))).cast::<()>();
+		extern "C" fn adapter_fn<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(data: NonNull<()>, state: &GrugState, values: *const GrugValue) -> GrugValue {
+			// SAFETY: Function signature is checked
+			unsafe{std::mem::transmute::<NonNull<()>, &F>(data)(state, values)}
+		}
+		unsafe{self.register_host_fn_raw(name, adapter_fn::<F>, data)}
+	}
+
 	pub fn register_host_fn<F: Into<HostFnStruct<F, I, O, Self>>, I, O>(&mut self, name: &'static str, f: F) -> Result<(), Error> where
 		HostFnStruct<F, I, O, Self>: IntoHostFn<Self>,
 	{

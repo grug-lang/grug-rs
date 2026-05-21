@@ -142,17 +142,17 @@ fn main () {
 			.set_mods_dir("gruggers/examples/fibonacci/mods")
 			.build_state().unwrap();
 
-		state.register_host_fn("print_string",       print_string      ).unwrap();
-		state.register_host_fn("print_number",       print_number      ).unwrap();
-		state.register_host_fn("list_number",        list_number       ).unwrap();
-		state.register_host_fn("print_list_number",  print_list_number ).unwrap();
-		state.register_host_fn("list_number_insert", list_number_insert).unwrap();
-		state.register_host_fn("list_number_remove", list_number_remove).unwrap();
-		state.register_host_fn("list_number_push",   list_number_push  ).unwrap();
-		state.register_host_fn("list_number_pop",    list_number_pop   ).unwrap();
-		state.register_host_fn("list_number_len",    list_number_len   ).unwrap();
-		state.register_host_fn("list_number_get",    list_number_get   ).unwrap();
-		state.register_host_fn("list_number_set",    list_number_set   ).unwrap();
+		state.register_host_fn_raw_rust("print_string",       print_string      ).unwrap();
+		state.register_host_fn_raw_rust("print_number",       print_number      ).unwrap();
+		state.register_host_fn_raw_rust("list_number",        list_number       ).unwrap();
+		state.register_host_fn_raw_rust("print_list_number",  print_list_number ).unwrap();
+		state.register_host_fn_raw_rust("list_number_insert", list_number_insert).unwrap();
+		state.register_host_fn_raw_rust("list_number_remove", list_number_remove).unwrap();
+		state.register_host_fn_raw_rust("list_number_push",   list_number_push  ).unwrap();
+		state.register_host_fn_raw_rust("list_number_pop",    list_number_pop   ).unwrap();
+		state.register_host_fn_raw_rust("list_number_len",    list_number_len   ).unwrap();
+		state.register_host_fn_raw_rust("list_number_get",    list_number_get   ).unwrap();
+		state.register_host_fn_raw_rust("list_number_set",    list_number_set   ).unwrap();
 		
 		state.all_host_fns_registered().unwrap();
 		STATE.write(state);
