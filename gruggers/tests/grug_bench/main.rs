@@ -119,6 +119,7 @@ mod game_functions {
 		safe fn game_fn_y           <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 		safe fn game_fn_sqrt        <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 		safe fn game_fn_set_acc     <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_fmod        <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 	}
 
 	pub fn register_game_functions(state: &mut GrugState) { unsafe {
@@ -131,6 +132,7 @@ mod game_functions {
 		state.register_host_fn("y"           , game_fn_y           ).unwrap();
 		state.register_host_fn("sqrt"        , game_fn_sqrt        ).unwrap();
 		state.register_host_fn("set_acc"     , game_fn_set_acc     ).unwrap();
+		state.register_host_fn("fmod"        , game_fn_fmod        ).unwrap();
 	}}
 }
 
