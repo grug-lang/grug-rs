@@ -2,7 +2,7 @@ use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, GameFnPtrState, INVALID_GRUG_SCRIPT_ID};
+use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, INVALID_GRUG_SCRIPT_ID};
 use crate::xar::Xar;
 use crate::ntstring::{NTStrPtr, NTBytes};
 use crate::arena::Arena;
@@ -386,19 +386,7 @@ impl GrugState {
 		Ok(&self.on_functions[start..end])
 	}
 
-	/// # Safety
-	/// The actual signature of the returned function should match the
-	/// signature in the mod_api
-	pub unsafe fn register_host_fn<F: Fn(&Self, *const GrugValue) -> GrugValue>(&mut self, name: &'static str, f: F) -> Result<(), Error> {
-		let data = NonNull::from_ref(Box::leak(Box::new_in(f, &self.data_arena))).cast::<()>();
-		extern "C" fn adapter_fn<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(data: NonNull<()>, state: &GrugState, values: *const GrugValue) -> GrugValue {
-			unsafe{std::mem::transmute::<NonNull<()>, &F>(data)(state, values)}
-		}
-		// SAFETY: preconditions
-		unsafe{self.register_host_fn_raw(name, adapter_fn::<F>, data)}
-	}
-
-	pub unsafe fn register_host_fn_raw(&mut self, name: &'static str, func: extern "C" fn (NonNull<()>, &GrugState, *const GrugValue) -> GrugValue, data: NonNull<()>) -> Result<(), Error> {
+	pub unsafe fn register_host_fn(&mut self, name: &'static str, func: extern "C" fn (&GrugState, *const GrugValue) -> GrugValue) -> Result<(), Error> {
 		if !self.mod_api.host_fns().contains_key(name) {
 			return Err(Error::new(
 				ErrorKind::INIT_ERROR,
@@ -419,7 +407,7 @@ impl GrugState {
 					format_args!("Host function named '{}' has already been registered", name),
 				)),
 				Entry::Vacant(x) => {
-					x.insert(GameFnPtr::from_ptr(ptr));
+					x.insert(GameFnPtr::from_ptr(func));
 					Ok(())
 				}
 			}
