@@ -235,6 +235,7 @@ pub struct GrugState {
 	next_script_id: AtomicU64,
 
 	pub(crate) backend: ErasedBackend<Self>,
+	// for use when compiling
 	pub(crate) arenas : RefCell<Vec<Arena>>,
 	// pub(crate) backend: Interpreter,
 	pub(crate) current_script: Cell<Option<GrugFileId>>,

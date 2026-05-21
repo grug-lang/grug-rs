@@ -12,7 +12,7 @@ mod windows {
 	/// The returned file should only be used for async reads
 	///
 	/// The std File functions will panic if given a file opened for async reads
-	pub fn open_file_async_for_read(path: impl AsRef<OsStr>) -> std::io::Result<File> {
+	pub fn open_file_async_for_read(path: &impl AsRef<OsStr>) -> std::io::Result<File> {
 		let mut path = Vec::from(path.as_ref().as_encoded_bytes());
 		path.push(b'\0');
 
@@ -33,7 +33,7 @@ mod windows {
 	}
 
 	/// All files passed to this functions should be opened for async reads without shared write permissions
-	pub unsafe fn read_files_async<'a>(files: &[File], arena: &'a Arena) -> std::io::Result<&'a [&'a [u8]]> {
+	pub fn read_files_async<'a>(files: &[File], arena: &'a Arena) -> std::io::Result<&'a [&'a [u8]]> {
 		let mut iosbs = Vec::new_in(arena);
 		iosbs.extend(files.iter().map(|_| IoStatusBlock::empty()));
 		let iosbs = iosbs.leak();
@@ -71,6 +71,7 @@ mod windows {
 		// wait for files 64 at a time
 		for chunk in file_handles.chunks_mut(64) {
 			let result = unsafe{WaitForMultipleObjects(chunk.len() as DWORD, chunk.as_mut_ptr(), TRUE, INFINITE)};
+			panic!("after wait");
 			const WAIT_OBJECT_0: DWORD = 0;
 			const WAIT_ABANDONED_0 : DWORD = 0x00000080;
 			if !(result < WAIT_OBJECT_0 + chunk.len() as DWORD && result > WAIT_OBJECT_0) {

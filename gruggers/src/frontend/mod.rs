@@ -1,5 +1,5 @@
 use crate::state::{GrugState, FileInfo};
-// use crate::backend::GrugAst;
+use crate::arena::Arena;
 use crate::types::GrugFileId;
 use crate::ast::*;
 use crate::ntstring::NTStrPtr;
@@ -207,6 +207,56 @@ impl GrugState {
 			}
 		}
 		(resource_files, grug_files)
+	}
+	
+	/// Compile all the files within the mods directory. 
+	pub fn compile_all_files_async(&self) -> std::vec::Vec<FileInfo> {
+		use crate::async_fs::{open_file_async_for_read, read_files_async};
+		let arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
+		let mut files = std::vec::Vec::new();
+		#[allow(unused)]
+		let mods_dir_len = if self.mods_dir_path.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
+		for mod_dir in std::fs::read_dir(&self.mods_dir_path).expect("Could not read mods directory") {
+			let Ok(mod_dir) = mod_dir else {
+				panic!("unable to read directory: {:?}", mod_dir);
+			};
+			// let mod_dir_path = mod_dir.path();
+			// let mod_dir_path = unsafe{OsStr::from_encoded_bytes_unchecked(&mod_dir_path.as_os_str().as_encoded_bytes()[mods_dir_len..])};
+			let mut entries_to_check = std::vec::Vec::from([mod_dir]);
+
+			while let Some(next_entry) = entries_to_check.pop() {
+				if next_entry.metadata().expect("could not read metadata").is_dir() {
+					let next_entry_path = next_entry.path();
+					for entry in std::fs::read_dir(&next_entry_path).expect("Could not read mods directory") {
+						let Ok(entry) = entry else {
+							panic!("unable to read entry: {:?}", entry);
+						};
+						entries_to_check.push(entry);
+					}
+				} else {
+					let entry_path = next_entry.path();
+					if let Some(extension) = Path::extension(&entry_path) && extension == "grug" {
+						files.push(entry_path);
+					};
+				}
+			}
+		}
+		
+		let mut ok_files = Vec::new_in(&arena);
+		let mut ok_files_paths = Vec::new_in(&arena);
+		let mut err_files = Vec::new_in(&arena);
+		for file_path in files {
+			match open_file_async_for_read(&file_path) {
+				Ok(file) => {
+					ok_files.push(file); 
+					ok_files_paths.push(file_path)
+				},
+				Err(err) => err_files.push((file_path, err)),
+			}
+		}
+		#[allow(unused)]
+		let file_data = read_files_async(&ok_files, &arena).unwrap();
+		todo!();
 	}
 }
 
