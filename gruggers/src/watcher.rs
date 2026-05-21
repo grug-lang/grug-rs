@@ -72,15 +72,6 @@ mod inner {
 
 	#[link(name = "kernel32")]
 	unsafe extern "system" {
-		fn CreateFileA(
-			file_name: *const u8,
-			desired_access: DWORD,
-			share_mode: DWORD,
-			security_attributes: Option<&mut ()>,
-			creation_disposition: DWORD,
-			flags_and_attributes: DWORD,
-			template_file: HANDLE,
-		) -> HANDLE;
 		fn ReadDirectoryChangesW(
 			directory: HANDLE,
 			buffer: *mut MaybeUninit<u32>,
@@ -93,41 +84,6 @@ mod inner {
 		) -> BOOL;
 	}
 	type OverlappedCompletionRoutine = extern "C" fn(DWORD, DWORD, &mut Overlapped);
-
-	struct AccessMask;
-	impl AccessMask {
-		// https://learn.microsoft.com/en-us/windows/win32/secauthz/access-mask
-		// const SYNCHRONIZE     : DWORD = 1 << 20;
-
-		// const GENERIC_ALL     : DWORD = 1 << 28;
-		// const GENERIC_EXECUTE : DWORD = 1 << 29;
-		// const GENERIC_WRITE   : DWORD = 1 << 30;
-		const GENERIC_READ    : DWORD = 1 << 31;
-	}
-
-	struct ShareMode;
-	impl ShareMode {
-		// const NO_SHARING       : DWORD = 0x0;
-		const FILE_SHARE_READ  : DWORD = 0x1;
-		// const FILE_SHARE_WRITE : DWORD = 0x2;
-		// const FILE_SHARE_DELETE: DWORD = 0x4;
-	}
-
-	struct CreateDisposition;
-	impl CreateDisposition {
-		// const CREATE_NEW       : DWORD = 1;
-		// const CREATE_ALWAYS    : DWORD = 2;
-		const OPEN_EXISTING    : DWORD = 3;
-		// const OPEN_ALWAYS      : DWORD = 4;
-		// const TRUNCATE_EXISTING: DWORD = 5;
-	}
-
-	struct FlagsAndAttributes;
-	impl FlagsAndAttributes {
-		const FILE_ATTRIBUTE_NORMAL     : DWORD = 0x80;
-		const FILE_FLAG_BACKUP_SEMANTICS: DWORD = 0x02000000;
-		const FILE_FLAG_OVERLAPPED      : DWORD = 0x40000000;
-	}
 
 	struct NotifyFilter;
 	impl NotifyFilter {

@@ -16,6 +16,7 @@ pub mod arena;
 
 mod cachemap;
 mod watcher;
+mod async_fs;
 pub mod error;
 
 mod pal;
