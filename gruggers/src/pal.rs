@@ -16,7 +16,7 @@ pub mod windows {
 	pub const INVALID_HANDLE_VALUE: HANDLE = std::ptr::with_exposed_provenance_mut(-1_isize as usize);
 
 	pub const TRUE : BOOL = 1;
-	// pub const FALSE: BOOL = 0;
+	pub const FALSE: BOOL = 0;
 
 	pub struct OwnedHandle(pub HANDLE);
 	unsafe impl Send for OwnedHandle {}
@@ -35,7 +35,7 @@ pub mod windows {
 
 	pub type ULONG = u32;
 	pub type ULONG_PTR = usize;
-	#[derive(Clone, Copy, Eq, PartialEq)]
+	#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 	#[repr(transparent)]
 	pub struct NTSTATUS(u32);
 	impl NTSTATUS {
@@ -52,10 +52,21 @@ pub mod windows {
 	pub type ApcIoRoutine = extern "C" fn (*mut c_void, *mut IoStatusBlock, ULONG);
 	
 	#[repr(C)]
+	#[derive(Clone, Copy)]
 	pub struct IoStatusBlock {
 		pub status: IoStatusBlockStatus,
 		pub information: ULONG_PTR,
 	}
+
+	impl std::fmt::Debug for IoStatusBlock {
+		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+			f.debug_struct("IoStatusBlock")
+				.field("status", &unsafe{self.status.status})
+				.field("information", &self.information)
+				.finish()
+		}
+	}
+
 	impl IoStatusBlock{
 		pub fn empty() -> Self {
 			Self {
@@ -65,6 +76,8 @@ pub mod windows {
 		}
 	}
 
+	#[repr(C)]
+	#[derive(Clone, Copy)]
 	pub union IoStatusBlockStatus {
 		pub status: NTSTATUS,
 		pub pointer: *mut c_void,
@@ -118,11 +131,12 @@ pub mod windows {
 			key: Option<&ULONG>
 		) -> NTSTATUS;
 
-		pub fn WaitForMultipleObjects(
+		pub fn WaitForMultipleObjectsEx(
 			count: DWORD,
 			handles: *mut HANDLE,
 			wait_all: BOOL,
 			milliseconds: DWORD,
+			alertable: BOOL
 		) -> DWORD;
 
 		pub fn GetCurrentProcess() -> HANDLE;
@@ -147,7 +161,7 @@ pub mod windows {
 	pub struct AccessMask;
 	impl AccessMask {
 		// https://learn.microsoft.com/en-us/windows/win32/secauthz/access-mask
-		// pub const SYNCHRONIZE     : DWORD = 1 << 20;
+		pub const SYNCHRONIZE     : DWORD = 1 << 20;
 
 		// pub const GENERIC_ALL     : DWORD = 1 << 28;
 		// pub const GENERIC_EXECUTE : DWORD = 1 << 29;
@@ -168,7 +182,7 @@ pub mod windows {
 		// pub const CREATE_NEW       : DWORD = 1;
 		// pub const CREATE_ALWAYS    : DWORD = 2;
 		pub const OPEN_EXISTING    : DWORD = 3;
-		// pub const OPEN_ALWAYS      : DWORD = 4;
+		pub const OPEN_ALWAYS      : DWORD = 4;
 		// pub const TRUNCATE_EXISTING: DWORD = 5;
 	}
 

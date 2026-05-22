@@ -323,6 +323,18 @@ mod typed_xar {
 				assert_eq!(*vec[i], 2 * i);
 			}
 		}
+
+		// #[test]
+		// fn xar_test_4 () {
+		// 	let x = Xar::new();
+		// 	let mut vec = Vec::new();
+		// 	for i in 0..1000 {
+		// 		unsafe{vec.push(x.insert(()))};
+		// 	}
+		// 	for item in vec {
+		// 		unsafe{x.delete(item)}
+		// 	}
+		// }
 	}
 }
 pub use typed_xar::*;

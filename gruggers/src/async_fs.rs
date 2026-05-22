@@ -3,7 +3,7 @@ mod windows {
 	use crate::pal::windows::*;
 	use crate::arena::Arena;
 	use std::fs::File;
-	use std::ffi::OsStr;
+	use std::ffi::{OsStr, c_void};
 	use std::os::windows::io::{FromRawHandle, AsRawHandle};
 
 	use allocator_api2::vec::Vec;
@@ -18,12 +18,12 @@ mod windows {
 
 		let file = unsafe{CreateFileA(
 			path.as_ptr(),
-			AccessMask::GENERIC_READ,
+			AccessMask::GENERIC_READ | AccessMask::SYNCHRONIZE,
 			ShareMode::FILE_SHARE_READ,
 			None,
-			CreateDisposition::OPEN_EXISTING,
-			FlagsAndAttributes::FILE_FLAG_OVERLAPPED | FlagsAndAttributes::FILE_FLAG_NO_BUFFERING,
-			INVALID_HANDLE_VALUE,
+			CreateDisposition::OPEN_ALWAYS,
+			FlagsAndAttributes::FILE_FLAG_OVERLAPPED,
+			std::ptr::null_mut(),
 		)};
 
 		if file == INVALID_HANDLE_VALUE {
@@ -52,17 +52,17 @@ mod windows {
 			// start read
 			let nt_status = unsafe{NtReadFile(
 				file.as_raw_handle(),
-				INVALID_HANDLE_VALUE,
+				std::ptr::null_mut(),
 				None,
 				std::ptr::null_mut(),
 				iosbs.as_mut_ptr().add(i),
 				buf, 
-				cap as u32,
-				Some(&0),
+				cap as DWORD,
+				Some(&0_i64),
 				None
 			)};
-			if nt_status == NTSTATUS::PENDING {
-				panic!("status not pending");
+			if nt_status != NTSTATUS::PENDING {
+				panic!("status not pending: {:x?}", nt_status);
 			}
 
 			files_data.push(std::ptr::slice_from_raw_parts_mut(buf, cap));
@@ -70,11 +70,10 @@ mod windows {
 		
 		// wait for files 64 at a time
 		for chunk in file_handles.chunks_mut(64) {
-			let result = unsafe{WaitForMultipleObjects(chunk.len() as DWORD, chunk.as_mut_ptr(), TRUE, INFINITE)};
-			panic!("after wait");
+			let result = unsafe{WaitForMultipleObjectsEx(chunk.len() as DWORD, chunk.as_mut_ptr(), TRUE, INFINITE, FALSE)};
 			const WAIT_OBJECT_0: DWORD = 0;
 			const WAIT_ABANDONED_0 : DWORD = 0x00000080;
-			if !(result < WAIT_OBJECT_0 + chunk.len() as DWORD && result > WAIT_OBJECT_0) {
+			if !(result < WAIT_OBJECT_0 + chunk.len() as DWORD && result >= WAIT_OBJECT_0) {
 				panic!("Wait abandoned");
 			}
 		}

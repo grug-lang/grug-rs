@@ -189,6 +189,8 @@ impl GrugState {
 			{
 				let file_name: &Path = file_name.as_ref();
 				if let Some(extension) = Path::extension(file_name) && extension == "grug" {
+					// This is actually not true of this library, although it is true for grug in general
+					// the grug cli allows scripts to not have a parent directory, but it does not call this function
 					let mod_dir_path = file_name.parent().expect("mod must have parent for successful compilation");
 					let result = self.compile_grug_file(file_name);
 					let info = FileInfo {
@@ -209,19 +211,22 @@ impl GrugState {
 		(resource_files, grug_files)
 	}
 	
-	/// Compile all the files within the mods directory. 
+	/// Compile all the files within the mods directory using async file system calls
 	pub fn compile_all_files_async(&self) -> std::vec::Vec<FileInfo> {
 		use crate::async_fs::{open_file_async_for_read, read_files_async};
-		let arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
+		let mut arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
+
 		let mut files = std::vec::Vec::new();
-		#[allow(unused)]
+
 		let mods_dir_len = if self.mods_dir_path.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
 		for mod_dir in std::fs::read_dir(&self.mods_dir_path).expect("Could not read mods directory") {
+			arena.clear();
 			let Ok(mod_dir) = mod_dir else {
 				panic!("unable to read directory: {:?}", mod_dir);
 			};
-			// let mod_dir_path = mod_dir.path();
-			// let mod_dir_path = unsafe{OsStr::from_encoded_bytes_unchecked(&mod_dir_path.as_os_str().as_encoded_bytes()[mods_dir_len..])};
+			let mod_dir_path = mod_dir.path();
+			let mod_dir_path = unsafe{OsStr::from_encoded_bytes_unchecked(&mod_dir_path.as_os_str().as_encoded_bytes()[mods_dir_len..])};
+			let mut mod_files = Vec::new_in(&arena);
 			let mut entries_to_check = std::vec::Vec::from([mod_dir]);
 
 			while let Some(next_entry) = entries_to_check.pop() {
@@ -236,27 +241,82 @@ impl GrugState {
 				} else {
 					let entry_path = next_entry.path();
 					if let Some(extension) = Path::extension(&entry_path) && extension == "grug" {
-						files.push(entry_path);
+						mod_files.push(entry_path);
 					};
 				}
 			}
-		}
-		
-		let mut ok_files = Vec::new_in(&arena);
-		let mut ok_files_paths = Vec::new_in(&arena);
-		let mut err_files = Vec::new_in(&arena);
-		for file_path in files {
-			match open_file_async_for_read(&file_path) {
-				Ok(file) => {
-					ok_files.push(file); 
-					ok_files_paths.push(file_path)
-				},
-				Err(err) => err_files.push((file_path, err)),
+
+			// split into files that can be opened and files that can't
+			let mut ok_files = Vec::new_in(&arena);
+			let mut ok_files_paths = Vec::new_in(&arena);
+			for file_path in mod_files {
+				match open_file_async_for_read(&file_path) {
+					Ok(file) => {
+						ok_files.push(file); 
+						ok_files_paths.push(file_path)
+					},
+					Err(err) => {
+						// get the path relative to the mods directory
+						let rel_path = &file_path.as_os_str().as_encoded_bytes()[mods_dir_len..];
+						let rel_path = <OsStr as AsRef<Path>>::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)});
+						
+						let info = FileInfo {
+							path: Box::from(rel_path),
+							file_name: Box::from(rel_path.file_name().unwrap()),
+							mod_name: Box::from(mod_dir_path),
+							entity_type: Box::from(get_entity_type(rel_path.as_os_str()).unwrap_or("")),
+							entity_name: Box::from(rel_path.file_prefix().unwrap()),
+							result: Err(Error::new(
+								ErrorKind::IO_ERROR,
+								"",
+								file_path.as_os_str(), 
+								"",
+								SourceSpan{offset: 0, line: 0},
+								format_args!("Unable to open file: {}", err)
+							)),
+						};
+						files.push(info);
+					}
+				}
 			}
+			// read the contents of files that can be read
+			let ok_files_data = read_files_async(&ok_files, &arena).unwrap();
+			// compile the files that can be read
+			ok_files_data.into_iter().zip(&ok_files_paths).map(|(data, path)| {
+				// get the path relative to the mods directory
+				let rel_path = &path.as_os_str().as_encoded_bytes()[mods_dir_len..];
+				let rel_path = <OsStr as AsRef<Path>>::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)});
+
+				// convert to utf8
+				let data = std::str::from_utf8(data).map_err(|err| {
+					Error::new(
+						ErrorKind::IO_ERROR,
+						"",
+						rel_path.as_os_str(), 
+						"",
+						SourceSpan{offset: err.valid_up_to(), line: 0},
+						format_args!("File is not valid utf8: {}", err),
+					)
+				})?;
+				self.compile_grug_file_from_str(rel_path, data)
+			}).zip(&ok_files_paths).for_each(|(result, path)| {
+				// get the path relative to the mods directory
+				let rel_path = &path.as_os_str().as_encoded_bytes()[mods_dir_len..];
+				let rel_path = <OsStr as AsRef<Path>>::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)});
+				let info = FileInfo {
+					path: Box::from(rel_path),
+					file_name: Box::from(rel_path.file_name().unwrap()),
+					mod_name: Box::from(mod_dir_path),
+					entity_type: Box::from(get_entity_type(rel_path.as_os_str()).unwrap_or("")),
+					entity_name: Box::from(rel_path.file_prefix().unwrap()),
+					result
+				};
+				files.push(info)
+			});
 		}
-		#[allow(unused)]
-		let file_data = read_files_async(&ok_files, &arena).unwrap();
-		todo!();
+		arena.clear();
+		self.arenas.borrow_mut().push(arena);
+		files
 	}
 }
 
