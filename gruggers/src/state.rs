@@ -11,6 +11,7 @@ use crate::watcher::{watch_changes};
 
 use gruggers_core::runtime_error::RuntimeError;
 pub use gruggers_core::state::State;
+pub use gruggers_core::ast::GrugAst;
 
 use std::marker::PhantomData;
 use std::ptr::NonNull;
@@ -19,10 +20,9 @@ use std::cell::{Cell, RefCell, Ref};
 use std::collections::{HashMap, hash_map::Entry, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::mem::MaybeUninit;
-use std::sync::Mutex;
 use std::ffi::{OsString, OsStr};
 use std::path::Path;
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 // /// Called by the 
 #[repr(C)]
@@ -223,8 +223,13 @@ pub struct GrugState {
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
 	pub(crate) entities: Xar<GrugEntity>,
-	pub(crate) resources: Mutex<HashSet<OsString>>,
-	
+	pub(crate) resources: RefCell<HashSet<OsString>>,
+	/// Send an arena and a slice of filepaths to compile (allocated within the arena)
+	pub(crate) compiler_senders: Vec<Sender<(Arena, &'static [&'static OsStr])>>,
+	/// Receive the arena and a slice of ASTs and the corresponding filepaths,
+	/// and a list of resources used by these files
+	/// (all allocated within the same arena)
+	pub(crate) compiler_reciever: Receiver<(Arena, &'static [(GrugAst<'static>, &'static OsStr)], &'static [&'static OsStr])>,
 	// SAFETY: The strings within the `on_functions` field is allocated within
 	// `mod_api`. So any reference given out to this field must have the 'self
 	// lifetime
@@ -313,7 +318,7 @@ impl GrugState {
 			next_entity_id: AtomicU64::new(0),
 			game_functions: HashMap::new(),
 			runtime_error_handler: handler,
-			resources: Mutex::new(HashSet::new()),
+			resources: RefCell::new(HashSet::new()),
 			entities: Xar::new(),
 			on_functions: on_fns,
 			path_to_script_ids: RefCell::new(HashMap::new()),

@@ -16,7 +16,7 @@ pub mod windows {
 	pub const INVALID_HANDLE_VALUE: HANDLE = std::ptr::with_exposed_provenance_mut(-1_isize as usize);
 
 	pub const TRUE : BOOL = 1;
-	pub const FALSE: BOOL = 0;
+	// pub const FALSE: BOOL = 0;
 
 	pub struct OwnedHandle(pub HANDLE);
 	unsafe impl Send for OwnedHandle {}
@@ -42,6 +42,7 @@ pub mod windows {
 		const TOP_NIBBLE: u32 = 0xF0000000;
 
 		pub const PENDING: Self = Self(0x00000103);
+		// pub const SUCCESS: Self = Self(0x00000000);
 		pub fn is_success(&self) -> bool {
 			((self.0 & Self::TOP_NIBBLE) >> 28) < 0x4
 		}
@@ -131,13 +132,18 @@ pub mod windows {
 			key: Option<&ULONG>
 		) -> NTSTATUS;
 
-		pub fn WaitForMultipleObjectsEx(
-			count: DWORD,
-			handles: *mut HANDLE,
-			wait_all: BOOL,
+		pub fn SleepEx(
 			milliseconds: DWORD,
 			alertable: BOOL
 		) -> DWORD;
+
+		// pub fn WaitForMultipleObjectsEx(
+		// 	count: DWORD,
+		// 	handles: *mut HANDLE,
+		// 	wait_all: BOOL,
+		// 	milliseconds: DWORD,
+		// 	alertable: BOOL
+		// ) -> DWORD;
 
 		pub fn GetCurrentProcess() -> HANDLE;
 
@@ -146,7 +152,7 @@ pub mod windows {
 		) -> BOOL;
 	}
 
-	pub const INFINITE: DWORD = 0xFFFFFFFF;
+	// pub const INFINITE: DWORD = 0xFFFFFFFF;
 
 	pub const MEM_COMMIT: DWORD = 0x00001000;
 	pub const MEM_RESERVE: DWORD = 0x00002000;
@@ -188,10 +194,11 @@ pub mod windows {
 
 	pub struct FlagsAndAttributes;
 	impl FlagsAndAttributes {
-		pub const FILE_ATTRIBUTE_NORMAL     : DWORD = 0x80;
-		pub const FILE_FLAG_BACKUP_SEMANTICS: DWORD = 0x02000000;
-		pub const FILE_FLAG_NO_BUFFERING    : DWORD = 0x20000000;
-		pub const FILE_FLAG_OVERLAPPED      : DWORD = 0x40000000;
+		pub const FILE_ATTRIBUTE_NORMAL             : DWORD = 0x00000080;
+		pub const FILE_FLAG_BACKUP_SEMANTICS        : DWORD = 0x02000000;
+		// pub const FILE_FLAG_NO_BUFFERING            : DWORD = 0x20000000;
+		// pub const FILE_NO_INTERMEDIATE_BUFFERING    : DWORD = 0x00000008;
+		pub const FILE_FLAG_OVERLAPPED              : DWORD = 0x40000000;
 	}
 
 }

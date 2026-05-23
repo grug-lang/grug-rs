@@ -38,8 +38,8 @@ mod test_bindings {
 			.set_backend(BytecodeBackend::new())
 			.build_state().map_err(|err| println!("{:?}", err)).ok()?;
 		super::game_fn_bindings::register_game_functions(&mut state).ok()?;
-		let files = state.compile_all_files_async();
-		// let files = state.compile_all_files();
+		// async file loading is only available on windows for now
+		let files = state.compile_all_files();
 		// let files = Vec::new();
 		Some(Box::new((state, files)))
 	}

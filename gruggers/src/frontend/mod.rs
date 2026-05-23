@@ -21,6 +21,26 @@ pub mod parser;
 
 // Compilation functions
 impl GrugState {
+	pub(crate) fn compiler_thread_fn(
+		receiver: Reciever<(Arena, &'static [&'static OsStr])>
+		sender: Sender<(
+			Arena, 
+			&'static [(
+				GrugAst<'static>, 
+				&'static OsStr
+			)], 
+			&'static [&'static OsStr]
+		)>,
+		mods_dir_path: OsString,
+		mod_api: Arc<ModApi>,
+		game_functions: Arc<RwLock<HashMap<&'static str, GameFnPtr>>>,
+	) -> impl FnOnce() {
+		move || {
+			for (arena, files) in receiver.iter() {
+				
+			}
+		}
+	}
 	/// Compile a grug file at a relative path within the mods directory. Once
 	/// compiled directly once, the file will be automatically hot reloaded by
 	/// the state. 
@@ -32,14 +52,7 @@ impl GrugState {
 		
 		let file_text = match std::fs::read_to_string(path_buf) {
 			Ok(file_text) => file_text,
-			Err(err) => return Err(Error::new(
-				ErrorKind::IO_ERROR,
-				"",
-				path, 
-				"",
-				SourceSpan{offset: 0, line: 0},
-				format_args!("Unable to open file: {}", err)
-			))
+			Err(err) => return Err(Error::from_io_error(err, path))
 		};
 
 		self.compile_grug_file_from_str(path, &file_text)
@@ -90,7 +103,7 @@ impl GrugState {
 				file_text, 
 				path
 			).fill_result_types(entity_type, &mut ast, &arena)?;
-			self.resources.lock().expect("poisoned mutex").extend(resources);
+			self.resources.borrow_mut().extend(resources);
 
 			// let mod_api_entity = self.mod_api.entities.get(entity_type);
 			let mut member_variables = Vec::new_in(&arena);
@@ -133,7 +146,9 @@ impl GrugState {
 		id
 	}
 	
-	/// Compile all the files within the mods directory. 
+	/// Compile all the files within the mods directory. Uses asynchronous file
+	/// system apis on windows 
+	#[cfg(not(target_os = "windows"))]
 	pub fn compile_all_files(&self) -> std::vec::Vec<FileInfo> {
 		let mut files = std::vec::Vec::new();
 		let mods_dir_len = if self.mods_dir_path.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
@@ -179,46 +194,18 @@ impl GrugState {
 		files
 	}
 
-	/// Check if there are any files in the mods directory that need to be hot reloaded. 
-	/// Also returns any resources that need to be reloaded
-	pub fn update_files(&self) -> (std::vec::Vec<OsString>, std::vec::Vec<FileInfo>) {
-		let mut resource_files = std::vec::Vec::new();
-		let mut grug_files = std::vec::Vec::new();
-		for change in self.changes.try_iter() {
-			let file_name = change.expect("File IO error");
-			{
-				let file_name: &Path = file_name.as_ref();
-				if let Some(extension) = Path::extension(file_name) && extension == "grug" {
-					// This is actually not true of this library, although it is true for grug in general
-					// the grug cli allows scripts to not have a parent directory, but it does not call this function
-					let mod_dir_path = file_name.parent().expect("mod must have parent for successful compilation");
-					let result = self.compile_grug_file(file_name);
-					let info = FileInfo {
-						path: Box::from(file_name),
-						file_name: Box::from(file_name.file_name().unwrap()),
-						mod_name: Box::from(mod_dir_path.as_os_str()),
-						entity_type: Box::from(get_entity_type(file_name.as_os_str()).unwrap_or("")),
-						entity_name: Box::from(file_name.file_prefix().unwrap()),
-						result
-					};
-					grug_files.push(info);
-				}
-			}
-			if self.resources.lock().unwrap().contains(&file_name) {
-				resource_files.push(file_name);
-			}
-		}
-		(resource_files, grug_files)
-	}
-	
-	/// Compile all the files within the mods directory using async file system calls
-	pub fn compile_all_files_async(&self) -> std::vec::Vec<FileInfo> {
+	/// Compile all the files within the mods directory. Uses asynchronous file
+	/// system apis on windows 
+	#[cfg(target_os = "windows")]
+	pub fn compile_all_files(&self) -> std::vec::Vec<FileInfo> {
 		use crate::async_fs::{open_file_async_for_read, read_files_async};
 		let mut arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
 
 		let mut files = std::vec::Vec::new();
 
 		let mods_dir_len = if self.mods_dir_path.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
+		// Iterate through every directory within the mods directory. Each
+		// directory is a separate mod. Compile each mod separately.
 		for mod_dir in std::fs::read_dir(&self.mods_dir_path).expect("Could not read mods directory") {
 			arena.clear();
 			let Ok(mod_dir) = mod_dir else {
@@ -249,6 +236,7 @@ impl GrugState {
 			// split into files that can be opened and files that can't
 			let mut ok_files = Vec::new_in(&arena);
 			let mut ok_files_paths = Vec::new_in(&arena);
+			println!("{:?}",  mod_files);
 			for file_path in mod_files {
 				match open_file_async_for_read(&file_path) {
 					Ok(file) => {
@@ -266,23 +254,17 @@ impl GrugState {
 							mod_name: Box::from(mod_dir_path),
 							entity_type: Box::from(get_entity_type(rel_path.as_os_str()).unwrap_or("")),
 							entity_name: Box::from(rel_path.file_prefix().unwrap()),
-							result: Err(Error::new(
-								ErrorKind::IO_ERROR,
-								"",
-								file_path.as_os_str(), 
-								"",
-								SourceSpan{offset: 0, line: 0},
-								format_args!("Unable to open file: {}", err)
-							)),
+							result: Err(err),
 						};
 						files.push(info);
 					}
 				}
 			}
 			// read the contents of files that can be read
-			let ok_files_data = read_files_async(&ok_files, &arena).unwrap();
+			let ok_files_data = read_files_async(&ok_files, &arena);
 			// compile the files that can be read
 			ok_files_data.into_iter().zip(&ok_files_paths).map(|(data, path)| {
+				let data = data?;
 				// get the path relative to the mods directory
 				let rel_path = &path.as_os_str().as_encoded_bytes()[mods_dir_len..];
 				let rel_path = <OsStr as AsRef<Path>>::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)});
@@ -290,15 +272,18 @@ impl GrugState {
 				// convert to utf8
 				let data = std::str::from_utf8(data).map_err(|err| {
 					Error::new(
-						ErrorKind::IO_ERROR,
+						ErrorKind::UTF8_ERROR,
 						"",
 						rel_path.as_os_str(), 
-						"",
+						// SAFETY: err.valid_up_to returns the length of the
+						// portion of the string that is valid utf8
+						unsafe{std::str::from_utf8_unchecked(&data[..err.valid_up_to()])},
 						SourceSpan{offset: err.valid_up_to(), line: 0},
 						format_args!("File is not valid utf8: {}", err),
 					)
 				})?;
 				self.compile_grug_file_from_str(rel_path, data)
+			// insert file data for each file
 			}).zip(&ok_files_paths).for_each(|(result, path)| {
 				// get the path relative to the mods directory
 				let rel_path = &path.as_os_str().as_encoded_bytes()[mods_dir_len..];
@@ -317,6 +302,38 @@ impl GrugState {
 		arena.clear();
 		self.arenas.borrow_mut().push(arena);
 		files
+	}
+
+	/// Check if there are any files in the mods directory that need to be hot reloaded. 
+	/// Also returns any resources that need to be reloaded
+	pub fn update_files(&self) -> (std::vec::Vec<OsString>, std::vec::Vec<FileInfo>) {
+		let mut resource_files = std::vec::Vec::new();
+		let mut grug_files = std::vec::Vec::new();
+		for change in self.changes.try_iter() {
+			let file_name = change.expect("File IO error");
+			{
+				let file_name: &Path = file_name.as_ref();
+				if let Some(extension) = Path::extension(file_name) && extension == "grug" {
+					// This is actually not true of this library, although it is true for grug in general
+					// the grug cli allows scripts to not have a parent directory, but it does not call this function
+					let mod_dir_path = file_name.parent().expect("mod must have parent for successful compilation");
+					let result = self.compile_grug_file(file_name);
+					let info = FileInfo {
+						path: Box::from(file_name),
+						file_name: Box::from(file_name.file_name().unwrap()),
+						mod_name: Box::from(mod_dir_path.as_os_str()),
+						entity_type: Box::from(get_entity_type(file_name.as_os_str()).unwrap_or("")),
+						entity_name: Box::from(file_name.file_prefix().unwrap()),
+						result
+					};
+					grug_files.push(info);
+				}
+			}
+			if self.resources.borrow().contains(&file_name) {
+				resource_files.push(file_name);
+			}
+		}
+		(resource_files, grug_files)
 	}
 }
 

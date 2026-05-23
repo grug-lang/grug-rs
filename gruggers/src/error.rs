@@ -43,4 +43,15 @@ impl Error {
 			_arena: arena
 		}
 	}
+
+	pub(crate) fn from_io_error(err: std::io::Error, file_path: &OsStr) -> Self {
+		Self::new(
+			ErrorKind::IO_ERROR,
+			"",
+			file_path,
+			"",
+			SourceSpan {offset: 0, line: 0},
+			format_args!("IO error: {}", err),
+		)
+	}
 }

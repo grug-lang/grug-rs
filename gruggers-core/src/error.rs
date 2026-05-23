@@ -33,6 +33,16 @@ impl SourceSpan {
 		column
 	}
 
+	/// If the line embedded within self is incorrect, use this function to get
+	/// the actual line number
+	/// # Panics
+	/// if the source offset is out of bounds of the text
+	pub fn get_line_from_offset(self, text: &str) -> usize {
+		let text = text.as_bytes();
+		// count the number of b'\n' from 0..self.offset
+		text.get(..self.offset).expect("span within source code bounds").iter().filter(|byte| **byte == b'\n').count() + 1
+	}
+
 	/// Get the full source line that contains the start of the source span in
 	/// the source code if it is within bounds
 	///
@@ -87,9 +97,10 @@ impl ErrorKind {
 
 	pub const IO_ERROR:           Self = Self::COMPILE_ERROR.add_component(0x1);
 	pub const FILE_NAME_ERROR:    Self = Self::COMPILE_ERROR.add_component(0x2);
-	pub const TOKENIZER_ERROR:    Self = Self::COMPILE_ERROR.add_component(0x3);
-	pub const PARSER_ERROR:       Self = Self::COMPILE_ERROR.add_component(0x4);
-	pub const TYPE_CHECKER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x5);
+	pub const UTF8_ERROR:         Self = Self::COMPILE_ERROR.add_component(0x3);
+	pub const TOKENIZER_ERROR:    Self = Self::COMPILE_ERROR.add_component(0x4);
+	pub const PARSER_ERROR:       Self = Self::COMPILE_ERROR.add_component(0x5);
+	pub const TYPE_CHECKER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x6);
 
 	pub const fn add_component(mut self, other: u8) -> Self {
 		let mut i = 0;
@@ -180,8 +191,8 @@ impl<'a> GrugError<'a> {
 }
 
 impl<'a> GrugError<'a> {
-	pub fn new_error_in<A: Allocator>(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments, alloc: &'a A) -> Self {
-		let line = err_span.line;
+	pub fn new_error_in<A: Allocator>(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, mut err_span: SourceSpan, error_message: std::fmt::Arguments, alloc: &'a A) -> Self {
+		let mut line = err_span.line;
 		let column = err_span.get_col(source_text);
 		let source_line = err_span.get_source_line(source_text).trim_start();
 
@@ -190,6 +201,21 @@ impl<'a> GrugError<'a> {
 			write!(err_string, 
 				"Error: {error_message}\n\
 				$  {}\0",
+				file_path.display()
+			).expect("writing into a vec should never fail");
+		} else if error_kind.matches(&ErrorKind::UTF8_ERROR) {
+			line = err_span.get_line_from_offset(source_text);
+			err_span = SourceSpan{line, ..err_span};
+			write!(err_string, 
+				"  in ({}:{line}:{column})\n\
+				Error: {error_message}\n\
+				{line} $ {source_line}\0",
+				file_path.display()
+			).expect("writing into a vec should never fail");
+		} else if error_kind.matches(&ErrorKind::IO_ERROR) {
+			write!(err_string, 
+				"Error: {error_message}\n\
+				$ {}\0",
 				file_path.display()
 			).expect("writing into a vec should never fail");
 		} else if error_kind.matches(&ErrorKind::TOKENIZER_ERROR) {
