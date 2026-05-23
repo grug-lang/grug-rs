@@ -36,7 +36,12 @@ mod windows {
 
 	/// All files passed to this functions should be opened for async reads without shared write permissions
 	// TODO: get the file paths as input so the errors can point to the correct files
-	pub fn read_files_async<'a>(files: &[File], arena: &'a Arena) -> Vec<Result<&'a [u8], Error>, &'a Arena> {
+	pub fn read_files_async<'a, 'b>(files: impl IntoIterator<Item=&'b File>, arena: &'a Arena) -> Vec<Result<&'a [u8], Error>, &'a Arena> {
+		let files = {
+			let mut temp = Vec::new_in(arena);
+			temp.extend(files);
+			temp
+		};
 		let mut iosbs = Vec::with_capacity_in(files.len(), arena);
 		iosbs.extend(files.iter().map(|_| IoStatusBlock::empty()));
 		let iosbs = iosbs.leak();
@@ -44,7 +49,7 @@ mod windows {
 		let mut files_data = Vec::with_capacity_in(files.len(), arena);
 
 		let mut file_handles = Vec::with_capacity_in(files.len(), arena);
-		file_handles.extend(files.iter().map(File::as_raw_handle));
+		file_handles.extend(files.iter().copied().map(File::as_raw_handle));
 
 		let mut num_apcs_queued: usize = 0;
 		// SAFETY: This must explicitly be a usize because `apc` expects it to

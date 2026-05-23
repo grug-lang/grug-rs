@@ -20,6 +20,9 @@ use crate::state::State;
 /// 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct GameFnPtr(NonNull<()>);
+// SAFETY: GameFnPtr is always just a function pointer
+unsafe impl Send for GameFnPtr {}
+unsafe impl Sync for GameFnPtr {}
 /// A Game fn pointer for a specific kind of state. Each implementor of
 /// [`State`] should register its own version of [`GameFnPtrState`].
 ///

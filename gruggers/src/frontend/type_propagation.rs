@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use crate::error::{Error, ErrorKind, SourceSpan};
@@ -26,13 +26,14 @@ pub(super) struct TypePropogator<'mod_api, 'arena> {
 	entity: &'mod_api ModApiEntity<'mod_api>,
 	game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiHostFn<'mod_api>>,
 	game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>,
-	resources: HashSet<OsString>,
+	resources: Vec<&'arena OsStr, &'arena Arena>,
 	current_mod_name: &'arena OsStr,
 	mods_dir_path: &'mod_api OsStr,
 	global_variables: HashMap<&'arena str, GrugType<'arena>>,
 	local_variables: Vec<HashMap<&'arena str, GrugType<'arena>>>,
 	num_while_loops_deep: usize,
 	current_fn_name: Option<&'arena str>,
+	arena: &'arena Arena,
 }
 
 impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
@@ -44,6 +45,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		mods_dir_path: &'mod_api OsStr, 
 		file_text: &'arena str,
 		file_path: &'arena OsStr,
+		arena: &'arena Arena,
 	) -> Self {
 		Self {
 			file_text,
@@ -52,12 +54,13 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			game_fns,
 			game_fn_ptrs,
 			current_mod_name: mod_name,
-			resources: HashSet::new(),
+			resources: Vec::new_in(arena),
 			mods_dir_path,
 			global_variables: HashMap::new(),
 			local_variables: Vec::new(),
 			num_while_loops_deep: 0,
 			current_fn_name: None,
+			arena,
 		}
 	}
 
@@ -73,10 +76,10 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		))
 	}
 
-	pub fn fill_result_types(mut self, entity_name: &str, ast: &mut Ast<'arena>, arena: &'arena Arena) -> Result<HashSet<OsString>, Error> {
+	pub fn fill_result_types(mut self, entity_type: &str, ast: &mut Ast<'arena>) -> Result<&'arena [&'arena OsStr], Error> {
 		self.add_global_variable(
 			nt!("me"), 
-			GrugType::Id{custom_name: Some(Box::leak(NTStr::box_from_str_in(entity_name, arena)).as_ntstrptr())},
+			GrugType::Id{custom_name: Some(Box::leak(NTStr::box_from_str_in(entity_type, self.arena)).as_ntstrptr())},
 			SourceSpan{line: 0, offset: 0}
 		)?;
 
@@ -84,7 +87,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			.iter_mut().filter_map(|st| match st {GlobalStatement::Variable(x) => Some(x), _ => None});
 		for variable in variables {
 			self.check_global_expr(&variable.assignment_expr, variable.name.to_str())?;
-			let result_ty = self.fill_expr(&ast.local_fn_signatures, &ast.export_fn_signatures, &mut variable.assignment_expr, arena)?;
+			let result_ty = self.fill_expr(&ast.local_fn_signatures, &ast.export_fn_signatures, &mut variable.assignment_expr)?;
 
 			if let ExprData::Identifier(name) = &variable.assignment_expr.data 
 				&& name.to_str() == "me" {
@@ -126,7 +129,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				self.current_fn_name = Some(on_fn_name);
 				return self.new_type_propagator_error(
 					current_on_fn.span,
-					format_args!("The function '{}' needs to be moved before or after a different export function, according to the entity '{}' in mod_api.json", current_on_fn.name.to_str(), entity_name)
+					format_args!("The function '{}' needs to be moved before or after a different export function, according to the entity '{}' in mod_api.json", current_on_fn.name.to_str(), entity_type)
 				);
 			}
 			previous_on_fn_index = current_index;
@@ -164,7 +167,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			for param in current_on_fn.parameters {
 				self.add_local_variable(param.name.to_str(), param.ty, param.name_span)?;
 			}
-			self.fill_statements(&ast.local_fn_signatures, &ast.export_fn_signatures, current_on_fn.body_statements, &GrugType::Void, arena)?;
+			self.fill_statements(&ast.local_fn_signatures, &ast.export_fn_signatures, current_on_fn.body_statements, &GrugType::Void)?;
 			self.pop_scope();
 
 			debug_assert!(self.current_fn_name == Some(current_on_fn.name.to_str()));
@@ -177,7 +180,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				self.current_fn_name = Some(on_fn_name.as_str());
 				return self.new_type_propagator_error(
 					on_fn.span,
-					format_args!("The function '{}' was not declared by entity '{}' in mod_api.json", on_fn_name, entity_name)
+					format_args!("The function '{}' was not declared by entity '{}' in mod_api.json", on_fn_name, entity_type)
 				);
 			}
 		}
@@ -204,7 +207,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					for param in *parameters {
 						self.add_local_variable(param.name.to_str(), param.ty, param.name_span)?;
 					}
-					self.fill_statements(&ast.local_fn_signatures, &ast.export_fn_signatures, body_statements, return_type, arena)?;
+					self.fill_statements(&ast.local_fn_signatures, &ast.export_fn_signatures, body_statements, return_type)?;
 
 					if *return_type != GrugType::Void && !matches!(body_statements.last(), Some(Statement::Return{..})) {
 						return self.new_type_propagator_error(
@@ -221,11 +224,11 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				GlobalStatement::Comment{..} => (),
 			}
 		}
-		Ok(self.resources)
+		Ok(self.resources.leak())
 	}
 	
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_statements(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], export_fns: &[(&str, &[Parameter<'arena>])], statements: &mut [Statement<'arena>], expected_return_type: &GrugType<'arena>, arena: &'arena Arena) -> Result<(), Error> {
+	fn fill_statements(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], export_fns: &[(&str, &[Parameter<'arena>])], statements: &mut [Statement<'arena>], expected_return_type: &GrugType<'arena>) -> Result<(), Error> {
 		self.push_scope();
 		for statement in statements {
 			match statement {
@@ -235,7 +238,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					assignment_expr,
 					name_span,
 				} => {
-					let result_ty = self.fill_expr(helper_fns, export_fns, assignment_expr, arena)?;
+					let result_ty = self.fill_expr(helper_fns, export_fns, assignment_expr)?;
 					
 					if let Some(ty) = ty {
 						self.add_local_variable(name.to_str(), **ty, *name_span)?;
@@ -272,7 +275,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					}
 				}
 				Statement::Call(expr) => {
-					self.fill_expr(helper_fns, export_fns, expr, arena)?;
+					self.fill_expr(helper_fns, export_fns, expr)?;
 				}
 				Statement::If {
 					condition,
@@ -285,14 +288,14 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					let mut if_block = if_block;
 					let mut else_block = else_block;
 					loop {
-						let cond_type = self.fill_expr(helper_fns, export_fns, condition, arena)?;
+						let cond_type = self.fill_expr(helper_fns, export_fns, condition)?;
 						if cond_type != GrugType::Bool {
 							return self.new_type_propagator_error(
 								condition.span,
 								format_args!("If condition must be bool but got '{}'", cond_type)
 							);
 						}
-						self.fill_statements(helper_fns, export_fns, if_block, expected_return_type, arena)?;
+						self.fill_statements(helper_fns, export_fns, if_block, expected_return_type)?;
 						if !else_block.is_empty() {
 							if *is_chained {
 								debug_assert!(else_block.len() == 1);
@@ -303,7 +306,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 								};
 								continue;
 							} else {
-								self.fill_statements(helper_fns, export_fns, else_block, expected_return_type, arena)?;
+								self.fill_statements(helper_fns, export_fns, else_block, expected_return_type)?;
 							}
 						}
 						break;
@@ -315,7 +318,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					condition,
 					block,
 				} => {
-					let cond_type = self.fill_expr(helper_fns, export_fns, condition, arena)?;
+					let cond_type = self.fill_expr(helper_fns, export_fns, condition)?;
 					if cond_type != GrugType::Bool {
 						return self.new_type_propagator_error(
 							condition.span,
@@ -323,7 +326,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 						);
 					}
 					self.num_while_loops_deep += 1;
-					self.fill_statements(helper_fns, export_fns, block, expected_return_type, arena)?;
+					self.fill_statements(helper_fns, export_fns, block, expected_return_type)?;
 					self.num_while_loops_deep -= 1;
 
 				}
@@ -332,7 +335,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					expr,
 				} => {
 					let (return_ty, span) = expr.as_mut()
-						.map(|expr| Ok((self.fill_expr(helper_fns, export_fns, expr, arena)?, expr.span)))
+						.map(|expr| Ok((self.fill_expr(helper_fns, export_fns, expr)?, expr.span)))
 						.unwrap_or(Ok((GrugType::Void, *return_span)))?;
 					if *expected_return_type != (GrugType::Id{custom_name: None}) && *expected_return_type != return_ty {
 						if return_ty == GrugType::Void {
@@ -422,7 +425,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	}
 
 	// out parameter self.current_on_fn_calls_helper_fn
-	fn fill_expr(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], export_fns: &[(&str, &[Parameter<'arena>])], assignment_expr: &mut Expr<'arena>, arena: &'arena Arena) -> Result<GrugType<'arena>, Error> {
+	fn fill_expr(&mut self, helper_fns: &[(&str, (GrugType<'arena>, &[Parameter<'arena>]))], export_fns: &[(&str, &[Parameter<'arena>])], assignment_expr: &mut Expr<'arena>) -> Result<GrugType<'arena>, Error> {
 		// MUST be None before type propogation
 		assert!(assignment_expr.result_type.is_none());
 		let result_ty = match &mut assignment_expr.data {
@@ -454,7 +457,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 						format_args!("Found '{0}' directly next to another '{0}', which can be simplified by just removing both of them", op)
 					);
 				}
-				let result_ty = self.fill_expr(helper_fns, export_fns, expr, arena)?;
+				let result_ty = self.fill_expr(helper_fns, export_fns, expr)?;
 				match (op, &result_ty) {
 					(UnaryOperator::Not, GrugType::Bool) => (),
 					(UnaryOperator::Not, got) => return self.new_type_propagator_error(
@@ -476,8 +479,8 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				op,
 				op_span,
 			} => {
-				let result_0 = self.fill_expr(helper_fns, export_fns, left, arena)?;
-				let result_1 = self.fill_expr(helper_fns, export_fns, right, arena)?;
+				let result_0 = self.fill_expr(helper_fns, export_fns, left)?;
+				let result_1 = self.fill_expr(helper_fns, export_fns, right)?;
 				match (&result_1, *op) {
 					(GrugType::String, BinaryOperator::DoubleEquals) | 
 					(GrugType::String, BinaryOperator::NotEquals) => (),
@@ -568,10 +571,10 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			} => {
 				let fn_name = fn_name.to_str();
 				if let Some((_, (return_ty, sig_arguments))) = helper_fns.iter().find(|(name, _)| *name == fn_name) {
-					self.check_arguments(helper_fns, export_fns, fn_name, *name_span, sig_arguments, args, arena)?;
+					self.check_arguments(helper_fns, export_fns, fn_name, *name_span, sig_arguments, args)?;
 					*return_ty
 				} else if let Some(game_fn) = self.game_fns.get(fn_name) {
-					self.check_arguments(helper_fns, export_fns, fn_name, *name_span, game_fn.parameters, args, arena)?;
+					self.check_arguments(helper_fns, export_fns, fn_name, *name_span, game_fn.parameters, args)?;
 					if let Some(game_fn_ptr) = self.game_fn_ptrs.get(fn_name) {
 						*ptr = Some(*game_fn_ptr);
 						game_fn.return_ty
@@ -600,10 +603,10 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				}
 			},
 			ExprData::Parenthesized(expr) => {
-				self.fill_expr(helper_fns, export_fns, expr, arena)?
+				self.fill_expr(helper_fns, export_fns, expr)?
 			},
 		};
-		assignment_expr.result_type = Some(Box::leak(Box::new_in(result_ty, arena)));
+		assignment_expr.result_type = Some(Box::leak(Box::new_in(result_ty, self.arena)));
 		Ok(result_ty)
 	}
 
@@ -614,7 +617,6 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		name_span: SourceSpan, 
 		signature: &[Parameter<'_>], 
 		arguments: &mut [Expr<'arena>], 
-		arena: &'arena Arena
 	) -> Result<(), Error> {
 		if signature.len() > arguments.len() {
 			let param = signature[arguments.len()];
@@ -624,23 +626,23 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			);
 		} else if signature.len() < arguments.len() {
 			let arg = &mut arguments[signature.len()];
-			let got_type = self.fill_expr(helper_fns, export_fns, arg, arena)?;
+			let got_type = self.fill_expr(helper_fns, export_fns, arg)?;
 			return self.new_type_propagator_error(
 				arg.span,
 				format_args!("Function call '{}' got an unexpected extra argument with type {}", function_name, got_type)
 			);
 		}
 		for (param, arg) in signature.iter().zip(arguments) {
-			let arg_result_ty = self.fill_expr(helper_fns, export_fns, arg, arena)?;
+			let arg_result_ty = self.fill_expr(helper_fns, export_fns, arg)?;
 			// TODO: Make this better
 			// If argument is resource
 			if let GrugType::Resource{extension} = param.ty 
 				&& let ExprData::Resource(ref mut value) = arg.data {
-				*value = self.validate_and_fix_resource_string(value.to_str(), extension.to_str(), arg.span, arena)?.as_ntstrptr();
+				*value = self.validate_and_fix_resource_string(value.to_str(), extension.to_str(), arg.span)?.as_ntstrptr();
 			// If argument is entity
 			} else if let GrugType::Entity{entity_type: _} = param.ty 
 				&& let ExprData::Entity(ref mut value) = arg.data {
-				self.validate_and_fix_entity_string(value, arg.span, arena)?;
+				self.validate_and_fix_entity_string(value, arg.span)?;
 			// argument is string but resource is expected
 			} else if let GrugType::Resource{..} = param.ty 
 				&& let ExprData::String(string) = arg.data {
@@ -675,7 +677,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		Ok(())
 	}
 
-	fn validate_and_fix_resource_string(&mut self, value: &str, extension: &str, span: SourceSpan, arena: &'arena Arena) -> Result<&'arena NTStr, Error> {
+	fn validate_and_fix_resource_string(&mut self, value: &str, extension: &str, span: SourceSpan) -> Result<&'arena NTStr, Error> {
 		if value.is_empty() {
 			return self.new_type_propagator_error(
 				span,
@@ -729,7 +731,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		// fix string
 		let mut string = PathBuf::from(self.current_mod_name);
 		string.push(value);
-		let resource_str = Box::leak(NTStr::box_from_str_in(&format!("{}", string.display()), arena));
+		let resource_str = Box::leak(NTStr::box_from_str_in(&format!("{}", string.display()), self.arena));
 
 		// check if resource exists
 		let mut full_path = PathBuf::from(self.mods_dir_path);
@@ -741,12 +743,12 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				format_args!("resource '{}' does not exist", full_path.display())
 			)
 		} else {
-			self.resources.insert(OsString::from(resource_str.as_str()));
+			self.resources.push(resource_str.as_str().as_ref());
 			Ok(resource_str)
 		}
 	}
 
-	fn validate_and_fix_entity_string(&mut self, entity_string_old: &mut NTStrPtr<'arena>, span: SourceSpan, arena: &'arena Arena) -> Result<(), Error> {
+	fn validate_and_fix_entity_string(&mut self, entity_string_old: &mut NTStrPtr<'arena>, span: SourceSpan) -> Result<(), Error> {
 		let entity_string = entity_string_old.to_str();
 		// Validate string
 		if entity_string.is_empty() {
@@ -797,7 +799,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		// TODO: If the mod name is non utf8, this may cause problems
 		// Cross mod entities are supported, so we actually need to handle this properly
 		if mod_name.is_empty() {
-			*entity_string_old = Box::leak(NTStr::box_from_str_in(&format!("{}:{}", self.current_mod_name.display(), entity_name), arena)).as_ntstrptr()
+			*entity_string_old = Box::leak(NTStr::box_from_str_in(&format!("{}:{}", self.current_mod_name.display(), entity_name), self.arena)).as_ntstrptr()
 		}
 		Ok(())
 	}

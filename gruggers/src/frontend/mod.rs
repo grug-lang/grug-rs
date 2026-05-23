@@ -4,12 +4,17 @@ use crate::types::GrugFileId;
 use crate::ast::*;
 use crate::ntstring::NTStrPtr;
 use crate::error::{Error, ErrorKind, SourceSpan};
+use crate::mod_api::ModApi;
+use gruggers_core::types::GameFnPtr;
 
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box as Box2;
 
 use std::ffi::{OsStr, OsString};
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{RwLock, RwLockReadGuard, Arc};
+use std::sync::mpsc::{Receiver, Sender};
 // use std::path::Path;
 
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
@@ -21,26 +26,119 @@ pub mod parser;
 
 // Compilation functions
 impl GrugState {
+	// Send at most this many files to a thread for compilation
+	const FILES_PER_THREAD: usize = 8;
+	// All 'static fields are actually allocated within the arena
 	pub(crate) fn compiler_thread_fn(
-		receiver: Reciever<(Arena, &'static [&'static OsStr])>
+		// these paths are absolute
+		receiver: Receiver<(Arena, &'static [&'static OsStr])>,
 		sender: Sender<(
 			Arena, 
-			&'static [(
-				GrugAst<'static>, 
+			&'static mut [(
+				Result<GrugAst<'static>, Error>, 
+				// derived from input paths
+				// These paths are relative
 				&'static OsStr
 			)], 
+			// Resources
+			// These paths are relative
 			&'static [&'static OsStr]
 		)>,
+		// path is absolute
 		mods_dir_path: OsString,
 		mod_api: Arc<ModApi>,
-		game_functions: Arc<RwLock<HashMap<&'static str, GameFnPtr>>>,
+		host_fn_ptrs: Arc<RwLock<HashMap<&'static str, GameFnPtr>>>,
 	) -> impl FnOnce() {
+		use crate::async_fs::{open_file_async_for_read, read_files_async};
+		let mods_dir_len = if mods_dir_path.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {mods_dir_path.len() + 1} else {mods_dir_path.len()};
 		move || {
 			for (arena, files) in receiver.iter() {
-				
+				let host_fn_ptrs = host_fn_ptrs.read().unwrap();
+				let mut resources = Vec::new_in(&arena);
+				// This is the actual lifetime of the data but it has to be erased to send across the channel
+				fn combine_lifetimes<'a>(_: &'a Arena, input: &'static [&'static OsStr]) -> &'a [&'a OsStr] {input}
+				let files = combine_lifetimes(&arena, files);
+
+				let mut results = Vec::new_in(&arena);
+				// read all files
+				// split into files that can be opened and files that can't
+				let mut ok_files = Vec::new_in(&arena);
+				for file_path in files.iter().copied() {
+					match open_file_async_for_read(&file_path) {
+						Ok(file) => {
+							ok_files.push((file, file_path)); 
+						},
+						Err(err) => {
+							results.push((Err(err), file_path));
+						}
+					}
+				}
+				// read the contents of files that can be read
+				let ok_files_data = read_files_async(ok_files.iter().map(|(file, _)| file), &arena);
+				// compile files one by one and collect errors, asts and resources
+				results.extend(ok_files_data.into_iter().zip(&ok_files).map(|(data, (_, path))| {
+					let data = data?;
+					// get the path relative to the mods directory
+					let rel_path = &path.as_encoded_bytes()[mods_dir_len..];
+					let rel_path = unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)};
+
+					// convert to utf8
+					let file_text = std::str::from_utf8(data).map_err(|err| {
+						Error::new(
+							ErrorKind::UTF8_ERROR,
+							"",
+							rel_path, 
+							// SAFETY: err.valid_up_to returns the length of the
+							// portion of the string that is valid utf8
+							unsafe{std::str::from_utf8_unchecked(&data[..err.valid_up_to()])},
+							SourceSpan{offset: err.valid_up_to(), line: 0},
+							format_args!("File is not valid utf8: {}", err),
+						)
+					})?;
+					// compile the file
+					let (ast, current_resources) = Self::compile_inner(
+						rel_path,
+						file_text,
+						&mods_dir_path,
+						&mod_api,
+						&host_fn_ptrs,
+						&arena
+					)?;
+					// add resource paths 
+					resources.extend_from_slice(current_resources);
+					// collect errors and resources
+					Ok(ast)
+				}).zip(&ok_files).map(|(ast, (_, path))| {
+					// get the path relative to the mods directory
+					let rel_path = &path.as_encoded_bytes()[mods_dir_len..];
+					let rel_path = unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)};
+					(ast, rel_path)
+				}));
+				drop(ok_files);
+
+
+				let results = unsafe{std::mem::transmute::<
+					&mut [(
+						Result<
+							GrugAst<'_>,
+							Error
+						>, 
+						&OsStr
+					)], 
+					&'static mut [(
+						Result<
+							GrugAst<'static>,
+							Error
+						>, 
+						&'static OsStr
+					)]
+				>(results.leak())};
+				let resources = unsafe{std::mem::transmute::<&[&OsStr], &'static[&'static OsStr]>(resources.leak())};
+				let Ok(()) = sender.send((arena, results, resources)) else {break;};
 			}
 		}
 	}
+
 	/// Compile a grug file at a relative path within the mods directory. Once
 	/// compiled directly once, the file will be automatically hot reloaded by
 	/// the state. 
@@ -71,63 +169,15 @@ impl GrugState {
 		use super::frontend::*;
 		let path = path.as_ref();
 
-		let mod_name = get_mod_name(path);
-		let entity_type = get_entity_type(path)?;
-
 		let mut arena = self.arenas.borrow_mut().pop().unwrap_or_default();
 		// immediately invoked closure so we get try {} finally {}
 		let id = (|| {
-			let tokens = tokenizer::tokenize(file_text, &arena, path)?;
-
-			let mut ast = parser::parse(&tokens, &arena, file_text, path)?;
-
-			let entity = self.mod_api.entities().get(entity_type).ok_or_else(|| 
-				// TODO: This is not handled by grug_tests
-				Error::new(
-					ErrorKind::FILE_NAME_ERROR,
-					"",
-					path, 
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Entity '{}' is not registered in the mod_api.json", entity_type),
-				)
-			)?;
-			let game_functions = self.mod_api.host_fns();
-			
-			let resources = TypePropogator::new(
-				entity, 
-				game_functions, 
-				&self.game_functions, 
-				mod_name, 
-				&self.mods_dir_path, 
-				file_text, 
-				path
-			).fill_result_types(entity_type, &mut ast, &arena)?;
-			self.resources.borrow_mut().extend(resources);
-
-			// let mod_api_entity = self.mod_api.entities.get(entity_type);
-			let mut member_variables = Vec::new_in(&arena);
-			let mut on_functions = Vec::new_in(&arena);
-			on_functions.extend((0..entity.export_fns.len()).map(|_| None));
-			let mut helper_functions = Vec::new_in(&arena);
-
-			ast.global_statements.into_iter().for_each(|statement| {
-				match statement {
-					GlobalStatement::Variable(st@MemberVariable      {..}) => member_variables.push(st),
-					GlobalStatement::OnFunction(st@OnFunction        {..}) => {
-						let (i, _) = entity.get_export_fn(st.name.to_str()).unwrap();
-						on_functions[i] = Some(&*Box2::leak(Box2::new_in(st, &arena)));
-					}
-					GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),
-					_ => (),
-				}
-			});
-
-			let file = GrugAst{
-				members: member_variables.leak(),
-				on_functions: on_functions.leak(),
-				helper_functions: helper_functions.leak(),
-			};
+			let host_fn_ptrs = self.host_fn_ptrs.read().unwrap();
+			let (file, resources) = Self::compile_inner(path, file_text, &self.mods_dir_path, &self.mod_api, &host_fn_ptrs, &arena)?;
+			let mut self_resources = self.resources.borrow_mut();
+			for resource in resources {
+				if !self_resources.contains(*resource) {self_resources.insert(OsString::from(resource));}
+			}
 			let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
 			let id = match path_to_script_ids.get(path) {
 				Some(id) => *id,
@@ -304,6 +354,76 @@ impl GrugState {
 		files
 	}
 
+	/// Merge threaded compilation and standalone compilation
+	fn compile_inner<'arena>(
+		path: &'arena OsStr, 
+		file_text: &'arena str, 
+		mods_dir_path: &'arena OsStr, 
+		mod_api: &'arena ModApi, 
+		host_fn_ptrs: &'arena RwLockReadGuard<HashMap<&'static str, GameFnPtr>>, 
+		arena: &'arena Arena
+	) -> Result<(GrugAst<'arena>, &'arena [&'arena OsStr]), Error> {
+		let mod_name = get_mod_name(path);
+		let entity_type = get_entity_type(path)?;
+
+		// tokenize
+		let tokens = tokenizer::tokenize(file_text, arena, path)?;
+		// parse
+		let mut ast = parser::parse(tokens.leak(), arena, file_text, path)?;
+
+		// get mod api entity declaration
+		let entity = mod_api.entities().get(entity_type).ok_or_else(|| 
+			// TODO: This is not handled by grug_tests
+			Error::new(
+				ErrorKind::FILE_NAME_ERROR,
+				"",
+				path, 
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("Entity '{}' is not registered in the mod_api.json", entity_type),
+			)
+		)?;
+		// get mod_api host function declarations
+		let mod_api_host_fns = mod_api.host_fns();
+		
+		// type check 
+		let resources = TypePropogator::new(
+			entity, 
+			mod_api_host_fns, 
+			host_fn_ptrs,
+			mod_name, 
+			mods_dir_path, 
+			file_text, 
+			path,
+			arena
+		).fill_result_types(entity_type, &mut ast)?;
+
+		// convert into GrugAst
+		let mut member_variables = Vec::new_in(arena);
+		let mut on_functions = Vec::new_in(arena);
+		on_functions.extend((0..entity.export_fns.len()).map(|_| None));
+		let mut helper_functions = Vec::new_in(arena);
+
+		ast.global_statements.into_iter().for_each(|statement| {
+			match statement {
+				GlobalStatement::Variable(st@MemberVariable      {..}) => member_variables.push(st),
+				GlobalStatement::OnFunction(st@OnFunction        {..}) => {
+					let (i, _) = entity.get_export_fn(st.name.to_str()).unwrap();
+					on_functions[i] = Some(&*Box2::leak(Box2::new_in(st, arena)));
+				}
+				GlobalStatement::HelperFunction(st@HelperFunction{..}) => helper_functions.push(st),
+				_ => (),
+			}
+		});
+
+		let file = GrugAst{
+			members: member_variables.leak(),
+			on_functions: on_functions.leak(),
+			helper_functions: helper_functions.leak(),
+		};
+		Ok((file, resources))
+	}
+
 	/// Check if there are any files in the mods directory that need to be hot reloaded. 
 	/// Also returns any resources that need to be reloaded
 	pub fn update_files(&self) -> (std::vec::Vec<OsString>, std::vec::Vec<FileInfo>) {
@@ -385,6 +505,9 @@ pub(crate) enum GlobalStatement<'a> {
 	EmptyLine,
 }
 
+/// The mods directory contains a directory for each mod. Each mod may contain
+/// several scripts. This function returns the name of the current mod
+/// directory from the full path.
 fn get_mod_name (path: &OsStr) -> &OsStr {
 	let path = path.as_encoded_bytes();
 	let mut slash_len = 0;
@@ -399,6 +522,12 @@ fn get_mod_name (path: &OsStr) -> &OsStr {
 	// path.split_once('/').map(|x| x.0).ok_or(GrugError::FileError(FileError::FilePathDoesNotContainForwardSlash{path: String::from(path)}))
 }
 
+/// The filename of a grug script should be as follows <name>-<entity>.grug
+///
+/// Where <name> can be any utf8 string, and <entity> refers to the entity type
+/// the file contains.
+///
+/// This function returns <entity> for a given file path (if <entity> exists)
 fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
 	let mut dot_pos = None;
 	let mut dash_pos = None;
@@ -462,6 +591,7 @@ fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
 	check_custom_id_is_pascal(entity_type, path)
 }
 
+/// Entities and Id types in grug must be pascalCase.
 fn check_custom_id_is_pascal<'a>(entity_type: &'a OsStr, path: &'_ OsStr) -> Result<&'a str, Error> {
 	let entity_type = entity_type.to_str().ok_or_else(|| 
 		Error::new(

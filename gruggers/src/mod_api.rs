@@ -20,6 +20,13 @@ pub(crate) struct ModApi {
 	_arena: Arena,
 }
 
+// We don't have a public api that uses the `_arena` field which is the only !Send
+// field
+unsafe impl Send for ModApi {}
+// We don't have a public api that uses the `_arena` field which is the only !Sync
+// field
+unsafe impl Sync for ModApi {}
+
 impl ModApi {
 	pub(crate) fn entities<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiEntity<'a>> {
 		&self.entities

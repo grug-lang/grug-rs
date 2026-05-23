@@ -23,6 +23,7 @@ use std::mem::MaybeUninit;
 use std::ffi::{OsString, OsStr};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{RwLock, Arc};
 
 // /// Called by the 
 #[repr(C)]
@@ -216,10 +217,10 @@ pub fn default_runtime_error_handler(_err_kind: u32, reason: &str, on_fn_name: &
 }
 
 pub struct GrugState {
-	pub(crate) mod_api: ModApi,
+	pub(crate) mod_api: Arc<ModApi>,
 	pub(crate) mods_dir_path: OsString,
 	next_entity_id: AtomicU64,
-	pub(crate) game_functions: HashMap<&'static str, GameFnPtr>,
+	pub(crate) host_fn_ptrs: Arc<RwLock<HashMap<&'static str, GameFnPtr>>>,
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
 	pub(crate) entities: Xar<GrugEntity>,
@@ -229,11 +230,11 @@ pub struct GrugState {
 	/// Receive the arena and a slice of ASTs and the corresponding filepaths,
 	/// and a list of resources used by these files
 	/// (all allocated within the same arena)
-	pub(crate) compiler_reciever: Receiver<(Arena, &'static [(GrugAst<'static>, &'static OsStr)], &'static [&'static OsStr])>,
-	// SAFETY: The strings within the `on_functions` field is allocated within
-	// `mod_api`. So any reference given out to this field must have the 'self
-	// lifetime
-	// If a later change makes mod_api mutable, these need to be allocated separately
+	pub(crate) compiler_receiver: Receiver<(Arena, &'static mut [(Result<GrugAst<'static>, Error>, &'static OsStr)], &'static [&'static OsStr])>,
+	/// SAFETY: The strings within the `on_functions` field is allocated within
+	/// `mod_api`. So any reference given out to this field must have the 'self
+	/// lifetime
+	/// If a later change makes mod_api mutable, these need to be allocated separately
 	// TODO: rename this to `event_functions`
 	on_functions: Vec<EventFnEntry<'static>>,
 	pub(crate) path_to_script_ids: RefCell<HashMap<OsString, GrugFileId>>,
@@ -288,6 +289,7 @@ impl GrugState {
 	fn new_inner (mod_api: ModApi, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, Error> {
 		let mut on_fns = Vec::new();
 		let init_globals = nt!("init_globals");
+		let mods_dir_path = OsString::from(mods_dir_path.as_ref());
 		for (entity_type, entity) in mod_api.entities() {
 			on_fns.push(EventFnEntry {
 				// SAFETY: All EventFnEntries we give out have a 'self
@@ -309,17 +311,35 @@ impl GrugState {
 			}
 		}
 
+		let mod_api = Arc::new(mod_api);
+		let host_fn_ptrs = Arc::new(RwLock::new(HashMap::new()));
+
 		let (sender, reciever) = channel();
-		watch_changes(mods_dir_path.as_ref().to_str().unwrap(), move |changes| sender.send(changes).is_ok()).unwrap();
+		watch_changes(&mods_dir_path, move |changes| sender.send(changes).is_ok()).unwrap();
+		let num_threads = 2;
+		let (snd, rcv) = channel();
+		let compiler_senders = (0..num_threads).map(|_| {
+			let (per_thread_send, per_thread_rcv) = channel();
+			std::thread::spawn(Self::compiler_thread_fn(
+				per_thread_rcv, 
+				snd.clone(), 
+				mods_dir_path.clone(), 
+				Arc::clone(&mod_api), 
+				Arc::clone(&host_fn_ptrs)
+			));
+			per_thread_send
+		}).collect::<Vec<_>>();
 
 		Ok(Self {
 			mod_api,
-			mods_dir_path: OsString::from(mods_dir_path.as_ref()),
+			mods_dir_path,
 			next_entity_id: AtomicU64::new(0),
-			game_functions: HashMap::new(),
+			host_fn_ptrs,
 			runtime_error_handler: handler,
 			resources: RefCell::new(HashSet::new()),
 			entities: Xar::new(),
+			compiler_senders,
+			compiler_receiver: rcv,
 			on_functions: on_fns,
 			path_to_script_ids: RefCell::new(HashMap::new()),
 			next_script_id: AtomicU64::new(0),
@@ -403,7 +423,7 @@ impl GrugState {
 				format_args!("Host function named '{}' is not found in mod_api.json", name),
 			));
 		} else {
-			match self.game_functions.entry(name) {
+			match self.host_fn_ptrs.write().unwrap().entry(name) {
 				Entry::Occupied(_) => return Err(Error::new(
 					ErrorKind::INIT_ERROR,
 					"",
@@ -433,8 +453,9 @@ impl GrugState {
 			GrugValue{void: ()}
 		}
 
+		let mut host_fn_ptrs = self.host_fn_ptrs.write().unwrap();
 		for name in self.mod_api.host_fns().keys() {
-			self.game_functions.entry(Box::leak(Box::from(name.as_str()))).or_insert(GameFnPtr::from_ptr(dummy_host_fn));
+			host_fn_ptrs.entry(Box::leak(Box::from(name.as_str()))).or_insert(GameFnPtr::from_ptr(dummy_host_fn));
 		}
 	}
 	
@@ -450,7 +471,7 @@ impl GrugState {
 
 	pub fn all_host_fns_registered(&self) -> Result<(), Error> {
 		for game_fn_name in self.mod_api.host_fns().keys() {
-			if !self.game_functions.contains_key(game_fn_name.as_str()) {
+			if !self.host_fn_ptrs.read().unwrap().contains_key(game_fn_name.as_str()) {
 				return Err(Error::new(
 					ErrorKind::INIT_ERROR,
 					"",

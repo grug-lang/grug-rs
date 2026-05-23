@@ -215,6 +215,10 @@ mod arena_impl {
 		current: Cell<*mut ArenaHeader>,
 	}
 
+	// SAFETY: We do not use any thread local data nor do we give out
+	// references to !Sync data
+	unsafe impl Send for Arena {}
+
 	struct ArenaHeader {
 		// start is stored implicitly
 		/* start  : *mut u8, */
