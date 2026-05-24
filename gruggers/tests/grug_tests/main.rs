@@ -1,4 +1,4 @@
-#![deny(warnings)]
+// #![deny(warnings)]
 #![allow(static_mut_refs)]
 use gruggers::ntstring::NTStr;
 use gruggers::nt;
@@ -8,7 +8,7 @@ mod test_bindings {
 	use gruggers::backend::BytecodeBackend;
 	use gruggers_core::runtime_error::RuntimeError;
 	use gruggers::types::{GrugValue, GrugFileId};
-	use gruggers::ntstring::{NTStrPtr, NTStr};
+	use gruggers::ntstring::{NTStrPtr, NTStr, NTBytes};
 	use gruggers::serde;
 
 	use std::path::Path;
@@ -16,10 +16,10 @@ mod test_bindings {
 
 	static mut CURRENT_ENTITY: Option<GrugEntityHandle<'static>> = None;
 
-	pub extern "C" fn create_grug_state<'a>(mod_api_path: NTStrPtr<'a>, mods_dir_path: NTStrPtr<'a>) -> Option<Box<(GrugState, Vec<FileInfo>)>> {
+	pub extern "C" fn create_grug_state<'a>(mod_api_path: NTBytes<'a>, mods_dir_path: NTBytes<'a>) -> Option<Box<(GrugState, Vec<FileInfo>)>> {
 		let mut state = GrugInitSettings::new()
-			.set_mod_api_path(mod_api_path.to_str())
-			.set_mods_dir(mods_dir_path.to_str())
+			.set_mod_api_path(unsafe{OsStr::from_encoded_bytes_unchecked(mod_api_path.to_bytes())})
+			.set_mods_dir(unsafe{OsStr::from_encoded_bytes_unchecked(mods_dir_path.to_bytes())})
 			.set_runtime_error_handler(|kind, msg, fn_name, script_path| {
 				let mut msg = String::from(msg);
 				msg.push('\0');
@@ -38,7 +38,6 @@ mod test_bindings {
 			.set_backend(BytecodeBackend::new())
 			.build_state().map_err(|err| println!("{:?}", err)).ok()?;
 		super::game_fn_bindings::register_game_functions(&mut state).ok()?;
-		// async file loading is only available on windows for now
 		let files = state.compile_all_files();
 		// let files = Vec::new();
 		Some(Box::new((state, files)))
@@ -46,11 +45,15 @@ mod test_bindings {
 
 	pub extern "C" fn destroy_grug_state<'a>(_state: Box<(GrugState, Vec<FileInfo>)>) { }
 
-	pub extern "C" fn compile_grug_file((state, files): &(GrugState, Vec<FileInfo>), path: NTStrPtr<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugFileId {
-		let path = path.to_str();
+	pub extern "C" fn compile_grug_file((state, files): &(GrugState, Vec<FileInfo>), path: NTBytes<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugFileId {
+		let path = path.to_bytes();
+
+		fn compare_paths_normalized(first: &[u8], second: &[u8]) -> bool {
+			first.iter().zip(second).all(|(first, second)| first == second || ((*first == b'/' || *first == b'\\') && (*second == b'/' || *second == b'\\')))
+		}
 
 		for file in files {
-			if &*file.path == <str as AsRef<OsStr>>::as_ref(path) {
+			if compare_paths_normalized(file.path.as_os_str().as_encoded_bytes(), path){
 				match &file.result {
 					Ok(id) => {
 						*err_out = None;
@@ -65,7 +68,8 @@ mod test_bindings {
 				}
 			}
 		}
-		match state.compile_grug_file(path) {
+		panic!();
+		match state.compile_grug_file(unsafe{OsStr::from_encoded_bytes_unchecked(path)}) {
 			Ok(id) => {
 				*err_out = None;
 				return id;
@@ -155,11 +159,11 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	// pub type c_size_t = u64;
 	#[allow(non_camel_case_types)]
-	pub type create_grug_state_t = for<'a> extern "C" fn(NTStrPtr<'a>, NTStrPtr<'a>) -> Option<Box<(GrugState, Vec<FileInfo>)>>;
+	pub type create_grug_state_t = for<'a> extern "C" fn(NTBytes<'a>, NTBytes<'a>) -> Option<Box<(GrugState, Vec<FileInfo>)>>;
 	#[allow(non_camel_case_types)]
 	pub type destroy_grug_state_t = extern "C" fn(Box<(GrugState, Vec<FileInfo>)>);
 	#[allow(non_camel_case_types)]
-	pub type compile_grug_file_t = extern "C" fn(&(GrugState, Vec<FileInfo>), NTStrPtr<'static>, &mut Option<NTStrPtr<'static>>) -> GrugFileId;
+	pub type compile_grug_file_t = extern "C" fn(&(GrugState, Vec<FileInfo>), NTBytes<'static>, &mut Option<NTStrPtr<'static>>) -> GrugFileId;
 	#[allow(non_camel_case_types)]
 	pub type init_globals_t = extern "C" fn (&'_ (GrugState, Vec<FileInfo>), GrugFileId);
 	#[allow(non_camel_case_types)]

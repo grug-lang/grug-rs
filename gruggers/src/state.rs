@@ -6,6 +6,7 @@ use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEnt
 use crate::xar::Xar;
 use crate::ntstring::{NTStrPtr, NTBytes};
 use crate::arena::Arena;
+use crate::own_ptr::OwnPtr;
 use crate::nt;
 use crate::watcher::{watch_changes};
 
@@ -137,7 +138,8 @@ impl<'a> GrugInitSettings<'a> {
 		}
 	}
 
-	pub fn set_mods_dir(mut self, dir: &'a str) -> Self {
+	pub fn set_mods_dir<P: AsRef<OsStr> + ?Sized>(mut self, dir: &'a P) -> Self {
+		let dir = dir.as_ref();
 		if dir.is_empty() {
 			self.mods_dir_path = None;
 			self.mods_dir_path_len = 0;
@@ -148,7 +150,8 @@ impl<'a> GrugInitSettings<'a> {
 		self
 	}
 
-	pub fn set_mod_api_path(mut self, mod_api: &'a str) -> Self {
+	pub fn set_mod_api_path<P: AsRef<OsStr> + ?Sized>(mut self, mod_api: &'a P) -> Self {
+		let mod_api = mod_api.as_ref();
 		if mod_api.is_empty() {
 			self.mod_api_path = None;
 			self.mod_api_path_len = 0;
@@ -230,7 +233,7 @@ pub struct GrugState {
 	/// Receive the arena and a slice of ASTs and the corresponding filepaths,
 	/// and a list of resources used by these files
 	/// (all allocated within the same arena)
-	pub(crate) compiler_receiver: Receiver<(Arena, &'static mut [(Result<GrugAst<'static>, Error>, &'static OsStr)], &'static [&'static OsStr])>,
+	pub(crate) compiler_receiver: Receiver<(Arena, OwnPtr<'static, [(Result<GrugAst<'static>, Error>, &'static OsStr)]>, &'static [&'static OsStr])>,
 	/// SAFETY: The strings within the `on_functions` field is allocated within
 	/// `mod_api`. So any reference given out to this field must have the 'self
 	/// lifetime
@@ -316,8 +319,10 @@ impl GrugState {
 
 		let (sender, reciever) = channel();
 		watch_changes(&mods_dir_path, move |changes| sender.send(changes).is_ok()).unwrap();
-		let num_threads = 2;
+		// TODO: un-hardcode this
+		let num_threads = 6;
 		let (snd, rcv) = channel();
+		// Create compiler threads
 		let compiler_senders = (0..num_threads).map(|_| {
 			let (per_thread_send, per_thread_rcv) = channel();
 			std::thread::spawn(Self::compiler_thread_fn(

@@ -206,6 +206,7 @@ mod arena_impl {
 	use std::alloc::Layout;
 	use std::ptr::NonNull;
 	use std::cell::Cell;
+	use std::ffi::OsStr;
 	use super::page_alloc::{PageAllocator, PAGE_SIZE};
 
 	use allocator_api2::alloc::{Allocator, AllocError};
@@ -358,7 +359,19 @@ mod arena_impl {
 			})
 		}
 
-		pub fn realloc(&self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+		/// Copies the memory pointed to by `old_ptr` with layout `old_layout`,
+		/// and copies it to a new allocation with layout `new_layout`.
+		///
+		/// Unlike a more general realloc function, it is valid to pass an
+		/// old_ptr and old_layout that were not allocated by this arena.
+		///
+		/// The pointer should still point to memory that is valid to read however
+		/// 
+		/// # SAFETY
+		///
+		/// `old_ptr` must point to memory that is valid to read for at least
+		/// `old_layout.size()` bytes
+		pub unsafe fn realloc(&self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
 			let ptr = self.alloc(new_layout)?;
 			// ptr from self.alloc is valid to write to for length new_layout.size()
 			// old_ptr is valid to read from for length old_layout.size()
@@ -401,7 +414,7 @@ mod arena_impl {
 		///
 		/// Does not free all memory requested from OS, the largest block will still be held.
 		///
-		/// use `Self::free` to free all held memory
+		/// use `[Self::free]` to free all held memory
 		pub fn clear(&mut self) {
 			if let Some(first_block) = self.current_block_mut() {
 				// SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
@@ -423,6 +436,44 @@ mod arena_impl {
 
 		/// Deallocates all memory held by this arena
 		pub fn free(self) { }
+
+		/// Copy a slice of bytes into the current arena and returns the new slice.
+		///
+		/// See [`copy_osstr_into`]  and [`copy_str_into`] for more specific
+		/// versions of this function
+		pub fn copy_bytes_into(&self, bytes: &[u8]) -> &[u8] {
+			let ptr = self.alloc(Layout::array::<u8>(bytes.len())
+				.expect("invalid layout for slice"))
+				.expect("unable to allocate")
+				.cast::<u8>().as_ptr();
+			// SAFETY: allocation is of length `bytes.len()`
+			unsafe{ptr.copy_from(bytes.as_ptr(), bytes.len())};
+			// SAFETY: ptr is trivially aligned and valid to read for `bytes.len()` bytes
+			unsafe{std::slice::from_raw_parts(ptr, bytes.len())}
+		}
+		
+		/// Copy an `&OsStr` into the current arena and return the new OsStr
+		///
+		/// see [`copy_bytes_into`] for a more general version of this function
+		pub fn copy_osstr_into(&self, bytes: &OsStr) -> &OsStr {
+			// SAFETY: input is an OsStr
+			unsafe{OsStr::from_encoded_bytes_unchecked(self.copy_bytes_into(bytes.as_encoded_bytes()))}
+		}
+
+		/// Copy a `&str` into the current arena and return the new OsStr
+		///
+		/// see [`copy_bytes_into`] for a more general version of this function
+		pub fn copy_str_into(&self, bytes: &str) -> &str {
+			// SAFETY: input is a str
+			unsafe{std::str::from_utf8_unchecked(self.copy_bytes_into(bytes.as_ref()))}
+		}
+
+		/// Allocates a slice of items into `self` from an iterator
+		pub fn slice_from_iter<T>(&self, i: impl IntoIterator<Item = T>) -> &mut [T] {
+			let mut vec = allocator_api2::vec::Vec::new_in(self);
+			vec.extend(i);
+			vec.leak()
+		}
 	}
 
 	impl Drop for Arena {

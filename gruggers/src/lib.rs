@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-#![deny(warnings)]
+// #![deny(warnings)]
 // #![deny(missing_docs)]
 #![allow(clippy::single_char_add_str, clippy::bool_comparison)]
 
@@ -17,6 +17,7 @@ pub mod arena;
 mod cachemap;
 mod watcher;
 mod async_fs;
+mod own_ptr;
 pub mod error;
 
 mod pal;
