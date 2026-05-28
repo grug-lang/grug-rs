@@ -12,6 +12,7 @@ use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box as Box2;
 
 use std::ffi::{OsStr, OsString};
+use std::path::PathBuf;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{RwLock, RwLockReadGuard, Arc};
@@ -22,18 +23,18 @@ const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 pub(crate) const SPACES_PER_INDENT: usize = 4;
 
 pub mod tokenizer;
-
 pub mod parser;
+mod type_propagation;
+use type_propagation::TypePropogator;
 
 // Compilation functions
 impl GrugState {
-	// Send at most this many files to a thread for compilation
+	/// Send at most this many files to a thread for compilation
 	const FILES_PER_THREAD: usize = 8;
 	// All 'static fields are actually allocated within the arena
 	/// Uses async file system apis on windows
-	#[cfg(target_os = "windows")]
 	pub(crate) fn compiler_thread_fn(
-		// these paths are absolute
+		// these paths are relative
 		receiver: Receiver<(Arena, &'static [&'static OsStr])>,
 		sender: Sender<(
 			Arena, 
@@ -53,7 +54,7 @@ impl GrugState {
 		host_fn_ptrs: Arc<RwLock<HashMap<&'static str, GameFnPtr>>>,
 	) -> impl FnOnce() {
 		use crate::async_fs::{open_file_async_for_read, read_files_async};
-		let mods_dir_len = if mods_dir_path.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {mods_dir_path.len() + 1} else {mods_dir_path.len()};
+		let mods_dir_path = PathBuf::from(mods_dir_path);
 		move || {
 			for (arena, files) in receiver.iter() {
 				let host_fn_ptrs = host_fn_ptrs.read().unwrap();
@@ -67,7 +68,9 @@ impl GrugState {
 				// split into files that can be opened and files that can't
 				let mut ok_files = Vec::new_in(&arena);
 				for file_path in files.iter().copied() {
-					match open_file_async_for_read(&file_path) {
+					let mut abs_path = mods_dir_path.clone();
+					abs_path.push(file_path);
+					match open_file_async_for_read(&abs_path) {
 						Ok(file) => {
 							ok_files.push((file, file_path)); 
 						},
@@ -80,42 +83,44 @@ impl GrugState {
 				let ok_files_data = read_files_async(ok_files.iter().map(|(file, _)| file), &arena);
 				// compile files one by one and collect errors, asts and resources
 				results.extend(ok_files_data.into_iter().zip(&ok_files).map(|(data, (_, path))| {
-					let data = data?;
-					// get the path relative to the mods directory
-					let rel_path = &path.as_encoded_bytes()[mods_dir_len..];
-					let rel_path = unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)};
+					let path = *path;
+					let data = match data {
+						Ok(data) => data,
+						Err(err) => return (Err(err), path),
+					};
 
 					// convert to utf8
-					let file_text = std::str::from_utf8(data).map_err(|err| {
+					let file_text = match std::str::from_utf8(data).map_err(|err| {
 						Error::new(
 							ErrorKind::UTF8_ERROR,
 							"",
-							rel_path, 
+							path, 
 							// SAFETY: err.valid_up_to returns the length of the
 							// portion of the string that is valid utf8
 							unsafe{std::str::from_utf8_unchecked(&data[..err.valid_up_to()])},
 							SourceSpan{offset: err.valid_up_to(), line: 0},
 							format_args!("File is not valid utf8: {}", err),
 						)
-					})?;
+					}) {
+						Ok(file_text) => file_text,
+						Err(err) => return (Err(err), path),
+					};
 					// compile the file
-					let (ast, current_resources) = Self::compile_inner(
-						rel_path,
+					let (ast, current_resources) = match Self::compile_inner(
+						path,
 						file_text,
-						&mods_dir_path,
+						mods_dir_path.as_ref(),
 						&mod_api,
 						&host_fn_ptrs,
 						&arena
-					)?;
+					) {
+						Ok(data) => data,
+						Err(err) => return (Err(err), path)
+					};
 					// add resource paths 
 					resources.extend_from_slice(current_resources);
 					// collect errors and resources
-					Ok(ast)
-				}).zip(&ok_files).map(|(ast, (_, path))| {
-					// get the path relative to the mods directory
-					let rel_path = &path.as_encoded_bytes()[mods_dir_len..];
-					let rel_path = unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)};
-					(ast, rel_path)
+					(Ok(ast), path)
 				}));
 				drop(ok_files);
 
@@ -198,76 +203,23 @@ impl GrugState {
 		
 		id
 	}
-	
-	/// Compile all the files within the mods directory. Uses asynchronous file
-	/// system apis on windows 
-	#[cfg(not(target_os = "windows"))]
-	pub fn compile_all_files(&self) -> std::vec::Vec<FileInfo> {
-		let mut files = std::vec::Vec::new();
-		let mods_dir_len = if self.mods_dir_path.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
-		for mod_dir in std::fs::read_dir(&self.mods_dir_path).expect("Could not read mods directory") {
-			let Ok(mod_dir) = mod_dir else {
-				panic!("unable to read directory: {:?}", mod_dir);
-			};
-			let mod_dir_path = mod_dir.path();
-			let mod_dir_path = unsafe{OsStr::from_encoded_bytes_unchecked(&mod_dir_path.as_os_str().as_encoded_bytes()[mods_dir_len..])};
-			let mut entries_to_check = std::vec::Vec::from([mod_dir]);
-
-			while let Some(next_entry) = entries_to_check.pop() {
-				if next_entry.metadata().expect("could not read metadata").is_dir() {
-					let next_entry_path = next_entry.path();
-					for entry in std::fs::read_dir(&next_entry_path).expect("Could not read mods directory") {
-						let Ok(entry) = entry else {
-							panic!("unable to read entry: {:?}", entry);
-						};
-						entries_to_check.push(entry);
-					}
-				} else {
-					let entry_path = next_entry.path();
-					let entry_path = entry_path.as_os_str();
-					let rel_path = entry_path.as_encoded_bytes();
-					let rel_path = &rel_path[mods_dir_len..];
-					let rel_path = <OsStr as AsRef<Path>>::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)});
-
-					if let Some(extension) = Path::extension(rel_path) && extension == "grug" {
-						let result = self.compile_grug_file(rel_path);
-						let info = FileInfo {
-							path: Box::from(rel_path),
-							file_name: Box::from(rel_path.file_name().unwrap()),
-							mod_name: Box::from(mod_dir_path),
-							entity_type: Box::from(get_entity_type(rel_path.as_os_str()).unwrap_or("")),
-							entity_name: Box::from(rel_path.file_prefix().unwrap()),
-							result
-						};
-						files.push(info);
-					};
-				}
-			}
-		}
-		files
-	}
 
 	/// Compile all the files within the mods directory. Uses asynchronous file
-	/// system apis on windows 
-	#[cfg(target_os = "windows")]
+	/// system apis if available on the current platform
 	pub fn compile_all_files(&self) -> std::vec::Vec<FileInfo> {
 		// iterate over all files and get all valid paths
 		let mut arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
 
+		let mut file_paths = Vec::new_in(&arena);
 		let mut files = std::vec::Vec::new();
 
 		let mods_dir_len = if self.mods_dir_path.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {self.mods_dir_path.len() + 1} else {self.mods_dir_path.len()};
 		// Iterate through every directory within the mods directory. Each
 		// directory is a separate mod. Compile each mod separately.
 		for mod_dir in std::fs::read_dir(&self.mods_dir_path).expect("Could not read mods directory") {
-			arena.clear();
 			let Ok(mod_dir) = mod_dir else {
 				panic!("unable to read directory: {:?}", mod_dir);
 			};
-			let mod_dir_path = mod_dir.path();
-			// mod_dir_path relative to mods dir
-			let mod_dir_path = unsafe{OsStr::from_encoded_bytes_unchecked(&mod_dir_path.as_os_str().as_encoded_bytes()[mods_dir_len..])};
-			let mut mod_files = Vec::new_in(&arena);
 			let mut entries_to_check = std::vec::Vec::from([mod_dir]);
 
 			while let Some(next_entry) = entries_to_check.pop() {
@@ -281,77 +233,83 @@ impl GrugState {
 					}
 				} else {
 					let entry_path = next_entry.path();
-					if let Some(extension) = Path::extension(&entry_path) && extension == "grug" {
-						mod_files.push(entry_path);
+					if let Some(extension) = entry_path.extension() && extension == "grug" {
+						// get path relative to mods dir
+						let rel_path = unsafe{OsStr::from_encoded_bytes_unchecked(&entry_path.as_os_str().as_encoded_bytes()[mods_dir_len..])};
+						// copy path into arena
+						let rel_path = arena.copy_osstr_into(rel_path);
+						file_paths.push(rel_path);
 					};
 				}
-			}
-
-			let mut next_thread = self.compiler_senders.iter().cycle();
-			let sent_count = mod_files.len();
-			let mut recv_count = 0;
-			// Chunk into FILES_PER_THREAD sized blocks
-			for chunk in mod_files.chunks(Self::FILES_PER_THREAD) {
-				let cur_arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
-
-				// We need to allocate the paths into the new arena to ensure panic safety
-				//
-				// If these strings were allocated in the outer arena (or if
-				// they are a reference to the existing PathBufs), then if this
-				// thread panics for any reason, the strings will be freed and
-				// the compiler threads will access freed memory.
-				let chunk = cur_arena.slice_from_iter(chunk.iter().map(|item| cur_arena.copy_osstr_into(item.as_ref())));
-				// SAFETY: make sure we never use this slice outside the current loop iteration
-				let chunk = unsafe{std::mem::transmute::<&[&OsStr], &'static [&'static OsStr]>(chunk)};
-				// Send to threads
-				next_thread.next().expect("at least one compiler thread").send((cur_arena, chunk)).expect("send succeeds");
-			}
-
-			// Send to backend while recieving
-			while recv_count < sent_count {
-				let (mut arena, results, resources) = self.compiler_receiver.recv().unwrap(); 
-				recv_count += results.len();
-
-				let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
-				for (result, path) in results {
-					// turn ok result into id, keep error result as same error
-					let result = result.map(|file| {
-						let id = match path_to_script_ids.get(path) {
-							Some(id) => *id,
-							None => {
-								let id = self.get_next_script_id();
-								assert!(path_to_script_ids.insert(OsString::from(path), id).is_none());
-								id
-							}
-						};
-						// Send to backend
-						self.backend.insert_file(self, id, file);
-						id
-					});
-					// Create FileInfo from this result
-					let path = <OsStr as AsRef<Path>>::as_ref(path);
-					let info = FileInfo {
-						path: Box::from(path),
-						file_name: Box::from(path.file_name().unwrap()),
-						mod_name: Box::from(mod_dir_path),
-						entity_type: Box::from(get_entity_type(path.as_os_str()).unwrap_or("")),
-						entity_name: Box::from(path.file_prefix().unwrap()),
-						result
-					};
-					files.push(info);
-				}
-				let mut self_resources = self.resources.borrow_mut();
-				for resource in resources {
-					if !self_resources.contains(*resource) {
-						self_resources.insert(OsString::from(resource));
-					}
-				}
-				// `results` and `resources` are allocated within arena, so it
-				// is only safe to clear the arena now.
-				arena.clear();
-				self.arenas.borrow_mut().push(arena);
 			}
 		}
+
+		let mut next_thread = self.compiler_senders.iter().cycle();
+		let sent_count = file_paths.len();
+		let mut recv_count = 0;
+		// Chunk into FILES_PER_THREAD sized blocks
+		for chunk in file_paths.chunks(Self::FILES_PER_THREAD) {
+			let cur_arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
+
+			// We need to allocate the paths into the new arena to ensure panic safety
+			//
+			// If these strings were allocated in the outer arena (or if
+			// they are a reference to the existing PathBufs), then if this
+			// thread panics for any reason, the strings will be freed and
+			// the compiler threads will access freed memory.
+			let chunk = cur_arena.slice_from_iter(chunk.iter().map(|item| cur_arena.copy_osstr_into(item.as_ref())));
+			// SAFETY: make sure we never use this slice outside the current loop iteration
+			let chunk = unsafe{std::mem::transmute::<&[&OsStr], &'static [&'static OsStr]>(chunk)};
+			// Send to threads
+			next_thread.next().expect("at least one compiler thread").send((cur_arena, chunk)).expect("send succeeds");
+		}
+
+		// Send to backend while recieving
+		while recv_count < sent_count {
+			let (mut arena, results, resources) = self.compiler_receiver.recv().unwrap(); 
+			recv_count += results.len();
+
+			let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
+			for (result, path) in results {
+				// turn ok result into id, keep error result as same error
+				let result = result.map(|file| {
+					let id = match path_to_script_ids.get(path) {
+						Some(id) => *id,
+						None => {
+							let id = self.get_next_script_id();
+							assert!(path_to_script_ids.insert(OsString::from(path), id).is_none());
+							id
+						}
+					};
+					// Send to backend
+					self.backend.insert_file(self, id, file);
+					id
+				});
+				// Create FileInfo from this result
+				let path = <OsStr as AsRef<Path>>::as_ref(path);
+				let mod_dir_path = path.parent().expect("must have at least component in path").components().next().unwrap().as_os_str();
+				let info = FileInfo {
+					path: Box::from(path),
+					file_name: Box::from(path.file_name().unwrap()),
+					mod_name: Box::from(mod_dir_path),
+					entity_type: Box::from(get_entity_type(path.as_os_str()).unwrap_or("")),
+					entity_name: Box::from(path.file_prefix().unwrap()),
+					result
+				};
+				files.push(info);
+			}
+			let mut self_resources = self.resources.borrow_mut();
+			for resource in resources {
+				if !self_resources.contains(*resource) {
+					self_resources.insert(OsString::from(resource));
+				}
+			}
+			// `results` and `resources` are allocated within arena, so it
+			// is only safe to clear the arena now.
+			arena.clear();
+			self.arenas.borrow_mut().push(arena);
+		}
+		drop(file_paths);
 		arena.clear();
 		self.arenas.borrow_mut().push(arena);
 		files
@@ -635,5 +593,3 @@ fn check_custom_id_is_pascal<'a>(entity_type: &'a OsStr, path: &'_ OsStr) -> Res
 	Ok(entity_type)
 }
 
-pub mod type_propagation;
-use type_propagation::*;

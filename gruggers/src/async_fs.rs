@@ -138,3 +138,44 @@ mod windows {
 #[cfg(target_os="windows")]
 pub use windows::*;
 
+/// File reads are not actually sync in the fallback path
+#[cfg(not(target_os = "windows"))]
+mod fallback {
+	use crate::arena::Arena;
+	use crate::error::{Error, ErrorKind, SourceSpan};
+	use std::fs::File;
+	use std::ffi::{OsStr, c_void};
+
+	use allocator_api2::vec::Vec;
+
+	pub fn open_file_async_for_read(path: &impl AsRef<OsStr>) -> Result<File, Error> {
+		let path = path.as_ref();
+		File::open(path).map_err(|err| Error::from_io_error(err, path))
+	}
+
+	pub fn read_files_async<'a, 'b>(files: impl IntoIterator<Item=&'b File>, arena: &'a Arena) -> Vec<Result<&'a [u8], Error>, &'a Arena> {
+		let files = {
+			let mut temp = Vec::new_in(arena);
+			temp.extend(files);
+			temp
+		};
+		let mut files_data = Vec::with_capacity_in(files.len(), arena);
+		for (i, file) in files.iter().enumerate() {
+			// get file size,
+			let size = file.metadata().expect("metadata always succeeds on windows").len();
+			// allocate space,
+			let cap = if size > 0 {((((size - 1) / 4096) + 1) * 4096) as usize} else {0};
+			let buf = arena.alloc_zeroed(std::alloc::Layout::from_size_align(cap, 4096).unwrap()).unwrap();
+			let buf = unsafe{std::slice::from_raw_parts_mut(buf.cast::<u8>(), cap)};
+
+			match file.read(buf) {
+				Ok(size) => files_data.push(Ok(buf[..size])),
+				Err(err) => files_data.push(Err(Error::from_io_error(err, "file_unknown (ig)")))
+			}
+		}
+		
+		files_data
+	}
+}
+#[cfg(not(target_os = "windows"))]
+pub use fallback::*;

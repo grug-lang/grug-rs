@@ -1,3 +1,45 @@
+//! Doing anything with grug first requires you to create a [`GrugState`].
+//!
+//! The first thing to do is to create a GrugInitSettings. This contains
+//! configuration data for the state. Important configuration parameters
+//! include mod_api path, the mods directory path, the runtime error handler,
+//! and an explicit backend. 
+//!
+//! GrugInitSettings can be initialized directly from c code as a normal struct. 
+//! It can be zeroed to set all options to the defaults.
+//! 
+//! Once configuration is complete, the GrugState can be built with
+//! [`GrugInitSettings::build_state`]. If there is any error when creating the
+//! state, an [`Error`] with kind INIT_ERROR will be returned. 
+//!
+//! If there is no error, you can then begin registering the host functions.
+//! Host functions are functions that grug code can call to perform any action
+//! not directly built into grug (which includes almost every single useful
+//! operation). All host functions mentioned in the mod_api should be registered
+//! exactly once at this stage. 
+//!
+//! It is not an error to not register a host function, but if a script
+//! encounters that function, The compilation threads will panic. It is always
+//! an error to register a function not mentioned in the mod_api or registering
+//! a function more than once.
+//!
+//! [`GrugState::all_host_fns_registered`] can be used to verify that all host
+//! functions are registered.
+//! 
+//! At this point, you can begin compiling the grug files.
+//! [`GrugState::compile_all_files`] can be used to compile all files within
+//! the mods directory at once. This is the most efficient way to compile
+//! files, because the frontend can work on multiple files at the same time.
+//!
+//! You can also use [`GrugState::compile_grug_file`] and
+//! [`GrugState::compile_grug_file_from_str`] to compile files individually.
+//!
+//! At this point, the state will begin automatically monitoring for changes to
+//! the mods directory. To handle the changes, call [`GrugState::update_files`]
+//! once at the top of the game loop or message loop. This returns all the
+//! scripts that were recompiled and any resources that need to be reloaded.
+//! 
+
 use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{Error, ErrorKind, SourceSpan};
@@ -48,6 +90,7 @@ const _: () = const {
 };
 
 impl RuntimeErrorHandler {
+	/// 
 	pub const fn new_default () -> Self {
 		Self {
 			data: NonNull::dangling(),
@@ -320,7 +363,10 @@ impl GrugState {
 		let (sender, reciever) = channel();
 		watch_changes(&mods_dir_path, move |changes| sender.send(changes).is_ok()).unwrap();
 		// TODO: un-hardcode this
-		let num_threads = 6;
+		let num_threads = {
+			let available_threads = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(1);
+			if available_threads <= 2 {1} else {available_threads - 2}
+		};
 		let (snd, rcv) = channel();
 		// Create compiler threads
 		let compiler_senders = (0..num_threads).map(|_| {
@@ -358,7 +404,7 @@ impl GrugState {
 	}
 
 	pub fn mods_dir_path(&self) -> &OsStr {
-		&self.mods_dir_path
+		self.mods_dir_path.as_ref()
 	}
 
 	pub fn get_export_fn_id(&self, entity_type: &str, on_fn_name: &str) -> Result<GrugOnFnId, Error> {
