@@ -38,9 +38,13 @@ fn main () {
 	let files = state.compile_all_files();
 	let id = *files[0].result.as_ref().unwrap();
 	let dog = state.create_entity(id).unwrap();
-	let on_bark_id = state.get_export_fn_id("Dog", "on_bark").unwrap();
+	let on_bark_id = state.get_export_fn_id("Dog", "bark").unwrap();
 
 	loop {
+		let (resources, files) = state.update_files();
+		for resource in resources {print!("{}, ", resource.display())};
+		println!("");
+		for file in files {if let Err(err) = file.result {println!("{}, ", err)}};
 		println!("{:?}", state.update_files());
 		if !state.call_on_function(&*dog, on_bark_id, &[]) {panic!()};
 		std::thread::sleep(Duration::from_secs(1));

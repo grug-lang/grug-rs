@@ -388,33 +388,96 @@ impl GrugState {
 	/// Check if there are any files in the mods directory that need to be hot reloaded. 
 	/// Also returns any resources that need to be reloaded
 	pub fn update_files(&self) -> (std::vec::Vec<OsString>, std::vec::Vec<FileInfo>) {
-		let mut resource_files = std::vec::Vec::new();
+		let mut arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
+		let mut file_paths = Vec::new_in(&arena);
+		let mut updated_resources = std::vec::Vec::new();
+		
 		let mut grug_files = std::vec::Vec::new();
 		for change in self.changes.try_iter() {
 			let file_name = change.expect("File IO error");
-			{
-				let file_name: &Path = file_name.as_ref();
-				if let Some(extension) = Path::extension(file_name) && extension == "grug" {
-					// This is actually not true of this library, although it is true for grug in general
-					// the grug cli allows scripts to not have a parent directory, but it does not call this function
-					let mod_dir_path = file_name.parent().expect("mod must have parent for successful compilation");
-					let result = self.compile_grug_file(file_name);
-					let info = FileInfo {
-						path: Box::from(file_name),
-						file_name: Box::from(file_name.file_name().unwrap()),
-						mod_name: Box::from(mod_dir_path.as_os_str()),
-						entity_type: Box::from(get_entity_type(file_name.as_os_str()).unwrap_or("")),
-						entity_name: Box::from(file_name.file_prefix().unwrap()),
-						result
-					};
-					grug_files.push(info);
+			if let Some(extension) = <OsStr as AsRef<Path>>::as_ref(&file_name).extension() && extension == "grug" {
+				if !file_paths.contains(&&*file_name) {
+					let rel_name = arena.copy_osstr_into(file_name.as_ref());
+					file_paths.push(rel_name);
 				}
 			}
 			if self.resources.borrow().contains(&file_name) {
-				resource_files.push(file_name);
+				if !updated_resources.contains(&file_name) {
+					updated_resources.push(file_name);
+				}
 			}
 		}
-		(resource_files, grug_files)
+
+		let mut next_thread = self.compiler_senders.iter().cycle();
+		let sent_count = file_paths.len();
+		let mut recv_count = 0;
+		// Chunk into FILES_PER_THREAD sized blocks
+		for chunk in file_paths.chunks(Self::FILES_PER_THREAD) {
+			let cur_arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
+
+			// We need to allocate the paths into the new arena to ensure panic safety
+			//
+			// If these strings were allocated in the outer arena (or if
+			// they are a reference to the existing PathBufs), then if this
+			// thread panics for any reason, the strings will be freed and
+			// the compiler threads will access freed memory.
+			let chunk = cur_arena.slice_from_iter(chunk.iter().map(|item| cur_arena.copy_osstr_into(item.as_ref())));
+			// SAFETY: make sure we never use this slice outside the current loop iteration
+			let chunk = unsafe{std::mem::transmute::<&[&OsStr], &'static [&'static OsStr]>(chunk)};
+			// Send to threads
+			next_thread.next().expect("at least one compiler thread").send((cur_arena, chunk)).expect("send succeeds");
+		}
+
+		// Send to backend while recieving
+		while recv_count < sent_count {
+			let (mut arena, results, resources) = self.compiler_receiver.recv().unwrap(); 
+			recv_count += results.len();
+
+			let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
+			for (result, path) in results {
+				// turn ok result into id, keep error result as same error
+				let result = result.map(|file| {
+					let id = match path_to_script_ids.get(path) {
+						Some(id) => *id,
+						None => {
+							let id = self.get_next_script_id();
+							assert!(path_to_script_ids.insert(OsString::from(path), id).is_none());
+							id
+						}
+					};
+					// Send to backend
+					self.backend.insert_file(self, id, file);
+					id
+				});
+				// Create FileInfo from this result
+				let path = <OsStr as AsRef<Path>>::as_ref(path);
+				println!("{:?}", path);
+				let mod_dir_path = path.parent().expect("must have at least component in path").components().next().unwrap().as_os_str();
+				let info = FileInfo {
+					path: Box::from(path),
+					file_name: Box::from(path.file_name().unwrap()),
+					mod_name: Box::from(mod_dir_path),
+					entity_type: Box::from(get_entity_type(path.as_os_str()).unwrap_or("")),
+					entity_name: Box::from(path.file_prefix().unwrap()),
+					result
+				};
+				grug_files.push(info);
+			}
+			let mut self_resources = self.resources.borrow_mut();
+			for resource in resources {
+				if !self_resources.contains(*resource) {
+					self_resources.insert(OsString::from(resource));
+				}
+			}
+			// `results` and `resources` are allocated within arena, so it
+			// is only safe to clear the arena now.
+			arena.clear();
+			self.arenas.borrow_mut().push(arena);
+		}
+		drop(file_paths);
+		arena.clear();
+		self.arenas.borrow_mut().push(arena);
+		(updated_resources, grug_files)
 	}
 }
 
