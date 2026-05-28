@@ -85,7 +85,7 @@ pub extern "C" fn grug_deinit_entity(state: &CState, handle: GrugEntityHandle<'_
 const INVALID_GRUG_ON_FN_ID: GrugOnFnId = u64::MAX;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_get_on_fn_ids(state: &CState) -> &[EventFnEntry<'_>] {
+pub extern "C" fn grug_get_fn_ids(state: &CState) -> &[EventFnEntry<'_>] {
 	state.0.get_on_functions()
 }
 
@@ -121,8 +121,12 @@ pub extern "C" fn grug_all_host_fns_registered(state: &CState) -> bool {
 	false
 }
 
-/// 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_get_error<'a>(state: &'a CState) -> Option<&'a GrugError<'a>> {
 	Some(unsafe{&*state.1.get()}.as_ref()?.inner())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn grug_entity_get_data<'a>(_: &CState, entity: Option<&'a GrugEntity>) -> Option<&'a GrugEntity> {
+	entity
 }

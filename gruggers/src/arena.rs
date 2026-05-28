@@ -383,13 +383,13 @@ mod arena_impl {
 			Ok(ptr)
 		}
 
-		pub fn alloc_zeroed(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+		pub fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
 			let ptr = self.alloc(layout)?;
 			unsafe{ (ptr.as_ptr() as *mut u8).write_bytes(0, layout.size()) };
 			Ok(ptr)
 		}
 
-		pub fn realloc_zeroed(&mut self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+		pub fn realloc_zeroed(&self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
 			let ptr = self.alloc_zeroed(new_layout)?;
 			unsafe{ (ptr.as_ptr() as *mut u8).write_bytes(0, new_layout.size()) };
 			unsafe {

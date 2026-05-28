@@ -142,9 +142,10 @@ pub use windows::*;
 #[cfg(not(target_os = "windows"))]
 mod fallback {
 	use crate::arena::Arena;
-	use crate::error::{Error, ErrorKind, SourceSpan};
+	use crate::error::Error;
 	use std::fs::File;
-	use std::ffi::{OsStr, c_void};
+	use std::ffi::OsStr;
+	use std::io::Read;
 
 	use allocator_api2::vec::Vec;
 
@@ -154,23 +155,23 @@ mod fallback {
 	}
 
 	pub fn read_files_async<'a, 'b>(files: impl IntoIterator<Item=&'b File>, arena: &'a Arena) -> Vec<Result<&'a [u8], Error>, &'a Arena> {
-		let files = {
+		let mut files = {
 			let mut temp = Vec::new_in(arena);
 			temp.extend(files);
 			temp
 		};
 		let mut files_data = Vec::with_capacity_in(files.len(), arena);
-		for (i, file) in files.iter().enumerate() {
+		for file in files.iter_mut() {
 			// get file size,
 			let size = file.metadata().expect("metadata always succeeds on windows").len();
 			// allocate space,
 			let cap = if size > 0 {((((size - 1) / 4096) + 1) * 4096) as usize} else {0};
 			let buf = arena.alloc_zeroed(std::alloc::Layout::from_size_align(cap, 4096).unwrap()).unwrap();
-			let buf = unsafe{std::slice::from_raw_parts_mut(buf.cast::<u8>(), cap)};
+			let buf = unsafe{std::slice::from_raw_parts_mut(buf.cast::<u8>().as_ptr(), cap)};
 
 			match file.read(buf) {
-				Ok(size) => files_data.push(Ok(buf[..size])),
-				Err(err) => files_data.push(Err(Error::from_io_error(err, "file_unknown (ig)")))
+				Ok(size) => files_data.push(Ok(&buf[..size])),
+				Err(err) => files_data.push(Err(Error::from_io_error(err, "file_unknown (ig)".as_ref())))
 			}
 		}
 		
