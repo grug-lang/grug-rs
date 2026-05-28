@@ -1,5 +1,6 @@
 //! Doing anything with grug first requires you to create a [`GrugState`].
 //!
+//! # Using [`GrugState`]
 //! The first thing to do is to create a GrugInitSettings. This contains
 //! configuration data for the state. Important configuration parameters
 //! include mod_api path, the mods directory path, the runtime error handler,
@@ -38,7 +39,6 @@
 //! the mods directory. To handle the changes, call [`GrugState::update_files`]
 //! once at the top of the game loop or message loop. This returns all the
 //! scripts that were recompiled and any resources that need to be reloaded.
-//! 
 
 use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
@@ -46,7 +46,7 @@ use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, INVALID_GRUG_SCRIPT_ID};
 use crate::xar::Xar;
-use crate::ntstring::{NTStrPtr, NTBytes};
+use crate::ntstring::{NTStrPtr};
 use crate::arena::Arena;
 use crate::own_ptr::OwnPtr;
 use crate::nt;
@@ -62,9 +62,7 @@ use std::pin::Pin;
 use std::cell::{Cell, RefCell, Ref};
 use std::collections::{HashMap, hash_map::Entry, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::mem::MaybeUninit;
 use std::ffi::{OsString, OsStr};
-use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{RwLock, Arc};
 
@@ -699,47 +697,103 @@ impl<'a> std::ops::Deref for GrugEntityHandle<'a> {
 	}
 }
 
-#[derive(Debug)]
-pub struct FileInfo {
-	pub path: std::boxed::Box<Path>,
-	pub file_name: std::boxed::Box<OsStr>,
-	pub mod_name: std::boxed::Box<OsStr>,
-	pub entity_type: std::boxed::Box<str>,
-	pub entity_name: std::boxed::Box<OsStr>,
-	pub result: Result<GrugFileId, Error>,
-}
+mod files {
+	use crate::own_ptr::OwnPtr;
+	use crate::arena::Arena;
+	use crate::ntstring::{NTBytes, NTStrPtr};
+	use crate::types::GrugFileId;
+	use crate::error::GrugError;
+	use crate::state::INVALID_GRUG_SCRIPT_ID;
 
-// Test struct for c api
-// Eventually replace FileInfo with this
-#[derive(Debug)]
-pub struct FileInfo2<'a> {
-	pub(crate) path: NTBytes<'a>,
-	pub(crate) file_name: NTBytes<'a>,
-	pub(crate) mod_name: NTBytes<'a>,
-	pub(crate) entity_type: NTStrPtr<'a>,
-	pub(crate) entity_name: NTBytes<'a>,
-	pub(crate) file_id: GrugFileId,
-	pub(crate) error: MaybeUninit<Error>,
-}
+	use std::ffi::OsStr;
+	use std::path::Path;
+	use std::mem::MaybeUninit;
 
-impl<'a> FileInfo2<'a> {
-	pub fn path (&self) -> &Path {
-		OsStr::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(self.path.to_bytes())})
+	pub struct Files {
+		pub(crate) inner: OwnPtr<'static, [FileInfo<'static>]>,
+		pub(crate) _arena: Arena,
 	}
-	pub fn file_name (&self) -> &OsStr {
-		unsafe{OsStr::from_encoded_bytes_unchecked(self.file_name.to_bytes())}
+
+	impl std::fmt::Debug for Files {
+		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+			self.files().fmt(f)
+		}
 	}
-	pub fn mod_name (&self) -> &OsStr {
-		unsafe{OsStr::from_encoded_bytes_unchecked(self.mod_name.to_bytes())}
+
+	impl Files {
+		pub fn empty() -> Self {
+			Self {
+				inner: (Box::new([]) as Box<[_]>).into(),
+				_arena: Arena::new(),
+			}
+		}
+
+		pub fn files(&self) -> &[FileInfo<'_>] {
+			&*self.inner
+		}
 	}
-	pub fn entity_type (&self) -> &str {
-		self.entity_type.to_str()
+
+	// Test struct for c api
+	// Eventually replace FileInfo with this
+	#[derive(Debug)]
+	#[repr(C)]
+	pub struct FileInfo<'a> {
+		pub(crate) path: NTBytes<'a>,
+		pub(crate) file_name: NTBytes<'a>,
+		pub(crate) mod_name: NTBytes<'a>,
+		pub(crate) entity_type: NTStrPtr<'a>,
+		pub(crate) entity_name: NTBytes<'a>,
+		pub(crate) file_id: GrugFileId,
+		pub(crate) error: MaybeUninit<GrugError<'a>>,
 	}
-	pub fn entity_name (&self) -> &OsStr {
-		unsafe{OsStr::from_encoded_bytes_unchecked(self.entity_name.to_bytes())}
-	}
-	pub fn result (&self) -> Result<GrugFileId, &Error> {
-		if self.file_id == INVALID_GRUG_SCRIPT_ID {unsafe{Err(self.error.assume_init_ref())}}
-		else {Ok(self.file_id)}
+
+	impl<'a> FileInfo<'a> {
+		pub(crate) fn new_in(path: &OsStr, file_name: &OsStr, mod_name: &OsStr, entity_type: &str, entity_name: &OsStr, result: Result<GrugFileId, GrugError>, arena: &'a Arena) -> Self {
+			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+			let path = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(path.as_encoded_bytes()))};
+			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+			let file_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(file_name.as_encoded_bytes()))};
+			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+			let mod_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(mod_name.as_encoded_bytes()))};
+			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice,
+			// and the returned slice is utf8 encoded because it comes from a
+			// str
+			let entity_type = unsafe{NTStrPtr::from_str_unchecked(std::str::from_utf8_unchecked(arena.copy_bytes_into_nt(entity_type.as_bytes())))};
+			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+			let entity_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(entity_name.as_encoded_bytes()))};
+			let (file_id, error) = match result {
+				Ok(id) => (id, MaybeUninit::uninit()),
+				Err(err) => (INVALID_GRUG_SCRIPT_ID, MaybeUninit::new(err.copy_into(arena)))
+			};
+			FileInfo {
+				path,
+				file_name,
+				mod_name,
+				entity_type,
+				entity_name,
+				file_id,
+				error
+			}
+		}
+		pub fn path (&self) -> &Path {
+			OsStr::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(self.path.to_bytes())})
+		}
+		pub fn file_name (&self) -> &OsStr {
+			unsafe{OsStr::from_encoded_bytes_unchecked(self.file_name.to_bytes())}
+		}
+		pub fn mod_name (&self) -> &OsStr {
+			unsafe{OsStr::from_encoded_bytes_unchecked(self.mod_name.to_bytes())}
+		}
+		pub fn entity_type (&self) -> &str {
+			self.entity_type.to_str()
+		}
+		pub fn entity_name (&self) -> &OsStr {
+			unsafe{OsStr::from_encoded_bytes_unchecked(self.entity_name.to_bytes())}
+		}
+		pub fn result (&self) -> Result<GrugFileId, GrugError<'_>> {
+			if self.file_id == INVALID_GRUG_SCRIPT_ID {unsafe{Err(*self.error.assume_init_ref())}}
+			else {Ok(self.file_id)}
+		}
 	}
 }
+pub use files::*;

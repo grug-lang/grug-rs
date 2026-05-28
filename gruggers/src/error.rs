@@ -31,6 +31,17 @@ impl Error {
 		&self.inner_error
 	}
 
+	/// Leaks the arena and returns a &'static [`GrugError`]
+	///
+	/// The only known use case of this is the [`grug_init`] function in the c
+	/// api. That function has no place to store an [`Error`], so it has to
+	/// leak the memory to return an error to the caller.
+	pub fn leak<'a>(self) -> GrugError<'static> {
+		let inner = unsafe{std::mem::transmute::<GrugError, GrugError<'static>>(*self.inner())};
+		std::mem::forget(self);
+		inner
+	}
+
 	/// Create a new grug error within an arena
 	pub(crate) fn new(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments) -> Self {
 		let arena = Arena::new();

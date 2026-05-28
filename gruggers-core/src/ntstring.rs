@@ -70,6 +70,8 @@ mod str {
 		/// # Panics
 		///
 		/// if `value` contains a null byte
+		// TODO: remove this
+		#[track_caller]
 		pub fn box_from_str_in<A: Allocator>(value: &str, a: A) -> Box<Self, A> {
 			assert!(!value.contains('\0'));
 			let (ptr, a) = Box::into_raw_with_allocator(Box::<[u8], _>::new_uninit_slice_in(value.len() + 1, a));
@@ -641,6 +643,7 @@ mod bytes {
 	/// # Panics
 	///
 	/// If the buffer contains a null byte
+	// TODO: remove this
 	pub fn copy_box_nt_bytes_in<A: Allocator>(bytes: &[u8], a: A) -> Box<[u8], A> {
 		assert!(!bytes.contains(&b'\0'));
 		let (ptr, a) = Box::into_raw_with_allocator(Box::<[u8], _>::new_uninit_slice_in(bytes.len() + 1, a));

@@ -100,6 +100,13 @@ impl<'a, T: ?Sized, A: Allocator + 'a> From<Box2<T, A>> for OwnPtr<'a, T> {
 	}
 }
 
+impl<'a, T: ?Sized> From<Box<T>> for OwnPtr<'a, T> {
+	fn from(other: Box<T>) -> Self {
+		// SAFETY: Box::into_raw points to a valid T
+		unsafe{Self::from_ptr(Box::into_raw(other))}
+	}
+}
+
 pub struct IntoIter<'a, T>{
 	start: NonNull<T>,
 	end: NonNull<T>,

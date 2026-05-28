@@ -203,6 +203,8 @@ mod page_alloc {
 }
 
 mod arena_impl {
+	use crate::ntstring::NTStr;
+
 	use std::alloc::Layout;
 	use std::ptr::NonNull;
 	use std::cell::Cell;
@@ -451,6 +453,27 @@ mod arena_impl {
 			// SAFETY: ptr is trivially aligned and valid to read for `bytes.len()` bytes
 			unsafe{std::slice::from_raw_parts(ptr, bytes.len())}
 		}
+
+		/// Copy a slice of bytes into the current arena and returns the new
+		/// slice with a null byte appended
+		///
+		/// See [`copy_osstr_into`]  and [`copy_str_into`] for more specific
+		/// versions of this function
+		/// 
+		/// # Panics
+		///
+		/// if `bytes` contains a null byte
+		pub fn copy_bytes_into_nt(&self, bytes: &[u8]) -> &[u8] {
+			assert!(!bytes.contains(&b'\0'));
+			let ptr = self.alloc(Layout::array::<u8>(bytes.len() + 1).expect("invalid layout for slice"))
+				.expect("unable to allocate")
+				.cast::<u8>().as_ptr();
+			// SAFETY: allocation is of length `bytes.len() + 1`
+			unsafe{ptr.copy_from(bytes.as_ptr(), bytes.len())};
+			unsafe{*ptr.add(bytes.len()) = b'\0'};
+			// SAFETY: ptr is trivially aligned and valid to read for `bytes.len() + 1` bytes
+			unsafe{std::slice::from_raw_parts(ptr, bytes.len() + 1)}
+		}
 		
 		/// Copy an `&OsStr` into the current arena and return the new OsStr
 		///
@@ -460,12 +483,26 @@ mod arena_impl {
 			unsafe{OsStr::from_encoded_bytes_unchecked(self.copy_bytes_into(bytes.as_encoded_bytes()))}
 		}
 
-		/// Copy a `&str` into the current arena and return the new OsStr
+		/// Copy a `&str` into the current arena and return the new str
 		///
 		/// see [`copy_bytes_into`] for a more general version of this function
 		pub fn copy_str_into(&self, bytes: &str) -> &str {
 			// SAFETY: input is a str
 			unsafe{std::str::from_utf8_unchecked(self.copy_bytes_into(bytes.as_ref()))}
+		}
+		
+		/// Copy a `&str` into the current arena and return the new str with a
+		/// null byte appended
+		///
+		/// see [`copy_bytes_into`] for a more general version of this function
+		/// 
+		/// # Panics
+		///
+		/// if `bytes` contains a null byte
+		pub fn copy_str_into_nt(&self, bytes: &str) -> &NTStr {
+			// SAFETY: input is a str
+			// input is null terminated
+			unsafe{NTStr::from_str_unchecked(std::str::from_utf8_unchecked(self.copy_bytes_into(bytes.as_ref())))}
 		}
 
 		/// Allocates a slice of items into `self` from an iterator

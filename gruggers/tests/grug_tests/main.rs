@@ -4,7 +4,7 @@ use gruggers::ntstring::NTStr;
 use gruggers::nt;
 
 mod test_bindings {
-	use gruggers::state::{GrugInitSettings, GrugState, State, GrugEntityHandle, FileInfo};
+	use gruggers::state::{GrugInitSettings, GrugState, State, GrugEntityHandle, Files};
 	use gruggers::backend::BytecodeBackend;
 	use gruggers_core::runtime_error::RuntimeError;
 	use gruggers::types::{GrugValue, GrugFileId};
@@ -16,7 +16,7 @@ mod test_bindings {
 
 	static mut CURRENT_ENTITY: Option<GrugEntityHandle<'static>> = None;
 
-	pub extern "C" fn create_grug_state<'a>(mod_api_path: NTBytes<'a>, mods_dir_path: NTBytes<'a>) -> Option<Box<(GrugState, Vec<FileInfo>)>> {
+	pub extern "C" fn create_grug_state<'a>(mod_api_path: NTBytes<'a>, mods_dir_path: NTBytes<'a>) -> Option<Box<(GrugState, Files)>> {
 		let mut state = GrugInitSettings::new()
 			.set_mod_api_path(unsafe{OsStr::from_encoded_bytes_unchecked(mod_api_path.to_bytes())})
 			.set_mods_dir(unsafe{OsStr::from_encoded_bytes_unchecked(mods_dir_path.to_bytes())})
@@ -43,18 +43,18 @@ mod test_bindings {
 		Some(Box::new((state, files)))
 	}
 
-	pub extern "C" fn destroy_grug_state<'a>(_state: Box<(GrugState, Vec<FileInfo>)>) { }
+	pub extern "C" fn destroy_grug_state<'a>(_state: Box<(GrugState, Files)>) { }
 
-	pub extern "C" fn compile_grug_file((_state, files): &(GrugState, Vec<FileInfo>), path: NTBytes<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugFileId {
+	pub extern "C" fn compile_grug_file((_state, files): &(GrugState, Files), path: NTBytes<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugFileId {
 		let path = path.to_bytes();
 
 		fn compare_paths_normalized(first: &[u8], second: &[u8]) -> bool {
 			first.iter().zip(second).all(|(first, second)| first == second || ((*first == b'/' || *first == b'\\') && (*second == b'/' || *second == b'\\')))
 		}
 
-		for file in files {
-			if compare_paths_normalized(file.path.as_os_str().as_encoded_bytes(), path){
-				match &file.result {
+		for file in files.files() {
+			if compare_paths_normalized(file.path().as_os_str().as_encoded_bytes(), path){
+				match &file.result() {
 					Ok(id) => {
 						*err_out = None;
 						return *id;
@@ -83,7 +83,7 @@ mod test_bindings {
 		// }
 	}
 
-	pub extern "C" fn init_globals ((state, _): &(GrugState, Vec<FileInfo>), file_id: GrugFileId) {
+	pub extern "C" fn init_globals ((state, _): &(GrugState, Files), file_id: GrugFileId) {
 		unsafe{state.set_next_entity_id(42)};
 		unsafe{&mut * &raw mut CURRENT_ENTITY}.take().map(|entity| state.destroy_entity(entity));
 		unsafe{CURRENT_ENTITY = std::mem::transmute::<Option<GrugEntityHandle<'_>>, Option<GrugEntityHandle<'static>>>(state.
@@ -91,7 +91,7 @@ mod test_bindings {
 	}
 
 	#[allow(unused_variables)]
-	pub extern "C" fn call_export_fn<'a> ((state, _): &(GrugState, Vec<FileInfo>), file_id: GrugFileId, fn_name: NTStrPtr<'a>, args: *const GrugValue, args_count: usize) {
+	pub extern "C" fn call_export_fn<'a> ((state, _): &(GrugState, Files), file_id: GrugFileId, fn_name: NTStrPtr<'a>, args: *const GrugValue, args_count: usize) {
 		state.clear_error();
 		unsafe{state.set_next_entity_id(42)};
 
@@ -112,7 +112,7 @@ mod test_bindings {
 	}
 
 	#[allow(unused_variables)]
-	pub extern "C" fn dump_file_to_json<'a> (_state: &(GrugState, Vec<FileInfo>), input_grug_file: NTStrPtr<'a>, output_buffer: *mut u8, output_buffer_len: usize) -> i32 {
+	pub extern "C" fn dump_file_to_json<'a> (_state: &(GrugState, Files), input_grug_file: NTStrPtr<'a>, output_buffer: *mut u8, output_buffer_len: usize) -> i32 {
 		let grug_file = input_grug_file.to_ntstr();
 
 		match serde::dump_file_to_json(grug_file, "") {
@@ -132,7 +132,7 @@ mod test_bindings {
 		}
 	}
 
-	pub extern "C" fn generate_file_from_json<'a> (_state: &(GrugState, Vec<FileInfo>), input_json: NTStrPtr<'a>, output_buffer: *mut u8, output_buffer_len: usize) -> i32 {
+	pub extern "C" fn generate_file_from_json<'a> (_state: &(GrugState, Files), input_json: NTStrPtr<'a>, output_buffer: *mut u8, output_buffer_len: usize) -> i32 {
 		let input_json = input_json.to_ntstr();
 
 		match serde::generate_file_from_json(input_json) {
@@ -152,28 +152,28 @@ mod test_bindings {
 		}
 	}
 
-	pub extern "C" fn game_fn_error ((state, _): &(GrugState, Vec<FileInfo>), msg: NTStrPtr<'static>) {
+	pub extern "C" fn game_fn_error ((state, _): &(GrugState, Files), msg: NTStrPtr<'static>) {
 		state.set_runtime_error(RuntimeError::GameFunctionError{message: msg.to_str()});
 	}
 
 	#[allow(non_camel_case_types)]
 	// pub type c_size_t = u64;
 	#[allow(non_camel_case_types)]
-	pub type create_grug_state_t = for<'a> extern "C" fn(NTBytes<'a>, NTBytes<'a>) -> Option<Box<(GrugState, Vec<FileInfo>)>>;
+	pub type create_grug_state_t = for<'a> extern "C" fn(NTBytes<'a>, NTBytes<'a>) -> Option<Box<(GrugState, Files)>>;
 	#[allow(non_camel_case_types)]
-	pub type destroy_grug_state_t = extern "C" fn(Box<(GrugState, Vec<FileInfo>)>);
+	pub type destroy_grug_state_t = extern "C" fn(Box<(GrugState, Files)>);
 	#[allow(non_camel_case_types)]
-	pub type compile_grug_file_t = extern "C" fn(&(GrugState, Vec<FileInfo>), NTBytes<'static>, &mut Option<NTStrPtr<'static>>) -> GrugFileId;
+	pub type compile_grug_file_t = extern "C" fn(&(GrugState, Files), NTBytes<'static>, &mut Option<NTStrPtr<'static>>) -> GrugFileId;
 	#[allow(non_camel_case_types)]
-	pub type init_globals_t = extern "C" fn (&'_ (GrugState, Vec<FileInfo>), GrugFileId);
+	pub type init_globals_t = extern "C" fn (&'_ (GrugState, Files), GrugFileId);
 	#[allow(non_camel_case_types)]
-	pub type call_export_fn_t = for<'a> extern "C" fn (&(GrugState, Vec<FileInfo>), GrugFileId, NTStrPtr<'a>, *const GrugValue, usize);
+	pub type call_export_fn_t = for<'a> extern "C" fn (&(GrugState, Files), GrugFileId, NTStrPtr<'a>, *const GrugValue, usize);
 	#[allow(non_camel_case_types)]
-	pub type dump_file_to_json_t = for<'a> extern "C" fn (&(GrugState, Vec<FileInfo>), NTStrPtr<'a>, *mut u8, usize) -> i32;
+	pub type dump_file_to_json_t = for<'a> extern "C" fn (&(GrugState, Files), NTStrPtr<'a>, *mut u8, usize) -> i32;
 	#[allow(non_camel_case_types)]
-	pub type generate_file_from_json_t = for<'a> extern "C" fn (&(GrugState, Vec<FileInfo>), NTStrPtr<'a>, *mut u8, usize) -> i32;
+	pub type generate_file_from_json_t = for<'a> extern "C" fn (&(GrugState, Files), NTStrPtr<'a>, *mut u8, usize) -> i32;
 	#[allow(non_camel_case_types)]
-	pub type game_fn_error_t = extern "C" fn (&(GrugState, Vec<FileInfo>), NTStrPtr<'static>);
+	pub type game_fn_error_t = extern "C" fn (&(GrugState, Files), NTStrPtr<'static>);
 
 	#[repr(C)]
 	pub struct GrugStateVTable {

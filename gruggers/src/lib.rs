@@ -35,6 +35,7 @@ pub use gruggers_core::nt;
 // TODO: (WIP) README and docs for gruggers
 // TODO: (WIP) Debug info to backends
 // TODO: (WIP) Better Error handling
+// TODO: change register_host_fn to take a non static function.
 //
 // TODO: (finished) Resource management
 // TODO: (finished) Hot reloading grug_files
