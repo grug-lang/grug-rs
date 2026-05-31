@@ -665,7 +665,7 @@ pub union ConstantData {
 	number: f64,
 	string: NTStrPtr<'static>,
 	helper_fn_data: (/* args: */ u32, /* locals_size: */ u32, /* location: */ usize),
-	game_fn_data: (/* args: */ u32, /* ptr: */ GameFnPtr, NonNull<()>),
+	game_fn_data: (/* args: */ u32, /* ptr: */ GameFnPtr, &'static ()),
 }
 
 struct Instructions{
@@ -774,7 +774,7 @@ impl Instructions {
 		self.fn_labels.insert(location, name);
 	}
 
-	pub fn insert_game_fn_data(&mut self, args: u32, ptr: GameFnPtr, data: NonNull<()>) -> u32 {
+	pub fn insert_game_fn_data(&mut self, args: u32, ptr: GameFnPtr, data: &'static ()) -> u32 {
 		*self.game_fn_locations.entry(ptr.as_usize()).or_insert_with(|| {
 			let ret_val = self.constants.len();
 			self.constants.push(ConstantData{game_fn_data: (args, ptr, data)});

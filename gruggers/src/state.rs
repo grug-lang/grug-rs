@@ -47,7 +47,7 @@ use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
 use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, INVALID_GRUG_SCRIPT_ID, HostFnStruct, IntoHostFn};
 use crate::xar::Xar;
 use crate::ast::Parameter;
-use crate::ntstring::{NTStrPtr, NTBytes};
+use crate::ntstring::NTStrPtr;
 use crate::arena::Arena;
 use crate::own_ptr::OwnPtr;
 use crate::nt;
@@ -270,7 +270,8 @@ pub struct GrugState {
 	// The data associated with these functions are stored in self.data_arena;
 	// This doesn't use Box<dyn Fn(&Self, ...) -> ... to make c interop have
 	// less overhead
-	pub(crate) host_fn_ptrs: Arc<RwLock<HashMap<&'static str, (GameFnPtr, NonNull<()>)>>>,
+	pub(crate) host_fn_ptrs_drop: Vec<(*mut (), extern "C" fn (*mut()))>,
+	pub(crate) host_fn_ptrs: Arc<RwLock<HashMap<&'static str, (GameFnPtr, &'static ())>>>,
 	pub(crate) data_arena: Arena,
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
@@ -390,6 +391,7 @@ impl GrugState {
 			mod_api,
 			mods_dir_path,
 			next_entity_id: AtomicU64::new(0),
+			host_fn_ptrs_drop: Vec::new(),
 			host_fn_ptrs,
 			data_arena: Arena::new(),
 			runtime_error_handler: handler,
@@ -469,7 +471,7 @@ impl GrugState {
 		Ok(&self.on_functions[start..end])
 	}
 
-	pub unsafe fn register_host_fn_raw(&mut self, name: &'static str, func: extern "C" fn (NonNull<()>, &GrugState, *const GrugValue) -> GrugValue, data: NonNull<()>) -> Result<(), Error> {
+	pub unsafe fn register_host_fn_raw(&mut self, name: &'static str, func: extern "C" fn (&'static (), &GrugState, *const GrugValue) -> GrugValue, data: NonNull<()>, drop: Option<extern "C" fn (*mut ())>) -> Result<(), Error> {
 		if !self.mod_api.host_fns().contains_key(name) {
 			return Err(Error::new(
 				ErrorKind::INIT_ERROR,
@@ -490,7 +492,10 @@ impl GrugState {
 					format_args!("Host function named '{}' has already been registered", name),
 				)),
 				Entry::Vacant(x) => {
-					x.insert((GameFnPtr::from_ptr(func), data));
+					x.insert((GameFnPtr::from_ptr(func), unsafe{data.as_ref()}));
+					if let Some(drop) = drop {
+						self.host_fn_ptrs_drop.push((data.as_ptr(), drop));
+					}
 					Ok(())
 				}
 			}
@@ -499,11 +504,15 @@ impl GrugState {
 
 	pub unsafe fn register_host_fn_raw_rust<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(&mut self, name: &'static str, func: F) -> Result<(), Error> {
 		let data = NonNull::from_ref(Box::leak(Box::new_in(func, &self.data_arena))).cast::<()>();
-		extern "C" fn adapter_fn<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(data: NonNull<()>, state: &GrugState, values: *const GrugValue) -> GrugValue {
+		extern "C" fn adapter_fn<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(data: &'static (), state: &GrugState, values: *const GrugValue) -> GrugValue {
 			// SAFETY: Function signature is checked
-			unsafe{std::mem::transmute::<NonNull<()>, &F>(data)(state, values)}
+			unsafe{std::mem::transmute::<&'static (), &F>(data)(state, values)}
 		}
-		unsafe{self.register_host_fn_raw(name, adapter_fn::<F>, data)}
+		extern "C" fn drop<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(data: *mut ()) {
+			// SAFETY: type is checked
+			unsafe{std::ptr::drop_in_place(std::mem::transmute::<*mut (), *mut F>(data))}
+		}
+		unsafe{self.register_host_fn_raw(name, adapter_fn::<F>, data, std::mem::needs_drop::<F>().then_some(drop::<F>))}
 	}
 
 	pub fn register_host_fn<F: Into<HostFnStruct<F, I, O, Self>>, I, O>(&mut self, name: &'static str, f: F) -> Result<(), Error> where
@@ -532,21 +541,27 @@ impl GrugState {
 			panic!("Invalid return type for host function");
 		}
 		
-		fn return_data_and_ptr<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(
+		fn return_data_and_ptr_and_drop<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(
 			f: F, 
 			arena: &Arena
-		) -> (NonNull<()>, extern "C" fn (NonNull<()>, &GrugState, *const GrugValue) -> GrugValue) {
+		) -> (NonNull<()>, extern "C" fn (&'static (), &GrugState, *const GrugValue) -> GrugValue, Option<extern "C" fn (*mut ())>) {
 			let data = NonNull::from_ref(Box::leak(Box::new_in(f, arena))).cast::<()>();
 
-			extern "C" fn adapter_fn<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(data: NonNull<()>, state: &GrugState, values: *const GrugValue) -> GrugValue {
+			extern "C" fn adapter_fn<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(data: &'static (), state: &GrugState, values: *const GrugValue) -> GrugValue {
 				// SAFETY: Function signature is checked
-				unsafe{std::mem::transmute::<NonNull<()>, &F>(data)(state, values)}
+				unsafe{std::mem::transmute::<&'static (), &F>(data)(state, values)}
 			}
-			(data, adapter_fn::<F>)
+
+			extern "C" fn drop_fn<F: Fn(&GrugState, *const GrugValue) -> GrugValue>(data: *mut ()) {
+				// SAFETY: type is checked
+				unsafe{std::ptr::drop_in_place(std::mem::transmute::<*mut (), *mut F>(data))}
+			}
+
+			(data, adapter_fn::<F>, std::mem::needs_drop::<F>().then_some(drop_fn::<F>))
 		}
-		let (data, ptr) = return_data_and_ptr(host_fn, &self.data_arena);
+		let (data, ptr, drop) = return_data_and_ptr_and_drop(host_fn, &self.data_arena);
 		// SAFETY: preconditions
-		unsafe{self.register_host_fn_raw(name, ptr, data)}
+		unsafe{self.register_host_fn_raw(name, ptr, data, drop)}
 	}
 
 	/// Register a dummy function for each game function defined in the mod_api
@@ -558,14 +573,16 @@ impl GrugState {
 	/// You are only allowed to compile scripts from this state.
 	/// This function only exists to allow the cli compiler to function.
 	pub unsafe fn register_dummies(&mut self) {
-		extern "C" fn dummy_host_fn(_data: NonNull<()>, _state: &GrugState, _arguments: *const GrugValue) -> GrugValue {
+		extern "C" fn dummy_host_fn(_data: &'static (), _state: &GrugState, _arguments: *const GrugValue) -> GrugValue {
 			GrugValue{void: ()}
 		}
 
 		let mut host_fn_ptrs = self.host_fn_ptrs.write().unwrap();
 		for name in self.mod_api.host_fns().keys() {
 			// TODO: allocate these strings within self.data_arena
-			host_fn_ptrs.entry(Box::leak(Box::from(name.as_str()))).or_insert((GameFnPtr::from_ptr(dummy_host_fn), NonNull::dangling()));
+			host_fn_ptrs.entry(
+				unsafe{std::mem::transmute::<&str, &'static str>(self.data_arena.copy_str_into(name))}
+			).or_insert((GameFnPtr::from_ptr(dummy_host_fn), &()));
 		}
 	}
 	
@@ -691,6 +708,12 @@ impl GrugState {
 		self.current_on_fn_id.set(old_on_fn_id);
 
 		ret_val
+	}
+}
+
+impl Drop for GrugState {
+	fn drop (&mut self) {
+		self.host_fn_ptrs_drop.iter_mut().for_each(|(ptr, drop)| drop(*ptr));
 	}
 }
 

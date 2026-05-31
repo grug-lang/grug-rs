@@ -110,29 +110,29 @@ mod game_functions {
 
 	#[link(name = "bench", kind="dylib")]
 	unsafe extern "C" {
-		safe fn game_fn_print_number<'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_print_bool  <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_get_1       <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_get_mass    <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_get_number  <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_x           <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_y           <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_sqrt        <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_set_acc     <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_fmod        <'a>(data: std::ptr::NonNull<()>, state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_print_number<'a>(data: &'static (), state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_print_bool  <'a>(data: &'static (), state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_get_1       <'a>(data: &'static (), state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_get_mass    <'a>(data: &'static (), state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_get_number  <'a>(data: &'static (), state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_x           <'a>(data: &'static (), state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_y           <'a>(data: &'static (), state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_sqrt        <'a>(data: &'static (), state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_set_acc     <'a>(data: &'static (), state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_fmod        <'a>(data: &'static (), state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
 	}
 
 	pub fn register_game_functions(state: &mut GrugState) { unsafe {
-		state.register_host_fn_raw("print_number", game_fn_print_number, std::ptr::NonNull::dangling()).unwrap();
-		state.register_host_fn_raw("print_bool"  , game_fn_print_bool  , std::ptr::NonNull::dangling()).unwrap();
-		state.register_host_fn_raw("get_1"       , game_fn_get_1       , std::ptr::NonNull::dangling()).unwrap();
-		state.register_host_fn_raw("get_mass"    , game_fn_get_mass    , std::ptr::NonNull::dangling()).unwrap();
-		state.register_host_fn_raw("get_number"  , game_fn_get_number  , std::ptr::NonNull::dangling()).unwrap();
-		state.register_host_fn_raw("x"           , game_fn_x           , std::ptr::NonNull::dangling()).unwrap();
-		state.register_host_fn_raw("y"           , game_fn_y           , std::ptr::NonNull::dangling()).unwrap();
-		state.register_host_fn_raw("sqrt"        , game_fn_sqrt        , std::ptr::NonNull::dangling()).unwrap();
-		state.register_host_fn_raw("set_acc"     , game_fn_set_acc     , std::ptr::NonNull::dangling()).unwrap();
-		state.register_host_fn_raw("fmod"        , game_fn_fmod        , std::ptr::NonNull::dangling()).unwrap();
+		state.register_host_fn_raw("print_number", game_fn_print_number, std::ptr::NonNull::dangling(), None).unwrap();
+		state.register_host_fn_raw("print_bool"  , game_fn_print_bool  , std::ptr::NonNull::dangling(), None).unwrap();
+		state.register_host_fn_raw("get_1"       , game_fn_get_1       , std::ptr::NonNull::dangling(), None).unwrap();
+		state.register_host_fn_raw("get_mass"    , game_fn_get_mass    , std::ptr::NonNull::dangling(), None).unwrap();
+		state.register_host_fn_raw("get_number"  , game_fn_get_number  , std::ptr::NonNull::dangling(), None).unwrap();
+		state.register_host_fn_raw("x"           , game_fn_x           , std::ptr::NonNull::dangling(), None).unwrap();
+		state.register_host_fn_raw("y"           , game_fn_y           , std::ptr::NonNull::dangling(), None).unwrap();
+		state.register_host_fn_raw("sqrt"        , game_fn_sqrt        , std::ptr::NonNull::dangling(), None).unwrap();
+		state.register_host_fn_raw("set_acc"     , game_fn_set_acc     , std::ptr::NonNull::dangling(), None).unwrap();
+		state.register_host_fn_raw("fmod"        , game_fn_fmod        , std::ptr::NonNull::dangling(), None).unwrap();
 	}}
 }
 

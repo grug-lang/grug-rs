@@ -38,9 +38,9 @@ pub extern "C" fn grug_deinit(_: Option<Box<CState>>) {}
 /// # SAFETY
 /// same as [`CState::register_host_fn`]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_register_host_fn<'a>(state: &'a mut CState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrState<GrugState>) -> Option<&'a GrugError<'a>> {
+pub unsafe extern "C" fn grug_register_host_fn<'a>(state: &'a mut CState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrState<GrugState>, data: *mut ()) -> Option<&'a GrugError<'a>> {
 	// SAFETY: This function is exposed to C and is inherently unsafe
-	if let Err(err) = unsafe{state.0.register_host_fn(game_fn_name.to_str(), func)} {
+	if let Err(err) = unsafe{state.0.register_host_fn_raw(game_fn_name.to_str(), func, NonNull::new(data).unwrap_or_else(NonNull::dangling), None)} {
 		Some(state.1.get_mut().insert(err).inner())
 	} else {
 		None

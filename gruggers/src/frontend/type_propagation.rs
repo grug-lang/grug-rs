@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ffi::OsStr;
 use std::path::PathBuf;
-use std::ptr::NonNull;
 
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::types::GameFnPtr;
@@ -26,7 +25,7 @@ pub(super) struct TypePropogator<'mod_api, 'arena> {
 	file_path: &'arena OsStr,
 	entity: &'mod_api ModApiEntity<'mod_api>,
 	game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiHostFn<'mod_api>>,
-	game_fn_ptrs: &'arena HashMap<&'static str, (GameFnPtr, NonNull<()>)>,
+	game_fn_ptrs: &'arena HashMap<&'static str, (GameFnPtr, &'static ())>,
 	resources: Vec<&'arena OsStr, &'arena Arena>,
 	current_mod_name: &'arena OsStr,
 	mods_dir_path: &'mod_api OsStr,
@@ -41,7 +40,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	pub fn new (
 		entity: &'mod_api ModApiEntity, 
 		game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiHostFn>, 
-		game_fn_ptrs: &'arena HashMap<&'static str, (GameFnPtr, NonNull<()>)>, 
+		game_fn_ptrs: &'arena HashMap<&'static str, (GameFnPtr, &'static ())>, 
 		mod_name: &'arena OsStr, 
 		mods_dir_path: &'mod_api OsStr, 
 		file_text: &'arena str,

@@ -12,7 +12,6 @@
 use crate::ntstring::{NTStrPtr, NTStr};
 use crate::types::GameFnPtr;
 use crate::error::SourceSpan;
-use std::ptr::NonNull;
 
 /// Represents the type of a value in grug
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -429,7 +428,7 @@ pub enum ExprData<'a> {
 		/// Expressions for each of the arguments of the function call
 		args : &'a mut [Expr<'a>],
 		/// Pointer to the game function if this expression is a game function call
-		ptr  : Option<(GameFnPtr, NonNull<()>)>,
+		ptr  : Option<(GameFnPtr, &'static ())>,
 		/// Span of the function name name
 		name_span: SourceSpan,
 	},

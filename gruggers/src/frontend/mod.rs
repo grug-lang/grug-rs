@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{RwLock, RwLockReadGuard, Arc};
 use std::sync::mpsc::{Receiver, Sender};
-// use std::path::Path;
 
 const MAX_FILE_ENTITY_TYPE_LENGTH: usize = 420;
 pub(crate) const SPACES_PER_INDENT: usize = 4;
@@ -51,7 +50,7 @@ impl GrugState {
 		// path is absolute
 		mods_dir_path: OsString,
 		mod_api: Arc<ModApi>,
-		host_fn_ptrs: Arc<RwLock<HashMap<&'static str, GameFnPtr>>>,
+		host_fn_ptrs: Arc<RwLock<HashMap<&'static str, (GameFnPtr, &'static ())>>>,
 	) -> impl FnOnce() {
 		use crate::async_fs::{open_file_async_for_read, read_files_async};
 		let mods_dir_path = PathBuf::from(mods_dir_path);
@@ -434,7 +433,7 @@ impl GrugState {
 		file_text: &'arena str, 
 		mods_dir_path: &'arena OsStr, 
 		mod_api: &'arena ModApi, 
-		host_fn_ptrs: &'arena RwLockReadGuard<HashMap<&'static str, GameFnPtr>>, 
+		host_fn_ptrs: &'arena RwLockReadGuard<HashMap<&'static str, (GameFnPtr, &'static ())>>, 
 		arena: &'arena Arena
 	) -> Result<(GrugAst<'arena>, &'arena [&'arena OsStr]), Error> {
 		let mod_name = get_mod_name(path);
