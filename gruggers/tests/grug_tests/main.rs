@@ -36,8 +36,8 @@ mod test_bindings {
 				)};
 			})
 			.set_backend(BytecodeBackend::new())
-			.build_state().ok()?;
-		super::game_fn_bindings::register_game_functions(&mut state).ok()?;
+			.build_state().map_err(|err| {println!("{:?}", err); err}).ok()?;
+		super::game_fn_bindings::register_game_functions(&mut state).map_err(|err| {println!("{:?}", err); err}).ok()?;
 		let files = state.compile_all_files();
 		// let files = Vec::new();
 		Some(Box::new((state, files)))

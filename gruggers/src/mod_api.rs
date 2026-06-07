@@ -31,6 +31,7 @@ impl ModApi {
 	pub(crate) fn entities<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiEntity<'a>> {
 		&self.entities
 	}
+	#[allow(dead_code)]
 	pub(crate) fn classes<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiClass<'a>> {
 		&self.classes
 	}
@@ -42,6 +43,7 @@ impl ModApi {
 pub(crate) struct ModApiClass<'a> {
 	#[allow(dead_code)]
 	pub(crate) description: Option< &'a str>,
+	#[allow(dead_code)]
 	pub(crate) methods: &'a [(&'a NTStr, ModApiHostFn<'a>)],
 }
 
