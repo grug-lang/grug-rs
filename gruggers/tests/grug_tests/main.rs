@@ -263,6 +263,8 @@ mod game_fn_bindings {
         safe fn game_fn_retrieve             <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_box_number           <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_print_csv            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_vec_number_new       <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_vec_number_push      <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
 	}
 	pub fn register_game_functions(state: &mut GrugState) -> Result<(), Error> { unsafe {
 		state.register_host_fn("nothing",              game_fn_nothing             )?; 
@@ -304,6 +306,8 @@ mod game_fn_bindings {
 		state.register_host_fn("retrieve",             game_fn_retrieve            )?; 
 		state.register_host_fn("box_number",           game_fn_box_number          )?; 
 		state.register_host_fn("print_csv",            game_fn_print_csv           )?; 
+		state.register_host_fn("vec_number_new",       game_fn_vec_number_new      )?; 
+		state.register_method ("VecNumber",            "push",      game_fn_vec_number_push     )?; 
 		Ok(())
 	}}
 }

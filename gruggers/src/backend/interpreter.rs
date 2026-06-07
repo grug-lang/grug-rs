@@ -199,14 +199,14 @@ fn copy_expr<'arena>(expr: &Expr<'_>, arena: &'arena Arena) -> Expr<'arena> {
 			}
 		},
 		ExprData::Call {
-			reciever,
+			receiver,
 			name,
 			args,
 			ptr,
 			name_span,
 		} => {
 			ExprData::Call {
-				reciever: reciever.as_ref().map(|x| &mut *arena.alloc_into(copy_expr(x, arena))),
+				receiver: receiver.as_ref().map(|x| &mut *arena.alloc_into(copy_expr(x, arena))),
 				name: copy_string(*name, arena),
 				args: arena.slice_from_iter(args.iter().map(|expr| copy_expr(expr, arena))),
 				ptr: *ptr,
@@ -578,13 +578,19 @@ impl Interpreter {
 				unreachable!("helper function not found");
 			}
 			ExprData::Call{
+				receiver,
 				name: _,
 				args,
 				ptr: Some(ptr),
 				..
 			} => {
 				let ptr = unsafe{ptr.as_ptr()};
-				let values = args.iter().map(|arg| self.run_expr(call_stack, state, file, entity, arg)).collect::<Option<Vec<_>>>()?;
+				let mut values = if let Some(receiver) = receiver {
+					vec![self.run_expr(call_stack, state, file, entity, receiver)?]
+				} else {
+					vec![]
+				};
+				args.iter().map(|arg| Some(values.push(self.run_expr(call_stack, state, file, entity, arg)?))).collect::<Option<Vec<()>>>()?;
 				let ret_val = ptr(state, values.as_ptr());
 				let ret_val = if expr.result_type == Some(&GrugType::Void) {GrugValue{void: ()}} else {ret_val};
 				if state.is_errorring() {

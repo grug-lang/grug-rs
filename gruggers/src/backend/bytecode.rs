@@ -365,7 +365,7 @@ impl<'a> Compiler<'a> {
 				}
 			}
 			ExprData::Call {
-				reciever: None,
+				receiver: None,
 				name,
 				args,
 				ptr: None,
@@ -386,7 +386,7 @@ impl<'a> Compiler<'a> {
 				instructions.stream.push(Op::CallHelperFunction{data_loc});
 			},
 			ExprData::Call {
-				reciever: Some(_),
+				receiver: Some(_),
 				name: _,
 				args: _,
 				ptr: None,
@@ -395,16 +395,16 @@ impl<'a> Compiler<'a> {
 				unreachable!();
 			}
 			ExprData::Call {
-				reciever,
+				receiver,
 				name: _,
 				args,
 				ptr: Some(ptr),
 				name_span: _,
 			} => {
 				let args_count;
-				if let Some(reciever) = reciever {
+				if let Some(receiver) = receiver {
 					args_count = args.len() + 1;
-					self.compile_expr(instructions, reciever);
+					self.compile_expr(instructions, receiver);
 				} else {
 					args_count = args.len();
 				}

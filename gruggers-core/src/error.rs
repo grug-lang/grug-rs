@@ -192,6 +192,7 @@ impl<'a> GrugError<'a> {
 }
 
 impl<'a> GrugError<'a> {
+	#[track_caller]
 	pub fn new_error_in<A: Allocator>(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, mut err_span: SourceSpan, error_message: std::fmt::Arguments, alloc: &'a A) -> Self {
 		let mut line = err_span.line;
 		let column = err_span.get_col(source_text);

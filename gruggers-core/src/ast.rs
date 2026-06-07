@@ -3,7 +3,7 @@
 //! All the types defined here are layout compatible with the corresponding
 //! types defined in `grug.h`.
 //!
-//! Backends recieve a [`GrugAst`] through a call to [`Backend::insert_file`](crate::backend::Backend::insert_file).
+//! Backends receive a [`GrugAst`] through a call to [`Backend::insert_file`](crate::backend::Backend::insert_file).
 //!
 //! The current api assumes the ast structs do not own the memory they are
 //! allocated in. The gruggers crate allocates these in an arena and
@@ -402,7 +402,7 @@ pub enum ExprData<'a> {
 	///
 	/// Can either be a helper function call, a game function call or a method call.
 	/// Represents a game function call if the `ptr` field is not [`None`]
-	/// And represents a method call if the reciever field is not [`None`]
+	/// And represents a method call if the receiver field is not [`None`]
 	///
 	/// for a function call, the fields are as defined below
 	/// ```text
@@ -422,11 +422,11 @@ pub enum ExprData<'a> {
 	///             |   |
 	///             |   + - `name`
 	///             |
-	///             + - `reciever`
+	///             + - `receiver`
 	/// ```
 	Call {
-		/// Reciever of the method
-		reciever: Option<&'a mut Expr<'a>>,
+		/// Receiver of the method
+		receiver: Option<&'a mut Expr<'a>>,
 		/// Name of the function or method
 		name : NTStrPtr<'a>,
 		/// Expressions for each of the arguments of the function call

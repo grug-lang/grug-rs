@@ -265,6 +265,7 @@ pub struct GrugState {
 	pub(crate) mods_dir_path: OsString,
 	next_entity_id: AtomicU64,
 	pub(crate) host_fn_ptrs: Arc<RwLock<HashMap<&'static str, GameFnPtr>>>,
+	pub(crate) method_fn_ptrs: Arc<RwLock<HashMap<&'static str, HashMap<&'static str, GameFnPtr>>>>,
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
 	pub(crate) entities: Xar<GrugEntity>,
@@ -356,6 +357,7 @@ impl GrugState {
 
 		let mod_api = Arc::new(mod_api);
 		let host_fn_ptrs = Arc::new(RwLock::new(HashMap::new()));
+		let method_fn_ptrs = Arc::new(RwLock::new(HashMap::new()));
 
 		let (sender, reciever) = channel();
 		watch_changes(&mods_dir_path, move |changes| sender.send(changes).is_ok()).unwrap();
@@ -372,7 +374,8 @@ impl GrugState {
 				snd.clone(), 
 				mods_dir_path.clone(), 
 				Arc::clone(&mod_api), 
-				Arc::clone(&host_fn_ptrs)
+				Arc::clone(&host_fn_ptrs),
+				Arc::clone(&method_fn_ptrs)
 			));
 			per_thread_send
 		}).collect::<Vec<_>>();
@@ -382,6 +385,7 @@ impl GrugState {
 			mods_dir_path,
 			next_entity_id: AtomicU64::new(0),
 			host_fn_ptrs,
+			method_fn_ptrs,
 			runtime_error_handler: handler,
 			resources: RefCell::new(HashSet::new()),
 			entities: Xar::new(),
@@ -481,6 +485,54 @@ impl GrugState {
 				)),
 				Entry::Vacant(x) => {
 					x.insert(GameFnPtr::from_ptr(func));
+					Ok(())
+				}
+			}
+		}
+	}
+
+	pub unsafe fn register_method(&mut self, class_name: &'static str, function_name: &'static str, func: extern "C" fn (&GrugState, *const GrugValue) -> GrugValue) -> Result<(), Error> {
+		let Some(class) = self.mod_api.classes().get(class_name) else {
+			return Err(Error::new(
+				ErrorKind::INIT_ERROR,
+				"",
+				"".as_ref(),
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("Class with name '{}' is not found in mod_api.json", class_name),
+			));
+		};
+		if class.methods.iter().find(|(name, _)| name.as_str() == function_name).is_none() {
+			return Err(Error::new(
+				ErrorKind::INIT_ERROR,
+				"",
+				"".as_ref(),
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("Class with name '{}' does not contain method with name '{}'", class_name, function_name),
+			));
+		}
+		
+		else {
+			match self.method_fn_ptrs.write().unwrap().entry(class_name) {
+				Entry::Occupied(mut entry) => {
+					match entry.get_mut().entry(function_name) {
+						Entry::Occupied(_) => return Err(Error::new(
+							ErrorKind::INIT_ERROR,
+							"",
+							"".as_ref(),
+							"",
+							SourceSpan{offset: 0, line: 0},
+							format_args!("Host method named '{}' on class '{}' has already been registered", function_name, class_name),
+						)),
+						Entry::Vacant(x) => {
+							x.insert(GameFnPtr::from_ptr(func));
+							Ok(())
+						}
+					}
+				}
+				Entry::Vacant(x) => {
+					x.insert(HashMap::from([(function_name, GameFnPtr::from_ptr(func))]));
 					Ok(())
 				}
 			}

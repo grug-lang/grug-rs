@@ -40,6 +40,7 @@ impl ModApi {
 	}
 }
 
+#[derive(Debug)]
 pub(crate) struct ModApiClass<'a> {
 	#[allow(dead_code)]
 	pub(crate) description: Option< &'a str>,
@@ -132,7 +133,6 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			entities
 		}
 	};
-
 	let entities = entities.iter().map(|(entity_name, entity_values)| {
 		let JsonValue::Object(entity_values) = entity_values else {
 			return Err(mod_api_err!(entity_name => "root.entities.{entity_name} is not an object"));
@@ -183,48 +183,48 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				}
 			};
 			
-			// optional "arguments" object
-			let parameters = match &function.get("arguments") {
+			// optional "parameters" object
+			let parameters = match &function.get("parameters") {
 				None => &vec![],
 				Some(parameters) => {
 					let JsonValue::Array(parameters) = parameters else {
-						return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[\"{fn_name}\"].arguments is not an array"));
+						return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[\"{fn_name}\"].parameters is not an array"));
 					};
 					parameters
 				}
 			};
 			let parameters = parameters.iter().enumerate().map(|(j, param_values)| {
 				let JsonValue::Object(param_values) = param_values else {
-					return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[\"{fn_name}\"].arguments[{j}] is not an object"))
+					return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[\"{fn_name}\"].parameters[{j}] is not an object"))
 				};
 				// "name" string
 				let param_name = match param_values.get("name") {
-					None => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[{i}].arguments[{j}].name missing")), Some(str) => {
+					None => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[{i}].parameters[{j}].name missing")), Some(str) => {
 						let Some(str) = str.as_str() else {
-							return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[{i}].arguments[{j}].name is not a string"));
+							return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[{i}].parameters[{j}].name is not a string"));
 						};
 						arena.copy_str_into_nt(str)
 					}
 				};
 				// "type" string
 				let ty = match param_values.get("type") {
-					None => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[{i}].arguments[{j}].type missing")),
+					None => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[{i}].parameters[{j}].type missing")),
 					Some(str) => {
 						let Some(str) = str.as_str() else {
-							return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[{i}].arguments[{j}].type is not a string"));
+							return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[{i}].parameters[{j}].type is not a string"));
 						};
 						str
 					}
 				};
 				let ty = match ty {
-					// arguments can't be void
-					"void"     => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[\"{fn_name}\"].arguments[\"{param_name}\"].type is void")),
+					// parameters can't be void
+					"void"     => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[\"{fn_name}\"].parameters[\"{param_name}\"].type is void")),
 					"bool"     => GrugType::Bool,
 					"number"   => GrugType::Number,
 					"string"   => GrugType::String,
 					"id"       => GrugType::Id{custom_name: None},
-					"resource"     => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[\"{fn_name}\"].arguments[\"{param_name}\"].type is resource")),
-					"entity"     => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[\"{fn_name}\"].arguments[\"{param_name}\"].type is entity")),
+					"resource"     => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[\"{fn_name}\"].parameters[\"{param_name}\"].type is resource")),
+					"entity"     => return Err(mod_api_err!(entity_name => "root.entities.{entity_name}.export_functions[\"{fn_name}\"].parameters[\"{param_name}\"].type is entity")),
 					type_name => {
 						let extra_value = arena.copy_str_into_nt(type_name).as_ntstrptr();
 						GrugType::Id {
@@ -324,12 +324,12 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				}
 			};
 			
-			// optional "arguments" object
-			let parameters = match &method_values.get("arguments") {
+			// optional "parameters" object
+			let parameters = match &method_values.get("parameters") {
 				None => &vec![],
 				Some(parameters) => {
 					let JsonValue::Array(parameters) = parameters else {
-						return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].arguments is not an array"));
+						return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters is not an array"));
 					};
 					parameters
 				}
@@ -337,31 +337,31 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 
 			let parameters = parameters.iter().enumerate().map(|(i, param_values)| {
 				let JsonValue::Object(param_values) = param_values else {
-					return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].arguments[{i}] is not an object"));
+					return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[{i}] is not an object"));
 				};
 				// "name" string
 				let param_name = match param_values.get("name") {
-					None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].arguments[{i}].name is missing")),
+					None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[{i}].name is missing")),
 					Some(str) => {
 						let Some(str) = str.as_str() else {
-							return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].arguments[{i}].name is not a string"));
+							return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[{i}].name is not a string"));
 						};
 						arena.copy_str_into_nt(str)
 					}
 				};
 				// "type" string
 				let ty = match param_values.get("type") {
-					None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].arguments[\"{param_name}\"].type is missing")),
+					None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].type is missing")),
 					Some(str) => {
 						let Some(str) = str.as_str() else {
-							return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].arguments[\"{param_name}\"].type is not a string"));
+							return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].type is not a string"));
 						};
 						str
 					}
 				};
 				let ty = match ty {
-					// arguments can't be void
-					"void"     => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].arguments[\"{param_name}\"].type is void")),
+					// parameters can't be void
+					"void"     => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].type is void")),
 					"bool"     => GrugType::Bool,
 					"number"      => GrugType::Number,
 					"string"   => GrugType::String,
@@ -369,10 +369,10 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 					"entity"   => {
 						// "entity_type" string
 						match param_values.get("entity_type") {
-							None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].arguments[\"{param_name}\"].entity_type is missing")),
+							None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].entity_type is missing")),
 							Some(str) => {
 								let Some(str) = str.as_str() else {
-									return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].arguments[\"{param_name}\"].entity_type is not a string"));
+									return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].entity_type is not a string"));
 								};
 								GrugType::Entity {
 									entity_type: (!str.is_empty()).then(|| {
@@ -385,10 +385,10 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 					"resource" => {
 						// "resource_extension" string
 						match param_values.get("resource_extension") {
-							None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].arguments[\"{param_name}\"].resource_extension is missing")),
+							None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].resource_extension is missing")),
 							Some(str) => {
 								let Some(str) = str.as_str() else {
-									return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].arguments[\"{param_name}\"].resource_extension is not a string"));
+									return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].resource_extension is not a string"));
 								};
 								GrugType::Resource {
 									extension: arena.copy_str_into_nt(str).as_ntstrptr()
@@ -466,7 +466,6 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			host_fns
 		}
 	};
-
 	let host_fns = host_fns.iter().map(|(fn_name, game_fn_values)| {
 		let JsonValue::Object(game_fn_values) = game_fn_values else {
 			return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name} is not an object"));
@@ -482,12 +481,12 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			}
 		};
 		
-		// optional "arguments" object
-		let parameters = match &game_fn_values.get("arguments") {
+		// optional "parameters" object
+		let parameters = match &game_fn_values.get("parameters") {
 			None => &vec![],
 			Some(parameters) => {
 				let JsonValue::Array(parameters) = parameters else {
-					return Err(mod_api_err!(fn_name => "root.game_fn_values.{fn_name}.arguments is not an array"));
+					return Err(mod_api_err!(fn_name => "root.game_fn_values.{fn_name}.parameters is not an array"));
 				};
 				parameters
 			}
@@ -495,31 +494,31 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 
 		let parameters = parameters.iter().enumerate().map(|(i, param_values)| {
 			let JsonValue::Object(param_values) = param_values else {
-				return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.arguments[{i}] is not an object"));
+				return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.parameters[{i}] is not an object"));
 			};
 			// "name" string
 			let param_name = match param_values.get("name") {
-				None => return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.arguments[{i}].name is missing")),
+				None => return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.parameters[{i}].name is missing")),
 				Some(str) => {
 					let Some(str) = str.as_str() else {
-						return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.arguments.name is not a string"));
+						return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.parameters.name is not a string"));
 					};
 					arena.copy_str_into_nt(str)
 				}
 			};
 			// "type" string
 			let ty = match param_values.get("type") {
-				None => return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.arguments[\"{param_name}\"].type is missing")),
+				None => return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.parameters[\"{param_name}\"].type is missing")),
 				Some(str) => {
 					let Some(str) = str.as_str() else {
-						return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.arguments[\"{param_name}\"].type is not a string"));
+						return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.parameters[\"{param_name}\"].type is not a string"));
 					};
 					str
 				}
 			};
 			let ty = match ty {
-				// arguments can't be void
-				"void"     => return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.arguments[\"{param_name}\"].type is void")),
+				// parameters can't be void
+				"void"     => return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.parameters[\"{param_name}\"].type is void")),
 				"bool"     => GrugType::Bool,
 				"number"      => GrugType::Number,
 				"string"   => GrugType::String,
@@ -527,10 +526,10 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				"entity"   => {
 					// "entity_type" string
 					match param_values.get("entity_type") {
-						None => return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.arguments[\"{param_name}\"].entity_type is missing")),
+						None => return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.parameters[\"{param_name}\"].entity_type is missing")),
 						Some(str) => {
 							let Some(str) = str.as_str() else {
-								return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.arguments[\"{param_name}\"].entity_type is not a string"));
+								return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.parameters[\"{param_name}\"].entity_type is not a string"));
 							};
 							GrugType::Entity {
 								entity_type: (!str.is_empty()).then(|| {
@@ -543,10 +542,10 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				"resource" => {
 					// "resource_extension" string
 					match param_values.get("resource_extension") {
-						None => return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.arguments[\"{param_name}\"].resource_extension is missing")),
+						None => return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.parameters[\"{param_name}\"].resource_extension is missing")),
 						Some(str) => {
 							let Some(str) = str.as_str() else {
-								return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.arguments[\"{param_name}\"].resource_extension is not a string"));
+								return Err(mod_api_err!(fn_name => "root.host_functions.{fn_name}.parameters[\"{param_name}\"].resource_extension is not a string"));
 							};
 							GrugType::Resource {
 								extension: arena.copy_str_into_nt(str).as_ntstrptr(),

@@ -15,7 +15,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{RwLock, RwLockReadGuard, Arc};
+use std::sync::{RwLock, Arc};
 use std::sync::mpsc::{Receiver, Sender};
 // use std::path::Path;
 
@@ -52,12 +52,16 @@ impl GrugState {
 		mods_dir_path: OsString,
 		mod_api: Arc<ModApi>,
 		host_fn_ptrs: Arc<RwLock<HashMap<&'static str, GameFnPtr>>>,
+		method_fn_ptrs: Arc<RwLock<HashMap<&'static str, HashMap<&'static str, GameFnPtr>>>>,
 	) -> impl FnOnce() {
 		use crate::async_fs::{open_file_async_for_read, read_files_async};
 		let mods_dir_path = PathBuf::from(mods_dir_path);
 		move || {
 			for (arena, files) in receiver.iter() {
+				// Get these once instead of in a loop
+				// Nobody's writing to them anyway
 				let host_fn_ptrs = host_fn_ptrs.read().unwrap();
+				let method_fn_ptrs = method_fn_ptrs.read().unwrap();
 				let mut resources = Vec::new_in(&arena);
 				// This is the actual lifetime of the data but it has to be erased to send across the channel
 				fn combine_lifetimes<'a>(_: &'a Arena, input: &'static [&'static OsStr]) -> &'a [&'a OsStr] {input}
@@ -112,6 +116,7 @@ impl GrugState {
 						mods_dir_path.as_ref(),
 						&mod_api,
 						&host_fn_ptrs,
+						&method_fn_ptrs,
 						&arena
 					) {
 						Ok(data) => data,
@@ -181,7 +186,8 @@ impl GrugState {
 		// immediately invoked closure so we get try {} finally {}
 		let id = (|| {
 			let host_fn_ptrs = self.host_fn_ptrs.read().unwrap();
-			let (file, resources) = Self::compile_inner(path, file_text, &self.mods_dir_path, &self.mod_api, &host_fn_ptrs, &arena)?;
+			let method_fn_ptrs = self.method_fn_ptrs.read().unwrap();
+			let (file, resources) = Self::compile_inner(path, file_text, &self.mods_dir_path, &self.mod_api, &host_fn_ptrs, &method_fn_ptrs, &arena)?;
 			let mut self_resources = self.resources.borrow_mut();
 			for resource in resources {
 				if !self_resources.contains(*resource) {self_resources.insert(OsString::from(resource));}
@@ -433,7 +439,8 @@ impl GrugState {
 		file_text: &'arena str, 
 		mods_dir_path: &'arena OsStr, 
 		mod_api: &'arena ModApi, 
-		host_fn_ptrs: &'arena RwLockReadGuard<HashMap<&'static str, GameFnPtr>>, 
+		host_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, 
+		method_fn_ptrs: &'arena HashMap<&'static str, HashMap<&'static str, GameFnPtr>>, 
 		arena: &'arena Arena
 	) -> Result<(GrugAst<'arena>, &'arena [&'arena OsStr]), Error> {
 		let mod_name = get_mod_name(path);
@@ -456,14 +463,14 @@ impl GrugState {
 				format_args!("Entity '{}' is not registered in the mod_api.json", entity_type),
 			)
 		)?;
-		// get mod_api host function declarations
-		let mod_api_host_fns = mod_api.host_fns();
-		
+
 		// type check 
 		let resources = TypePropogator::fill_result_types(
 			entity, 
-			mod_api_host_fns, 
+			mod_api.host_fns(), 
+			mod_api.classes(),
 			host_fn_ptrs,
+			method_fn_ptrs,
 			mod_name, 
 			mods_dir_path, 
 			file_text, 

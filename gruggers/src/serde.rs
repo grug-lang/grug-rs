@@ -180,7 +180,7 @@ mod ser {
 				}
 			}
 			ExprData::Call{
-				reciever: _,
+				receiver,
 				name,
 				args,
 				ptr: _, 
@@ -190,6 +190,9 @@ mod ser {
 					"type": "CALL_EXPR",
 					"name": name.to_str(),
 				};
+				if let Some(receiver) = receiver {
+					object["receiver"] = serialize_expr(receiver);
+				}
 				if !args.is_empty() {
 					object["arguments"] = args.iter().map(serialize_expr).collect::<Vec<_>>().into();
 				}
@@ -259,6 +262,9 @@ mod ser {
 					"type": "CALL_STATEMENT",
 					"name": name,
 				};
+				if let JsonValue::Object(receiver) = &expr["receiver"] {
+					object["receiver"] = JsonValue::Object(receiver.clone());
+				}
 				if let JsonValue::Array(arguments) = &expr["arguments"] {
 					object["arguments"] = JsonValue::from(&**arguments);
 				}
@@ -513,6 +519,10 @@ mod de {
 				}
 				"CALL_STATEMENT" => {
 					apply_indentation(indentation, output);
+					if let Ok(receiver) = get_object_field(statement, "receiver", "CALL_STATEMENT") {
+						apply_expr(receiver, output)?;
+						output.push_str(".");
+					};
 					let Some(name) = get_object_field(statement, "name", "CALL_STATEMENT")?.as_str() else {
 						return Err(JsonDeserializeError::CallExpressionFunctionNameNotString);
 					};
@@ -694,6 +704,10 @@ mod de {
 				apply_expr(right, output)
 			}
 			"CALL_EXPR" => {
+				if let Ok(receiver) = get_object_field(input, "receiver", "CALL_EXPR") {
+					apply_expr(receiver, output)?;
+					output.push_str(".");
+				};
 				let Some(name) = get_object_field(input, "name", "CALL_EXPR")?.as_str() else {
 					return Err(JsonDeserializeError::CallExpressionFunctionNameNotString);
 				};

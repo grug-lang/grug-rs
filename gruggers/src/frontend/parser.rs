@@ -564,7 +564,7 @@ impl<'a> Ast<'a> {
 		match next_tokens[0].ty {
 			TokenType::Word => {
 				match next_tokens[1].ty {
-					TokenType::OpenParenthesis => {
+					TokenType::OpenParenthesis | TokenType::Dot => {
 						Ok(Statement::Call(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?))
 					}
 					TokenType::Colon | TokenType::Space => {
@@ -818,7 +818,7 @@ impl<'a> Ast<'a> {
 						if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
 							Expr{
 								data: ExprData::Call {
-									reciever: None,
+									receiver: None,
 									name: value.as_ntstrptr(),
 									args: Vec::new().leak(),
 									ptr : None,
@@ -837,7 +837,7 @@ impl<'a> Ast<'a> {
 									let [_] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 									break Expr {
 										data: ExprData::Call {
-											reciever: None,
+											receiver: None,
 											name: value.as_ntstrptr(),
 											args: arguments.leak(),
 											ptr : None,
@@ -920,7 +920,7 @@ impl<'a> Ast<'a> {
 		while let Ok([space, op]) = peek_next_tokens(tokens) {
 			// Actually a method call
 			if let Ok([_, name]) = consume_next_token_types(tokens, &[TokenType::Dot, TokenType::Word]) {
-				let reciever = current;
+				let receiver = current;
 				let name_span = name.span;
 				let name: &'a NTStr  = arena.copy_str_into_nt(name.value);
 				// a word token can actually be a function call
@@ -930,9 +930,9 @@ impl<'a> Ast<'a> {
 					
 					current = if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
 						Expr{
-							span: reciever.span,
+							span: receiver.span,
 							data: ExprData::Call {
-								reciever: Some(arena.alloc_into(reciever)),
+								receiver: Some(arena.alloc_into(receiver)),
 								name: name.as_ntstrptr(),
 								args: Vec::new().leak(),
 								ptr : None,
@@ -949,9 +949,9 @@ impl<'a> Ast<'a> {
 							} else {
 								let [_] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 								break Expr {
-									span: reciever.span,
+									span: receiver.span,
 									data: ExprData::Call {
-										reciever: Some(arena.alloc_into(reciever)),
+										receiver: Some(arena.alloc_into(receiver)),
 										name: name.as_ntstrptr(),
 										args: arguments.leak(),
 										ptr : None,
