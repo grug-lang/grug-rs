@@ -48,7 +48,6 @@ mod ser {
 					"assignment": serialize_expr(assignment_expr),
 				}
 			},
-			// TODO: "parameters should always be present"
 			GlobalStatement::OnFunction(OnFunction{
 				name,
 				parameters,

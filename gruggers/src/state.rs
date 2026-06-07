@@ -275,12 +275,12 @@ pub struct GrugState {
 	/// and a list of resources used by these files
 	/// (all allocated within the same arena)
 	pub(crate) compiler_receiver: Receiver<(Arena, OwnPtr<'static, [(Result<GrugAst<'static>, Error>, &'static OsStr)]>, &'static [&'static OsStr])>,
-	/// SAFETY: The strings within the `on_functions` field is allocated within
+	/// SAFETY: The strings within the `export_functions` field is allocated within
 	/// `mod_api`. So any reference given out to this field must have the 'self
 	/// lifetime
 	/// If a later change makes mod_api mutable, these need to be allocated separately
-	// TODO: rename this to `event_functions`
-	on_functions: Vec<EventFnEntry<'static>>,
+	// TODO: rename this to `export_functions`
+	export_functions: Vec<ExportFnEntry<'static>>,
 	pub(crate) path_to_script_ids: RefCell<HashMap<OsString, GrugFileId>>,
 	next_script_id: AtomicU64,
 
@@ -289,7 +289,7 @@ pub struct GrugState {
 	pub(crate) arenas : RefCell<Vec<Arena>>,
 	// pub(crate) backend: Interpreter,
 	pub(crate) current_script: Cell<Option<GrugFileId>>,
-	pub(crate) current_on_fn_id: Cell<Option<GrugOnFnId>>,
+	pub(crate) current_export_fn_id: Cell<Option<GrugOnFnId>>,
 	pub(crate) is_errorring: Cell<bool>,
 
 	pub(crate) changes: Receiver<Result<OsString, std::io::Error>>,
@@ -301,10 +301,10 @@ impl State for GrugState {
 		let Some(current_script) = self.current_script.get() else {
 			return
 		};
-		let Some(current_on_fn_id) = self.current_on_fn_id.get() else {
+		let Some(current_export_fn_id) = self.current_export_fn_id.get() else {
 			return
 		};
-		let current_on_fn_name = self.get_on_fn_name(current_on_fn_id).unwrap();
+		let current_on_fn_name = self.get_export_fn_name(current_export_fn_id).unwrap();
 		let message = format!("{}", error);
 		self.runtime_error_handler.handle_error(
 			error, 
@@ -335,7 +335,7 @@ impl GrugState {
 		let init_globals = nt!("init_globals");
 		let mods_dir_path = OsString::from(mods_dir_path.as_ref());
 		for (entity_type, entity) in mod_api.entities() {
-			on_fns.push(EventFnEntry {
+			on_fns.push(ExportFnEntry {
 				// SAFETY: All EventFnEntries we give out have a 'self
 				// lifetime, which is the same as the 'mod_api lifetime they
 				// actually have
@@ -344,7 +344,7 @@ impl GrugState {
 				index      : 0,
 			});
 			for (i, (event_fn_name, _)) in entity.export_fns.iter().enumerate() {
-				on_fns.push(EventFnEntry{
+				on_fns.push(ExportFnEntry{
 					// SAFETY: All EventFnEntries we give out have a 'self
 					// lifetime, which is the same as the 'mod_api lifetime they
 					// actually have
@@ -389,13 +389,13 @@ impl GrugState {
 			entities: Xar::new(),
 			compiler_senders,
 			compiler_receiver: rcv,
-			on_functions: on_fns,
+			export_functions: on_fns,
 			path_to_script_ids: RefCell::new(HashMap::new()),
 			next_script_id: AtomicU64::new(0),
 			arenas: RefCell::new(Vec::new()),
 			backend,
 			current_script: Cell::new(None),
-			current_on_fn_id: Cell::new(None),
+			current_export_fn_id: Cell::new(None),
 			is_errorring: Cell::new(false),
 			changes: reciever,
 		})
@@ -405,7 +405,7 @@ impl GrugState {
 		self.mods_dir_path.as_ref()
 	}
 
-	pub fn get_export_fn_id(&self, entity_type: &str, on_fn_name: &str) -> Result<GrugOnFnId, Error> {
+	pub fn get_export_fn_id(&self, entity_type: &str, fn_name: &str) -> Result<GrugOnFnId, Error> {
 		if !self.mod_api.entities().contains_key(entity_type) {
 			return Err(Error::new(
 				ErrorKind::INIT_ERROR,
@@ -416,8 +416,8 @@ impl GrugState {
 				format_args!("mod api does not define an entity named {}", entity_type),
 			));
 		}
-		for (i, on_fn_entry) in self.on_functions.iter().enumerate() {
-			if on_fn_entry.entity_type() == entity_type && on_fn_entry.event_fn_name() == on_fn_name {
+		for (i, on_fn_entry) in self.export_functions.iter().enumerate() {
+			if on_fn_entry.entity_type() == entity_type && on_fn_entry.event_fn_name() == fn_name {
 				return Ok(i as u64)
 			}
 		}
@@ -427,19 +427,19 @@ impl GrugState {
 			"".as_ref(),
 			"",
 			SourceSpan{offset: 0, line: 0},
-			format_args!("'{}' does not export a function named '{}'", entity_type, on_fn_name),
+			format_args!("'{}' does not export a function named '{}'", entity_type, fn_name),
 		));
 	}
 	
-	pub fn get_on_fn_name(&self, on_fn_id: GrugOnFnId) -> Option<&str> {
-		self.on_functions.get(on_fn_id as usize).map(|entry| entry.event_fn_name())
+	pub fn get_export_fn_name(&self, fn_id: GrugOnFnId) -> Option<&str> {
+		self.export_functions.get(fn_id as usize).map(|entry| entry.event_fn_name())
 	}
 
-	pub fn get_on_functions(&self) -> &[EventFnEntry<'_>] {
-		&self.on_functions
+	pub fn get_export_fns(&self) -> &[ExportFnEntry<'_>] {
+		&self.export_functions
 	}
 
-	pub fn get_entity_on_functions(&self, entity_type: &str) -> Result<&[EventFnEntry<'_>], Error> {
+	pub fn get_entity_export_functions(&self, entity_type: &str) -> Result<&[ExportFnEntry<'_>], Error> {
 		if !self.mod_api.entities().contains_key(entity_type) {
 			return Err(Error::new(
 				ErrorKind::INIT_ERROR,
@@ -451,14 +451,14 @@ impl GrugState {
 			));
 		}
 		let mut start = 0;
-		while start != self.on_functions.len() && self.on_functions[start].entity_type() != entity_type {
+		while start != self.export_functions.len() && self.export_functions[start].entity_type() != entity_type {
 			start += 1;
 		}
 		let mut end = start;
-		while end != self.on_functions.len() && self.on_functions[end].entity_type() == entity_type {
+		while end != self.export_functions.len() && self.export_functions[end].entity_type() == entity_type {
 			end += 1;
 		}
-		Ok(&self.on_functions[start..end])
+		Ok(&self.export_functions[start..end])
 	}
 
 	pub unsafe fn register_host_fn(&mut self, name: &'static str, func: extern "C" fn (&GrugState, *const GrugValue) -> GrugValue) -> Result<(), Error> {
@@ -550,11 +550,12 @@ impl GrugState {
 		self.next_entity_id.store(next_id, Ordering::Relaxed);
 	}
 
+	/// Create a new entity from the input file id
 	pub fn create_entity(&self, file_id: GrugFileId) -> Option<GrugEntityHandle<'_>> {
 		let old_script   = self.current_script  .get();
-		let old_on_fn_id = self.current_on_fn_id.get();
+		let old_fn_id = self.current_export_fn_id.get();
 		self.current_script  .set(Some(file_id));
-		self.current_on_fn_id.set(Some(0));
+		self.current_export_fn_id.set(Some(0));
 
 		let entity = self.entities.insert(unsafe{GrugEntity::new_uninit(self.get_next_entity_id(), file_id)});
 		let entity = unsafe{GrugEntityHandle::new(entity)};
@@ -562,7 +563,7 @@ impl GrugState {
 		let success = self.backend.init_entity(self, unsafe{Pin::new_unchecked(&entity)});
 
 		self.current_script  .set(old_script);
-		self.current_on_fn_id.set(old_on_fn_id);
+		self.current_export_fn_id.set(old_fn_id);
 
 		if success {
 			Some(entity)
@@ -572,6 +573,7 @@ impl GrugState {
 		}
 	}
 
+	/// Destroys the entity passed in _if_ the entity was allocated from self
 	pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) {
 		// TODO: Implement Xar::contained_within and perform this check yourself
 		if self.entities.is_contained_within(entity.0) {
@@ -581,17 +583,20 @@ impl GrugState {
 		}
 	}
 
+	/// Destroy all entities 
 	pub fn clear_entities(&mut self) {
 		self.backend.clear_entities();
 		self.entities.clear();
 	}
 
-	pub fn clear_error(&self) {
+	/// Clear any currently active errors
+	fn clear_error(&self) {
 		self.is_errorring.set(false);
 	}
 
-	fn get_on_fn_index(&self, id: GrugOnFnId) -> usize {
-		self.on_functions[id as usize].index
+	/// get the index of the export function within its entity
+	fn get_export_fn_index(&self, id: GrugOnFnId) -> usize {
+		self.export_functions[id as usize].index
 	}
 }
 
@@ -601,46 +606,46 @@ impl GrugState {
 	/// the number of arguments expected by `function_name`. If there are no arguments, 
 	/// `values` may be null
 	#[must_use]
-	pub unsafe fn call_on_function_raw(&self, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
+	pub unsafe fn call_on_function_raw(&self, entity: &GrugEntity, fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
 		let old_script   = self.current_script  .get();
-		let old_on_fn_id = self.current_on_fn_id.get();
+		let old_fn_id = self.current_export_fn_id.get();
 		self.current_script  .set(Some(entity.file_id));
-		self.current_on_fn_id.set(Some(on_fn_id));
+		self.current_export_fn_id.set(Some(fn_id));
 
 		let ret_val = unsafe {
-			self.backend.call_on_function_raw(self, entity, self.get_on_fn_index(on_fn_id), values)
+			self.backend.call_on_function_raw(self, entity, self.get_export_fn_index(fn_id), values)
 		};
 
 		self.current_script  .set(old_script);
-		self.current_on_fn_id.set(old_on_fn_id);
+		self.current_export_fn_id.set(old_fn_id);
 
 		ret_val
 	}
 
 	#[must_use]
-	pub fn call_on_function(&self, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
+	pub fn call_on_function(&self, entity: &GrugEntity, fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
 		let old_script   = self.current_script  .get();
-		let old_on_fn_id = self.current_on_fn_id.get();
+		let old_fn_id = self.current_export_fn_id.get();
 		self.current_script  .set(Some(entity.file_id));
-		self.current_on_fn_id.set(Some(on_fn_id));
+		self.current_export_fn_id.set(Some(fn_id));
 
-		let ret_val = self.backend.call_on_function(self, entity, self.get_on_fn_index(on_fn_id), values);
+		let ret_val = self.backend.call_on_function(self, entity, self.get_export_fn_index(fn_id), values);
 
 		self.current_script  .set(old_script);
-		self.current_on_fn_id.set(old_on_fn_id);
+		self.current_export_fn_id.set(old_fn_id);
 
 		ret_val
 	}
 }
 
 // TODO: This should be moved to gruggers-core
-pub struct EventFnEntry<'a> {
+pub struct ExportFnEntry<'a> {
 	entity_type   : NTStrPtr<'a>,
 	event_fn_name : NTStrPtr<'a>,
 	pub index      : usize,
 }
 
-impl<'a> EventFnEntry<'a> {
+impl<'a> ExportFnEntry<'a> {
 	/// Turns the null terminated string representing the entity name into a [`&str`]
 	pub fn entity_type(&self) -> &str {
 		self.entity_type.to_str()
@@ -662,7 +667,7 @@ const _: () = const{
 	// The rust compiler currently does not guarantee the layout of slice pointer.
 	// These assertions ensure that if the assumption is broken, we get a
 	// compile error instead of random crashes
-	let x: &[EventFnEntry] = &[];
+	let x: &[ExportFnEntry] = &[];
 	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
 };
 

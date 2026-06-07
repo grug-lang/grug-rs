@@ -237,9 +237,6 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(file_text: &'a str, arena: &'a Arena, file_
 				let mut allocated = Vec::new_in(arena);
 				let mut copied_len = 0;
 
-				// TODO: Handle Escaped strings
-				//
-				// Just allocate the new string in the arena, you don't even need Cow
 				while i < file_text.len() && file_text[i] != b'"' && !is_escaped {
 					if is_escaped {
 						is_escaped = false;

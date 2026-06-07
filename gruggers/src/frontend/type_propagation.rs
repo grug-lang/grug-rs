@@ -634,7 +634,6 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		}
 		for (param, arg) in signature.iter().zip(arguments) {
 			let arg_result_ty = self.fill_expr(helper_fns, export_fns, arg)?;
-			// TODO: Make this better
 			// If argument is resource
 			if let GrugType::Resource{extension} = param.ty 
 				&& let ExprData::Resource(ref mut value) = arg.data {
@@ -658,16 +657,16 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					format_args!("The host function '{}' expects an entity string, so put an 'e' in front of string \"{}\"", function_name, string)
 				);
 			// if argument is void
-			} else if *arg.result_type.as_ref().unwrap() == &GrugType::Void {
+			} else if &arg_result_ty == &GrugType::Void {
 				return self.new_type_propagator_error(
 					arg.span,
 					format_args!("Function call '{}' expected the type {} for argument '{}', but got a function call that doesn't return anything", function_name, param.ty, param.name)
 				);
 			// id type coersion to id
-			} else if let GrugType::Id{custom_name: None} = param.ty && let Some(GrugType::Id{custom_name: _}) = arg.result_type {
+			} else if let GrugType::Id{custom_name: None} = param.ty && let GrugType::Id{custom_name: _} = arg_result_ty {
 				arg.result_type = Some(&GrugType::Id{custom_name: None});
 			// mismatch
-			} else if Some(&param.ty) != arg.result_type {
+			} else if param.ty != arg_result_ty {
 				return self.new_type_propagator_error(
 					arg.span,
 					format_args!("Function call '{}' expected the type {} for argument '{}', but got {}", function_name, param.ty, param.name, arg_result_ty)

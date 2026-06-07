@@ -3,7 +3,7 @@
 //! These functions have the same safety requirements as the equivalent
 //! functions in state.rs
 #![allow(improper_ctypes_definitions)]
-use crate::state::{EventFnEntry, GrugEntityHandle, GrugInitSettings, GrugState, Files, FileInfo};
+use crate::state::{ExportFnEntry, GrugEntityHandle, GrugInitSettings, GrugState, Files, FileInfo};
 use crate::ntstring::NTStrPtr;
 use crate::types::{GrugFileId, GrugOnFnId, GrugEntity, GrugValue, GameFnPtrState, INVALID_GRUG_SCRIPT_ID};
 use crate::error::{Error, GrugError};
@@ -62,7 +62,6 @@ pub extern "C" fn grug_update(state: &CState) -> &[FileInfo<'_>] {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_compile_file(state: &CState, file_path: NTStrPtr<'_>) -> GrugFileId {
-	
 	match state.0.compile_grug_file(file_path.to_str()) {
 		Ok(id) => id,
 		Err(err) => {
@@ -85,8 +84,8 @@ pub extern "C" fn grug_deinit_entity(state: &CState, handle: GrugEntityHandle<'_
 const INVALID_GRUG_ON_FN_ID: GrugOnFnId = u64::MAX;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_get_fn_ids(state: &CState) -> &[EventFnEntry<'_>] {
-	state.0.get_on_functions()
+pub extern "C" fn grug_get_fn_ids(state: &CState) -> &[ExportFnEntry<'_>] {
+	state.0.get_export_fns()
 }
 
 #[unsafe(no_mangle)]
