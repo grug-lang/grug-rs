@@ -105,7 +105,7 @@ impl std::fmt::Display for TokenType {
 	}
 }
 
-pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, file_path: P) -> Result<Vec<Token<'b>, &'a Arena>, Error> {
+pub fn tokenize<'a, P: AsRef<OsStr>>(file_text: &'a str, arena: &'a Arena, file_path: P) -> Result<Vec<Token<'a>, &'a Arena>, Error> {
 	let file_path = file_path.as_ref();
 	let mut tokens = Vec::new_in(arena);
 	let mut cur_line = 1;
@@ -223,9 +223,6 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 			continue;
 		}
 			
-		// TODO: Does grug allow tabs for indentation and if it does, should each tab be a separate token
-		// token_match!(b"\t" => TokenType::Indentation);
-
 		// Entitiy strings, resource strings, and basic strings
 		// Strings
 		for (start, ty) in [(&b"r\""[..], TokenType::Resource), (&b"e\""[..], TokenType::Entity), (&b"\""[..], TokenType::String)] {
@@ -235,17 +232,38 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 				let start_index = i;
 				let start_line = cur_line;
 
+				let mut is_escaped = false;
+
+				let mut allocated = Vec::new_in(arena);
+				let mut copied_len = 0;
+
 				// TODO: Handle Escaped strings
 				//
 				// Just allocate the new string in the arena, you don't even need Cow
-				while i < file_text.len() && file_text[i] != b'"' {
+				while i < file_text.len() && file_text[i] != b'"' && !is_escaped {
+					if is_escaped {
+						is_escaped = false;
+						let next_char = match file_text[i] {
+							b't'  => b'\t',
+							b'n'  => b'\n',
+							b'r'  => b'\r',
+							x => x,
+						};
+						allocated.push(next_char);
+						copied_len = i - start_index;
+						// only normal strings can be escaped 
+					} else if file_text[i] == b'\\' && ty == TokenType::String {
+						is_escaped = true;
+						allocated.extend_from_slice(&file_text[(start_index + copied_len)..i]);
+						copied_len = i - start_index;
+					}
 					if file_text[i] == b'\0' {
 						return Err(new_tokenizer_error!(
 							(i, cur_line) => 
 							"Unexpected null byte on line {}", cur_line
 						));
 					}
-					if i + 2 < file_text.len() && (&file_text[i..=(i+2)] == b"\\\r\n" || &file_text[i..=(i+1)] == b"\\\n") {
+					if i + 2 < file_text.len() && is_escaped && (&file_text[i..=(i+2)] == b"\\\r\n" || &file_text[i..=(i+1)] == b"\\\n") {
 						return Err(new_tokenizer_error!(
 							(i, cur_line) => 
 							"Unexpected line break in string on line {}", cur_line
@@ -262,10 +280,15 @@ pub fn tokenize<'a, 'b, P: AsRef<OsStr>>(file_text: &'b str, arena: &'a Arena, f
 						"Unclosed \" on line {}", start_line
 					));
 				}
+				let value = if !allocated.is_empty() {
+					unsafe{str::from_utf8_unchecked(allocated.leak())}
+				} else {
+					unsafe{str::from_utf8_unchecked(&file_text[start_index..(i)])}
+				};
 				tokens.push(Token{
 					ty,
 					// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-					value: unsafe{str::from_utf8_unchecked(&file_text[start_index..(i)])},
+					value,
 					span: SourceSpan{offset: quote_start_index, line: start_line},
 				});
 				i += 1;

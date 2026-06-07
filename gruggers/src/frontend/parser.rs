@@ -34,8 +34,6 @@ enum ParserError<'a> {
 	ExpectedSpace {
 		got: Token<'a>
 	},
-	// TODO: This is a bad error message
-	// "token_index 1 was out of bounds in peek_token()"
 	OutOfTokensError,
 	ExceededMaxParsingDepth,
 	IndentationMismatch{
@@ -97,8 +95,6 @@ impl<'a> ParserError<'a> {
 				got.span,
 				format_args!("Expected space (' '), but got {} at line {}", got.ty, got.span.line),
 			),
-			// TODO: This is a bad error message
-			// "token_index 1 was out of bounds in peek_token()"
 			Self::OutOfTokensError => Error::new(
 				ErrorKind::PARSER_ERROR,
 				ast.current_function,
@@ -511,8 +507,6 @@ impl<'a> Ast<'a> {
 		Ok(arguments.leak())
 	}
 
-	// TODO: Get the grammar for statements
-	// This parser consumes a space before consuming the curly braces
 	fn parse_statements(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<&'a mut [Statement<'a>], ParserError<'a>> {
 		assert_parsing_depth(parsing_depth)?;
 		let &[_, _, mut last_new_line] = consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
@@ -746,11 +740,10 @@ impl<'a> Ast<'a> {
 			_ => unreachable!(),
 		}
 
-		// TODO: This Me error should be folded into the other Me error within
-		// the branch above but it has to be separate to match the required error message
 		if local_name == "me" {
 			return self.new_parse_error(
 				name_token.span,
+				// TODO: "Cannot assign to 'me'"
 				format_args!("Assigning a new value to the entity's 'me' variable is not allowed"),
 			);
 		}
@@ -1058,17 +1051,6 @@ fn is_end_of_block<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, indentation
 		TokenType::CloseBrace => Ok(true),
 		TokenType::NewLine => Ok(false),
 		TokenType::Indentation => {
-			// TODO: I don't understand this?
-			//
-			// 	    fn on_something() {
-			// 	    	if (boolean) {
-			//				some_game_fn()
-			// 	  ->	}
-			// 	    }
-			// 	There would be an indentation token at the arrow with 4 spaces
-			// 	(indentation is going from 2 to 1) and this branch detects that
-			//
-			// 	Would'nt it be better to check for the close braces directly
 			Ok(next_token.value.len() == (indentation - 1) * SPACES_PER_INDENT)
 		}
 		_ => Err(ParserError::ExpectedIndentation {

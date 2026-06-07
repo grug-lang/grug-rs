@@ -2,23 +2,24 @@ use crate::types::{
 	GrugValue, GrugFileId, GrugEntity, GameFnPtr,
 };
 use crate::ast::{
+	GrugAst,
 	Expr, ExprData, OnFunction, Statement,
 	BinaryOperator, GrugType, HelperFunction, UnaryOperator
 };
 use crate::ntstring::{NTStrPtr, NTStr};
+use crate::arena::Arena;
 use crate::xar::{ErasedXar, ErasedPtr};
+use crate::backend::Backend;
+
 use gruggers_core::runtime_error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
 use gruggers_core::state::State;
 use gruggers_core::export_backend;
-use crate::backend::Backend;
-use crate::ast::GrugAst;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::pin::Pin;
 use std::cell::{Cell, RefCell};
 use std::alloc::Layout;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 struct Compiler<'a> {
@@ -261,21 +262,8 @@ impl<'a> Compiler<'a> {
 			ExprData::String(value)   |
 			ExprData::Resource(value) |
 			ExprData::Entity(value)   => {
-				match instructions.strings.get(value.to_ntstr()) {
-					None => {
-						let value = NTStr::arc_from_str(value.to_ntstr());
-						// SAFETY: This returned instruction stream is only valid as long as this list of strings is available
-						let string = unsafe{value.as_ntstrptr().detach_lifetime()};
-						let data_loc = instructions.insert_string(string);
-						instructions.stream.push(Op::LoadStr{data_loc});
-						instructions.strings.insert(value);
-					}
-					Some(value) => {
-						let string = unsafe{value.as_ntstrptr().detach_lifetime()};
-						let data_loc = instructions.insert_string(string);
-						instructions.stream.push(Op::LoadStr{data_loc});
-					}
-				}
+				let data_loc = instructions.insert_string(value.to_str());
+				instructions.stream.push(Op::LoadStr{data_loc});
 			}
 			ExprData::Number (value, _) => {
 				let data_loc = instructions.insert_number(*value);
@@ -681,11 +669,11 @@ struct Instructions{
 		)>
 	>,
 	constants: Vec<ConstantData>,
-	// TODO: this Arc<str> should prolly be replaced with an &'static into an arena
-	helper_fn_locations: HashMap<Arc<str>, /* constant location */ u32>,
+	helper_fn_locations: HashMap<&'static str, /* constant location */ u32>,
 	game_fn_locations: HashMap</* GameFnPtr as usize */ usize, /* constant location */ u32>,
-	fn_labels: HashMap<usize, Arc<str>>,
-	strings: HashSet<Arc<NTStr>>,
+	fn_labels: HashMap<usize, &'static str>,
+	strings: HashMap<&'static NTStr, u32>,
+	_arena: Arena,
 }
 
 impl Instructions {
@@ -697,23 +685,32 @@ impl Instructions {
 			helper_fn_locations: HashMap::new(),
 			game_fn_locations: HashMap::new(),
 			fn_labels: HashMap::new(),
-			strings: HashSet::new(),
+			strings: HashMap::new(),
 			// jumps_count: 0,
 			// jumps_start: HashMap::new(),
 			// jumps_end: HashMap::new(),
+			_arena: Arena::new(),
 		}
+	}
+
+	pub fn insert_string(&mut self, string: &'_ str) -> u32 {
+		self.strings.get(string).copied().unwrap_or_else(|| {
+			let ret_val = self.constants.len();
+			// SAFETY: bite me
+			let string = unsafe{std::mem::transmute::<&NTStr, &'static NTStr>(self._arena.copy_str_into_nt(string))};
+
+			self.strings.insert(string, ret_val as u32);
+			// SAFETY: This string cannot last longer than self
+			self.constants.push(ConstantData{string: unsafe{string.as_ntstrptr().detach_lifetime()}});
+
+			assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
+			ret_val as u32
+		})
 	}
 
 	pub fn insert_number(&mut self, number: f64) -> u32 {
 		let ret_val = self.constants.len();
 		self.constants.push(ConstantData{number});
-		assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
-		ret_val as u32
-	}
-
-	pub fn insert_string(&mut self, string: NTStrPtr<'static>) -> u32 {
-		let ret_val = self.constants.len();
-		self.constants.push(ConstantData{string});
 		assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
 		ret_val as u32
 	}
@@ -753,7 +750,8 @@ impl Instructions {
 	}
 
 	pub fn insert_on_fn(&mut self, name: &str, index: usize, location: usize, argument_count: usize, locals_size: u32) {
-		let name = Arc::from(name);
+		// SAFETY: we never give out a static str
+		let name = unsafe{std::mem::transmute::<&str, &'static str>(self._arena.copy_str_into(name))};
 		if self.on_fn_locations.len() <= index {
 			self.on_fn_locations.resize(index + 1, None);
 		}
@@ -766,11 +764,12 @@ impl Instructions {
 	}
 
 	pub fn insert_helper_fn(&mut self, name: &str, args: u32, locals_size: u32, location: usize) {
-		let name = Arc::from(name);
+		// SAFETY: we never give out a static str
+		let name = unsafe{std::mem::transmute::<&str, &'static str>(self._arena.copy_str_into(name))};
 		let const_location = self.constants.len();
 		assert!(const_location < u32::MAX as usize);
 		self.constants.push(ConstantData{helper_fn_data: (args, locals_size, location)});
-		self.helper_fn_locations.insert(Arc::clone(&name), const_location as u32);
+		self.helper_fn_locations.insert(name, const_location as u32);
 		self.fn_labels.insert(location, name);
 	}
 

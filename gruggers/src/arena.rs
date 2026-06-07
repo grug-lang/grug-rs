@@ -500,9 +500,20 @@ mod arena_impl {
 		///
 		/// if `bytes` contains a null byte
 		pub fn copy_str_into_nt(&self, bytes: &str) -> &NTStr {
+			assert!(!bytes.as_bytes().contains(&b'\0'));
+			let ptr = self.alloc(Layout::array::<u8>(bytes.len() + 1)
+				.expect("invalid layout for slice"))
+				.expect("unable to allocate")
+				.cast::<u8>().as_ptr();
+			
+			// SAFETY: allocation is of length `bytes.len() + 1`
+			unsafe{ptr.copy_from(bytes.as_ptr(), bytes.len())};
+			unsafe{ptr.add(bytes.len()).write(b'\0')};
+			// SAFETY: ptr is trivially aligned and valid to read for `bytes.len() + 1` bytes
+			let slice = unsafe{std::slice::from_raw_parts(ptr, bytes.len() + 1)};
+
 			// SAFETY: input is a str
-			// input is null terminated
-			unsafe{NTStr::from_str_unchecked(std::str::from_utf8_unchecked(self.copy_bytes_into(bytes.as_ref())))}
+			unsafe{NTStr::from_str_unchecked(std::str::from_utf8_unchecked(slice))}
 		}
 
 		/// Allocates a slice of items into `self` from an iterator

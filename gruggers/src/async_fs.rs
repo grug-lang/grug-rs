@@ -118,11 +118,17 @@ mod windows {
 		}
 
 		for (iosb, file_data) in iosbs.iter_mut().zip(&mut files_data) {
-			let Ok(file_data) = file_data else {continue};
 			if unsafe{!iosb.status.status.is_success()} {
-				// TODO: replace with error
-				panic!("read failed: {:x?}", unsafe{iosb.status.status});
+				*file_data = Err(Error::new(
+					ErrorKind::IO_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("IO Error (status is not STATUS_PENDING): {:?}", unsafe{iosb.status.status}),
+				));
 			}
+			let Ok(file_data) = file_data else {continue};
 			let new_ptr = std::ptr::slice_from_raw_parts_mut(file_data.cast::<u8>(), iosb.information as usize);
 			*file_data = new_ptr;
 		}

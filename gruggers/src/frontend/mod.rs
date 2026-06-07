@@ -647,7 +647,6 @@ fn check_custom_id_is_pascal<'a>(entity_type: &'a OsStr, path: &'_ OsStr) -> Res
 		)
 	)?;
 	let mut chars = entity_type.chars();
-	// TODO: This only triggers if entity_type is empty, which should never happen?
 	if let Some(first) = chars.next() && !first.is_uppercase() {
 		return Err(Error::new(
 			ErrorKind::FILE_NAME_ERROR,
