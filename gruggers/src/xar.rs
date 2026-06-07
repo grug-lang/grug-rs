@@ -7,7 +7,6 @@ use std::cell::Cell;
 mod typed_xar {
 	use super::*;
 
-	// TODO: Test get_mut of XarHandle
 	/// A growable exponential array 
 	/// Insertion returns a pinned pointer to a value.
 	/// The values inside the Xar are not dropped unless delete is called with a pointer to the item
@@ -416,8 +415,6 @@ mod erased_xar {
 		item_layout: Layout,
 		free_list: Cell<Option<ErasedPtr<'static>>>,
 		chunks: [Cell<Option<ErasedPtr<'static>>>; 61],
-		// TODO:
-		// allocator: A
 	}
 
 	impl ErasedXar {

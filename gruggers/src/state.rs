@@ -279,7 +279,6 @@ pub struct GrugState {
 	/// `mod_api`. So any reference given out to this field must have the 'self
 	/// lifetime
 	/// If a later change makes mod_api mutable, these need to be allocated separately
-	// TODO: rename this to `export_functions`
 	export_functions: Vec<ExportFnEntry<'static>>,
 	pub(crate) path_to_script_ids: RefCell<HashMap<OsString, GrugFileId>>,
 	next_script_id: AtomicU64,
@@ -360,7 +359,6 @@ impl GrugState {
 
 		let (sender, reciever) = channel();
 		watch_changes(&mods_dir_path, move |changes| sender.send(changes).is_ok()).unwrap();
-		// TODO: un-hardcode this
 		let num_threads = {
 			let available_threads = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(1);
 			if available_threads <= 2 {1} else {available_threads - 2}
@@ -575,7 +573,6 @@ impl GrugState {
 
 	/// Destroys the entity passed in _if_ the entity was allocated from self
 	pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) {
-		// TODO: Implement Xar::contained_within and perform this check yourself
 		if self.entities.is_contained_within(entity.0) {
 			self.backend.destroy_entity_data(&entity);
 			// `self.entities.contained_within` returns true so this entity must exist within self
@@ -590,7 +587,7 @@ impl GrugState {
 	}
 
 	/// Clear any currently active errors
-	fn clear_error(&self) {
+	pub fn clear_error(&self) {
 		self.is_errorring.set(false);
 	}
 

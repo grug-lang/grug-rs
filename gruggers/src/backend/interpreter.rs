@@ -22,7 +22,7 @@ use allocator_api2::vec::Vec;
 
 fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'arena> {
 	let mut members = Vec::with_capacity_in(ast.members.len(), arena);
-	for member in ast.members {
+	for member in ast.members.iter() {
 		let name = copy_string(member.name, arena);
 		let ty = copy_type(member.ty, arena);
 		let assignment_expr = copy_expr(&member.assignment_expr, arena);
@@ -35,7 +35,7 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 	}
 
 	let mut on_functions = Vec::with_capacity_in(ast.on_functions.len(), arena);
-	for on_function in ast.on_functions {
+	for on_function in ast.on_functions.iter() {
 		let Some(on_function) = on_function else {on_functions.push(None); continue;};
 		let name = copy_string(on_function.name, arena);
 		let mut parameters = Vec::with_capacity_in(on_function.parameters.len(), arena);
@@ -57,7 +57,7 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 	}
 
 	let mut helper_functions = Vec::with_capacity_in(ast.helper_functions.len(), arena);
-	for helper_function in ast.helper_functions {
+	for helper_function in ast.helper_functions.iter() {
 		let name = copy_string(helper_function.name, arena);
 		let return_type = copy_type(helper_function.return_type, arena);
 		let mut parameters = Vec::with_capacity_in(helper_function.parameters.len(), arena);
@@ -297,10 +297,10 @@ impl CallStack {
 			.expect("must have scope");
 	}
 
-	fn add_local_variable(&mut self, name: &'static str, value: GrugValue) {
+	fn add_local_variable(&mut self, name: &str, value: GrugValue) {
 		assert!(self.local_variables.last_mut()
 			.expect("must have stack frame").last_mut()
-			.expect("last frame must have scope").insert(name, value)
+			.expect("last frame must have scope").insert(unsafe{std::mem::transmute::<&str, &'static str>(name)}, value)
 			.is_none(), "variable already exists");
 	}
 
@@ -343,7 +343,7 @@ impl Interpreter {
 	}
 
 	#[expect(clippy::too_many_arguments)]
-	fn run_function<GrugState: State>(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &'static [Parameter], values: &[GrugValue], statements: &'static [Statement]) -> Option<GrugValue> {
+	fn run_function<GrugState: State>(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &'static [Parameter], values: &[GrugValue], statements: &[Statement]) -> Option<GrugValue> {
 		if call_stack.local_variables.len() > MAX_RECURSION_LIMIT {
 			state.set_runtime_error(RuntimeError::StackOverflow);
 			return None
@@ -370,7 +370,7 @@ impl Interpreter {
 		Some(value)
 	}
 
-	fn run_statements<GrugState: State>(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, statements: &'static [Statement]) -> Option<GrugControlFlow> {
+	fn run_statements<GrugState: State>(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, statements: &[Statement]) -> Option<GrugControlFlow> {
 		call_stack.push_scope();
 		let mut ret_val = GrugControlFlow::None;
 		'outer: for statement in statements {
@@ -483,7 +483,7 @@ impl Interpreter {
 		Some(ret_val)
 	}
 
-	fn run_expr<GrugState: State>(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, expr: &'static Expr) -> Option<GrugValue> {
+	fn run_expr<GrugState: State>(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, expr: &Expr) -> Option<GrugValue> {
 		if call_stack.start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
 			state.set_runtime_error(RuntimeError::ExceededTimeLimit);
 			return None;
@@ -491,9 +491,9 @@ impl Interpreter {
 		Some(match &expr.data {
 			ExprData::True => GrugValue{bool: 1},
 			ExprData::False => GrugValue{bool: 0},
-			ExprData::String(value) => GrugValue{string: *value},
-			ExprData::Resource(value) => GrugValue{string: *value},
-			ExprData::Entity(value) => GrugValue{string: *value},
+			ExprData::String(value) => GrugValue{string: unsafe{std::mem::transmute::<NTStrPtr, NTStrPtr<'static>>(*value)}},
+			ExprData::Resource(value) => GrugValue{string: unsafe{std::mem::transmute::<NTStrPtr, NTStrPtr<'static>>(*value)}},
+			ExprData::Entity(value) => GrugValue{string: unsafe{std::mem::transmute::<NTStrPtr, NTStrPtr<'static>>(*value)}},
 			ExprData::Number (value, _) => GrugValue{number: *value},
 			ExprData::Identifier(name) => {
 				let name = name.to_str();
@@ -574,7 +574,7 @@ impl Interpreter {
 			} => {
 				let name = name.to_str();
 				let values = args.iter().map(|argument| self.run_expr(call_stack, state, file, entity, argument)).collect::<Option<Vec<_>>>()?;
-				for helper_fn in file.file.helper_functions {
+				for helper_fn in file.file.helper_functions.iter() {
 					if helper_fn.name.to_str() != name {
 						continue;
 					}

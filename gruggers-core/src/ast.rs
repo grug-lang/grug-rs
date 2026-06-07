@@ -738,7 +738,7 @@ pub struct GrugAst<'a> {
 	/// ```
 	///
 	/// These variable declarations must define both a type and a initializer
-	pub members: &'a [MemberVariable<'a>],
+	pub members: &'a mut [MemberVariable<'a>],
 	/// Represents all the on function declarations in the file
 	///
 	/// ```text
@@ -755,7 +755,7 @@ pub struct GrugAst<'a> {
 	///
 	/// If an on function is not present in the file, that entry will be `None`
 	/// (or a null pointer on the c side)
-	pub on_functions: &'a [Option<&'a OnFunction<'a>>],
+	pub on_functions: &'a mut [Option<&'a OnFunction<'a>>],
 	/// Represents all the helper function declarations in the file
 	///
 	/// ```text
@@ -774,7 +774,7 @@ pub struct GrugAst<'a> {
 	///     return game_fn_error("invalid color id")
 	/// }
 	/// ```
-	pub helper_functions: &'a [HelperFunction<'a>],
+	pub helper_functions: &'a mut [HelperFunction<'a>],
 }
 
 const _: () = const{
