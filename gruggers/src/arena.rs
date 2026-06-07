@@ -522,6 +522,12 @@ mod arena_impl {
 			vec.extend(i);
 			vec.leak()
 		}
+
+		pub fn alloc_into<T>(&self, value: T) -> &mut T {
+			let ptr = self.allocate(Layout::new::<T>()).unwrap().cast::<T>();
+			unsafe{ptr.write(value);}
+			unsafe{&mut *ptr.as_ptr()}
+		}
 	}
 
 	impl Drop for Arena {

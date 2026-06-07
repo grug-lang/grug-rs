@@ -818,6 +818,7 @@ impl<'a> Ast<'a> {
 						if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
 							Expr{
 								data: ExprData::Call {
+									reciever: None,
 									name: value.as_ntstrptr(),
 									args: Vec::new().leak(),
 									ptr : None,
@@ -836,6 +837,7 @@ impl<'a> Ast<'a> {
 									let [_] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
 									break Expr {
 										data: ExprData::Call {
+											reciever: None,
 											name: value.as_ntstrptr(),
 											args: arguments.leak(),
 											ptr : None,

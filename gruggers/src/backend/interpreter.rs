@@ -6,7 +6,7 @@ use crate::ast::{
 use crate::xar::Xar;
 use crate::arena::Arena;
 use crate::backend::Backend;
-use crate::ntstring::{NTStr, NTStrPtr};
+use crate::ntstring::{NTStrPtr};
 
 use gruggers_core::runtime_error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
 use gruggers_core::state::State;
@@ -199,14 +199,16 @@ fn copy_expr<'arena>(expr: &Expr<'_>, arena: &'arena Arena) -> Expr<'arena> {
 			}
 		},
 		ExprData::Call {
+			reciever,
 			name,
 			args,
 			ptr,
 			name_span,
 		} => {
 			ExprData::Call {
+				reciever: reciever.as_ref().map(|x| &mut *arena.alloc_into(copy_expr(x, arena))),
 				name: copy_string(*name, arena),
-				args: copy_exprs(args, arena),
+				args: arena.slice_from_iter(args.iter().map(|expr| copy_expr(expr, arena))),
 				ptr: *ptr,
 				name_span: *name_span,
 			}
@@ -218,12 +220,6 @@ fn copy_expr<'arena>(expr: &Expr<'_>, arena: &'arena Arena) -> Expr<'arena> {
 		data,
 		span: expr.span,
 	}
-}
-
-fn copy_exprs<'arena>(exprs: &[Expr<'_>], arena: &'arena Arena) -> &'arena mut [Expr<'arena>] {
-	let mut vec = Vec::with_capacity_in(exprs.len(), arena);
-	exprs.iter().for_each(|expr| vec.push(copy_expr(expr, arena)));
-	vec.leak()
 }
 
 fn copy_type<'arena>(ty: GrugType<'_>, arena: &'arena Arena) -> GrugType<'arena> {
@@ -241,7 +237,7 @@ fn copy_type<'arena>(ty: GrugType<'_>, arena: &'arena Arena) -> GrugType<'arena>
 }
 
 fn copy_string<'arena>(string: NTStrPtr<'_>, arena: &'arena Arena) -> NTStrPtr<'arena> {
-	Box::leak(NTStr::box_from_str_in(string.to_str(), arena)).as_ntstrptr()
+	arena.copy_str_into_nt(string.to_str()).as_ntstrptr()
 }
 
 struct GrugEntityData {

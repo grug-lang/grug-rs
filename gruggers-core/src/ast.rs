@@ -398,25 +398,42 @@ pub enum ExprData<'a> {
 		/// Span of the operator
 		op_span: SourceSpan
 	},
-	/// Represents a function call.
+	/// Represents a function call
 	///
-	/// Can either be a helper function call or a game function call.
+	/// Can either be a helper function call, a game function call or a method call.
 	/// Represents a game function call if the `ptr` field is not [`None`]
+	/// And represents a method call if the reciever field is not [`None`]
 	///
+	/// for a function call, the fields are as defined below
 	/// ```text
 	/// x: number = helper_max(25 + 32, 03 + 28)
 	///    `name` - ^^^^^^^^^^ ^^^^^^^  ^^^^^^^ - `args[1]`
 	///                        |
 	///                        + - `args[0]`
 	/// ```
+	///
+	/// for a method call, the fields are as defined below
+	/// ```text
+	/// vec: VecNumber = vec_number_new()
+	/// y: number = vec.get(2, 30)
+	///             ^^^ ^^^ ^  ^^ - `args[1]`
+	///             |   |   |
+	///             |   |   + - `args[0]`
+	///             |   |
+	///             |   + - `name`
+	///             |
+	///             + - `reciever`
+	/// ```
 	Call {
-		/// Name of the function
+		/// Reciever of the method
+		reciever: Option<&'a mut Expr<'a>>,
+		/// Name of the function or method
 		name : NTStrPtr<'a>,
 		/// Expressions for each of the arguments of the function call
 		args : &'a mut [Expr<'a>],
-		/// Pointer to the game function if this expression is a game function call
+		/// Pointer to the host function if this expression is a game function call
 		ptr  : Option<GameFnPtr>,
-		/// Span of the function name name
+		/// Span of the function or method name,
 		name_span: SourceSpan,
 	},
 	/// Represents a parenthesized expression

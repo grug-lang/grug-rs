@@ -425,6 +425,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				self.check_global_expr(right, name)?;
 			},
 			ExprData::Call{
+				reciever: None,
 				name: fn_name,
 				args,
 				ptr : _,
@@ -439,6 +440,15 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				}
 				args.iter().map(|argument| self.check_global_expr(argument, name))
 					.collect::<Result<Vec<_>, _>>()?;
+			},
+			ExprData::Call{
+				reciever: Some(_),
+				name: _,
+				args: _,
+				ptr : _,
+				name_span: _,
+			} => {
+				unimplemented!();
 			},
 			ExprData::Parenthesized(expr) => self.check_global_expr(expr, name)?,
 		}
@@ -562,6 +572,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				}
 			},
 			ExprData::Call{
+				reciever: None,
 				name: fn_name,
 				args,
 				ptr ,
@@ -600,6 +611,15 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					);
 				}
 			},
+			ExprData::Call{
+				reciever: Some(_),
+				name: _,
+				args: _,
+				ptr : _,
+				name_span: _,
+			} => {
+				unimplemented!()
+			}
 			ExprData::Parenthesized(expr) => {
 				self.fill_expr(helper_fns, export_fns, expr)?
 			},
