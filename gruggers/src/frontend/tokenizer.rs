@@ -24,6 +24,7 @@ pub enum TokenType {
 	ForwardSlash,
 	Comma,
 	Colon,
+	Dot,
 	NewLine,
 	DoubleEquals,
 	NotEquals,
@@ -69,6 +70,7 @@ impl std::fmt::Display for TokenType {
 			Self::ForwardSlash => write!(f, "'/'"),
 			Self::Comma => write!(f, "','"),
 			Self::Colon => write!(f, "':'"),
+			Self::Dot => write!(f, "'.'"),
 			Self::NewLine => write!(f, "line break ('\\n')"),
 			Self::DoubleEquals => write!(f, "'=='"),
 			Self::NotEquals => write!(f, "'!='"),
@@ -217,6 +219,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(file_text: &'a str, arena: &'a Arena, file_
 		token_match!(b"/" => TokenType::ForwardSlash);
 		token_match!(b"," => TokenType::Comma);
 		token_match!(b":" => TokenType::Colon);
+		token_match!(b"." => TokenType::Dot);
 		token_match!(b"\n" => TokenType::NewLine, {cur_line += 1;});
 		token_match!(b"\r\n" => TokenType::NewLine, {cur_line += 1;});
 		token_match!(b"==" => TokenType::DoubleEquals);

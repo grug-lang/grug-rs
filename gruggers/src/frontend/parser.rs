@@ -918,6 +918,60 @@ impl<'a> Ast<'a> {
 			}
 		};
 		while let Ok([space, op]) = peek_next_tokens(tokens) {
+			// Actually a method call
+			if let Ok([_, name]) = consume_next_token_types(tokens, &[TokenType::Dot, TokenType::Word]) {
+				let reciever = current;
+				let name_span = name.span;
+				let name: &'a NTStr  = arena.copy_str_into_nt(name.value);
+				// a word token can actually be a function call
+				let next_token = get_next_token(tokens)?;
+				if next_token.ty == TokenType::OpenParenthesis {
+					// immediate ")" | (expr + ("," + " " + expr)*) + ")"
+					
+					current = if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
+						Expr{
+							span: reciever.span,
+							data: ExprData::Call {
+								reciever: Some(arena.alloc_into(reciever)),
+								name: name.as_ntstrptr(),
+								args: Vec::new().leak(),
+								ptr : None,
+								name_span,
+							},
+							result_type: None,
+						}
+					} else {
+						let mut arguments = Vec::new_in(arena);
+						loop {
+							arguments.push(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?);
+							if let Ok([_, _]) = consume_next_token_types(tokens, &[TokenType::Comma, TokenType::Space]) {
+								
+							} else {
+								let [_] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
+								break Expr {
+									span: reciever.span,
+									data: ExprData::Call {
+										reciever: Some(arena.alloc_into(reciever)),
+										name: name.as_ntstrptr(),
+										args: arguments.leak(),
+										ptr : None,
+										name_span
+									},
+									result_type: None,
+								}
+							}
+						}
+					};
+				} else {
+					// Reserved for struct field accesses
+					return self.new_parse_error(
+						next_token.span,
+						format_args!("Method call expected '('")
+					);
+				}
+				continue;
+			}
+			// normal expresions must have a space
 			let TokenType::Space = space.ty else {
 				break;
 			};
