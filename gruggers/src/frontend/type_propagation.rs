@@ -76,33 +76,55 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		))
 	}
 
-	pub fn fill_result_types(mut self, entity_type: &str, ast: &mut Ast<'arena>) -> Result<&'arena [&'arena OsStr], Error> {
-		self.add_global_variable(
+	pub fn fill_result_types(
+		entity: &'mod_api ModApiEntity, 
+		game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiHostFn>, 
+		game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, 
+		mod_name: &'arena OsStr, 
+		mods_dir_path: &'mod_api OsStr, 
+		file_text: &'arena str,
+		file_path: &'arena OsStr,
+		entity_type: &str, 
+		ast: &mut Ast<'arena>,
+		arena: &'arena Arena,
+	) -> Result<&'arena [&'arena OsStr], Error> {
+		let mut type_propagator = Self::new(
+			entity, 
+			game_fns,
+			game_fn_ptrs,
+			mod_name,
+			mods_dir_path,
+			file_text, 
+			file_path,
+			arena,
+		);
+
+		type_propagator.add_global_variable(
 			nt!("me"), 
-			GrugType::Id{custom_name: Some(Box::leak(NTStr::box_from_str_in(entity_type, self.arena)).as_ntstrptr())},
+			GrugType::Id{custom_name: Some(Box::leak(NTStr::box_from_str_in(entity_type, type_propagator.arena)).as_ntstrptr())},
 			SourceSpan{line: 0, offset: 0}
 		)?;
 
 		let variables = ast.global_statements
 			.iter_mut().filter_map(|st| match st {GlobalStatement::Variable(x) => Some(x), _ => None});
 		for variable in variables {
-			self.check_global_expr(&variable.assignment_expr, variable.name.to_str())?;
-			let result_ty = self.fill_expr(&ast.local_fn_signatures, &ast.export_fn_signatures, &mut variable.assignment_expr)?;
+			type_propagator.check_global_expr(&variable.assignment_expr, variable.name.to_str())?;
+			let result_ty = type_propagator.fill_expr(&ast.local_fn_signatures, &ast.export_fn_signatures, &mut variable.assignment_expr)?;
 
 			if let ExprData::Identifier(name) = &variable.assignment_expr.data 
 				&& name.to_str() == "me" {
-				return self.new_type_propagator_error(
+				return type_propagator.new_type_propagator_error(
 					variable.assignment_expr.span,
 					format_args!("Global variables can't be assigned 'me'")
 				);
 			}
 			if !(variable.ty == GrugType::Id{custom_name: None} && matches!(result_ty, GrugType::Id{..})) && result_ty != variable.ty {
-				return self.new_type_propagator_error(
+				return type_propagator.new_type_propagator_error(
 					variable.assignment_expr.span,
 					format_args!("Can't assign {} to '{}', which has type {}", result_ty, variable.name, variable.ty)
 				);
 			}
-			self.add_global_variable(variable.name.to_str(), result_ty, variable.span)?;
+			type_propagator.add_global_variable(variable.name.to_str(), result_ty, variable.span)?;
 		}
 
 		let mut previous_on_fn_index = 0;
@@ -111,7 +133,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			.iter_mut().filter_map(|st| match st {GlobalStatement::OnFunction(x) => Some(x), _ => None})
 			.collect::<Vec<_>>();
 		for (on_fn_name, mod_api_on_fn) in 
-			self.entity.export_fns.iter()
+			type_propagator.entity.export_fns.iter()
 		{
 			let Some((current_index, current_on_fn)) = 
 				on_functions.iter_mut().enumerate()
@@ -120,65 +142,65 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				continue;
 			};
 
-			// These should only be set inside self.fill_statements
-			debug_assert!(self.local_variables.is_empty());
-			debug_assert!(self.num_while_loops_deep == 0);
-			debug_assert!(self.current_fn_name.is_none());
+			// These should only be set inside type_propagator.fill_statements
+			debug_assert!(type_propagator.local_variables.is_empty());
+			debug_assert!(type_propagator.num_while_loops_deep == 0);
+			debug_assert!(type_propagator.current_fn_name.is_none());
 
 			if previous_on_fn_index > current_index {
-				self.current_fn_name = Some(on_fn_name);
-				return self.new_type_propagator_error(
+				type_propagator.current_fn_name = Some(on_fn_name);
+				return type_propagator.new_type_propagator_error(
 					current_on_fn.span,
 					format_args!("The function '{}' needs to be moved before or after a different export function, according to the entity '{}' in mod_api.json", current_on_fn.name.to_str(), entity_type)
 				);
 			}
 			previous_on_fn_index = current_index;
 
-			self.current_fn_name = Some(current_on_fn.name.to_str());
+			type_propagator.current_fn_name = Some(current_on_fn.name.to_str());
 			
 			if mod_api_on_fn.parameters.len() > current_on_fn.parameters.len() {
 				let param = &mod_api_on_fn.parameters[current_on_fn.parameters.len()];
-				return self.new_type_propagator_error(
+				return type_propagator.new_type_propagator_error(
 					current_on_fn.span,
 					format_args!("Function '{}' expected the parameter '{}' with type {}", current_on_fn.name.to_str(), param.name.to_str(), param.ty)
 				);
 			} else if mod_api_on_fn.parameters.len() < current_on_fn.parameters.len() {
 				let param = &current_on_fn.parameters[mod_api_on_fn.parameters.len()];
-				return self.new_type_propagator_error(
+				return type_propagator.new_type_propagator_error(
 					param.name_span,
 					format_args!("Function '{}' got an unexpected extra parameter '{}' with type {}", current_on_fn.name.to_str(), param.name.to_str(), param.ty)
 				);
 			}
 			for (param, arg) in mod_api_on_fn.parameters.iter().zip(current_on_fn.parameters.iter()) {
 				if param.name != arg.name {
-					return self.new_type_propagator_error(
+					return type_propagator.new_type_propagator_error(
 						arg.name_span,
 						format_args!("Function '{}' its '{}' parameter was supposed to be named '{}'", current_on_fn.name.to_str(), arg.name.to_str(), param.name.to_str())
 					);
 				}
 				if param.ty != arg.ty {
-					return self.new_type_propagator_error(
+					return type_propagator.new_type_propagator_error(
 						arg.type_span,
 						format_args!("Function '{}' its '{}' parameter was supposed to have the type {}, but got {}", current_on_fn.name.to_str(), param.name.to_str(), param.ty, arg.ty)
 					);
 				}
 			}
-			self.push_scope();
+			type_propagator.push_scope();
 			for param in current_on_fn.parameters {
-				self.add_local_variable(param.name.to_str(), param.ty, param.name_span)?;
+				type_propagator.add_local_variable(param.name.to_str(), param.ty, param.name_span)?;
 			}
-			self.fill_statements(&ast.local_fn_signatures, &ast.export_fn_signatures, current_on_fn.body_statements, &GrugType::Void)?;
-			self.pop_scope();
+			type_propagator.fill_statements(&ast.local_fn_signatures, &ast.export_fn_signatures, current_on_fn.body_statements, &GrugType::Void)?;
+			type_propagator.pop_scope();
 
-			debug_assert!(self.current_fn_name == Some(current_on_fn.name.to_str()));
-			self.current_fn_name = None;
+			debug_assert!(type_propagator.current_fn_name == Some(current_on_fn.name.to_str()));
+			type_propagator.current_fn_name = None;
 		}
-		let entity_on_functions = &self.entity.export_fns;
+		let entity_on_functions = &type_propagator.entity.export_fns;
 		for on_fn in on_functions {
 			let on_fn_name = on_fn.name.to_ntstr();
 			if !entity_on_functions.iter().any(|(name, _)| *name == on_fn_name) {
-				self.current_fn_name = Some(on_fn_name.as_str());
-				return self.new_type_propagator_error(
+				type_propagator.current_fn_name = Some(on_fn_name.as_str());
+				return type_propagator.new_type_propagator_error(
 					on_fn.span,
 					format_args!("The function '{}' was not declared by entity '{}' in mod_api.json", on_fn_name, entity_type)
 				);
@@ -197,34 +219,34 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					return_type,
 					span,
 				}) => {
-					debug_assert!(self.local_variables.is_empty());
-					debug_assert!(self.num_while_loops_deep == 0);
-					debug_assert!(self.current_fn_name.is_none());
+					debug_assert!(type_propagator.local_variables.is_empty());
+					debug_assert!(type_propagator.num_while_loops_deep == 0);
+					debug_assert!(type_propagator.current_fn_name.is_none());
 
 					let name = name.to_str();
-					self.current_fn_name = Some(name);
-					self.push_scope();
+					type_propagator.current_fn_name = Some(name);
+					type_propagator.push_scope();
 					for param in *parameters {
-						self.add_local_variable(param.name.to_str(), param.ty, param.name_span)?;
+						type_propagator.add_local_variable(param.name.to_str(), param.ty, param.name_span)?;
 					}
-					self.fill_statements(&ast.local_fn_signatures, &ast.export_fn_signatures, body_statements, return_type)?;
+					type_propagator.fill_statements(&ast.local_fn_signatures, &ast.export_fn_signatures, body_statements, return_type)?;
 
 					if *return_type != GrugType::Void && !matches!(body_statements.last(), Some(Statement::Return{..})) {
-						return self.new_type_propagator_error(
+						return type_propagator.new_type_propagator_error(
 							*span,
 							format_args!("Function '{}' is supposed to return {} as its last line", name, return_type)
 						);
 					}
 
-					self.pop_scope();
+					type_propagator.pop_scope();
 
-					debug_assert!(self.current_fn_name == Some(name));
-					self.current_fn_name = None;
+					debug_assert!(type_propagator.current_fn_name == Some(name));
+					type_propagator.current_fn_name = None;
 				}
 				GlobalStatement::Comment{..} => (),
 			}
 		}
-		Ok(self.resources.leak())
+		Ok(type_propagator.resources.leak())
 	}
 	
 	// out parameter self.current_on_fn_calls_helper_fn
@@ -549,15 +571,6 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 									format_args!("'{}' operator expects number", op)
 								);
 							}
-						}
-						result_0
-					},
-					BinaryOperator::Remainder => {
-						if result_0 != GrugType::Number {
-							return self.new_type_propagator_error(
-								*op_span,
-								format_args!("'%' operator expects number")
-							);
 						}
 						result_0
 					},

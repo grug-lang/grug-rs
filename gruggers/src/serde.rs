@@ -222,7 +222,6 @@ mod ser {
 			BinaryOperator::Minus => "MINUS_TOKEN".into(),
 			BinaryOperator::Multiply => "MULTIPLICATION_TOKEN".into(),
 			BinaryOperator::Division => "DIVISION_TOKEN".into(),
-			BinaryOperator::Remainder => "REMAINDER_TOKEN".into(),
 		}
 	}
 

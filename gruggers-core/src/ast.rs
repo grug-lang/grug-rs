@@ -312,18 +312,6 @@ pub enum BinaryOperator {
 	///               ^ - `Division`
 	/// ```
 	Division,
-	/// Remainder operator
-	///
-	/// Both sides of the expression must have an output type of [`GrugType::Number`]
-	///
-	/// The output type of the expression is [`GrugType::Number`]
-	///
-	/// ```text
-	/// x: number = 25
-	/// y: number = x % 25
-	///               ^ - `Remainder`
-	/// ```
-	Remainder,
 }
 
 impl std::fmt::Display for BinaryOperator {
@@ -341,7 +329,6 @@ impl std::fmt::Display for BinaryOperator {
 			Self::Minus => write!(f, "-"),
 			Self::Multiply => write!(f, "*"),
 			Self::Division => write!(f, "/"),
-			Self::Remainder => write!(f, "%"),
 		}
 	}
 }

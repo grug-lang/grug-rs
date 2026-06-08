@@ -43,10 +43,6 @@ enum ParserError<'a> {
 	ExpectedIndentation{
 		got: Token<'a>,
 	},
-	ExpectedStatement{
-		prev_token: String,
-		line: usize,
-	},
 }
 
 impl<'a> ParserError<'a> {
@@ -132,7 +128,6 @@ impl<'a> ParserError<'a> {
 				got.span,
 				format_args!("Expected indentation, line break, or '}}' but got '{}'", got.value),
 			),
-			err => unimplemented!("{:?}", err)
 		}
 	}
 }
@@ -209,7 +204,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				// `x: number =25`
 				//
 				// The error message is not going to be helpful in that case
-				match peek_next_token(&tokens)? {
+				match get_next_token(&mut tokens)? {
 					Token{ty: TokenType::Space, ..} => (),
 					Token{span, ..} => return ast.new_parse_error(
 						*span,
@@ -217,7 +212,6 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 					),
 				}
 
-				consume_space(&mut tokens)?;
 				consume_next_token_types(&mut tokens, &[TokenType::Equal])?;
 
 				consume_space(&mut tokens)?;
@@ -730,14 +724,12 @@ impl<'a> Ast<'a> {
 		}
 		// TODO: This error should just be folded into ExpectedSpace but it has
 		// to be different to match the required error message
-		match consume_space(tokens) {
-			Ok(_) => (),
-			Err(ParserError::ExpectedSpace{got}) => return self.new_parse_error(
-				got.span,
-				format_args!("Variable '{}' was not assigned a value", local_name),
+		match get_next_token(tokens)? {
+			Token{ty: TokenType::Space, ..} => (),
+			Token{span, ..} => return self.new_parse_error(
+				*span,
+				format_args!("Variable '{}' was not assigned a value", local_name)
 			),
-			Err(ParserError::OutOfTokensError) => return Err(ParserError::OutOfTokensError),
-			_ => unreachable!(),
 		}
 
 		if local_name == "me" {
@@ -963,9 +955,6 @@ impl<'a> Ast<'a> {
 				TokenType::ForwardSlash => {
 					BinaryOperator::Division
 				}
-				TokenType::Percent => {
-					BinaryOperator::Remainder
-				}
 				_ => break,
 			};
 			let (l_bp, r_bp) = Self::get_infix_precedence(bin_op);
@@ -1012,14 +1001,15 @@ impl<'a> Ast<'a> {
 			BinaryOperator::Minus         => (5.0, 5.1),
 			BinaryOperator::Multiply      => (6.0, 6.1),
 			BinaryOperator::Division      => (6.0, 6.1),
-			BinaryOperator::Remainder     => (6.0, 6.1),
 		}
 	}
 	
 	fn parse_type(&mut self, type_token: &'a Token, arena: &'a Arena) -> Result<GrugType<'a>, ParserError<'a>> {
 		if type_token.ty != TokenType::Word {
-			// TODO: 
-			panic!("unimplemented error condition");
+			return self.new_parse_error(
+				type_token.span,
+				format_args!("Expected type but got {}", type_token.ty)
+			);
 		}
 		Ok(match type_token.value {
 			"void"     => GrugType::Void,

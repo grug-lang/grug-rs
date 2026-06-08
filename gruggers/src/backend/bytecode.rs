@@ -295,7 +295,6 @@ impl<'a> Compiler<'a> {
 					BinaryOperator::Minus         => {self.compile_expr(instructions, right); instructions.stream.push(Op::Sub);}
 					BinaryOperator::Multiply      => {self.compile_expr(instructions, right); instructions.stream.push(Op::Mul);}
 					BinaryOperator::Division      => {self.compile_expr(instructions, right); instructions.stream.push(Op::Div);}
-					BinaryOperator::Remainder     => {self.compile_expr(instructions, right); instructions.stream.push(Op::Rem);}
 					BinaryOperator::DoubleEquals  => {
 						match right.result_type.unwrap() {
 							GrugType::String => {
@@ -596,7 +595,6 @@ enum Op {
 	Sub,
 	Mul,
 	Div,
-	Rem,
 	// And,
 	// Or,
 	Not,
@@ -849,7 +847,6 @@ impl std::fmt::Display for Instructions {
 				Op::Sub => write!(f, "Sub"),
 				Op::Mul => write!(f, "Mul"),
 				Op::Div => write!(f, "Div"),
-				Op::Rem => write!(f, "Rem"),
 				// Op::And => write!(f, "And"),
 				// Op::Or => write!(f, "Or"),
 				Op::Not => write!(f, "Not"),
@@ -965,8 +962,7 @@ impl Stack {
 				Op::Add                  |
 				Op::Sub                  |
 				Op::Mul                  |
-				Op::Div                  |
-				Op::Rem                  => {
+				Op::Div                  => {
 					let second = unsafe{self.stack.pop().unwrap_unchecked().number};
 					let first = unsafe{self.stack.pop().unwrap_unchecked().number};
 					let value = match ins {
@@ -974,7 +970,6 @@ impl Stack {
 						Op::Sub => first - second,
 						Op::Mul => first * second,
 						Op::Div => first / second,
-						Op::Rem => first % second,
 						_ => unreachable!(),
 					};
 					self.stack.push(GrugValue{number: value});

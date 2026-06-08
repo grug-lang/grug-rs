@@ -22,7 +22,6 @@ pub enum TokenType {
 	Minus,
 	Star,
 	ForwardSlash,
-	Percent,
 	Comma,
 	Colon,
 	NewLine,
@@ -68,7 +67,6 @@ impl std::fmt::Display for TokenType {
 			Self::Minus => write!(f, "'-'"),
 			Self::Star => write!(f, "'*'"),
 			Self::ForwardSlash => write!(f, "'/'"),
-			Self::Percent => write!(f, "'%'"),
 			Self::Comma => write!(f, "','"),
 			Self::Colon => write!(f, "':'"),
 			Self::NewLine => write!(f, "line break ('\\n')"),
@@ -164,7 +162,6 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(file_text: &'a str, arena: &'a Arena, file_
 		token_match!(b"-" => TokenType::Minus);
 		token_match!(b"*" => TokenType::Star);
 		token_match!(b"/" => TokenType::ForwardSlash);
-		token_match!(b"%" => TokenType::Percent);
 		token_match!(b"," => TokenType::Comma);
 		token_match!(b":" => TokenType::Colon);
 		token_match!(b"\n" => TokenType::NewLine, {cur_line += 1;});
@@ -240,6 +237,8 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(file_text: &'a str, arena: &'a Arena, file_
 				while i < file_text.len() && file_text[i] != b'"' && !is_escaped {
 					if is_escaped {
 						is_escaped = false;
+						// TODO: Wait for response 
+						// [https://github.com/grug-lang/grug-tests/issues/64]
 						let next_char = match file_text[i] {
 							b't'  => b'\t',
 							b'n'  => b'\n',

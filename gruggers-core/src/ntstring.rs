@@ -71,7 +71,6 @@ mod str {
 		///
 		/// if `value` contains a null byte
 		// TODO: remove this
-		#[track_caller]
 		pub fn box_from_str_in<A: Allocator>(value: &str, a: A) -> Box<Self, A> {
 			assert!(!value.contains('\0'));
 			let (ptr, a) = Box::into_raw_with_allocator(Box::<[u8], _>::new_uninit_slice_in(value.len() + 1, a));

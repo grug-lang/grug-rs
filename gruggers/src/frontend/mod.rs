@@ -460,7 +460,7 @@ impl GrugState {
 		let mod_api_host_fns = mod_api.host_fns();
 		
 		// type check 
-		let resources = TypePropogator::new(
+		let resources = TypePropogator::fill_result_types(
 			entity, 
 			mod_api_host_fns, 
 			host_fn_ptrs,
@@ -468,8 +468,10 @@ impl GrugState {
 			mods_dir_path, 
 			file_text, 
 			path,
-			arena
-		).fill_result_types(entity_type, &mut ast)?;
+			entity_type,
+			&mut ast,
+			arena,
+		)?;
 
 		// convert into GrugAst
 		let mut member_variables = Vec::new_in(arena);

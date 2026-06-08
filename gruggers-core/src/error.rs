@@ -199,6 +199,8 @@ impl<'a> GrugError<'a> {
 
 		let mut err_string = Vec::new_in(&alloc);
 		if error_kind.matches(&ErrorKind::FILE_NAME_ERROR) {
+			// TODO: There should only be a single space between the $ and
+			// file name
 			write!(err_string, 
 				"Error: {error_message}\n\
 				$  {}\0",
@@ -345,8 +347,6 @@ impl<'a> GrugError<'a> {
 
 impl<'a> std::fmt::Display for GrugError<'a> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		// TODO: This should be changed to self.error_string later
-		// TODO: Each different top level error kind should have a different format
 		f.write_str(self.error_string.to_str())
 	}
 }
