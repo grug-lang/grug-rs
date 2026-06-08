@@ -298,9 +298,10 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 			} else if let Ok([_, _]) = consume_next_token_types(&mut tokens, &[TokenType::Local, TokenType::Space]) {
 				let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
 				if !name_token.value.starts_with("_") {
+					ast.current_function = name_token.value;
 					return ast.new_parse_error(
 						name_token.span,
-						format_args!("Local function name must begin with `_`")
+						format_args!("Local function name must begin with '_'")
 					);
 				}
 				let fn_name = name_token.value;
@@ -1008,7 +1009,7 @@ impl<'a> Ast<'a> {
 		if type_token.ty != TokenType::Word {
 			return self.new_parse_error(
 				type_token.span,
-				format_args!("Expected type but got {}", type_token.ty)
+				format_args!("Expected word but got {}", type_token.ty)
 			);
 		}
 		Ok(match type_token.value {

@@ -737,7 +737,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		if !std::fs::exists(&full_path).is_ok_and(std::convert::identity) {
 			self.new_type_propagator_error(
 				span,
-				format_args!("resource '{}' does not exist", full_path.display())
+				format_args!("resource '{}' does not exist", value)
 			)
 		} else {
 			self.resources.push(resource_str.as_str().as_ref());

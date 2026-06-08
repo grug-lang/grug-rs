@@ -586,7 +586,7 @@ fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
 					path, 
 					"",
 					SourceSpan{offset: 0, line: 0},
-					format_args!("'{}' is missing a period in its filename", file_name.display())
+					format_args!("'{}' is missing a period in its name", file_name.display())
 				)),
 			(b'-', Some(_), None) => {dash_pos = Some(i); break;},
 			_ => (),

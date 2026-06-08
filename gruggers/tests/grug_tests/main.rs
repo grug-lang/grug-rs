@@ -45,7 +45,7 @@ mod test_bindings {
 
 	pub extern "C" fn destroy_grug_state<'a>(_state: Box<(GrugState, Files)>) { }
 
-	pub extern "C" fn compile_grug_file((_state, files): &(GrugState, Files), path: NTBytes<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugFileId {
+	pub extern "C" fn compile_grug_file((state, files): &(GrugState, Files), path: NTBytes<'static>, err_out: &mut Option<NTStrPtr<'static>>) -> GrugFileId {
 		let path = path.to_bytes();
 
 		fn compare_paths_normalized(first: &[u8], second: &[u8]) -> bool {
@@ -68,19 +68,19 @@ mod test_bindings {
 				}
 			}
 		}
-		panic!("file not found: {}", unsafe{OsStr::from_encoded_bytes_unchecked(path).display()});
-		// match state.compile_grug_file(unsafe{OsStr::from_encoded_bytes_unchecked(path)}) {
-		// 	Ok(id) => {
-		// 		*err_out = None;
-		// 		return id;
-		// 	}
-		// 	Err(err) => {
-		// 		let mut string = format!("{}", err);
-		// 		string.push('\0');
-		// 		*err_out = Some(NTStr::try_from_str(String::leak(string)).unwrap().as_ntstrptr());
-		// 		return GrugFileId::new(u64::MAX);
-		// 	}
-		// }
+		// panic!("file not found: {}", unsafe{OsStr::from_encoded_bytes_unchecked(path).display()});
+		match state.compile_grug_file(unsafe{OsStr::from_encoded_bytes_unchecked(path)}) {
+			Ok(id) => {
+				*err_out = None;
+				return id;
+			}
+			Err(err) => {
+				let mut string = format!("{}", err);
+				string.push('\0');
+				*err_out = Some(NTStr::try_from_str(String::leak(string)).unwrap().as_ntstrptr());
+				return GrugFileId::new(u64::MAX);
+			}
+		}
 	}
 
 	pub extern "C" fn init_globals ((state, _): &(GrugState, Files), file_id: GrugFileId) {
