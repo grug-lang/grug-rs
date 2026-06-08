@@ -99,11 +99,10 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			arena,
 		);
 
-		type_propagator.add_global_variable(
+		type_propagator.global_variables.insert(
 			nt!("me"), 
-			GrugType::Id{custom_name: Some(Box::leak(NTStr::box_from_str_in(entity_type, type_propagator.arena)).as_ntstrptr())},
-			SourceSpan{line: 0, offset: 0}
-		)?;
+			GrugType::Id{custom_name: Some(type_propagator.arena.copy_str_into_nt(entity_type).as_ntstrptr())}
+		);
 
 		let variables = ast.global_statements
 			.iter_mut().filter_map(|st| match st {GlobalStatement::Variable(x) => Some(x), _ => None});
@@ -503,35 +502,28 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			} => {
 				let result_0 = self.fill_expr(helper_fns, export_fns, left)?;
 				let result_1 = self.fill_expr(helper_fns, export_fns, right)?;
-				match (&result_1, *op) {
-					(GrugType::String, BinaryOperator::DoubleEquals) | 
-					(GrugType::String, BinaryOperator::NotEquals) => (),
-					(GrugType::String, BinaryOperator::Plus) => {
+				match (&result_0, &result_1, *op) {
+					(GrugType::String, GrugType::String, BinaryOperator::DoubleEquals) | 
+					(GrugType::String, GrugType::String, BinaryOperator::NotEquals) => (),
+					(GrugType::String, GrugType::String, BinaryOperator::Plus) => {
 						return self.new_type_propagator_error(
 							*op_span,
 							format_args!("cannot add strings with '+'")
 						);
 					},
-					(GrugType::String, _) => {
+					(GrugType::String, GrugType::String, _) => {
 						return self.new_type_propagator_error(
 							*op_span,
-							format_args!("You can't use the {} operator on a string", op)
+							format_args!("You can't use the '{}' operator on strings", op)
 						);
 					},
 					_ => (),
 				}
 				if !GrugType::match_non_exact(&result_0, &result_1) {
-					if result_0 == GrugType::String || result_1 == GrugType::String{
-						return self.new_type_propagator_error(
-							*op_span,
-							format_args!("You can't use the '{}' operator on a string", op)
-						);
-					} else {
-						return self.new_type_propagator_error(
-							*op_span,
-							format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, result_0, result_1)
-						);
-					}
+					return self.new_type_propagator_error(
+						*op_span,
+						format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, result_0, result_1)
+					);
 				}
 
 				match op {
@@ -560,17 +552,10 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 					BinaryOperator::Plus | BinaryOperator::Minus |
 					BinaryOperator::Multiply | BinaryOperator::Division => {
 						if result_0 != GrugType::Number {
-							if result_0 == GrugType::String {
-								return self.new_type_propagator_error(
-									*op_span,
-									format_args!("You can't use the {} operator on a string", op)
-								);
-							} else {
-								return self.new_type_propagator_error(
-									*op_span,
-									format_args!("'{}' operator expects number", op)
-								);
-							}
+							return self.new_type_propagator_error(
+								*op_span,
+								format_args!("'{}' operator expects number", op)
+							);
 						}
 						result_0
 					},
