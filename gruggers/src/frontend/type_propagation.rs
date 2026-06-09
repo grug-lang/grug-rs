@@ -651,7 +651,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				let Some(class) = self.classes.get(reciever_type) else {
 					return self.new_error(
 						receiver.span,
-						format_args!("Cannot find method '{}' on type '{}'", name, reciever_type)
+						format_args!("Type '{}' does not have any methods", reciever_type)
 					);
 				};
 				let Some((_, host_fn)) = class.methods.iter().find(|(fn_name, _)| fn_name.as_str() == name) else {

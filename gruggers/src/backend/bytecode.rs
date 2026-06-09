@@ -233,6 +233,10 @@ impl<'a> Compiler<'a> {
 					instructions.try_patch(Op::Jmp{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc).unwrap();
 				}
 			}
+			// TODO: This should pop the last element if it is a function with a return value
+			// There's no correctness issues here, but it will cause the stack
+			// frame to grow if theres a lot of functions with return types as
+			// statements in a functions
 			Statement::Call(expr) => self.compile_expr(instructions, expr),
 			Statement::Return{return_span: _, expr} => {
 				if let Some(expr) = expr {

@@ -134,7 +134,7 @@ mod str {
 
 	impl std::fmt::Debug for NTStr {
 		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-			self.deref().fmt(f)
+			self.as_str_with_null().fmt(f)
 		}
 	}
 

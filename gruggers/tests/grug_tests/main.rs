@@ -36,8 +36,9 @@ mod test_bindings {
 				)};
 			})
 			.set_backend(BytecodeBackend::new())
-			.build_state().map_err(|err| {println!("{:?}", err); err}).ok()?;
-		super::game_fn_bindings::register_game_functions(&mut state).map_err(|err| {println!("{:?}", err); err}).ok()?;
+			.build_state().map_err(|err| {println!("{}", err); err}).ok()?;
+		super::game_fn_bindings::register_game_functions(&mut state).map_err(|err| {println!("{}", err); err}).ok()?;
+		state.all_host_fns_registered().map_err(|err| {println!("{}", err); err}).ok()?;
 		let files = state.compile_all_files();
 		// let files = Vec::new();
 		Some(Box::new((state, files)))
@@ -265,6 +266,8 @@ mod game_fn_bindings {
         safe fn game_fn_print_csv            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_vec_number_new       <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_vec_number_push      <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_vec_number_pop       <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
+        safe fn game_fn_vec_number_insert    <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
 	}
 	pub fn register_game_functions(state: &mut GrugState) -> Result<(), Error> { unsafe {
 		state.register_host_fn("nothing",              game_fn_nothing             )?; 
@@ -307,7 +310,9 @@ mod game_fn_bindings {
 		state.register_host_fn("box_number",           game_fn_box_number          )?; 
 		state.register_host_fn("print_csv",            game_fn_print_csv           )?; 
 		state.register_host_fn("vec_number_new",       game_fn_vec_number_new      )?; 
-		state.register_method ("VecNumber",            "push",      game_fn_vec_number_push     )?; 
+		state.register_method("VecNumber", "push",     game_fn_vec_number_push     )?; 
+		state.register_method("VecNumber", "pop",      game_fn_vec_number_pop      )?; 
+		state.register_method("VecNumber", "insert",   game_fn_vec_number_insert   )?; 
 		Ok(())
 	}}
 }

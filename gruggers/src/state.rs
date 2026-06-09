@@ -569,8 +569,10 @@ impl GrugState {
 	}
 
 	pub fn all_host_fns_registered(&self) -> Result<(), Error> {
+		// Check all normal host functions
+		let host_fn_ptrs = self.host_fn_ptrs.read().unwrap();
 		for game_fn_name in self.mod_api.host_fns().keys() {
-			if !self.host_fn_ptrs.read().unwrap().contains_key(game_fn_name.as_str()) {
+			if !host_fn_ptrs.contains_key(game_fn_name.as_str()) {
 				return Err(Error::new(
 					ErrorKind::INIT_ERROR,
 					"",
@@ -579,6 +581,32 @@ impl GrugState {
 					SourceSpan{offset: 0, line: 0},
 					format_args!("host function '{game_fn_name}' has not been registered"),
 				));
+			}
+		}
+		// check all methods
+		let method_fn_ptrs = self.method_fn_ptrs.read().unwrap();
+		for (class_name, class) in self.mod_api.classes() {
+			let Some(method_fn_ptrs) = method_fn_ptrs.get(class_name.as_str()) else {
+				return Err(Error::new(
+					ErrorKind::INIT_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("methods for class '{class_name}' have not been registered"),
+				));
+			};
+			for (method_name, _) in class.methods {
+				if !method_fn_ptrs.contains_key(method_name.as_str()) {
+					return Err(Error::new(
+						ErrorKind::INIT_ERROR,
+						"",
+						"".as_ref(),
+						"",
+						SourceSpan{offset: 0, line: 0},
+						format_args!("method '{method_name}' in class '{class_name}' has not been registered"),
+					));
+				}
 			}
 		}
 		Ok(())
