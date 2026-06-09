@@ -86,8 +86,10 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 
 	pub fn fill_result_types(
 		entity: &'mod_api ModApiEntity, 
-		game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiHostFn>, 
+		game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiHostFn<'mod_api>>, 
+		classes: &'mod_api HashMap<&'mod_api NTStr, ModApiClass<'mod_api>>, 
 		game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, 
+		method_fn_ptrs: &'arena HashMap<&'static str, HashMap<&'static str, GameFnPtr>>, 
 		mod_name: &'arena OsStr, 
 		mods_dir_path: &'mod_api OsStr, 
 		file_text: &'arena str,
@@ -99,7 +101,9 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 		let mut type_propagator = Self::new(
 			entity, 
 			game_fns,
+			classes,
 			game_fn_ptrs,
+			method_fn_ptrs,
 			mod_name,
 			mods_dir_path,
 			file_text, 
@@ -662,8 +666,6 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 						*ptr = Some(*fn_ptr);
 						host_fn.return_ty
 					} else {
-						println!("{:?}", class);
-						println!("{:?}", name);
 						// missing method
 						panic!("This error is not triggerred by grug_tests");
 					}
