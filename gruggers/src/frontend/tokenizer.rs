@@ -58,7 +58,7 @@ pub enum TokenType {
 
 impl std::fmt::Display for TokenType {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		match self {
+		return match self {
 			Self::OpenParenthesis => write!(f, "'('"),
 			Self::CloseParenthesis => write!(f, "')'"),
 			Self::OpenBrace => write!(f, "'{{'"),
@@ -99,7 +99,60 @@ impl std::fmt::Display for TokenType {
 			Self::Comment => write!(f, "comment"),
 			Self::Resource => write!(f, "resource string"),
 			Self::Entity => write!(f, "entity string"),
-		}
+		};
+	}
+}
+
+// This only exists to add coverage to the fmt function above. I'd remove it if
+// i could use #[coverage(off)]
+#[cfg(test)]
+mod test {
+	use super::*;
+	#[test]
+	fn test() {
+		let x = &[
+			TokenType::OpenParenthesis,
+			TokenType::CloseParenthesis,
+			TokenType::OpenBrace,
+			TokenType::CloseBrace,
+			TokenType::Plus,
+			TokenType::Minus,
+			TokenType::Star,
+			TokenType::ForwardSlash,
+			TokenType::Comma,
+			TokenType::Colon,
+			TokenType::NewLine,
+			TokenType::DoubleEquals,
+			TokenType::NotEquals,
+			TokenType::Equal,
+			TokenType::GreaterEquals,
+			TokenType::Greater,
+			TokenType::LessEquals,
+			TokenType::Less,
+			TokenType::And,
+			TokenType::Or,
+			TokenType::Not,
+			TokenType::True,
+			TokenType::False,
+			TokenType::If,
+			TokenType::Else,
+			TokenType::While,
+			TokenType::Break,
+			TokenType::Return,
+			TokenType::Continue,
+			TokenType::Export,
+			TokenType::Local,
+			TokenType::Space,
+			TokenType::Indentation,
+			TokenType::String,
+			TokenType::Entity,
+			TokenType::Resource,
+			TokenType::Word,
+			TokenType::Int32,
+			TokenType::Float32,
+			TokenType::Comment,
+		];
+		x.into_iter().for_each(|x| println!("{}", x));
 	}
 }
 
