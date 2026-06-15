@@ -919,6 +919,7 @@ impl<'a> Ast<'a> {
 		};
 		while let Ok([space, op]) = peek_next_tokens(tokens) {
 			// Actually a method call
+			// TODO: Consume the dot and word token separately
 			if let Ok([_, name]) = consume_next_token_types(tokens, &[TokenType::Dot, TokenType::Word]) {
 				let receiver = current;
 				let name_span = name.span;
