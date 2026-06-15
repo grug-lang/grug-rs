@@ -49,13 +49,12 @@ impl GrugState {
 			&'static [&'static OsStr]
 		)>,
 		// path is absolute
-		mods_dir_path: OsString,
+		mods_dir_path: PathBuf,
 		mod_api: Arc<ModApi>,
 		host_fn_ptrs: Arc<RwLock<HashMap<&'static str, GameFnPtr>>>,
 		method_fn_ptrs: Arc<RwLock<HashMap<&'static str, HashMap<&'static str, GameFnPtr>>>>,
 	) -> impl FnOnce() {
 		use crate::async_fs::{open_file_async_for_read, read_files_async};
-		let mods_dir_path = PathBuf::from(mods_dir_path);
 		move || {
 			for (arena, files) in receiver.iter() {
 				// Get these once instead of in a loop
@@ -192,15 +191,7 @@ impl GrugState {
 			for resource in resources {
 				if !self_resources.contains(*resource) {self_resources.insert(OsString::from(resource));}
 			}
-			let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
-			let id = match path_to_script_ids.get(path) {
-				Some(id) => *id,
-				None => {
-					let id = self.get_next_script_id();
-					assert!(path_to_script_ids.insert(OsString::from(path), id).is_none());
-					id
-				}
-			};
+			let id = self.get_or_insert_script_id(path.as_ref());
 			self.backend.insert_file(self, id, file);
 			Ok(id)
 		})();
@@ -275,19 +266,11 @@ impl GrugState {
 			let (mut current_arena, results, resources) = self.compiler_receiver.recv().unwrap(); 
 			recv_count += results.len();
 
-			let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
 			for (result, path) in results {
 				// turn ok result into id, allocate error into outer arena
 				let result = match result {
 					Ok(ast) => {
-						let id = match path_to_script_ids.get(path) {
-							Some(id) => *id,
-							None => {
-								let id = self.get_next_script_id();
-								assert!(path_to_script_ids.insert(OsString::from(path), id).is_none());
-								id
-							}
-						};
+						let id = self.get_or_insert_script_id(path.as_ref());
 						// Send to backend
 						self.backend.insert_file(self, id, ast);
 						Ok(id)
@@ -377,19 +360,11 @@ impl GrugState {
 			let (mut current_arena, results, resources) = self.compiler_receiver.recv().unwrap(); 
 			recv_count += results.len();
 
-			let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
 			for (result, path) in results {
 				// turn ok result into id, copy err into current arena
 				let result = match result {
 					Ok(ast) => {
-						let id = match path_to_script_ids.get(path) {
-							Some(id) => *id,
-							None => {
-								let id = self.get_next_script_id();
-								assert!(path_to_script_ids.insert(OsString::from(path), id).is_none());
-								id
-							}
-						};
+						let id = self.get_or_insert_script_id(path.as_ref());
 						// Send to backend
 						self.backend.insert_file(self, id, ast);
 						Ok(id)
@@ -401,8 +376,7 @@ impl GrugState {
 				};
 				// Create FileInfo from this result
 				let path = <OsStr as AsRef<Path>>::as_ref(path);
-				println!("{:?}", path);
-				let mod_dir_path = path.parent().expect("must have at least component in path").components().next().unwrap().as_os_str();
+				let mod_dir_path = path.parent().expect("must have at least one component in path").components().next().unwrap().as_os_str();
 				let info = FileInfo::new_in(
 					path.as_os_str(),
 					path.file_name().unwrap(),
@@ -445,6 +419,17 @@ impl GrugState {
 	) -> Result<(GrugAst<'arena>, &'arena [&'arena OsStr]), Error> {
 		let mod_name = get_mod_name(path);
 		let entity_type = get_entity_type(path)?;
+
+		if file_text.len() == 0 {
+			return Err(Error::new(
+				ErrorKind::EMPTY_FILE,
+				"",
+				path,
+				"",
+				SourceSpan {offset: 0, line: 1},
+				format_args!("File is empty")
+			));
+		}
 
 		// tokenize
 		let tokens = tokenizer::tokenize(file_text, arena, path)?;

@@ -102,6 +102,8 @@ impl ErrorKind {
 	pub const PARSER_ERROR:       Self = Self::COMPILE_ERROR.add_component(0x5);
 	pub const TYPE_CHECKER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x6);
 
+	pub const EMPTY_FILE:         Self = Self::FILE_NAME_ERROR.add_component(0x1);
+
 	pub const fn add_component(mut self, other: u8) -> Self {
 		let mut i = 0;
 		while i < self.0.len() {

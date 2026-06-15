@@ -56,6 +56,7 @@ use gruggers_core::runtime_error::RuntimeError;
 pub use gruggers_core::state::State;
 pub use gruggers_core::ast::GrugAst;
 
+use std::path::{Path, PathBuf};
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::pin::Pin;
@@ -281,7 +282,7 @@ pub struct GrugState {
 	/// lifetime
 	/// If a later change makes mod_api mutable, these need to be allocated separately
 	export_functions: Vec<ExportFnEntry<'static>>,
-	pub(crate) path_to_script_ids: RefCell<HashMap<OsString, GrugFileId>>,
+	pub(crate) path_to_script_ids: RefCell<HashMap<OsString, (OsString, GrugFileId)>>,
 	next_script_id: AtomicU64,
 
 	pub(crate) backend: ErasedBackend<Self>,
@@ -310,7 +311,7 @@ impl State for GrugState {
 			error, 
 			&message,
 			current_on_fn_name,
-			self.get_script_path(current_script).unwrap(),
+			self.get_script_path_rel(current_script).unwrap(),
 		);
 	}
 
@@ -333,7 +334,8 @@ impl GrugState {
 	fn new_inner (mod_api: ModApi, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, Error> {
 		let mut on_fns = Vec::new();
 		let init_globals = nt!("init_globals");
-		let mods_dir_path = OsString::from(mods_dir_path.as_ref());
+		let mods_dir_path = PathBuf::from(mods_dir_path.as_ref());
+		
 		for (entity_type, entity) in mod_api.entities() {
 			on_fns.push(ExportFnEntry {
 				// SAFETY: All EventFnEntries we give out have a 'self
@@ -382,7 +384,7 @@ impl GrugState {
 
 		Ok(Self {
 			mod_api,
-			mods_dir_path,
+			mods_dir_path: mods_dir_path.into(),
 			next_entity_id: AtomicU64::new(0),
 			host_fn_ptrs,
 			method_fn_ptrs,
@@ -401,6 +403,22 @@ impl GrugState {
 			is_errorring: Cell::new(false),
 			changes: reciever,
 		})
+	}
+
+	pub(crate) fn get_or_insert_script_id(&self, path: &Path) -> GrugFileId {
+		let mut canonicalized = PathBuf::from(self.mods_dir_path.clone());
+		canonicalized.push(path);
+		let canonicalized = canonicalized.canonicalize().expect("error while canonicalizing");
+
+		let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
+		match path_to_script_ids.get(canonicalized.as_os_str()) {
+			Some((_, id)) => *id,
+			None => {
+				let id = self.get_next_script_id();
+				assert!(path_to_script_ids.insert(canonicalized.into_os_string(), (OsString::from(path), id)).is_none());
+				id
+			}
+		}
 	}
 
 	pub fn mods_dir_path(&self) -> &OsStr {
@@ -559,12 +577,12 @@ impl GrugState {
 	}
 	
 	// This should only happen during an error so its okay if its slow
-	pub fn get_script_path(&self, script_id: GrugFileId) -> Option<&OsStr> {
+	pub fn get_script_path_rel(&self, script_id: GrugFileId) -> Option<&OsStr> {
 		let string = Ref::filter_map(self.path_to_script_ids.borrow(), |inner|
-			inner.iter().find(|(_, v)| **v == script_id).map(|x| x.0)
+			inner.values().find(|(_, v)| *v == script_id).map(|x| &*x.0)
 		).ok()?;
 		// SAFETY: a path is never replaced once it is inserted into the map;
-		let string: &OsStr = unsafe{&*(&**string as *const OsStr)};
+		let string: &OsStr = unsafe{&*(&*string as *const OsStr)};
 		Some(string)
 	}
 
@@ -756,7 +774,8 @@ pub struct GrugEntityHandle<'a>(XarHandle<'a, GrugEntity>);
 impl<'a> GrugEntityHandle<'a> {
 	/// # SAFETY
 	/// inner can only be deleted by deleting the returned value
-	/// The returned value is allowed to create a shared reference to the data at any time 
+	/// `GrugEntityHandle` is `Deref<Target> = GrugEntity`, so
+	/// the returned value is allowed to create a shared reference to the data at any time 
 	pub unsafe fn new(inner: XarHandle<'a, GrugEntity>) -> Self {
 		Self(inner)
 	}
@@ -792,6 +811,7 @@ mod files {
 	use std::mem::MaybeUninit;
 
 	pub struct Files {
+		/// Fuck man, we just need 'unsafe already
 		pub(crate) inner: OwnPtr<'static, [FileInfo<'static>]>,
 		pub(crate) _arena: Arena,
 	}
@@ -810,21 +830,32 @@ mod files {
 			}
 		}
 
-		pub fn files(&self) -> &[FileInfo<'_>] {
+		/// Get the list of files that were compiled or recompiled
+		pub fn files<'a>(&'a self) -> &'a [FileInfo<'a>] {
 			&*self.inner
 		}
 	}
 
 	// Test struct for c api
 	// Eventually replace FileInfo with this
-	#[derive(Debug)]
+	#[derive(Debug, Clone, Copy)]
 	#[repr(C)]
 	pub struct FileInfo<'a> {
+		/// Full path to the file relative to the mods directory
 		pub(crate) path: NTBytes<'a>,
+		/// Filename component of the path
 		pub(crate) file_name: NTBytes<'a>,
+		/// first level directory within the mods directory
+		// TODO: Check that mods directly within the mods directory don't
+		// cause problems. This is technically disallowed by grug but grugc
+		// uses this behavior
 		pub(crate) mod_name: NTBytes<'a>,
+		/// Portion of the filename between the '-' and '.'
 		pub(crate) entity_type: NTStrPtr<'a>,
+		/// Portion of the filename before the '-'
 		pub(crate) entity_name: NTBytes<'a>,
+		/// These two files are actually a Result<GrugFileId, GrugError<'a>>
+		/// Err case is when file_id === INVALID_GRUG_SCRIPT_ID
 		pub(crate) file_id: GrugFileId,
 		pub(crate) error: MaybeUninit<GrugError<'a>>,
 	}
@@ -840,12 +871,41 @@ mod files {
 			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice,
 			// and the returned slice is utf8 encoded because it comes from a
 			// str
-			let entity_type = unsafe{NTStrPtr::from_str_unchecked(std::str::from_utf8_unchecked(arena.copy_bytes_into_nt(entity_type.as_bytes())))};
+			let entity_type = arena.copy_str_into_nt(entity_type).as_ntstrptr();
 			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
 			let entity_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(entity_name.as_encoded_bytes()))};
 			let (file_id, error) = match result {
 				Ok(id) => (id, MaybeUninit::uninit()),
 				Err(err) => (INVALID_GRUG_SCRIPT_ID, MaybeUninit::new(err.copy_into(arena)))
+			};
+			FileInfo {
+				path,
+				file_name,
+				mod_name,
+				entity_type,
+				entity_name,
+				file_id,
+				error
+			}
+		}
+		pub fn copy_into<'b>(&self, arena: &'b Arena) -> FileInfo<'b> {
+			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+			let path = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.path.to_bytes()))};
+			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+			let file_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.file_name.to_bytes()))};
+			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+			let mod_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.mod_name.to_bytes()))};
+			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice,
+			// and the returned slice is utf8 encoded because it comes from a
+			// str
+			let entity_type = arena.copy_str_into_nt(self.entity_type.to_str()).as_ntstrptr();
+			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+			let entity_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.entity_name.to_bytes()))};
+			let (file_id, error) = if self.file_id == INVALID_GRUG_SCRIPT_ID {
+				// SAFETY: self.error is intialized if self.file_id == INVALID_GRUG_SCRIPT_ID
+				(INVALID_GRUG_SCRIPT_ID, MaybeUninit::new(unsafe{self.error.assume_init()}.copy_into(arena)))
+			} else {
+				(self.file_id, MaybeUninit::uninit())
 			};
 			FileInfo {
 				path,
@@ -877,5 +937,6 @@ mod files {
 			else {Ok(self.file_id)}
 		}
 	}
+
 }
 pub use files::*;

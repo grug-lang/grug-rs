@@ -45,6 +45,7 @@ impl Error {
 	/// Create a new grug error within an arena
 	#[track_caller]
 	pub(crate) fn new(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments) -> Self {
+		println!("{:?}", std::panic::Location::caller());
 		let arena = Arena::new();
 		let error = GrugError::new_error_in(error_kind, function_name, file_path, source_text, err_span, error_message, &arena);
 		// Transmute to a static lifetime
@@ -56,6 +57,7 @@ impl Error {
 		}
 	}
 
+	#[track_caller]
 	pub(crate) fn from_io_error(err: std::io::Error, file_path: &OsStr) -> Self {
 		Self::new(
 			ErrorKind::IO_ERROR,
