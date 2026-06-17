@@ -18,7 +18,7 @@ mod test_bindings {
 
 	type CState = (GrugState, Arena);
 
-	pub extern "C" fn create_grug_state<'a>(mod_api_path: NTBytes<'a>, mods_dir_path: NTBytes<'a>) -> Option<Box<CState>> {
+	pub extern "C" fn create_grug_state<'a>(mod_api_path: NTBytes<'a>, mods_dir_path: NTBytes<'a>, _unsafe_mode: bool) -> Option<Box<CState>> {
 		let mut state = GrugInitSettings::new()
 			.set_mod_api_path(unsafe{OsStr::from_encoded_bytes_unchecked(mod_api_path.to_bytes())})
 			.set_mods_dir(unsafe{OsStr::from_encoded_bytes_unchecked(mods_dir_path.to_bytes())})
@@ -41,7 +41,6 @@ mod test_bindings {
 			.build_state().map_err(|err| {println!("{}", err); err}).ok()?;
 		super::game_fn_bindings::register_game_functions(&mut state).map_err(|err| {println!("{}", err); err}).ok()?;
 		state.all_host_fns_registered().map_err(|err| {println!("{}", err); err}).ok()?;
-		// let files = Vec::new();
 		Some(Box::new((state, Arena::new())))
 	}
 
@@ -166,7 +165,7 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	// pub type c_size_t = u64;
 	#[allow(non_camel_case_types)]
-	pub type create_grug_state_t = for<'a> extern "C" fn(NTBytes<'a>, NTBytes<'a>) -> Option<Box<CState>>;
+	pub type create_grug_state_t = for<'a> extern "C" fn(NTBytes<'a>, NTBytes<'a>, bool) -> Option<Box<CState>>;
 	#[allow(non_camel_case_types)]
 	pub type destroy_grug_state_t = extern "C" fn(Box<CState>);
 	#[allow(non_camel_case_types)]
