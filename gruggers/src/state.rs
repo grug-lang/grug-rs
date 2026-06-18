@@ -701,6 +701,7 @@ impl GrugState {
 	/// the number of arguments expected by `function_name`. If there are no arguments, 
 	/// `values` may be null
 	#[must_use]
+	// TODO: rename to call_export_fn and call_export_fn_raw
 	pub unsafe fn call_on_function_raw(&self, entity: &GrugEntity, fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
 		let old_script   = self.current_script  .get();
 		let old_fn_id = self.current_export_fn_id.get();
