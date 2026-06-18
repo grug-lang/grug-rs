@@ -482,8 +482,9 @@ impl GrugState {
 		
 		// Note: This is the same as the unstable get_mut_unchecked on Arc;
 		// Once that is stabilized, this can be replaced
-		let mod_api = unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut ModApi>(&mut self.mod_api)};
-		unsafe{(&mut **mod_api).register_host_fn(name, GameFnPtr::from_ptr(func))}
+		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
+		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
+		unsafe{(&mut *mod_api).register_host_fn(name, GameFnPtr::from_ptr(func))}
 	}
 
 	pub unsafe fn register_method_fn(&mut self, class_name: &str, fn_name: &str, func: extern "C" fn (&GrugState, *const GrugValue) -> GrugValue) -> Result<(), Error> {
@@ -495,8 +496,9 @@ impl GrugState {
 		
 		// Note: This is the same as the unstable get_mut_unchecked on Arc;
 		// Once that is stabilized, this can be replaced
-		let mod_api = unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut ModApi>(&mut self.mod_api)};
-		unsafe{(&mut **mod_api).register_method_fn(class_name, fn_name, GameFnPtr::from_ptr(func))}
+		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
+		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
+		unsafe{(&mut *mod_api).register_method_fn(class_name, fn_name, GameFnPtr::from_ptr(func))}
 	}
 
 	/// Register a dummy function for each game function defined in the mod_api
