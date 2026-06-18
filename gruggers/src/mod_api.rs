@@ -4,8 +4,8 @@ use std::path::Path;
 use crate::ntstring::NTStr;
 use crate::ast::{Parameter, GrugType};
 use crate::arena::Arena;
-
-use crate::error::{ErrorKind, Error, SourceSpan};
+use crate::error::{ErrorKind, Error, SourceSpan, Result};
+use crate::types::GameFnPtr;
 
 use allocator_api2::vec::Vec;
 
@@ -33,10 +33,92 @@ impl ModApi {
 	}
 	#[allow(dead_code)]
 	pub(crate) fn classes<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiClass<'a>> {
-		&self.classes
+		// SAFETY: Invariance of the methods field requires this transmute
+		// This transmute brings it back to the actual lifetime
+		unsafe{std::mem::transmute::<&'a HashMap<&'static NTStr, ModApiClass<'static>>, &'a HashMap<&'a NTStr, ModApiClass<'a>>>(&self.classes)}
 	}
 	pub(crate) fn host_fns<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiHostFn<'a>> {
 		&self.host_fns
+	}
+
+	pub(crate) fn register_host_fn(&mut self, name: &str, ptr: GameFnPtr) -> Result<()> {
+		let Some(host_fn_data) = self.host_fns.get_mut(name) else {
+			return Err(Error::new(
+				ErrorKind::INIT_ERROR,
+				"",
+				"".as_ref(),
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("Host function named '{}' is not found in mod_api.json", name),
+			));
+		};
+		match &mut host_fn_data.fn_ptr {
+			Some(_) => {
+				return Err(Error::new(
+					ErrorKind::INIT_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host function named '{}' has already been registered", name),
+				));
+			}
+			x => *x = Some(ptr),
+		}
+		Ok(())
+	}
+
+	pub(crate) fn register_method_fn(&mut self, class_name: &str, fn_name: &str, ptr: GameFnPtr) -> Result<()> {
+		let Some(class) = self.classes.get_mut(class_name) else {
+			return Err(Error::new(
+				ErrorKind::INIT_ERROR,
+				"",
+				"".as_ref(),
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("Class with name '{}' is not found in mod_api.json", class_name),
+			));
+		};
+		let Some((_, host_fn_data)) = class.methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) else {
+			return Err(Error::new(
+				ErrorKind::INIT_ERROR,
+				"",
+				"".as_ref(),
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("Class with name '{}' does not contain method with name '{}'", class_name, fn_name),
+			));
+		};
+		match &mut host_fn_data.fn_ptr {
+			Some(_) => {
+				return Err(Error::new(
+					ErrorKind::INIT_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host method named '{}' on class '{}' has already been registered", fn_name, class_name),
+				));
+			}
+			x => *x = Some(ptr),
+		}
+		Ok(())
+	}
+
+	pub(crate) unsafe fn register_dummies(&mut self) {
+		use crate::state::GrugState;
+		use crate::types::GrugValue;
+		extern "C" fn dummy_host_fn(_state: &GrugState, _arguments: *const GrugValue) -> GrugValue {
+			GrugValue{void: ()}
+		}
+		for (_, host_fn) in &mut self.host_fns {
+			host_fn.fn_ptr = const{Some(GameFnPtr::from_ptr(dummy_host_fn))};
+		}
+		for (_, class) in &mut self.classes {
+			for (_, host_fn) in &mut *class.methods {
+				host_fn.fn_ptr = const{Some(GameFnPtr::from_ptr(dummy_host_fn))};
+			}
+		}
 	}
 }
 
@@ -45,7 +127,7 @@ pub(crate) struct ModApiClass<'a> {
 	#[allow(dead_code)]
 	pub(crate) description: Option< &'a str>,
 	#[allow(dead_code)]
-	pub(crate) methods: &'a [(&'a NTStr, ModApiHostFn<'a>)],
+	pub(crate) methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
 }
 
 #[derive(Debug)]
@@ -74,9 +156,10 @@ pub(crate) struct ModApiHostFn<'a> {
 	pub(crate) description: Option<&'a str>,
 	pub(crate) return_ty: GrugType<'a>,
 	pub(crate) parameters: &'a [Parameter<'a>],
+	pub(crate) fn_ptr: Option<GameFnPtr>,
 }
 
-pub(crate) fn get_mod_api(mod_api_path: impl AsRef<Path>) -> Result<ModApi, Error> {
+pub(crate) fn get_mod_api(mod_api_path: impl AsRef<Path>) -> Result<ModApi> {
 	let mod_api_path = mod_api_path.as_ref();
 	let mod_api_text = std::fs::read_to_string(mod_api_path).map_err(|err| 
 		Error::new(
@@ -91,7 +174,7 @@ pub(crate) fn get_mod_api(mod_api_path: impl AsRef<Path>) -> Result<ModApi, Erro
 	get_mod_api_from_text(mod_api_path, &mod_api_text)
 }
 
-pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text: &str) -> Result<ModApi, Error> {
+pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text: &str) -> Result<ModApi> {
 	let arena = Arena::new();
 
 	macro_rules! mod_api_err{
@@ -240,7 +323,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 					name_span: SourceSpan{offset: 0, line: 0},
 					type_span: SourceSpan{offset: 0, line: 0},
 				})
-			}).collect::<Result<Vec<_>, _>>()?;
+			}).collect::<Result<Vec<_>>>()?;
 			// SAFETY: we don't give out a 'static refernce to this string
 			let parameters = {
 				let mut temp = Vec::new_in(&arena);
@@ -251,7 +334,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				description,
 				parameters,
 			}))
-		}).collect::<Result<Vec<_>, _>>()?;
+		}).collect::<Result<Vec<_>>>()?;
 		let export_fns = {
 			let mut temp = Vec::new_in(&arena);
 			temp.extend(export_fns);
@@ -262,7 +345,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			description,
 			export_fns
 		}))
-	}).collect::<Result<HashMap<_, _>, _>>()?;
+	}).collect::<Result<HashMap<_, _>>>()?;
 	
 	// "classes" object
 	let classes = match mod_api_root.get("classes") {
@@ -410,7 +493,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 					name_span: SourceSpan{offset: 0, line: 0},
 					type_span: SourceSpan{offset: 0, line: 0},
 				})
-			}).collect::<Result<Vec<_>, _>>()?;
+			}).collect::<Result<Vec<_>>>()?;
 			let parameters = {
 				let mut temp = Vec::new_in(&arena);
 				temp.extend(parameters);
@@ -446,15 +529,16 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			Ok((method_name, ModApiHostFn{
 				return_ty,
 				description,
-				parameters
+				parameters,
+				fn_ptr: None,
 			}))
-		}).collect::<Result<Vec<_>, _>>()?;
+		}).collect::<Result<Vec<_>>>()?;
 		let class_name = arena.copy_str_into_nt(class_name);
 		Ok((class_name, ModApiClass {
 			description,
 			methods: methods.leak(),
 		}))
-	}).collect::<Result<HashMap<_, _>, _>>()?;
+	}).collect::<Result<HashMap<_, _>>>()?;
 	
 	// "host_functions" object
 	let host_fns = match mod_api_root.get("host_functions") {
@@ -565,7 +649,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				name_span: SourceSpan{offset: 0, line: 0},
 				type_span: SourceSpan{offset: 0, line: 0},
 			})
-		}).collect::<Result<Vec<_>, _>>()?;
+		}).collect::<Result<Vec<_>>>()?;
 		let parameters = {
 			let mut temp = Vec::new_in(&arena);
 			temp.extend(parameters);
@@ -601,9 +685,10 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		Ok((fn_name, ModApiHostFn{
 			return_ty,
 			description,
-			parameters
+			parameters,
+			fn_ptr: None,
 		}))
-	}).collect::<Result<HashMap<_, _>, _>>()?;
+	}).collect::<Result<HashMap<_, _>>>()?;
 
 	Ok(ModApi{
 		entities: unsafe{std::mem::transmute::<HashMap<&'_ NTStr, ModApiEntity<'_>>, HashMap<&'static NTStr, ModApiEntity<'static>>>(entities)},

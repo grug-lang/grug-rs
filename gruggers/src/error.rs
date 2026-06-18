@@ -3,6 +3,9 @@ pub use gruggers_core::error::*;
 use crate::arena::Arena;
 use std::ffi::OsStr;
 
+// TODO: Replace every instance of Result<T, Error> with Result<T>
+pub type Result<T> = std::result::Result<T, Error>;
+
 /// Owned wrapper around [`GrugError`] that carries its
 /// allocator within itself
 ///

@@ -4,7 +4,6 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use crate::error::{Error, ErrorKind, SourceSpan};
-use crate::types::GameFnPtr;
 use crate::ntstring::{NTStr, NTStrPtr};
 use crate::ast::{
 	GrugType, UnaryOperator, BinaryOperator,
@@ -15,7 +14,7 @@ use crate::frontend::GlobalStatement;
 use crate::nt;
 use crate::arena::Arena;
 use crate::frontend::parser::Ast;
-use crate::mod_api::{ModApiEntity, ModApiHostFn, ModApiClass};
+use crate::mod_api::{ModApiEntity, ModApi};
 
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
@@ -24,11 +23,7 @@ pub(super) struct TypePropogator<'mod_api, 'arena> {
 	file_text: &'arena str,
 	file_path: &'arena OsStr,
 	entity: &'mod_api ModApiEntity<'mod_api>,
-	game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiHostFn<'mod_api>>,
-	classes: &'mod_api HashMap<&'mod_api NTStr, ModApiClass<'mod_api>>, 
-	// TODO: rename
-	game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>,
-	method_fn_ptrs: &'arena HashMap<&'static str, HashMap<&'static str, GameFnPtr>>, 
+	mod_api: &'mod_api ModApi,
 	resources: Vec<&'arena OsStr, &'arena Arena>,
 	current_mod_name: &'arena OsStr,
 	mods_dir_path: &'mod_api OsStr,
@@ -43,10 +38,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	// TODO: This should only be called with fill_result_types
 	pub fn new (
 		entity: &'mod_api ModApiEntity, 
-		game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiHostFn<'mod_api>>, 
-		classes: &'mod_api HashMap<&'mod_api NTStr, ModApiClass<'mod_api>>, 
-		game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, 
-		method_fn_ptrs: &'arena HashMap<&'static str, HashMap<&'static str, GameFnPtr>>, 
+		mod_api: &'mod_api ModApi,
 		mod_name: &'arena OsStr, 
 		mods_dir_path: &'mod_api OsStr, 
 		file_text: &'arena str,
@@ -57,10 +49,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			file_text,
 			file_path,
 			entity,
-			game_fns,
-			classes,
-			game_fn_ptrs,
-			method_fn_ptrs,
+			mod_api,
 			current_mod_name: mod_name,
 			resources: Vec::new_in(arena),
 			mods_dir_path,
@@ -86,10 +75,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 
 	pub fn fill_result_types(
 		entity: &'mod_api ModApiEntity, 
-		game_fns: &'mod_api HashMap<&'mod_api NTStr, ModApiHostFn<'mod_api>>, 
-		classes: &'mod_api HashMap<&'mod_api NTStr, ModApiClass<'mod_api>>, 
-		game_fn_ptrs: &'arena HashMap<&'static str, GameFnPtr>, 
-		method_fn_ptrs: &'arena HashMap<&'static str, HashMap<&'static str, GameFnPtr>>, 
+		mod_api: &'mod_api ModApi,
 		mod_name: &'arena OsStr, 
 		mods_dir_path: &'mod_api OsStr, 
 		file_text: &'arena str,
@@ -100,10 +86,7 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	) -> Result<&'arena [&'arena OsStr], Error> {
 		let mut type_propagator = Self::new(
 			entity, 
-			game_fns,
-			classes,
-			game_fn_ptrs,
-			method_fn_ptrs,
+			mod_api,
 			mod_name,
 			mods_dir_path,
 			file_text, 
@@ -594,10 +577,10 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				if let Some((_, (return_ty, sig_arguments))) = helper_fns.iter().find(|(name, _)| *name == fn_name) {
 					self.check_arguments(helper_fns, export_fns, fn_name, *name_span, sig_arguments, args)?;
 					*return_ty
-				} else if let Some(game_fn) = self.game_fns.get(fn_name) {
+				} else if let Some(game_fn) = self.mod_api.host_fns().get(fn_name) {
 					self.check_arguments(helper_fns, export_fns, fn_name, *name_span, game_fn.parameters, args)?;
-					if let Some(game_fn_ptr) = self.game_fn_ptrs.get(fn_name) {
-						*ptr = Some(*game_fn_ptr);
+					if let Some(game_fn_ptr) = game_fn.fn_ptr {
+						*ptr = Some(game_fn_ptr);
 						game_fn.return_ty
 					} else {
 						panic!("Game function {} was not registered (Note: This error is not triggerred by grug_tests)", fn_name);
@@ -631,9 +614,9 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				name_span,
 			} => {
 				let name = name.to_str();
-				let reciever_type = match self.fill_expr(helper_fns, export_fns, receiver)? {
-					GrugType::Id{custom_name: Some(reciever_type)} => {
-						reciever_type.to_str()
+				let receiver_type = match self.fill_expr(helper_fns, export_fns, receiver)? {
+					GrugType::Id{custom_name: Some(receiver_type)} => {
+						receiver_type.to_str()
 					}
 					GrugType::Id{custom_name: None} => {
 						return self.new_error(
@@ -648,29 +631,24 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 						);
 					}
 				};
-				let Some(class) = self.classes.get(reciever_type) else {
+				let Some(class) = self.mod_api.classes().get(receiver_type) else {
 					return self.new_error(
 						receiver.span,
-						format_args!("Type '{}' does not have any methods", reciever_type)
+						format_args!("Type '{}' does not have any methods", receiver_type)
 					);
 				};
 				let Some((_, host_fn)) = class.methods.iter().find(|(fn_name, _)| fn_name.as_str() == name) else {
 					return self.new_error(
 						receiver.span,
-						format_args!("Cannot find method '{}' on type '{}'", name, reciever_type)
+						format_args!("Cannot find method '{}' on type '{}'", name, receiver_type)
 					);
 				};
 				self.check_arguments(helper_fns, export_fns, name, *name_span, host_fn.parameters, args)?;
-				if let Some(class) = self.method_fn_ptrs.get(reciever_type) {
-					if let Some(fn_ptr) = class.get(name) {
-						*ptr = Some(*fn_ptr);
-						host_fn.return_ty
-					} else {
-						// missing method
-						panic!("This error is not triggerred by grug_tests");
-					}
+				if let Some(fn_ptr) = host_fn.fn_ptr {
+					*ptr = Some(fn_ptr);
+					host_fn.return_ty
 				} else {
-					// missing class
+					// unregistered method
 					panic!("This error is not triggerred by grug_tests");
 					// return self.new_error(
 					// 	*name_span,

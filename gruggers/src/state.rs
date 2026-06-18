@@ -61,11 +61,11 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::pin::Pin;
 use std::cell::{Cell, RefCell, Ref};
-use std::collections::{HashMap, hash_map::Entry, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::ffi::{OsString, OsStr};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{RwLock, Arc};
+use std::sync::Arc;
 
 // /// Called by the 
 #[repr(C)]
@@ -265,8 +265,6 @@ pub struct GrugState {
 	pub(crate) mod_api: Arc<ModApi>,
 	pub(crate) mods_dir_path: OsString,
 	next_entity_id: AtomicU64,
-	pub(crate) host_fn_ptrs: Arc<RwLock<HashMap<&'static str, GameFnPtr>>>,
-	pub(crate) method_fn_ptrs: Arc<RwLock<HashMap<&'static str, HashMap<&'static str, GameFnPtr>>>>,
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
 	pub(crate) entities: Xar<GrugEntity>,
@@ -358,8 +356,6 @@ impl GrugState {
 		}
 
 		let mod_api = Arc::new(mod_api);
-		let host_fn_ptrs = Arc::new(RwLock::new(HashMap::new()));
-		let method_fn_ptrs = Arc::new(RwLock::new(HashMap::new()));
 
 		let (sender, reciever) = channel();
 		watch_changes(&mods_dir_path, move |changes| sender.send(changes).is_ok()).unwrap();
@@ -376,8 +372,6 @@ impl GrugState {
 				snd.clone(), 
 				mods_dir_path.clone(), 
 				Arc::clone(&mod_api), 
-				Arc::clone(&host_fn_ptrs),
-				Arc::clone(&method_fn_ptrs)
 			));
 			per_thread_send
 		}).collect::<Vec<_>>();
@@ -386,8 +380,6 @@ impl GrugState {
 			mod_api,
 			mods_dir_path: mods_dir_path.into(),
 			next_entity_id: AtomicU64::new(0),
-			host_fn_ptrs,
-			method_fn_ptrs,
 			runtime_error_handler: handler,
 			resources: RefCell::new(HashSet::new()),
 			entities: Xar::new(),
@@ -481,80 +473,30 @@ impl GrugState {
 		Ok(&self.export_functions[start..end])
 	}
 
-	pub unsafe fn register_host_fn(&mut self, name: &'static str, func: extern "C" fn (&GrugState, *const GrugValue) -> GrugValue) -> Result<(), Error> {
-		if !self.mod_api.host_fns().contains_key(name) {
-			return Err(Error::new(
-				ErrorKind::INIT_ERROR,
-				"",
-				"".as_ref(),
-				"",
-				SourceSpan{offset: 0, line: 0},
-				format_args!("Host function named '{}' is not found in mod_api.json", name),
-			));
-		} else {
-			match self.host_fn_ptrs.write().unwrap().entry(name) {
-				Entry::Occupied(_) => return Err(Error::new(
-					ErrorKind::INIT_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Host function named '{}' has already been registered", name),
-				)),
-				Entry::Vacant(x) => {
-					x.insert(GameFnPtr::from_ptr(func));
-					Ok(())
-				}
-			}
-		}
+	pub unsafe fn register_host_fn(&mut self, name: &str, func: extern "C" fn (&GrugState, *const GrugValue) -> GrugValue) -> Result<(), Error> {
+		// SAFETY: This Arc is shared between the state and all the compiler
+		// threads.  Because we have a &mut self, we assume that all compiler
+		// threads are parked waiting to receive more compile commands. This
+		// means that they cannot have an active reference to the mod_api data
+		// during this call to get_mut_unchecked
+		
+		// Note: This is the same as the unstable get_mut_unchecked on Arc;
+		// Once that is stabilized, this can be replaced
+		let mod_api = unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut ModApi>(&mut self.mod_api)};
+		unsafe{(&mut **mod_api).register_host_fn(name, GameFnPtr::from_ptr(func))}
 	}
 
-	pub unsafe fn register_method(&mut self, class_name: &'static str, function_name: &'static str, func: extern "C" fn (&GrugState, *const GrugValue) -> GrugValue) -> Result<(), Error> {
-		let Some(class) = self.mod_api.classes().get(class_name) else {
-			return Err(Error::new(
-				ErrorKind::INIT_ERROR,
-				"",
-				"".as_ref(),
-				"",
-				SourceSpan{offset: 0, line: 0},
-				format_args!("Class with name '{}' is not found in mod_api.json", class_name),
-			));
-		};
-		if class.methods.iter().find(|(name, _)| name.as_str() == function_name).is_none() {
-			return Err(Error::new(
-				ErrorKind::INIT_ERROR,
-				"",
-				"".as_ref(),
-				"",
-				SourceSpan{offset: 0, line: 0},
-				format_args!("Class with name '{}' does not contain method with name '{}'", class_name, function_name),
-			));
-		}
+	pub unsafe fn register_method_fn(&mut self, class_name: &str, fn_name: &str, func: extern "C" fn (&GrugState, *const GrugValue) -> GrugValue) -> Result<(), Error> {
+		// SAFETY: This Arc is shared between the state and all the compiler
+		// threads.  Because we have a &mut self, we assume that all compiler
+		// threads are parked waiting to receive more compile commands. This
+		// means that they cannot have an active reference to the mod_api data
+		// during this call to get_mut_unchecked
 		
-		else {
-			match self.method_fn_ptrs.write().unwrap().entry(class_name) {
-				Entry::Occupied(mut entry) => {
-					match entry.get_mut().entry(function_name) {
-						Entry::Occupied(_) => return Err(Error::new(
-							ErrorKind::INIT_ERROR,
-							"",
-							"".as_ref(),
-							"",
-							SourceSpan{offset: 0, line: 0},
-							format_args!("Host method named '{}' on class '{}' has already been registered", function_name, class_name),
-						)),
-						Entry::Vacant(x) => {
-							x.insert(GameFnPtr::from_ptr(func));
-							Ok(())
-						}
-					}
-				}
-				Entry::Vacant(x) => {
-					x.insert(HashMap::from([(function_name, GameFnPtr::from_ptr(func))]));
-					Ok(())
-				}
-			}
-		}
+		// Note: This is the same as the unstable get_mut_unchecked on Arc;
+		// Once that is stabilized, this can be replaced
+		let mod_api = unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut ModApi>(&mut self.mod_api)};
+		unsafe{(&mut **mod_api).register_method_fn(class_name, fn_name, GameFnPtr::from_ptr(func))}
 	}
 
 	/// Register a dummy function for each game function defined in the mod_api
@@ -566,14 +508,16 @@ impl GrugState {
 	/// You are only allowed to compile scripts from this state.
 	/// This function only exists to allow the cli compiler to function.
 	pub unsafe fn register_dummies(&mut self) {
-		extern "C" fn dummy_host_fn(_state: &GrugState, _arguments: *const GrugValue) -> GrugValue {
-			GrugValue{void: ()}
-		}
-
-		let mut host_fn_ptrs = self.host_fn_ptrs.write().unwrap();
-		for name in self.mod_api.host_fns().keys() {
-			host_fn_ptrs.entry(Box::leak(Box::from(name.as_str()))).or_insert(GameFnPtr::from_ptr(dummy_host_fn));
-		}
+		// SAFETY: This Arc is shared between the state and all the compiler
+		// threads.  Because we have a &mut self, we assume that all compiler
+		// threads are parked waiting to receive more compile commands. This
+		// means that they cannot have an active reference to the mod_api data
+		// during this call to get_mut_unchecked
+		
+		// Note: This is the same as the unstable get_mut_unchecked on Arc;
+		// Once that is stabilized, this can be replaced
+		let mod_api = unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut ModApi>(&mut self.mod_api)};
+		unsafe{(&mut **mod_api).register_dummies()}
 	}
 	
 	// This should only happen during an error so its okay if its slow
@@ -588,34 +532,22 @@ impl GrugState {
 
 	pub fn all_host_fns_registered(&self) -> Result<(), Error> {
 		// Check all normal host functions
-		let host_fn_ptrs = self.host_fn_ptrs.read().unwrap();
-		for game_fn_name in self.mod_api.host_fns().keys() {
-			if !host_fn_ptrs.contains_key(game_fn_name.as_str()) {
+		for (host_fn_name, host_fn) in self.mod_api.host_fns() {
+			if let None = host_fn.fn_ptr {
 				return Err(Error::new(
 					ErrorKind::INIT_ERROR,
 					"",
 					"".as_ref(),
 					"",
 					SourceSpan{offset: 0, line: 0},
-					format_args!("host function '{game_fn_name}' has not been registered"),
+					format_args!("host function '{host_fn_name}' has not been registered"),
 				));
 			}
 		}
 		// check all methods
-		let method_fn_ptrs = self.method_fn_ptrs.read().unwrap();
 		for (class_name, class) in self.mod_api.classes() {
-			let Some(method_fn_ptrs) = method_fn_ptrs.get(class_name.as_str()) else {
-				return Err(Error::new(
-					ErrorKind::INIT_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("methods for class '{class_name}' have not been registered"),
-				));
-			};
-			for (method_name, _) in class.methods {
-				if !method_fn_ptrs.contains_key(method_name.as_str()) {
+			for (method_name, method) in &*class.methods {
+				if let None = method.fn_ptr {
 					return Err(Error::new(
 						ErrorKind::INIT_ERROR,
 						"",
