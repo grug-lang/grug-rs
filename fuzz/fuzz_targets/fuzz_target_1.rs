@@ -9,15 +9,14 @@ use std::cell::RefCell;
 const MOD_API: &str = r#"{
 	"entities": {
 		"A": {
-			"on_functions": {
-				
-			}
+			"export_functions": [ ]
 		}
 	},
-	"game_functions": {
+	"classes": {},
+	"host_functions": {
 		"test": {
 			"return_type": "boolean",
-			"arguments": []
+			"parameters": []
 		}
 	}
 }"#;
@@ -28,7 +27,7 @@ thread_local! {
 
 fuzz_target!(|data: &str| {
 	STATE.with_borrow_mut(|state: &mut Option<GrugState>| {
-		let state = state.get_or_insert_with(|| GrugState::new_from_text(MOD_API, "mods", Default::default(), BytecodeBackend::new()).unwrap());
+		let state = state.get_or_insert_with(|| GrugState::new_from_text(MOD_API, "./", Default::default(), BytecodeBackend::new()).unwrap());
 		_ = state.compile_grug_file_from_str("test/test-A.grug", data);
 	});
 });
