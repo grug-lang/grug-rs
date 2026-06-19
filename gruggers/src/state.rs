@@ -518,8 +518,9 @@ impl GrugState {
 		
 		// Note: This is the same as the unstable get_mut_unchecked on Arc;
 		// Once that is stabilized, this can be replaced
-		let mod_api = unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut ModApi>(&mut self.mod_api)};
-		unsafe{(&mut **mod_api).register_dummies()}
+		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
+		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
+		unsafe{(&mut *mod_api).register_dummies()}
 	}
 	
 	// This should only happen during an error so its okay if its slow
@@ -635,8 +636,7 @@ impl GrugState {
 	/// the number of arguments expected by `function_name`. If there are no arguments, 
 	/// `values` may be null
 	#[must_use]
-	// TODO: rename to call_export_fn and call_export_fn_raw
-	pub unsafe fn call_on_function_raw(&self, entity: &GrugEntity, fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
+	pub unsafe fn call_export_fn_raw(&self, entity: &GrugEntity, fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
 		let old_script   = self.current_script  .get();
 		let old_fn_id = self.current_export_fn_id.get();
 		self.current_script  .set(Some(entity.file_id));
@@ -653,7 +653,7 @@ impl GrugState {
 	}
 
 	#[must_use]
-	pub fn call_on_function(&self, entity: &GrugEntity, fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
+	pub fn call_export_fn(&self, entity: &GrugEntity, fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
 		let old_script   = self.current_script  .get();
 		let old_fn_id = self.current_export_fn_id.get();
 		self.current_script  .set(Some(entity.file_id));

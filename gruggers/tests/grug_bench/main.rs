@@ -66,7 +66,7 @@ mod test_bindings {
 
 	extern "C" fn call_entity_on_fn(state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue, values_len: usize) {
 		let values = unsafe{if values.is_null() {&[]} else {std::slice::from_raw_parts(values, values_len)}};
-		assert!(state.call_on_function(
+		assert!(state.call_export_fn(
 			entity, 
 			on_fn_id, 
 			values,

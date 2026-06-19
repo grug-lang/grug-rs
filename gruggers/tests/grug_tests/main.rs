@@ -114,7 +114,7 @@ mod test_bindings {
 		let fn_id = state.get_export_fn_id(entity_type, fn_name).unwrap();
 		let args = if args_count == 0 {&[]} else {unsafe{std::slice::from_raw_parts(args, args_count)}};
 		_ = state
-			.call_on_function(&*entity, fn_id, args);
+			.call_export_fn(&*entity, fn_id, args);
 	}
 
 	#[allow(unused_variables)]

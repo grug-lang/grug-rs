@@ -1,3 +1,4 @@
+// TODO: Try adding scoped arenas
 mod page_alloc {
 	#![allow(non_snake_case)]
 	// directly use VirtualAlloc and VirtualFree on windows

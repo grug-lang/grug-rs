@@ -159,16 +159,16 @@ fn main () {
 		OBJECTS.write(HashMap::new());
 
 		let script_id = STATE.compile_grug_file("fib_script/entity-Fib.grug").unwrap();
-		let script = STATE.create_entity(script_id).unwrap();
+		let script    = STATE.create_entity(script_id).unwrap();
 
-		let naive_id = STATE.get_export_fn_id("Fib", "on_fib_naive").unwrap();
-		let iterative_id = STATE.get_export_fn_id("Fib", "on_fib_iterative").unwrap();
-		let memo_id = STATE.get_export_fn_id("Fib", "on_fib_memoized").unwrap();
-		let memo_print_id = STATE.get_export_fn_id("Fib", "on_print_list").unwrap();
+		let naive_id      = STATE.get_export_fn_id("Fib", "fib_naive").unwrap();
+		let iterative_id  = STATE.get_export_fn_id("Fib", "fib_iterative").unwrap();
+		let memo_id       = STATE.get_export_fn_id("Fib", "fib_memoized").unwrap();
+		let memo_print_id = STATE.get_export_fn_id("Fib", "print_list").unwrap();
 
 		println!("Naive implementation");
 		for i in 0..10 {
-			if !STATE.call_on_function(&*script, naive_id, &[GrugValue{number:i as f64}]) {
+			if !STATE.call_export_fn(&*script, naive_id, &[GrugValue{number:i as f64}]) {
 				break
 			};
 		}
@@ -176,7 +176,7 @@ fn main () {
 		println!("iterative implementation");
 		for i in 0..10 {
 			print!("{i} : ");
-			if !STATE.call_on_function(&*script, iterative_id, &[GrugValue{number:i as f64}]) {
+			if !STATE.call_export_fn(&*script, iterative_id, &[GrugValue{number:i as f64}]) {
 				break
 			};
 		}
@@ -184,11 +184,11 @@ fn main () {
 		println!("memoized implementation");
 		for i in 0..10 {
 			// print!("{i} : ");
-			if !STATE.call_on_function(&*script, memo_id, &[GrugValue{number:i as f64}]) {
+			if !STATE.call_export_fn(&*script, memo_id, &[GrugValue{number:i as f64}]) {
 				break
 			};
 		}
 		
-		if !STATE.call_on_function(&*script, memo_print_id, &[]) {panic!()};
+		if !STATE.call_export_fn(&*script, memo_print_id, &[]) {panic!()};
 	}
 }

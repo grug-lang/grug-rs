@@ -6,15 +6,16 @@
 				{
 					"name": "bark",
 					"description": "Called when the entity is supposed to bark",
-					"arguments": [ ]
+					"parameters": [ ]
 				}
 			]
 		}
 	},
+	"classes": {},
 	"host_functions": {
 		"print_string": {
 			"description": "Prints a string",
-			"arguments": [
+			"parameters": [
 				{
 					"name": "msg",
 					"type": "string"
@@ -23,7 +24,7 @@
 		},
 		"print_file": {
 			"description": "Prints a file",
-			"arguments": [
+			"parameters": [
 				{
 					"name": "path",
 					"type": "resource",

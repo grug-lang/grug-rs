@@ -398,8 +398,8 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 	// Check that the global variable's assigned value doesn't contain a call_to a helper function nor identifier
 	fn check_global_expr(&mut self, assignment_expr: &Expr<'_>, name: &str) -> Result<(), Error> {
 		match &assignment_expr.data {
-			ExprData::Entity(_) => unreachable!(),
-			ExprData::Resource(_) => unreachable!(),
+			ExprData::Entity(_)     |
+			ExprData::Resource(_)   |
 			ExprData::True          |
 			ExprData::False         |
 			ExprData::String(_)     | 
@@ -439,11 +439,12 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 			ExprData::Call{
 				receiver: Some(_),
 				name: _,
-				args: _,
+				args,
 				ptr : _,
 				name_span: _,
 			} => {
-				unimplemented!();
+				args.iter().map(|argument| self.check_global_expr(argument, name))
+					.collect::<Result<Vec<_>, _>>()?;
 			},
 			ExprData::Parenthesized(expr) => self.check_global_expr(expr, name)?,
 		}
@@ -614,6 +615,27 @@ impl<'mod_api: 'arena, 'arena> TypePropogator<'mod_api, 'arena> {
 				name_span,
 			} => {
 				let name = name.to_str();
+				match &receiver.data {
+					ExprData::Call {
+						receiver: Some(_),
+						..
+					} => {
+						return self.new_error(
+							receiver.span,
+							format_args!("Method chaining is not allowed")
+						);
+					}
+					ExprData::Call {
+						receiver: None,
+						..
+					} => {
+						return self.new_error(
+							receiver.span,
+							format_args!("Cannot call method on the result of a function call")
+						);
+					}
+					_ => (),
+				};
 				let receiver_type = match self.fill_expr(helper_fns, export_fns, receiver)? {
 					GrugType::Id{custom_name: Some(receiver_type)} => {
 						receiver_type.to_str()

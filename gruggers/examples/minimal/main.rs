@@ -28,12 +28,12 @@ fn main () {
 	let files = state.compile_all_files();
 	let id = *files.files()[0].result().as_ref().unwrap();
 	let dog = state.create_entity(id).unwrap();
-	let on_bark_id = state.get_export_fn_id("Dog", "on_bark").unwrap();
+	let on_bark_id = state.get_export_fn_id("Dog", "bark").unwrap();
 
 	loop {
 		_ = state.update_files();
-		if !state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: nt!("woof").as_ntstrptr()}]) {panic!()};
-		if !state.call_on_function(&*dog, on_bark_id, &[GrugValue{string: nt!("arf").as_ntstrptr()}]) {panic!()};
+		if !state.call_export_fn(&*dog, on_bark_id, &[GrugValue{string: nt!("woof").as_ntstrptr()}]) {panic!()};
+		if !state.call_export_fn(&*dog, on_bark_id, &[GrugValue{string: nt!("arf").as_ntstrptr()}]) {panic!()};
 		std::thread::sleep(Duration::from_secs(1));
 	}
 }

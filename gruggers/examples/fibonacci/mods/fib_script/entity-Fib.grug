@@ -1,10 +1,10 @@
 memo_list: List = list_number()
 
-on_fib_naive(number: number) {
-    print_number(helper_fib_naive(number))
+export fib_naive(number: number) {
+    print_number(_fib_naive(number))
 }
 
-on_fib_iterative(number: number) {
+export fib_iterative(number: number) {
     result: number = 0
     if number < 0 {
         result = 0
@@ -25,17 +25,17 @@ on_fib_iterative(number: number) {
     print_number(result)
 }
 
-on_fib_memoized(number: number) {
-    helper_fib_memo(number)
-    # print_number(helper_fib_memo(number))
+export fib_memoized(number: number) {
+    _fib_memo(number)
+    # print_number(_fib_memo(number))
     # print_list_number(memo_list)
 }
 
-on_print_list() {
+export print_list() {
     print_list_number(memo_list)
 }
 
-helper_fib_memo(x: number) number {
+local _fib_memo(x: number) number {
     if list_number_len(memo_list) > x {
         return list_number_get(memo_list, x)
     }
@@ -43,18 +43,18 @@ helper_fib_memo(x: number) number {
         list_number_push(memo_list, 1)
         return 1
     }
-    a: number = helper_fib_memo(x - 1)
-    b: number = helper_fib_memo(x - 2)
+    a: number = _fib_memo(x - 1)
+    b: number = _fib_memo(x - 2)
     list_number_push(memo_list, a + b)
     return a + b
 }
 
-helper_fib_naive(n: number) number {
+local _fib_naive(n: number) number {
     if n <= 1 {
         return 0
     }
     if (n == 1 or n == 2) {
         return 1
     }
-    return helper_fib_naive(n - 1) + helper_fib_naive(n - 2)
+    return _fib_naive(n - 1) + _fib_naive(n - 2)
 }

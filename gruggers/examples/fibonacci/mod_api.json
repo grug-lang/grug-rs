@@ -2,46 +2,51 @@
 	"entities": {
 		"Fib": {
 			"description": "Test script to find the numbers in the fibonacci sequence",
-			"on_functions": {
-				"on_fib_naive": {
-					"arguments": [
+			"export_functions": [
+				{
+					"name": "fib_naive",
+					"parameters": [
 						{
 							"name": "number",
 							"type": "number"
 						}
 					]
 				},
-				"on_fib_iterative": {
-					"arguments": [
+				{
+					"name": "fib_iterative",
+					"parameters": [
 						{
 							"name": "number",
 							"type": "number"
 						}
 					]
 				},
-				"on_fib_memoized": {
-					"arguments": [
+				{
+					"name": "fib_memoized",
+					"parameters": [
 						{
 							"name": "number",
 							"type": "number"
 						}
 					]
 				},
-				"on_print_list": {
-					"arguments": []
+				{
+					"name": "print_list",
+					"parameters": []
 				}
-			}
+			]
 		}
 	},
-	"game_functions": {
+	"classes": {},
+	"host_functions": {
 		"list_number": {
 			"description": "creates a list of numbers",
 			"return_type": "List",
-			"arguments": []
+			"parameters": []
 		},
 		"print_list_number": {
 			"description": "Prints a list of numbers",
-			"arguments": [
+			"parameters": [
 				{
 					"name": "list",
 					"type": "List"
@@ -50,7 +55,7 @@
 		},
 		"list_number_insert": {
 			"description": "inserts an element into the list at the given location",
-			"arguments" : [
+			"parameters" : [
 				{
 					"name": "list",
 					"type": "List"
@@ -68,7 +73,7 @@
 		"list_number_remove": {
 			"description": "removes an element from the list at the given location",
 			"return_type": "number",
-			"arguments" : [
+			"parameters" : [
 				{
 					"name": "list",
 					"type": "List"
@@ -81,7 +86,7 @@
 		},
 		"list_number_push": {
 			"description": "inserts an element into the end of the list",
-			"arguments" : [
+			"parameters" : [
 				{
 					"name": "list",
 					"type": "List"
@@ -95,7 +100,7 @@
 		"list_number_pop": {
 			"description": "removes the last element from the list and returns it",
 			"return_type": "number",
-			"arguments" : [
+			"parameters" : [
 				{
 					"name": "list",
 					"type": "List"
@@ -105,7 +110,7 @@
 		"list_number_len": {
 			"description": "returns the length of the list",
 			"return_type": "number",
-			"arguments": [
+			"parameters": [
 				{
 					"name": "list",
 					"type": "List"
@@ -115,7 +120,7 @@
 		"list_number_get": {
 			"description": "gets the value at an index",
 			"return_type": "number",
-			"arguments": [
+			"parameters": [
 				{
 					"name": "list",
 					"type": "List"
@@ -129,7 +134,7 @@
 		"list_number_set": {
 			"description": "sets the value at an index",
 			"return_type": "number",
-			"arguments": [
+			"parameters": [
 				{
 					"name": "list",
 					"type": "List"
@@ -146,7 +151,7 @@
 		},
 		"print_number": {
 			"description": "Prints a number",
-			"arguments": [
+			"parameters": [
 				{
 					"name": "number",
 					"type": "number"
@@ -155,7 +160,7 @@
 		},
 		"print_string": {
 			"description": "Prints a string",
-			"arguments": [
+			"parameters": [
 				{
 					"name": "msg",
 					"type": "string"

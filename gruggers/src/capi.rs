@@ -103,8 +103,8 @@ pub extern "C" fn grug_get_on_fn_id(state: &CState, entity_type: NTStrPtr<'_>, o
 /// `values` must point to a buffer that contains at least `values_len`
 /// elements
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_call_on_function(state: &CState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue, values_len: usize) -> bool {
-	unsafe{state.0.call_on_function(entity, on_fn_id, std::slice::from_raw_parts(values, values_len))}
+pub unsafe extern "C" fn grug_call_export_fn(state: &CState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue, values_len: usize) -> bool {
+	unsafe{state.0.call_export_fn(entity, on_fn_id, std::slice::from_raw_parts(values, values_len))}
 }
 
 #[unsafe(no_mangle)]

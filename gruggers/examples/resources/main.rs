@@ -46,7 +46,7 @@ fn main () {
 		println!("");
 		for file in files.files() {if let Err(err) = file.result() {println!("{}, ", err)}};
 		println!("{:?}", state.update_files());
-		if !state.call_on_function(&*dog, on_bark_id, &[]) {panic!()};
+		if !state.call_export_fn(&*dog, on_bark_id, &[]) {panic!()};
 		std::thread::sleep(Duration::from_secs(1));
 	}
 }
