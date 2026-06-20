@@ -371,168 +371,157 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				Some(arena.copy_str_into(str))
 			}
 		};
-		// optional "methods" array
+		// optional "methods" objetc
 		let methods = match &class_values.get("methods") {
-			None => &vec![],
-			Some(parameters) => {
-				let JsonValue::Array(parameters) = parameters else {
-					return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods is not an array"));
+			None => Vec::new(),
+			Some(methods) => {
+				let JsonValue::Object(methods) = methods else {
+					return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods is not an object"));
 				};
-				parameters
+				methods.iter().map(|(method_name, method_values)| {
+					let method_name = arena.copy_str_into_nt(method_name);
+					let JsonValue::Object(method_values) = method_values else {
+						return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name} is not an object"));
+					};
+					// optional "description" string
+					let description = match method_values.get("description") {
+						None => None,
+						Some(str) => {
+							let Some(str) = str.as_str() else {
+								return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.description is not a string"));
+							};
+							Some(arena.copy_str_into(str))
+						}
+					};
+					
+					// optional "parameters" object
+					let parameters = match &method_values.get("parameters") {
+						None => &vec![],
+						Some(parameters) => {
+							let JsonValue::Array(parameters) = parameters else {
+								return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.parameters is not an array"));
+							};
+							parameters
+						}
+					};
+
+					let parameters = parameters.iter().enumerate().map(|(i, param_values)| {
+						let JsonValue::Object(param_values) = param_values else {
+							return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.parameters[{i}] is not an object"));
+						};
+						// "name" string
+						let param_name = match param_values.get("name") {
+							None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.parameters[{i}].name is missing")),
+							Some(str) => {
+								let Some(str) = str.as_str() else {
+									return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.parameters[{i}].name is not a string"));
+								};
+								arena.copy_str_into_nt(str)
+							}
+						};
+						// "type" string
+						let ty = match param_values.get("type") {
+							None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.parameters[\"{param_name}\"].type is missing")),
+							Some(str) => {
+								let Some(str) = str.as_str() else {
+									return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.parameters[\"{param_name}\"].type is not a string"));
+								};
+								str
+							}
+						};
+						let ty = match ty {
+							// parameters can't be void
+							"void"     => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.parameters[\"{param_name}\"].type is void")),
+							"bool"     => GrugType::Bool,
+							"number"      => GrugType::Number,
+							"string"   => GrugType::String,
+							"id"       => GrugType::Id{custom_name: None},
+							"entity"   => {
+								// "entity_type" string
+								match param_values.get("entity_type") {
+									None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.parameters[\"{param_name}\"].entity_type is missing")),
+									Some(str) => {
+										let Some(str) = str.as_str() else {
+											return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.parameters[\"{param_name}\"].entity_type is not a string"));
+										};
+										GrugType::Entity {
+											entity_type: (!str.is_empty()).then(|| {
+												arena.copy_str_into_nt(str).as_ntstrptr()
+											})
+										}
+									}
+								}
+							},
+							"resource" => {
+								// "resource_extension" string
+								match param_values.get("resource_extension") {
+									None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.parameters[\"{param_name}\"].resource_extension is missing")),
+									Some(str) => {
+										let Some(str) = str.as_str() else {
+											return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.parameters[\"{param_name}\"].resource_extension is not a string"));
+										};
+										GrugType::Resource {
+											extension: arena.copy_str_into_nt(str).as_ntstrptr()
+										}
+									}
+								}
+							}
+							// TODO: This should be checked against existing IDs
+							type_name => {
+								let extra_value = arena.copy_str_into_nt(type_name).as_ntstrptr();
+								GrugType::Id {
+									custom_name: Some(extra_value),
+								}
+							}
+						};
+						Ok(Parameter{
+							name: param_name.as_ntstrptr(),
+							ty,
+							name_span: SourceSpan{offset: 0, line: 0},
+							type_span: SourceSpan{offset: 0, line: 0},
+						})
+					}).collect::<Result<Vec<_>>>()?;
+					let parameters = {
+						let mut temp = Vec::new_in(&arena);
+						temp.extend(parameters);
+						temp.leak()
+					};
+
+					// optional "return_type" string
+					let return_ty = match method_values.get("return_type") {
+						None => "void",
+						Some(str) => {
+							let Some(str) = str.as_str() else {
+								return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.return_type is not a string"));
+							};
+							arena.copy_str_into_nt(str)
+						}
+					};
+					let return_ty = match return_ty {
+						"void"     => GrugType::Void,
+						"bool"     => GrugType::Bool,
+						"number"      => GrugType::Number,
+						"string"   => GrugType::String,
+						"id"       => GrugType::Id{custom_name: None},
+						"entity"     => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.return_type is an entity")),
+						"resource"     => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods.{method_name}.return_type is an resource")),
+						type_name => {
+							let extra_value = arena.copy_str_into_nt(type_name).as_ntstrptr();
+							GrugType::Id {
+								custom_name: Some(extra_value),
+							}
+						}
+					};
+					// SAFETY: we don't give out a 'static refernce to this string
+					Ok((method_name, ModApiHostFn{
+						return_ty,
+						description,
+						parameters,
+						fn_ptr: None,
+					}))
+				}).collect::<Result<Vec<_>>>()?
 			}
 		};
-		let methods = methods.iter().enumerate().map(|(i, method_values)| {
-			let JsonValue::Object(method_values) = method_values else {
-				return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[{i}] is not an object"));
-			};
-			// "name" string
-			let method_name = match method_values.get("name") {
-				None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[{i}].name is missing")),
-				Some(str) => {
-					let Some(str) = str.as_str() else {
-						return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[{i}].name is not a string"));
-					};
-					arena.copy_str_into_nt(str)
-				}
-			};
-
-			// optional "description" string
-			let description = match method_values.get("description") {
-				None => None,
-				Some(str) => {
-					let Some(str) = str.as_str() else {
-						return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].description is not a string"));
-					};
-					Some(arena.copy_str_into(str))
-				}
-			};
-			
-			// optional "parameters" object
-			let parameters = match &method_values.get("parameters") {
-				None => &vec![],
-				Some(parameters) => {
-					let JsonValue::Array(parameters) = parameters else {
-						return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters is not an array"));
-					};
-					parameters
-				}
-			};
-
-			let parameters = parameters.iter().enumerate().map(|(i, param_values)| {
-				let JsonValue::Object(param_values) = param_values else {
-					return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[{i}] is not an object"));
-				};
-				// "name" string
-				let param_name = match param_values.get("name") {
-					None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[{i}].name is missing")),
-					Some(str) => {
-						let Some(str) = str.as_str() else {
-							return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[{i}].name is not a string"));
-						};
-						arena.copy_str_into_nt(str)
-					}
-				};
-				// "type" string
-				let ty = match param_values.get("type") {
-					None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].type is missing")),
-					Some(str) => {
-						let Some(str) = str.as_str() else {
-							return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].type is not a string"));
-						};
-						str
-					}
-				};
-				let ty = match ty {
-					// parameters can't be void
-					"void"     => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].type is void")),
-					"bool"     => GrugType::Bool,
-					"number"      => GrugType::Number,
-					"string"   => GrugType::String,
-					"id"       => GrugType::Id{custom_name: None},
-					"entity"   => {
-						// "entity_type" string
-						match param_values.get("entity_type") {
-							None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].entity_type is missing")),
-							Some(str) => {
-								let Some(str) = str.as_str() else {
-									return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].entity_type is not a string"));
-								};
-								GrugType::Entity {
-									entity_type: (!str.is_empty()).then(|| {
-										arena.copy_str_into_nt(str).as_ntstrptr()
-									})
-								}
-							}
-						}
-					},
-					"resource" => {
-						// "resource_extension" string
-						match param_values.get("resource_extension") {
-							None => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].resource_extension is missing")),
-							Some(str) => {
-								let Some(str) = str.as_str() else {
-									return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].parameters[\"{param_name}\"].resource_extension is not a string"));
-								};
-								GrugType::Resource {
-									extension: arena.copy_str_into_nt(str).as_ntstrptr()
-								}
-							}
-						}
-					}
-					// TODO: This should be checked against existing IDs
-					type_name => {
-						let extra_value = arena.copy_str_into_nt(type_name).as_ntstrptr();
-						GrugType::Id {
-							custom_name: Some(extra_value),
-						}
-					}
-				};
-				Ok(Parameter{
-					name: param_name.as_ntstrptr(),
-					ty,
-					name_span: SourceSpan{offset: 0, line: 0},
-					type_span: SourceSpan{offset: 0, line: 0},
-				})
-			}).collect::<Result<Vec<_>>>()?;
-			let parameters = {
-				let mut temp = Vec::new_in(&arena);
-				temp.extend(parameters);
-				temp.leak()
-			};
-
-			// optional "return_type" string
-			let return_ty = match method_values.get("return_type") {
-				None => "void",
-				Some(str) => {
-					let Some(str) = str.as_str() else {
-						return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].return_type is not a string"));
-					};
-					arena.copy_str_into_nt(str)
-				}
-			};
-			let return_ty = match return_ty {
-				"void"     => GrugType::Void,
-				"bool"     => GrugType::Bool,
-				"number"      => GrugType::Number,
-				"string"   => GrugType::String,
-				"id"       => GrugType::Id{custom_name: None},
-				"entity"     => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].return_type is an entity")),
-				"resource"     => return Err(mod_api_err!(class_name => "root.classes.{class_name}.methods[\"{method_name}\"].return_type is an resource")),
-				type_name => {
-					let extra_value = arena.copy_str_into_nt(type_name).as_ntstrptr();
-					GrugType::Id {
-						custom_name: Some(extra_value),
-					}
-				}
-			};
-			// SAFETY: we don't give out a 'static refernce to this string
-			Ok((method_name, ModApiHostFn{
-				return_ty,
-				description,
-				parameters,
-				fn_ptr: None,
-			}))
-		}).collect::<Result<Vec<_>>>()?;
 		let class_name = arena.copy_str_into_nt(class_name);
 		Ok((class_name, ModApiClass {
 			description,
