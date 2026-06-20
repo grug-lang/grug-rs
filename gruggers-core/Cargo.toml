@@ -9,3 +9,6 @@ license = "MIT"
 
 [dependencies]
 allocator-api2 = "0.4.0"
+
+[features]
+generics = []

@@ -60,6 +60,17 @@ pub enum GrugType<'a> {
 	///
 	/// This can only be used as the type of an argument of a game function
 	Entity{entity_type: Option<NTStrPtr<'a>>},
+	/// For internal use
+	#[cfg(feature="generics")]
+	Generic {
+		name: NTStrPtr<'a>,
+	},
+	#[cfg(feature="generics")]
+	/// Should replace Id
+	Class {
+		name: NTStrPtr<'a>,
+		generics: &'a [GrugType<'a>],
+	}
 }
 
 const _: () = const {
@@ -668,6 +679,7 @@ pub struct Parameter<'a> {
 	pub type_span: SourceSpan,
 }
 
+// TODO: Rename to ExportFunction
 /// Represents a single on function declaration
 ///
 /// ```text
