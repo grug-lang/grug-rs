@@ -213,6 +213,9 @@ mod arena_impl {
 	use super::page_alloc::{PageAllocator, PAGE_SIZE};
 
 	use allocator_api2::alloc::{Allocator, AllocError};
+	use allocator_api2::vec::Vec;
+
+	use std::io::Write;
 
 	pub struct Arena {
 		// current points to the block where the next allocation will be attempted
@@ -519,15 +522,23 @@ mod arena_impl {
 
 		/// Allocates a slice of items into `self` from an iterator
 		pub fn slice_from_iter<T>(&self, i: impl IntoIterator<Item = T>) -> &mut [T] {
-			let mut vec = allocator_api2::vec::Vec::new_in(self);
+			let mut vec = Vec::new_in(self);
 			vec.extend(i);
 			vec.leak()
 		}
 
+		/// Allocates space for and moves a value into the arena
 		pub fn alloc_into<T>(&self, value: T) -> &mut T {
 			let ptr = self.allocate(Layout::new::<T>()).unwrap().cast::<T>();
 			unsafe{ptr.write(value);}
 			unsafe{&mut *ptr.as_ptr()}
+		}
+
+		pub fn fmt_into(&self, f: std::fmt::Arguments) -> &str {
+			let mut vec = Vec::new_in(self);
+			write!(vec, "{}", f).expect("writing into a vec cannot fail");
+			// SAFETY: format string outputs are always utf8
+			unsafe{std::str::from_utf8_unchecked(vec.leak())}
 		}
 	}
 

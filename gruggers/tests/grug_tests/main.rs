@@ -47,7 +47,6 @@ mod test_bindings {
 	pub extern "C" fn destroy_grug_state<'a>(_state: Box<CState>) { }
 
 	pub extern "C" fn compile_grug_file<'a>(cstate: &'a CState, path: NTBytes<'_>, err_out: &'_ mut Option<NTStrPtr<'a>>) -> GrugFileId {
-		update(cstate, err_out);
 		let path = path.to_bytes();
 		let (state, arena) = cstate;
 		
@@ -83,6 +82,7 @@ mod test_bindings {
 	}
 
 	pub extern "C" fn update<'a>((state, arena): &'a CState, err_out: &mut Option<NTStrPtr<'a>>) {
+		std::thread::sleep(std::time::Duration::from_micros(1));
 		match state.update_files() {
 			(_, updated_files) => {
 				// for each file in the `updated_files`, find it in `files`,
