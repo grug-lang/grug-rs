@@ -175,7 +175,7 @@ struct ModApiContext<'a, 'error> {
 impl<'a, 'error> ModApiContext<'a, 'error> {
 	fn new(path: &'error Path, text: &'error str, arena: &'a Arena) -> Self {
 		Self {
-			json_path: JsonPath(Vec::new()),
+			json_path: JsonPath(Vec::new_in(arena)),
 			path, 
 			text,
 			arena,
@@ -263,6 +263,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			};
 			// required "name" string
 			let param_name = self.get_key(param_values, "name")?.as_str().ok_or_else(|| self.new_error("is not a string"))?;
+			self.pop_path();
 
 			// replace [index] with ["<name>"] in path
 			self.pop_path();
@@ -277,7 +278,9 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 				GrugType::Void => return Err(self.new_error("cannot be void")),
 				_ => (),
 			}
+			self.pop_path();
 
+			self.pop_path();
 			temp.push(Parameter{
 				name: param_name.as_ntstrptr(),
 				ty,
@@ -333,7 +336,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 	}
 }
 
-struct JsonPath<'a>(Vec<JsonPathComponent<'a>>);
+struct JsonPath<'a>(Vec<JsonPathComponent<'a>, &'a Arena>);
 
 enum JsonPathComponent<'a> {
 	ObjectKey(&'a str),
@@ -518,6 +521,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 	}).collect::<Result<HashMap<_, _>>>()?;
 	context.pop_path();
 	
+	assert_eq!(0, context.json_path.0.len(), "{}", &context.json_path);
 	drop(context);
 
 	Ok(ModApi{
@@ -526,4 +530,34 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		host_fns: unsafe{std::mem::transmute::<HashMap<&'_ NTStr, ModApiHostFn<'_>>, HashMap<&'static NTStr, ModApiHostFn<'static>>>(host_fns)},
 		_arena: arena,
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn mod_api_test_ok() {
+		let text = r#"{
+			"classes": {},
+			"entities": {},
+			"host_functions": {}
+		}"#;
+		get_mod_api_from_text("test", text).unwrap();
+	}
+
+	#[test]
+	fn mod_api_test_err_1() {
+		let text = r#"{
+			"classes": {
+				"Test": 42
+			},
+			"entities": {},
+			"host_functions": {}
+		}"#;
+		match get_mod_api_from_text("test", text) {
+			Ok(_) => panic!("expected failure"),
+			Err(err) => assert_eq!(err.inner().error_message.to_str(), "root.classes.Test is not an object")
+		}
+	}
 }
