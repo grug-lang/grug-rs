@@ -310,10 +310,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropogator<'mod_api, 'arena, 't
 					assignment_expr,
 					name_span,
 				} => {
-					let result_ty = self.fill_complete_expr(assignment_expr, ty.copied())?;
 					
 					if let Some(ty) = ty {
 						self.verify_generics(**ty, *type_span)?;
+						let result_ty = self.fill_complete_expr(assignment_expr, Some(**ty))?;
 						self.add_local_variable(name.to_str(), **ty, *name_span)?;
 						if **ty != result_ty {
 							return self.new_error(
@@ -322,6 +322,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropogator<'mod_api, 'arena, 't
 							);
 						}
 					} else {
+						let result_ty = self.fill_complete_expr(assignment_expr, ty.copied())?;
 						let ty = if let Some(ty) = self.get_global_variable_type(name.to_str()) {
 							if matches!(ty, GrugType::Id {..}) {
 								return self.new_error(
@@ -962,14 +963,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropogator<'mod_api, 'arena, 't
 			} else if let GrugType::Entity{entity_type: _} = param.ty 
 				&& let ExprData::Entity(ref mut value) = arg.data {
 				self.validate_and_fix_entity_string(value, arg.span, arena)?;
-			// argument is string but resource is expected
+			// argument is a literal string but resource is expected
 			} else if let GrugType::Resource{..} = param.ty 
 				&& let ExprData::String(string) = arg.data {
 				return self.new_error(
 					arg.span,
 					format_args!("The host function '{}' expects a resource string, so put an 'r' in front of string \"{}\"", function_name, string)
 				);
-			// argument is string but entity is expected
+			// argument is a literal string but entity is expected
 			} else if let GrugType::Entity{..} = param.ty 
 				&& let ExprData::String(string) = arg.data {
 				return self.new_error(
@@ -1189,17 +1190,31 @@ struct TyCtx<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct TypeInferenceError<'a> {
-	left: GrugType<'a>,
-	right: GrugType<'a>,
+enum TypeInferenceError<'a> {
+	Mismatch {
+		left: GrugType<'a>,
+		right: GrugType<'a>,
+	},
+	Resource,
+	Entity,
 }
 
 impl<'a> TypeInferenceError<'a> {
 	fn into_err(self, err_span: SourceSpan, context: &TypePropogator) -> Error {
-		context.new_error::<std::convert::Infallible>(
-			err_span,
-			format_args!("Expected type {} but got {}", self.left, self.right),
-		).unwrap_err()
+		match self {
+			Self::Mismatch{left, right} => context.new_error::<std::convert::Infallible>(
+				err_span,
+				format_args!("Expected {} but got {}", TypeDiff::new(left, right), TypeDiff::new(right, left)),
+			),
+			Self::Resource => context.new_error::<std::convert::Infallible>(
+				err_span,
+				format_args!("cannot use resource strings in generics"),
+			),
+			Self::Entity   => context.new_error::<std::convert::Infallible>(
+				err_span,
+				format_args!("cannot use entity strings in generics"),
+			),
+		}.unwrap_err()
 	}
 }
 
@@ -1248,11 +1263,11 @@ impl<'a> TyCtx<'a> {
 				(GrugType::Number, GrugType::Number) => (),
 				(GrugType::String, GrugType::String) => (),
 				(_, GrugType::Resource{..}) | 
-				(GrugType::Resource{..}, _) => unreachable!("resource strings can't show up in generics"),
+				(GrugType::Resource{..}, _) => return Err(TypeInferenceError::Resource),
 				(_, GrugType::Entity{..}) | 
-				(GrugType::Entity{..}, _) => unreachable!("entity strings can't show up in generics"),
+				(GrugType::Entity{..}, _) => return Err(TypeInferenceError::Entity),
 				(left@GrugType::Id{name: left_name, ..}, right@GrugType::Id{name: right_name, ..}) if left_name != right_name => {
-					return Err(TypeInferenceError{left, right});
+					return Err(TypeInferenceError::Mismatch{left, right});
 				}
 				(GrugType::Id{generics: left_generics, ..}, GrugType::Id{generics: right_generics, ..}) => {
 					assert_eq!(left_generics.len(), right_generics.len(), "You forgot to verify the number of generics on types");
@@ -1271,7 +1286,7 @@ impl<'a> TyCtx<'a> {
 					self.substitutions[idx] = other;
 				}
 				(left, right) => {
-					return Err(TypeInferenceError{left, right});
+					return Err(TypeInferenceError::Mismatch{left, right});
 				}
 			}
 		}
@@ -1327,5 +1342,62 @@ impl<'a, T> std::ops::Deref for StackLL<'a, T> {
 	type Target = T;
 	fn deref(&self) -> &T {
 		&self.current
+	}
+}
+
+/// Its Display implementation only shows the parts of the types that are different
+struct TypeDiff<'a> {
+	expected: GrugType<'a>,
+	got     : GrugType<'a>,
+}
+
+impl<'a> TypeDiff<'a> {
+	fn new(expected: GrugType<'a>, got: GrugType<'a>) -> Self {
+		Self {
+			expected,
+			got
+		}
+	}
+}
+
+impl<'a> std::fmt::Display for TypeDiff<'a> {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		fn get_type_name(ty: GrugType<'_>) -> &str {
+			match ty {
+				GrugType::Void => "void",
+				GrugType::Bool => "bool",
+				GrugType::Number => "number",
+				GrugType::String => "string",
+				GrugType::Id {
+					name,
+					generics: _,
+				} => name.to_str(),
+				GrugType::Resource{..} => "resource",
+				GrugType::Entity{..} => "entity",
+				GrugType::Existential {..} => "_",
+			}
+		}
+
+		f.write_str(get_type_name(self.expected))?;
+		match (self.expected, self.got) {
+			(
+				left@GrugType::Id{name: name_left, generics: generics_left}, 
+				right@GrugType::Id{name: name_right, generics: generics_right}
+			) if name_left == name_right && !left.matches(&right) => {
+				f.write_str("[")?;
+				for (i, (expected, got)) in generics_left.iter().copied().zip(generics_right.iter().copied()).enumerate() {
+					Self {
+						expected,
+						got
+					}.fmt(f)?;
+					if i != generics_left.len() - 1 {
+						f.write_str(", ")?;
+					}
+				}
+				f.write_str("]")?;
+			}
+			_ => (),
+		}
+		Ok(())
 	}
 }

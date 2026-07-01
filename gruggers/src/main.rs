@@ -39,7 +39,8 @@ fn main() -> Result<()> {
 		.set_mods_dir(mods_dir)
 		.set_backend(StubBackend)
 		.build_state().map_err(|err| {
-			format!("{}", err)
+			eprintln!("{}", err);
+			String::from("Mod API error")
 		})?;
 
 	// SAFETY: We never call a script created from this compiler
@@ -74,7 +75,7 @@ fn compile_files<P: AsRef<Path>>(state: &GrugState, path: P) -> Result<()> {
 		match state.compile_grug_file_from_str(path.as_ref(), &file_text) {
 			Ok(_) => (),
 			Err(err) => {
-				println!("Error in {}: {}", path.as_ref().display(), err);
+				eprintln!("{}", err);
 				has_error = true;
 			}
 		}

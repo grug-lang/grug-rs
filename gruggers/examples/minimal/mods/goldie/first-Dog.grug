@@ -3,4 +3,5 @@ export bark(message: string) {
     if message == "arf" {
         print_string(message)
     }
+    x: Dict[number, Dict[number, string]] = dict_from_list()
 }

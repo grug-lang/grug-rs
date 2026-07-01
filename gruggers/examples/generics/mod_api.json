@@ -1,0 +1,214 @@
+{
+	"entities": {
+		"Test": {
+			"description": "Test Entity",
+			"export_functions": [
+				{
+					"name": "run",
+					"description": "Called when the entity is supposed to run",
+					"parameters": [
+						{
+							"name": "message",
+							"type": {
+								"name": "string"
+							}
+						}
+					]
+				}
+			]
+		}
+	},
+	"classes": {
+		"Dict": {
+			"used_generics": [
+				"$K",
+				"$V"
+			],
+			"methods": {
+			}
+		},
+		"Pair": {
+			"used_generics": [
+				"$K",
+				"$V"
+			]
+		},
+		"List": {
+			"used_generics": [
+				"$T"
+			],
+			"methods": {
+				"push": {
+					"parameters": [
+						{
+							"name": "item",
+							"type": {
+								"name": "$T"
+							}
+						}
+					]
+				},
+				"get": {
+					"return_type": {
+						"name": "$T"
+					},
+					"parameters": [
+						{
+							"name": "idx",
+							"type": {
+								"name": "number"
+							}
+						}
+					]
+				},
+				"get_checked": {
+					"return_type": {
+						"name": "Option",
+						"generics": [
+							{
+								"name": "$T"
+							}
+						]
+					},
+					"parameters": [
+						{
+							"name": "idx",
+							"type": {
+								"name": "number"
+							}
+						}
+					]
+				}
+			}
+		},
+		"Option": {
+			"used_generics": [
+				"$T"
+			],
+			"methods": {
+				"is": {
+					"return_type": {
+						"name": "bool"
+					}
+				},
+				"unwrap": {
+					"return_type": {
+						"name": "$T"
+					}
+				}
+			}
+		}
+	},
+	"host_functions": {
+		"dict_from_list": {
+			"used_generics": [
+				"$K",
+				"$V"
+			],
+			"return_type": {
+				"name": "Dict",
+				"generics": [
+					{
+						"name": "$K"
+					},
+					{
+						"name": "$V"
+					}
+				]
+			},
+			"parameters": [
+				{
+					"name": "list",
+					"type": {
+						"name": "List",
+						"generics": [
+							{
+								"name": "Pair",
+								"generics": [
+									{
+										"name": "$K"
+									},
+									{
+										"name": "$V"
+									}
+								]
+							}
+						]
+					}
+				}
+			]
+		},
+		"list": {
+			"used_generics": [
+				"$T"
+			],
+			"return_type": {
+				"name": "List",
+				"generics": [
+					{
+						"name": "$T"
+					}
+				]
+			}
+		},
+		"dict": {
+			"used_generics": [
+				"$K",
+				"$V"
+			],
+			"return_type": {
+				"name": "Dict",
+				"generics": [
+					{
+						"name": "$K"
+					},
+					{
+						"name": "$V"
+					}
+				]
+			}
+		},
+		"dict_get": {
+			"used_generics": [
+				"$K",
+				"$V"
+			],
+			"return_type": {
+				"name": "$V"
+			},
+			"parameters": [
+				{
+					"name": "dict",
+					"type": {
+						"name": "Dict",
+						"generics": [
+							{
+								"name": "$K"
+							},
+							{
+								"name": "$V"
+							}
+						]
+					}
+				},
+				{
+					"name": "Key",
+					"type": {
+						"name": "$K"
+					}
+				}
+			]
+		},
+		"print_string": {
+			"description": "Prints a string",
+			"parameters": [
+				{
+					"name": "msg",
+					"type": {
+						"name": "string"
+					}
+				}
+			]
+		}
+	}
+}

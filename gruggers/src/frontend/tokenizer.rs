@@ -217,7 +217,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(file_text: &'a str, arena: &'a Arena, file_
 		token_match!(b")" => TokenType::CloseParenthesis);
 		token_match!(b"{" => TokenType::OpenBrace);
 		token_match!(b"}" => TokenType::CloseBrace);
-		token_match!(b"[" => TokenType::CloseBracket);
+		token_match!(b"[" => TokenType::OpenBracket);
 		token_match!(b"]" => TokenType::CloseBracket);
 		token_match!(b"+" => TokenType::Plus);
 		token_match!(b"-" => TokenType::Minus);

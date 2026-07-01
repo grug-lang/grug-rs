@@ -145,7 +145,7 @@ impl<'a> std::fmt::Display for GrugType<'a> {
 				write!(f, "[")?;
 				for (i, generic) in generics.iter().enumerate() {
 					write!(f, "{}", generic)?;
-					if i != generics.len() {
+					if i != generics.len() - 1 {
 						write!(f, ", ")?;
 					}
 				}

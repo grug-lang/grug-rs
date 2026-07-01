@@ -1,0 +1,10 @@
+list: List[number] = list()
+n: void = list.push(2)
+
+export run(message: string) {
+    x: Dict[number, Dict[List[number], number]] = dict()
+    if dict_get(dict(), "hello") {
+        return
+    }
+    return
+}
