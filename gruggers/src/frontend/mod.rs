@@ -51,8 +51,10 @@ impl GrugState {
 		mod_api: Arc<ModApi>,
 	) -> impl FnOnce() {
 		use crate::async_fs::{open_file_async_for_read, read_files_async};
+		let mut temp_arena = Arena::new();
 		move || {
 			for (arena, files) in receiver.iter() {
+				temp_arena.clear();
 				let mut resources = Vec::new_in(&arena);
 				// This is the actual lifetime of the data but it has to be erased to send across the channel
 				fn combine_lifetimes<'a>(_: &'a Arena, input: &'static [&'static OsStr]) -> &'a [&'a OsStr] {input}
@@ -106,7 +108,8 @@ impl GrugState {
 						file_text,
 						mods_dir_path.as_ref(),
 						&mod_api,
-						&arena
+						&arena,
+						&temp_arena,
 					) {
 						Ok(data) => data,
 						Err(err) => return (Err(err), path)
@@ -179,7 +182,8 @@ impl GrugState {
 				file_text, 
 				&self.mods_dir_path, 
 				&self.mod_api, 
-				&arena
+				&arena,
+				&arena,
 			)?;
 			let mut self_resources = self.resources.borrow_mut();
 			for resource in resources {
@@ -407,7 +411,8 @@ impl GrugState {
 		file_text: &'arena str, 
 		mods_dir_path: &'arena OsStr, 
 		mod_api: &'arena ModApi, 
-		arena: &'arena Arena
+		arena: &'arena Arena,
+		temp_arena: &'_ Arena,
 	) -> Result<(GrugAst<'arena>, &'arena [&'arena OsStr]), Error> {
 		let mod_name = get_mod_name(path);
 		let entity_type = get_entity_type(path)?;
@@ -426,7 +431,7 @@ impl GrugState {
 		// tokenize
 		let tokens = tokenizer::tokenize(file_text, arena, path)?;
 		// parse
-		let mut ast = parser::parse(tokens.leak(), arena, file_text, path)?;
+		let ast = parser::parse(tokens.leak(), arena, file_text, path)?;
 
 		// get mod api entity declaration
 		let entity = mod_api.entities().get(entity_type).ok_or_else(|| 
@@ -442,7 +447,7 @@ impl GrugState {
 		)?;
 
 		// type check 
-		let resources = TypePropogator::fill_result_types(
+		let (ast, resources) = TypePropogator::fill_result_types(
 			entity, 
 			mod_api,
 			mod_name, 
@@ -450,8 +455,9 @@ impl GrugState {
 			file_text, 
 			path,
 			entity_type,
-			&mut ast,
+			ast,
 			arena,
+			temp_arena,
 		)?;
 
 		// convert into GrugAst

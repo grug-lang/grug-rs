@@ -38,6 +38,7 @@ mod ser {
 			GlobalStatement::Variable(MemberVariable{
 				name,
 				ty,
+				type_span: _,
 				assignment_expr,
 				span: _
 			}) => {
@@ -70,6 +71,7 @@ mod ser {
 				parameters,
 				body_statements,
 				return_type,
+				return_type_span: _,
 				span: _
 			}) => {
 				let mut object = object! {
@@ -105,22 +107,33 @@ mod ser {
 
 	fn serialize_type(ty: &GrugType) -> JsonValue {
 		match ty {
-			GrugType::Void => "void".into(),
-			GrugType::Bool => "bool".into(),
-			GrugType::Number => "number".into(),
-			GrugType::String => "string".into(),
-			GrugType::Id {
-				custom_name: None
-			} => "id".into(),
+			GrugType::Void => object!{
+				"name": "void"
+			},
+			GrugType::Bool => object!{
+				"name": "bool",
+			},
+			GrugType::Number => object! {
+				"name": "number",
+			},
+			GrugType::String => object! {
+				"name": "string",
+			},
 			GrugType::Id{
-				custom_name: Some(name),
-			} => name.to_str().into(),
-			GrugType::Resource {
-				..
-			} => unreachable!(),
-			GrugType::Entity {
-				..
-			} => unreachable!(),
+				name,
+				generics,
+			} => {
+				let mut object = object! {
+					"name": name.to_str(),
+				};
+				if !generics.is_empty() {
+					object["generics"] = generics.into_iter().map(|generic| serialize_type(generic)).collect::<Vec<_>>().into();
+				}
+				object
+			}
+			GrugType::Resource   {..} => unreachable!(),
+			GrugType::Entity     {..} => unreachable!(),
+			GrugType::Existential{..} => unreachable!(),
 		}
 	}
 
@@ -241,6 +254,7 @@ mod ser {
 			Statement::Variable{
 				name,
 				ty,
+				type_span: _,
 				assignment_expr,
 				name_span: _,
 			} => {

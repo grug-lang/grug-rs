@@ -18,6 +18,8 @@ pub enum TokenType {
 	CloseParenthesis,
 	OpenBrace,
 	CloseBrace,
+	OpenBracket,
+	CloseBracket,
 	Plus,
 	Minus,
 	Star,
@@ -64,6 +66,8 @@ impl std::fmt::Display for TokenType {
 			Self::CloseParenthesis => write!(f, "')'"),
 			Self::OpenBrace => write!(f, "'{{'"),
 			Self::CloseBrace => write!(f, "'}}'"),
+			Self::OpenBracket => write!(f, "'['"),
+			Self::CloseBracket => write!(f, "']'"),
 			Self::Plus => write!(f, "'+'"),
 			Self::Minus => write!(f, "'-'"),
 			Self::Star => write!(f, "'*'"),
@@ -213,6 +217,8 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(file_text: &'a str, arena: &'a Arena, file_
 		token_match!(b")" => TokenType::CloseParenthesis);
 		token_match!(b"{" => TokenType::OpenBrace);
 		token_match!(b"}" => TokenType::CloseBrace);
+		token_match!(b"[" => TokenType::CloseBracket);
+		token_match!(b"]" => TokenType::CloseBracket);
 		token_match!(b"+" => TokenType::Plus);
 		token_match!(b"-" => TokenType::Minus);
 		token_match!(b"*" => TokenType::Star);

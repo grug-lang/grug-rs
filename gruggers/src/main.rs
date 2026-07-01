@@ -28,7 +28,8 @@ fn main() -> Result<()> {
 
 	let mod_api_path = match args.mod_api_path {
 		Some(path) => path,
-		None => search_mod_api_path()?,
+		None => search_mod_api_path()?
+		
 	};
 
 	let mods_dir = args.mods_dir.as_ref().map(AsRef::as_ref).unwrap_or(".");
@@ -37,7 +38,9 @@ fn main() -> Result<()> {
 		.set_mod_api_path(&mod_api_path)
 		.set_mods_dir(mods_dir)
 		.set_backend(StubBackend)
-		.build_state().unwrap();
+		.build_state().map_err(|err| {
+			format!("{}", err)
+		})?;
 
 	// SAFETY: We never call a script created from this compiler
 	unsafe{grug_state.register_dummies()}

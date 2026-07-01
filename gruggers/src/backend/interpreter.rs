@@ -29,6 +29,7 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 		members.push(MemberVariable {
 			name,
 			ty, 
+			type_span: member.type_span,
 			assignment_expr,
 			span: member.span,
 		});
@@ -73,6 +74,7 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 		helper_functions.push(HelperFunction{
 			name, 
 			return_type,
+			return_type_span: helper_function.return_type_span,
 			parameters: parameters.leak(),
 			body_statements,
 			span: helper_function.span
@@ -93,11 +95,13 @@ fn copy_statements<'arena>(stmts: &[Statement<'_>], arena: &'arena Arena) -> &'a
 			Statement::Variable {
 				name,
 				ty,
+				type_span,
 				assignment_expr,
 				name_span,
 			} => Statement::Variable {
 				name: copy_string(*name, arena),
 				ty: ty.map(|ty| &*Box::leak(Box::new_in(copy_type(*ty, arena), arena))),
+				type_span: *type_span,
 				assignment_expr : copy_expr(assignment_expr, arena),
 				name_span: *name_span,
 			},
@@ -228,11 +232,20 @@ fn copy_type<'arena>(ty: GrugType<'_>, arena: &'arena Arena) -> GrugType<'arena>
 		GrugType::Bool => GrugType::Bool,
 		GrugType::Number => GrugType::Number,
 		GrugType::String => GrugType::String,
-		GrugType::Id{custom_name: None} => GrugType::Id{custom_name: None},
 		GrugType::Entity{entity_type: None} => GrugType::Entity{entity_type: None},
 		GrugType::Resource{extension} => GrugType::Resource{extension: copy_string(extension, arena)},
-		GrugType::Id{custom_name: Some(custom_name)} => GrugType::Id{custom_name: Some(copy_string(custom_name, arena))},
+		GrugType::Id{name, generics} => GrugType::Id{
+			name: copy_string(name, arena),
+			generics: {
+				let mut temp = Vec::with_capacity_in(generics.len(), arena);
+				temp.extend(generics.iter().map(|ty| {
+					copy_type(*ty, arena)
+				}));
+				temp.leak()
+			}
+		},
 		GrugType::Entity{entity_type: Some(entity_type)} => GrugType::Entity{entity_type: Some(copy_string(entity_type, arena))},
+		GrugType::Existential{..} => panic!("Existential passed to backend"),
 	}
 }
 
@@ -374,6 +387,7 @@ impl Interpreter {
 				Statement::Variable{
 					name,
 					ty,
+					type_span: _,
 					assignment_expr,
 					name_span: _,
 				} => {

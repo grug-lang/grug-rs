@@ -16,6 +16,8 @@ pub struct Error {
 	_arena: Arena
 }
 
+impl std::error::Error for Error { }
+
 impl std::fmt::Debug for Error {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		self.inner_error.fmt(f)

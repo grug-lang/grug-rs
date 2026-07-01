@@ -129,6 +129,7 @@ impl<'a> Compiler<'a> {
 			Statement::Variable{
 				name,
 				ty,
+				type_span: _,
 				assignment_expr,
 				name_span: _,
 			} => {

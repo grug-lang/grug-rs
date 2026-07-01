@@ -14,7 +14,7 @@ use crate::types::GameFnPtr;
 use crate::error::SourceSpan;
 
 /// Represents the type of a value in grug
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C, u32)]
 pub enum GrugType<'a> {
 	/// Return type of a function with no return value
@@ -47,7 +47,10 @@ pub enum GrugType<'a> {
 	/// ```
 	String,
 	/// TODO: Explain usage of ID types in grug
-	Id{custom_name: Option<NTStrPtr<'a>>},
+	Id{
+		name: NTStrPtr<'a>,
+		generics: &'a [GrugType<'a>]
+	},
 	/// Type of a resource string
 	///
 	/// TODO: Explain what resources can be used for with examples
@@ -60,27 +63,72 @@ pub enum GrugType<'a> {
 	///
 	/// This can only be used as the type of an argument of a game function
 	Entity{entity_type: Option<NTStrPtr<'a>>},
-	/// For internal use
-	#[cfg(feature="generics")]
-	Generic {
-		name: NTStrPtr<'a>,
-	},
-	#[cfg(feature="generics")]
-	/// Should replace Id
-	Class {
-		name: NTStrPtr<'a>,
-		generics: &'a [GrugType<'a>],
+	/// For internal use, Backends should never ever see this
+	Existential {
+		idx: usize
 	}
 }
 
-const _: () = const {
-	struct Test {
-		_value: u32,
-		_data: *const u8,
+impl<'a> Eq for GrugType<'a> { }
+impl<'a> PartialEq for GrugType<'a> {
+	fn eq(&self, other: &Self) -> bool {
+		use GrugType::*;
+		match (self, other) {
+			(Void, Void) => true,
+			(Bool, Bool) => true,
+			(Number, Number) => true,
+			(String, String) => true,
+			(Id{name: name_1, generics: generics_1, ..}, Id{name: name_2, generics: generics_2, ..}) => name_1 == name_2 && generics_1 == generics_2,
+			(
+				Resource {
+					extension: extension_1,
+				}, 
+				Resource {
+					extension: extension_2,
+				}, 
+			) => extension_1 == extension_2,
+			(
+				Entity {
+					entity_type: ty_1,
+				}, 
+				Entity {
+					entity_type: ty_2,
+				}, 
+			) => ty_1 == ty_2,
+			(Existential{idx: idx1}, Existential{idx: idx2}) => idx1 == idx2,
+			_ => false,
+		}
 	}
+}
 
-	assert!(std::mem::size_of::<Test>() == std::mem::size_of::<GrugType>())
-};
+impl<'a> GrugType<'a> {
+	pub fn matches(&self, other: &Self) -> bool {
+		use GrugType::*;
+		match (self, other) {
+			(Void, Void) => true,
+			(Bool, Bool) => true,
+			(Number, Number) => true,
+			(String, String) => true,
+			(Id{name: name_1, generics: generics_1, ..}, Id{name: name_2, generics: generics_2, ..}) => 
+				name_1 == name_2 && generics_1.iter().zip(*generics_2).all(|(x, y)| x.matches(y)),
+			(
+				Resource {extension: extension_1}, 
+				Resource {extension: extension_2}, 
+			) => extension_1 == extension_2,
+			(Resource{..}, _) => false,
+			(_, Resource{..}) => false,
+			(
+				Entity {entity_type: ty_1}, 
+				Entity {entity_type: ty_2}, 
+			) => ty_1 == ty_2,
+			(Entity{..}, _) => false,
+			(_, Entity{..}) => false,
+			(Existential{..}, _) => true,
+			(_, Existential{..}) => true,
+			_ => false,
+		}
+	}
+}
 
 impl<'a> std::fmt::Display for GrugType<'a> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
@@ -90,11 +138,19 @@ impl<'a> std::fmt::Display for GrugType<'a> {
 			Self::Number => write!(f, "number"),
 			Self::String => write!(f, "string"),
 			Self::Id{
-				custom_name: None,
-			} => write!(f, "id"),
-			Self::Id{
-				custom_name: Some(custom_name),
-			} => write!(f, "{}", custom_name),
+				name,
+				generics,
+			} => {
+				write!(f, "{}", name)?;
+				write!(f, "[")?;
+				for (i, generic) in generics.iter().enumerate() {
+					write!(f, "{}", generic)?;
+					if i != generics.len() {
+						write!(f, ", ")?;
+					}
+				}
+				write!(f, "]")
+			}
 			Self::Resource {
 				extension: _,
 			} => write!(f, "resource"),
@@ -104,38 +160,9 @@ impl<'a> std::fmt::Display for GrugType<'a> {
 			Self::Entity {
 				entity_type: None,
 			} => write!(f, "entity"),
-		}
-	}
-}
-
-impl<'a> GrugType<'a> {
-	/// Checks if two types are the same. Considers a custom id type and a
-	/// generic id type to be the same type.
-	pub fn match_non_exact(&self, other: &Self) -> bool {
-		use GrugType::*;
-		match (self, other) {
-			(Void, Void) => true,
-			(Bool, Bool) => true,
-			(Number, Number) => true,
-			(String, String) => true,
-			(Id{custom_name: custom_name_1}, Id{custom_name: custom_name_2}) => custom_name_1 == custom_name_2 || custom_name_1.is_none() || custom_name_2.is_none(),
-			(
-				Resource {
-					extension: extension_1,
-				}, 
-				Resource {
-					extension: extension_2,
-				}, 
-			) => extension_1 == extension_2 || extension_1.is_empty() || extension_2.is_empty(),
-			(
-				Entity {
-					entity_type: ty_1,
-				}, 
-				Entity {
-					entity_type: ty_2,
-				}, 
-			) => ty_1 == ty_2 || ty_1.is_none() || ty_2.is_none(),
-			_ => false,
+			Self::Existential {
+				idx,
+			} => write!(f, "${idx}"),
 		}
 	}
 }
@@ -485,14 +512,16 @@ pub struct Expr<'a> {
 #[derive(Debug)]
 pub struct MemberVariable<'a> {
 	/// Name of the variable
-	pub name: NTStrPtr<'a>,
+	pub name           : NTStrPtr<'a>,
 	/// Type of the variable
-	pub ty  : GrugType<'a>,
+	pub ty             : GrugType<'a>,
+	/// Source Span of the type
+	pub type_span      : SourceSpan,
 	/// Initializer of the variable.
 	/// It is not allowed to call an on function or helper function.
 	pub assignment_expr: Expr<'a>,
 	/// Source span of the name of the variable
-	pub span: SourceSpan,
+	pub span           : SourceSpan,
 }
 
 /// Represents a statement within a function
@@ -519,6 +548,8 @@ pub enum Statement<'a> {
 		name            : NTStrPtr<'a>,
 		/// Type of the variable if the statement is a declaration
 		ty              : Option<&'a GrugType<'a>>,
+		/// Span of the type, if it exists, or just the span of the name again,
+		type_span       : SourceSpan,
 		/// Expression to assign to the variable
 		assignment_expr : Expr<'a>,
 		/// Span of the name
@@ -734,6 +765,8 @@ pub struct HelperFunction<'a> {
 	///
 	/// Return type is [`GrugType::Void`] if there is no return type
 	pub return_type: GrugType<'a>,
+	/// Source Span of the return type
+	pub return_type_span: SourceSpan,
 	/// List of parameters to the function and their types 
 	pub parameters: &'a [Parameter<'a>],
 	/// List of statements that make up the top level of the function. 

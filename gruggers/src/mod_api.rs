@@ -6,7 +6,7 @@ use crate::ntstring::NTStr;
 use crate::ast::{Parameter, GrugType};
 use crate::arena::Arena;
 use crate::error::{ErrorKind, Error, SourceSpan, Result};
-use crate::types::GameFnPtr;
+use crate::types::{GameFnPtr, GameFnRegisterer};
 
 use allocator_api2::vec::Vec;
 
@@ -129,7 +129,9 @@ pub(crate) struct ModApiClass<'a> {
 	#[allow(dead_code)]
 	pub(crate) description: Option< &'a str>,
 	#[allow(dead_code)]
+	pub(crate) ty: GrugType<'a>,
 	pub(crate) methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
+	pub(crate) generics: &'a [&'a NTStr],
 }
 
 #[derive(Debug)]
@@ -156,13 +158,11 @@ pub(crate) struct ModApiExportFn<'a> {
 pub(crate) struct ModApiHostFn<'a> {
 	#[allow(dead_code)]
 	pub(crate) description: Option<&'a str>,
-	pub(crate) return_ty: GrugType<'a>,
-	pub(crate) parameters: &'a [Parameter<'a>],
-	pub(crate) fn_ptr: Option<GameFnPtr>,
-	#[cfg(feature = "generics")]
 	pub(crate) generics: &'a [&'a NTStr],
-	#[cfg(feature = "generics")]
-	pub(crate) registerer: Option<GameFnRegisterer>,
+	pub(crate) parameters: &'a [Parameter<'a>],
+	pub(crate) return_ty: GrugType<'a>,
+	pub(crate) fn_ptr: Option<GameFnPtr>,
+	pub(crate) _registerer: Option<GameFnRegisterer>,
 }
 
 struct ModApiContext<'a, 'error> {
@@ -206,12 +206,15 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		object.get(key).ok_or_else(|| self.new_error("does not exist"))
 	}
 
-	fn parse_type<'b>(&mut self, object: &'a Object, type_key: &'a str, arena: &'b Arena) -> Result<GrugType<'b>> {
-		// "type" string
-		let ty = match object.get(type_key) {
+	fn parse_type<'b>(&mut self, object: &'a JsonValue, used_generics: &'b[&'b NTStr], arena: &'b Arena) -> Result<GrugType<'b>> {
+		let JsonValue::Object(object) = object else {
+			return Err(self.new_error("is not an object"));
+		};
+		// "name" string
+		let ty = match object.get("name") {
 			None => return Ok(GrugType::Void),
 			Some(str) => {
-				self.push_path(JsonPathComponent::ObjectKey(type_key));
+				self.push_path(JsonPathComponent::ObjectKey("name"));
 				str.as_str().ok_or_else(|| self.new_error("is not a string"))?
 			}
 		};
@@ -222,7 +225,6 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			"bool"     => GrugType::Bool,
 			"number"   => GrugType::Number,
 			"string"   => GrugType::String,
-			"id"       => GrugType::Id{custom_name: None},
 			"entity"   => {
 				// "entity_type" string
 				let entity_type = self.get_key(object, "entity_type")?.as_str().ok_or_else(|| self.new_error("is not a string"))?;
@@ -241,17 +243,44 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 					extension: arena.copy_str_into_nt(entity_type).as_ntstrptr(),
 				}
 			}
+			generic if generic.starts_with("$") => {
+				for (i, name) in used_generics.iter().enumerate() {
+					if &***name == generic {
+						return Ok(GrugType::Existential{idx: i});
+					}
+				}
+				self.push_path(JsonPathComponent::ObjectKey("name"));
+				return Err(self.new_error("is an undeclared generic"));
+			}
 			type_name => {
-				let extra_value = arena.copy_str_into_nt(type_name).as_ntstrptr();
+				let name = arena.copy_str_into_nt(type_name).as_ntstrptr();
+				// recursively parse types within generics
+				let generics = if let Some(generics) = object.get("generics") {
+					self.push_path(JsonPathComponent::ObjectKey("generics"));
+					let mut temp = Vec::new_in(arena);
+					let JsonValue::Array(generics) = generics else {
+						return Err(self.new_error("is not an array"));
+					};
+					for (i, generic) in generics.iter().enumerate() {
+						self.push_path(JsonPathComponent::ArrayIdx(i));
+						temp.push(self.parse_type(generic, used_generics, arena)?);
+						self.pop_path();
+					}
+					self.pop_path();
+					&*temp.leak()
+				} else {
+					&[]
+				};
 				GrugType::Id {
-					custom_name: Some(extra_value),
+					name,
+					generics,
 				}
 			}
 		};
 		Ok(ty)
 	}
 
-	fn parse_parameters<'b>(&mut self, parameters: &'a JsonValue, arena: &'b Arena) -> Result<&'b [Parameter<'b>]> {
+	fn parse_parameters<'b>(&mut self, parameters: &'a JsonValue, generics: &'b [&'b NTStr], arena: &'b Arena) -> Result<&'b [Parameter<'b>]> {
 		let JsonValue::Array(parameters) = parameters else {
 			return Err(self.new_error("is not an array"));
 		};
@@ -272,8 +301,8 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			let param_name = arena.copy_str_into_nt(param_name);
 			
 			// required "type" string
-			let ty = self.parse_type(param_values, "type", arena)?;
-			self.push_path(JsonPathComponent::ObjectKey("type"));
+			let ty = self.get_key(param_values, "type")?;
+			let ty = self.parse_type(ty, generics, arena)?;
 			match &ty {
 				GrugType::Void => return Err(self.new_error("cannot be void")),
 				_ => (),
@@ -291,7 +320,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		Ok(temp.leak())
 	}
 
-	fn parse_host_fn<'b>(&mut self, host_fn_values: &'a JsonValue, arena: &'b Arena) -> Result<ModApiHostFn<'b>> {
+	fn parse_host_fn<'b>(&mut self, host_fn_values: &'a JsonValue, parent_generics: &[&'b NTStr], arena: &'b Arena) -> Result<ModApiHostFn<'b>> {
 		let JsonValue::Object(host_fn_values) = host_fn_values else {
 			return Err(self.new_error("is not an object"));
 		};
@@ -302,20 +331,37 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			self.pop_path();
 			Ok(description)
 		}).transpose()?;
+
+		// optional "used_generics" key
+		let mut used_generics = Vec::with_capacity_in(parent_generics.len(), arena);
+		used_generics.extend(parent_generics);
+		if let Some(generics) = host_fn_values.get("used_generics") {
+			self.push_path(JsonPathComponent::ObjectKey("used_generics"));
+			let JsonValue::Array(generics) = generics else {
+				return Err(self.new_error("is not an array"));
+			};
+			for (i, generic) in generics.iter().enumerate() {
+				self.push_path(JsonPathComponent::ArrayIdx(i));
+				used_generics.push(arena.copy_str_into_nt(generic.as_str().ok_or_else(|| self.new_error("is not a string"))?));
+				self.pop_path();
+			}
+			self.pop_path();
+		}
+		let generics = used_generics.leak();
 		
 		// optional "parameters" array 
 		let parameters = if let Some(parameters) = host_fn_values.get("parameters") {
 			self.push_path(JsonPathComponent::ObjectKey("parameters"));
-			let parameters = self.parse_parameters(parameters, arena)?;
+			let parameters = self.parse_parameters(parameters, generics, arena)?;
 			self.pop_path();
 			parameters
 		} else {
 			&[]
 		};
 
-		let return_ty = if host_fn_values.get("return_type").is_some() {
-			let return_ty = self.parse_type(host_fn_values, "return_type", arena)?;
+		let return_ty = if let Some(return_ty) = host_fn_values.get("return_type") {
 			self.push_path(JsonPathComponent::ObjectKey("return_type"));
+			let return_ty = self.parse_type(return_ty, generics, arena)?;
 			match &return_ty {
 				GrugType::Entity{..} => return Err(self.new_error("cannot be entity")),
 				GrugType::Resource{..} => return Err(self.new_error("cannot be resource")),
@@ -330,8 +376,10 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		Ok(ModApiHostFn{
 			description,
 			return_ty,
+			generics,
 			parameters,
 			fn_ptr: None,
+			_registerer: None,
 		})
 	}
 }
@@ -436,7 +484,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				// optional "parameters" array 
 				let parameters = if let Some(parameters) = export_fn_values.get("parameters") {
 					context.push_path(JsonPathComponent::ObjectKey("parameters"));
-					let parameters = context.parse_parameters(parameters, &arena)?;
+					let parameters = context.parse_parameters(parameters, &[], &arena)?;
 					context.pop_path();
 					parameters
 				} else {
@@ -482,6 +530,29 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			Ok(description)
 		}).transpose()?;
 
+		// optional "used_generics" key
+		let mut used_generics = Vec::new_in(&arena);
+		if let Some(generics) = class_values.get("used_generics") {
+			context.push_path(JsonPathComponent::ObjectKey("used_generics"));
+			let JsonValue::Array(generics) = generics else {
+				return Err(context.new_error("is not an array"));
+			};
+			for (i, generic) in generics.iter().enumerate() {
+				context.push_path(JsonPathComponent::ArrayIdx(i));
+				used_generics.push(arena.copy_str_into_nt(generic.as_str().ok_or_else(|| context.new_error("is not a string"))?));
+				context.pop_path();
+			}
+			context.pop_path();
+		}
+		let generics = used_generics.leak();
+
+		let ty = GrugType::Id {
+			name: class_name.as_ntstrptr(),
+			generics: arena.slice_from_iter((0..(generics.len())).map(|i| {
+				GrugType::Existential{idx: i}
+			})),
+		};
+
 		// optional "methods" object
 		let methods = if let Some(methods) = class_values.get("methods") {
 			context.push_path(JsonPathComponent::ObjectKey("methods"));
@@ -492,7 +563,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			for (method_name, method_values) in methods.iter() {
 				context.push_path(JsonPathComponent::ObjectKey(method_name));
 				let method_name = arena.copy_str_into_nt(method_name);
-				temp.push((method_name, context.parse_host_fn(method_values, &arena)?));
+				temp.push((method_name, context.parse_host_fn(method_values, generics, &arena)?));
 				context.pop_path();
 			}
 			context.pop_path();
@@ -503,6 +574,8 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		context.pop_path();
 		Ok((class_name, ModApiClass {
 			description,
+			ty,
+			generics,
 			methods,
 		}))
 	}).collect::<Result<HashMap<_, _>>>()?;
@@ -515,7 +588,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 	let host_fns = host_fns.iter().map(|(host_fn_name, host_fn_values)| {
 		context.push_path(JsonPathComponent::ObjectKey(host_fn_name));
 		let host_fn_name = arena.copy_str_into_nt(host_fn_name);
-		let host_fn = context.parse_host_fn(host_fn_values, &arena)?;
+		let host_fn = context.parse_host_fn(host_fn_values, &[], &arena)?;
 		context.pop_path();
 		Ok((host_fn_name, host_fn))
 	}).collect::<Result<HashMap<_, _>>>()?;

@@ -5,8 +5,31 @@ use std::ptr::NonNull;
 use std::marker::PhantomPinned;
 use crate::ntstring::NTStrPtr;
 use crate::state::State;
+use crate::ast::GrugType;
 
 // TODO: Remove the "Grug" prefix from these types
+
+/// A function pointer to a function that provides specialized versions of
+/// generic host functions
+///
+/// This function is called after type inference has determined all relevant
+/// generic types to obtain the actual host function pointer for the function
+/// call.
+///
+/// Grug implementations are allowed to cache the results of these function
+/// calls, so providers must ensure these functions are pure. 
+///
+/// The argument is a pointer to an array of grug types. These types indicate
+/// the generic parameters associated with this specific host function call
+///
+/// The number of types provided is determined by the mod_api.
+///
+/// For normal host functions, it is the number of elements in the
+/// "used_generics" field of the host_function
+///
+/// For methods, it is the number of elements in the "used_generics"
+/// field of the class and the method combined.
+pub type GameFnRegisterer = extern "C" fn (*const GrugType) -> GameFnPtr;
 
 /// A function pointer to a game function
 /// Game functions have one the following signature
@@ -19,6 +42,7 @@ use crate::state::State;
 /// Conversion to and from [`GameFnPtrState`] is done using [`Self::as_ptr`] and [`Self::from_ptr`]
 /// 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
 pub struct GameFnPtr(NonNull<()>);
 // SAFETY: GameFnPtr is always just a function pointer
 unsafe impl Send for GameFnPtr {}
