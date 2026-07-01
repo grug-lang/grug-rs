@@ -19,12 +19,51 @@
 		}
 	},
 	"classes": {
+		"Ref": {
+			"used_generics": [
+				"$T"
+			],
+			"methods": {
+				"set": {
+					"parameters": [
+						{
+							"name": "value",
+							"type": {
+								"name": "$T"
+							}
+						}
+					]
+				},
+				"get": {
+					"return_type": {
+						"name": "$T"
+					}
+				}
+			}
+		},
 		"Dict": {
 			"used_generics": [
 				"$K",
 				"$V"
 			],
 			"methods": {
+				"put": {
+					"parameters": [
+						{
+							"name": "key",
+							"type": {
+								"name": "$K"
+							}
+						},
+						{
+							"name": "value",
+							"type": {
+								"name": "$V"
+							}
+						}
+					]
+				}
+
 			}
 		},
 		"Pair": {
@@ -151,6 +190,37 @@
 				]
 			}
 		},
+		"make_pair": {
+			"used_generics": [
+				"$T0",
+				"$T1"
+			],
+			"return_type": {
+				"name": "Pair",
+				"generics": [
+					{
+						"name": "$T0"
+					},
+					{
+						"name": "$T1"
+					}
+				]
+			},
+			"parameters": [
+				{
+					"name": "first",
+					"type": {
+						"name": "$T0"
+					}
+				},
+				{
+					"name": "second",
+					"type": {
+						"name": "$T1"
+					}
+				}
+			]
+		},
 		"dict": {
 			"used_generics": [
 				"$K",
@@ -168,44 +238,15 @@
 				]
 			}
 		},
-		"dict_get": {
+		"print": {
 			"used_generics": [
-				"$K",
-				"$V"
+				"$T"
 			],
-			"return_type": {
-				"name": "$V"
-			},
 			"parameters": [
 				{
-					"name": "dict",
+					"name": "thing",
 					"type": {
-						"name": "Dict",
-						"generics": [
-							{
-								"name": "$K"
-							},
-							{
-								"name": "$V"
-							}
-						]
-					}
-				},
-				{
-					"name": "Key",
-					"type": {
-						"name": "$K"
-					}
-				}
-			]
-		},
-		"print_string": {
-			"description": "Prints a string",
-			"parameters": [
-				{
-					"name": "msg",
-					"type": {
-						"name": "string"
+						"name": "$T"
 					}
 				}
 			]

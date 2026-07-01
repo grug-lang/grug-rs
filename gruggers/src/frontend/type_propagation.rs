@@ -19,7 +19,7 @@ use crate::mod_api::{ModApiEntity, ModApi};
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
 
-pub(super) struct TypePropogator<'mod_api, 'arena: 'temp, 'temp> {
+pub(super) struct TypePropagator<'mod_api, 'arena: 'temp, 'temp> {
 	file_text: &'arena str,
 	file_path: &'arena OsStr,
 	entity: &'mod_api ModApiEntity<'mod_api>,
@@ -37,7 +37,7 @@ pub(super) struct TypePropogator<'mod_api, 'arena: 'temp, 'temp> {
 	temp_arena: &'temp Arena,
 }
 
-impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropogator<'mod_api, 'arena, 'temp> {
+impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 'temp> {
 	// TODO: This should only be called with fill_result_types
 	pub fn new (
 		file_text: &'arena str,
@@ -310,7 +310,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropogator<'mod_api, 'arena, 't
 					assignment_expr,
 					name_span,
 				} => {
-					
 					if let Some(ty) = ty {
 						self.verify_generics(**ty, *type_span)?;
 						let result_ty = self.fill_complete_expr(assignment_expr, Some(**ty))?;
@@ -788,6 +787,20 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropogator<'mod_api, 'arena, 't
 					}));
 					
 					self.fill_arguments(fn_name, ty_ctx, substitutions, *name_span, parameters, args, arena)?;
+
+					// Try to get the best return type the first time through
+					for generic in generics.iter_mut() {
+						// replace any existential in the generics with its current best type
+						match generic {
+							GrugType::Existential{idx} => {
+								if let Some(better_type) = ty_ctx.get_current_type(*idx) {
+									*generic = better_type;
+								}
+							}
+							_ => (),
+						}
+					}
+
 					if substitutions.is_some() {
 						if let Some(game_fn_ptr) = host_fn.fn_ptr {
 							*ptr = Some(game_fn_ptr);
@@ -908,6 +921,20 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropogator<'mod_api, 'arena, 't
 				ty_ctx.add_constraint(mod_api_receiver_type, receiver_type).map_err(|err| err.into_err(receiver.span, self))?;
 				
 				self.fill_arguments(name, ty_ctx, substitutions, *name_span, parameters, args, arena)?;
+
+				// Try to get the best return type the first time through
+				for generic in generics.iter_mut() {
+					// replace any existential in the generics with its current best type
+					match generic {
+						GrugType::Existential{idx} => {
+							if let Some(better_type) = ty_ctx.get_current_type(*idx) {
+								*generic = better_type;
+							}
+						}
+						_ => (),
+					}
+				}
+
 				if let Some(fn_ptr) = host_fn.fn_ptr {
 					*ptr = Some(fn_ptr);
 				} else {
@@ -924,6 +951,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropogator<'mod_api, 'arena, 't
 				self.fill_expr(ty_ctx, substitutions, expr, arena)?
 			},
 		};
+		
 		assignment_expr.result_type = Some(arena.alloc_into(result_ty));
 		Ok(result_ty)
 	}
@@ -1200,7 +1228,7 @@ enum TypeInferenceError<'a> {
 }
 
 impl<'a> TypeInferenceError<'a> {
-	fn into_err(self, err_span: SourceSpan, context: &TypePropogator) -> Error {
+	fn into_err(self, err_span: SourceSpan, context: &TypePropagator) -> Error {
 		match self {
 			Self::Mismatch{left, right} => context.new_error::<std::convert::Infallible>(
 				err_span,
@@ -1254,9 +1282,12 @@ impl<'a> TyCtx<'a> {
 		new_existential
 	}
 
+	#[track_caller]
 	fn add_constraint(&mut self, left: GrugType<'a>, right: GrugType<'a>) -> Result<(), TypeInferenceError<'a>> {
 		self.constraints.push((left, right));
-		while let Some(constraint) = self.constraints.pop() {
+		// This ensures recursive calls only handle the constraints relevant to them
+		let mut constraints_to_check = 1;
+		while constraints_to_check != 0 && let Some(constraint) = self.constraints.pop() {
 			match constraint {
 				(GrugType::Void, GrugType::Void) => (),
 				(GrugType::Bool, GrugType::Bool) => (),
@@ -1266,29 +1297,34 @@ impl<'a> TyCtx<'a> {
 				(GrugType::Resource{..}, _) => return Err(TypeInferenceError::Resource),
 				(_, GrugType::Entity{..}) | 
 				(GrugType::Entity{..}, _) => return Err(TypeInferenceError::Entity),
-				(left@GrugType::Id{name: left_name, ..}, right@GrugType::Id{name: right_name, ..}) if left_name != right_name => {
+				(GrugType::Id{name: left_name, ..}, GrugType::Id{name: right_name, ..}) if left_name != right_name => {
 					return Err(TypeInferenceError::Mismatch{left, right});
 				}
+				// This part is *not* recursive. The error should contain the original types
 				(GrugType::Id{generics: left_generics, ..}, GrugType::Id{generics: right_generics, ..}) => {
 					assert_eq!(left_generics.len(), right_generics.len(), "You forgot to verify the number of generics on types");
 					for (left, right) in left_generics.iter().zip(right_generics) {
 						self.constraints.push((*left, *right));
 					}
+					constraints_to_check += left_generics.len();
 				}
 				// An existential is always equal to itself
 				(GrugType::Existential{idx: left_idx}, GrugType::Existential{idx: right_idx}) if left_idx == right_idx => (),
 				// At least one side is an existential
+				// This part *is* recursive. The error should contain the new types
 				(GrugType::Existential{idx}, other) |
 				(other, GrugType::Existential{idx}) => {
 					// TODO, recursive `occurs` check
 					// self.occurs_in(StackLL{current: idx, parent: None}, other)?;
-					self.constraints.push((other, self.substitutions[idx]));
+					let old_substitution = self.substitutions[idx];
 					self.substitutions[idx] = other;
+					self.add_constraint(other, old_substitution)?;
 				}
-				(left, right) => {
+				_ => {
 					return Err(TypeInferenceError::Mismatch{left, right});
 				}
 			}
+			constraints_to_check -= 1;
 		}
 		Ok(())
 	}
@@ -1378,12 +1414,15 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
 			}
 		}
 
+		if self.expected.matches(&self.got) {
+			return f.write_str("_")
+		}
 		f.write_str(get_type_name(self.expected))?;
 		match (self.expected, self.got) {
 			(
-				left@GrugType::Id{name: name_left, generics: generics_left}, 
-				right@GrugType::Id{name: name_right, generics: generics_right}
-			) if name_left == name_right && !left.matches(&right) => {
+				GrugType::Id{name: name_left, generics: generics_left}, 
+				GrugType::Id{name: name_right, generics: generics_right}
+			) if name_left == name_right => {
 				f.write_str("[")?;
 				for (i, (expected, got)) in generics_left.iter().copied().zip(generics_right.iter().copied()).enumerate() {
 					Self {

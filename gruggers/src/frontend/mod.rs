@@ -23,7 +23,7 @@ pub(crate) const SPACES_PER_INDENT: usize = 4;
 pub mod tokenizer;
 pub mod parser;
 mod type_propagation;
-use type_propagation::TypePropogator;
+use type_propagation::TypePropagator;
 
 // Compilation functions
 impl GrugState {
@@ -447,7 +447,7 @@ impl GrugState {
 		)?;
 
 		// type check 
-		let (ast, resources) = TypePropogator::fill_result_types(
+		let (ast, resources) = TypePropagator::fill_result_types(
 			entity, 
 			mod_api,
 			mod_name, 
