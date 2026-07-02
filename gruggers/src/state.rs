@@ -44,7 +44,7 @@ use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{GrugValue, GrugId, GameFnPtr, GrugOnFnId, GrugFileId, GrugEntity, INVALID_GRUG_SCRIPT_ID};
+use crate::types::{GrugValue, GrugId, GameFnPtr, GameFnPtrState, HostFnReg, GrugOnFnId, GrugFileId, GrugEntity, INVALID_GRUG_SCRIPT_ID};
 use crate::xar::Xar;
 use crate::ntstring::{NTStrPtr};
 use crate::arena::Arena;
@@ -318,6 +318,7 @@ impl State for GrugState {
 	}
 }
 
+// Miscellaneous functions
 impl GrugState {
 	fn new (mod_api_path: impl AsRef<OsStr>, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, Error> {
 		let mod_api = get_mod_api(mod_api_path.as_ref())?;
@@ -473,56 +474,6 @@ impl GrugState {
 		Ok(&self.export_functions[start..end])
 	}
 
-	pub unsafe fn register_host_fn(&mut self, name: &str, func: extern "C" fn (&GrugState, *const GrugValue) -> GrugValue) -> Result<(), Error> {
-		// SAFETY: This Arc is shared between the state and all the compiler
-		// threads.  Because we have a &mut self, we assume that all compiler
-		// threads are parked waiting to receive more compile commands. This
-		// means that they cannot have an active reference to the mod_api data
-		// during this call to get_mut_unchecked
-		
-		// Note: This is the same as the unstable get_mut_unchecked on Arc;
-		// Once that is stabilized, this can be replaced
-		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
-		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
-		unsafe{(&mut *mod_api).register_host_fn(name, GameFnPtr::from_ptr(func))}
-	}
-
-	pub unsafe fn register_method_fn(&mut self, class_name: &str, fn_name: &str, func: extern "C" fn (&GrugState, *const GrugValue) -> GrugValue) -> Result<(), Error> {
-		// SAFETY: This Arc is shared between the state and all the compiler
-		// threads.  Because we have a &mut self, we assume that all compiler
-		// threads are parked waiting to receive more compile commands. This
-		// means that they cannot have an active reference to the mod_api data
-		// during this call to get_mut_unchecked
-		
-		// Note: This is the same as the unstable get_mut_unchecked on Arc;
-		// Once that is stabilized, this can be replaced
-		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
-		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
-		unsafe{(&mut *mod_api).register_method_fn(class_name, fn_name, GameFnPtr::from_ptr(func))}
-	}
-
-	/// Register a dummy function for each game function defined in the mod_api
-	///
-	/// # Safety
-	///
-	/// It is immediate UB to run any grug script created with this grug_state afterwards.
-	///
-	/// You are only allowed to compile scripts from this state.
-	/// This function only exists to allow the cli compiler to function.
-	pub unsafe fn register_dummies(&mut self) {
-		// SAFETY: This Arc is shared between the state and all the compiler
-		// threads.  Because we have a &mut self, we assume that all compiler
-		// threads are parked waiting to receive more compile commands. This
-		// means that they cannot have an active reference to the mod_api data
-		// during this call to get_mut_unchecked
-		
-		// Note: This is the same as the unstable get_mut_unchecked on Arc;
-		// Once that is stabilized, this can be replaced
-		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
-		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
-		unsafe{(&mut *mod_api).register_dummies()}
-	}
-	
 	// This should only happen during an error so its okay if its slow
 	pub fn get_script_path_rel(&self, script_id: GrugFileId) -> Option<&OsStr> {
 		let string = Ref::filter_map(self.path_to_script_ids.borrow(), |inner|
@@ -630,6 +581,80 @@ impl GrugState {
 	}
 }
 
+// Registration functions
+impl GrugState {
+	/// Register a non generic host function
+	pub unsafe fn register_host_fn(&mut self, fn_name: &str, func: GameFnPtrState<Self>) -> Result<(), Error> {
+		unsafe{self.register_host_fn_internal(None, fn_name, func)}
+	}
+
+	/// Register a non generic host method
+	pub unsafe fn register_method(&mut self, class_name: &str, fn_name: &str, func: GameFnPtrState<Self>) -> Result<(), Error> {
+		unsafe{self.register_host_fn_internal(Some(class_name), fn_name, func)}
+	}
+
+	unsafe fn register_host_fn_internal(&mut self, class_name: Option<&str>, fn_name: &str, func: GameFnPtrState<Self>) -> Result<(), Error> {
+		// SAFETY: This Arc is shared between the state and all the compiler
+		// threads.  Because we have a &mut self, we assume that all compiler
+		// threads are parked waiting to receive more compile commands. This
+		// means that they cannot have an active reference to the mod_api data
+		// during this call to get_mut_unchecked
+		
+		// Note: This is the same as the unstable get_mut_unchecked on Arc;
+		// Once that is stabilized, this can be replaced
+		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
+		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
+		unsafe{(&mut *mod_api).register_fn(class_name, fn_name, GameFnPtr::from_ptr(func))}
+	}
+
+	/// Registers a generic host function
+	pub unsafe fn register_generic_fn<const N: usize>(&mut self, fn_name: &str, func: HostFnReg<N, Self>) -> Result<(), Error> {
+		unsafe{self.register_generic_fn_internal(None, fn_name, func)}
+	}
+
+	/// Registers a generic host method
+	pub unsafe fn register_generic_method<const N: usize>(&mut self, class_name: &str, fn_name: &str, func: HostFnReg<N, Self>) -> Result<(), Error> {
+		unsafe{self.register_generic_fn_internal(Some(class_name), fn_name, func)}
+	}
+
+	unsafe fn register_generic_fn_internal<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFnReg<N, Self>) -> Result<(), Error> {
+		// SAFETY: This Arc is shared between the state and all the compiler
+		// threads.  Because we have a &mut self, we assume that all compiler
+		// threads are parked waiting to receive more compile commands. This
+		// means that they cannot have an active reference to the mod_api data
+		// during this call to get_mut_unchecked
+		
+		// Note: This is the same as the unstable get_mut_unchecked on Arc;
+		// Once that is stabilized, this can be replaced
+		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
+		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
+		unsafe{(&mut *mod_api).register_generic_fn(class_name, fn_name, func)}
+	}
+
+	/// Register a dummy function for each game function defined in the mod_api
+	///
+	/// # Safety
+	///
+	/// It is immediate UB to run any grug script created with this grug_state afterwards.
+	///
+	/// You are only allowed to compile scripts from this state.
+	/// This function only exists to allow the cli compiler to function.
+	pub unsafe fn register_dummies(&mut self) {
+		// SAFETY: This Arc is shared between the state and all the compiler
+		// threads.  Because we have a &mut self, we assume that all compiler
+		// threads are parked waiting to receive more compile commands. This
+		// means that they cannot have an active reference to the mod_api data
+		// during this call to get_mut_unchecked
+		
+		// Note: This is the same as the unstable get_mut_unchecked on Arc;
+		// Once that is stabilized, this can be replaced
+		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
+		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
+		unsafe{(&mut *mod_api).register_dummies()}
+	}
+}
+
+// Runner functions
 impl GrugState {
 	/// # SAFETY 
 	/// `values` must point to an array of values with length equal to

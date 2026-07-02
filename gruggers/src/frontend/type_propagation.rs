@@ -529,27 +529,33 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 	/// Type inference in grug is limited to host function calls, 
 	/// Variables do not have type inference (yet).
 	///
-	/// This means that each complete expression can be type checked independently (but in order).
+	/// This means that each complete expression can be type checked
+	/// independently (but in order).
 	///
-	/// This function creates a typing context for such an expression and typechecks it.
+	/// This function creates a typing context for such an expression and
+	/// typechecks it.
 	/// 
-	/// The basic flow of this function is as follows,
+	/// The basic flow of this function is as follows:
 	///
 	/// 1. Create a new typing context,
 	/// 2. Walk the expression tree once
-	/// 	- for each call to a generic host function, create new existential
-	/// 	types for the generics used by that host function.
-	/// 	- Emit constraints for the expressions
-	/// 		- for function calls, add a constraint between the expected
-	/// 		type of the parameter (which may or may not be generic) and the
-	/// 		actual type of the expression, (which may or may not be generic)
-	/// 	- For each constraint check if it is consistent with the preexisting constraints
-	/// 		- Return an error if not
+	/// 	- For each call to a generic host function, create new existential
+	/// 	  types for the generics used by that host function.
+	/// 	- Emit constraints for the expressions.
+	/// 		- For function calls, add a constraint between the expected
+	/// 		  type of the parameter (which may or may not be generic) and the
+	/// 		  actual type of the expression (which may or may not be generic).
+	/// 	- For each constraint check if it is consistent with the preexisting constraints.
+	/// 		- Return an error if not.
 	/// 3. Recursively substitute all existentials with their actual types in the type context.
-	/// 4. Walk the expression tree a second time in the exact same order
+	/// 4. Walk the expression tree a second time in the exact same order.
 	/// 	- Create the new existentials again, but this time, substitute the
-	/// 	calculated types from the previous steps as soon as the
-	/// 	existentials are created
+	/// 	  calculated types from the previous steps as soon as the
+	/// 	  existentials are created.
+	///
+	/// see
+	/// (this)[https://smallcultfollowing.com/babysteps/blog/2017/03/25/unification-in-chalk-part-1/]
+	/// blog post for an explanation of how constraints work
 	fn fill_complete_expr(&mut self, expr: &mut Expr<'arena>, expected_type: Option<GrugType<'arena>>) -> Result<GrugType<'arena>, Error> {
 		let mut ty_ctx = TyCtx::new(self.temp_arena);
 		// First run through the expression, We do not have a list of substitutions.
@@ -754,16 +760,16 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			},
 			ExprData::Call{
 				receiver: None,
-				name: fn_name,
+				name,
 				args,
 				ptr ,
 				name_span,
 			} => {
-				let fn_name = fn_name.to_str();
-				if let Some((_, (return_ty, sig_arguments))) = self.local_fns.iter().find(|(name, _)| *name == fn_name) {
-					self.fill_arguments(fn_name, ty_ctx, substitutions, *name_span, sig_arguments, args, arena)?;
+				let name = name.to_str();
+				if let Some((_, (return_ty, sig_arguments))) = self.local_fns.iter().find(|(fn_name, _)| *fn_name == name) {
+					self.fill_arguments(name, ty_ctx, substitutions, *name_span, sig_arguments, args, arena)?;
 					*return_ty
-				} else if let Some(host_fn) = self.mod_api.host_fns().get(fn_name) {
+				} else if let Some(host_fn) = self.mod_api.host_fns().get(name) {
 					// Create the actual types to represent generics
 					let generics = if let Some(substitutions) = substitutions {
 						// for the second time through, replace the existentials as they are created
@@ -786,7 +792,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 						}
 					}));
 					
-					self.fill_arguments(fn_name, ty_ctx, substitutions, *name_span, parameters, args, arena)?;
+					self.fill_arguments(name, ty_ctx, substitutions, *name_span, parameters, args, arena)?;
 
 					// Try to get the best return type the first time through
 					for generic in generics.iter_mut() {
@@ -801,24 +807,45 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 						}
 					}
 
+					// only fill in the host function pointer the second time
+					// through.
 					if substitutions.is_some() {
-						if let Some(game_fn_ptr) = host_fn.fn_ptr {
-							*ptr = Some(game_fn_ptr);
+						// non generic functions directly use the function
+						// from the host function data
+						if generics.len() == 0 {
+							if let Some(game_fn_ptr) = host_fn.fn_ptr {
+								*ptr = Some(game_fn_ptr);
+							} else {
+								panic!("Game function {} was not registered (Note: This error is not triggerred by grug_tests)", name);
+							}
+						// generic functions need to call the registerer
 						} else {
-							panic!("Game function {} was not registered (Note: This error is not triggerred by grug_tests)", fn_name);
-							// return self.new_error(
-							// 	*name_span,
-							// 	format_args!("Game function {} was not registered", fn_name)
-							// );
+							if let Some(fn_registerer) = host_fn.registerer {
+								let result = unsafe{fn_registerer(generics.as_ptr())};
+								if let Some(result) = result {
+									*ptr = Some(result);
+								} else {
+									return self.new_error(
+										*name_span,
+										format_args!("generic function '{}' instantiation failed for types {}", name, TypeListDisplay(generics))
+									);
+								}
+							} else {
+								panic!("Game function {} was not registered (Note: This error is not triggerred by grug_tests)", name);
+								// return self.new_error(
+								// 	*name_span,
+								// 	format_args!("Game function {} was not registered", name)
+								// );
+							}
 						}
 					}
 					Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
-				} else if fn_name.starts_with("_") {
+				} else if name.starts_with("_") {
 					return self.new_error(
 						*name_span,
-						format_args!("The local function '{}' was not defined by this grug file", fn_name)
+						format_args!("The local function '{}' was not defined by this grug file", name)
 					);
-				} else if self.export_fns.iter().any(|(name, _)| *name == fn_name) {
+				} else if self.export_fns.iter().any(|(fn_name, _)| *fn_name == name) {
 					return self.new_error(
 						*name_span,
 						format_args!("Mods aren't allowed to call their own export functions")
@@ -826,7 +853,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				} else {
 					return self.new_error(
 						*name_span,
-						format_args!("The game function '{}' was not declared by mod_api.json", fn_name)
+						format_args!("The game function '{}' was not declared by mod_api.json", name)
 					);
 				}
 			},
@@ -935,15 +962,33 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					}
 				}
 
-				if let Some(fn_ptr) = host_fn.fn_ptr {
-					*ptr = Some(fn_ptr);
-				} else {
-					// unregistered method
-					panic!("This error is not triggerred by grug_tests");
-					// return self.new_error(
-					// 	*name_span,
-					// 	format_args!("Game function {} was not registered", fn_name)
-					// );
+				// only fill in the host function pointer the second time
+				// through.
+				if substitutions.is_some() {
+					// non generic functions directly use the function
+					// from the host function data
+					if generics.len() == 0 {
+						if let Some(game_fn_ptr) = host_fn.fn_ptr {
+							*ptr = Some(game_fn_ptr);
+						} else {
+							panic!("method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", receiver_name, name);
+						}
+					// generic functions need to call the registerer
+					} else {
+						if let Some(fn_registerer) = host_fn.registerer {
+							let result = unsafe{fn_registerer(generics.as_ptr())};
+							if let Some(result) = result {
+								*ptr = Some(result);
+							} else {
+								return self.new_error(
+									*name_span,
+									format_args!("generic method {}.{} instantiation failed for types {}", receiver_name, name, TypeListDisplay(generics))
+								);
+							}
+						} else {
+							panic!("generic method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", receiver_name, name);
+						}
+					}
 				}
 				Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
 			}
@@ -1212,8 +1257,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 }
 
 struct TyCtx<'a> {
+	/// The names of each existential that has been created in this context so
+	/// far, The index of the existential refers to the index into these
+	/// vectors that contains the data about that existential
 	existentials: Vec<&'a str, &'a Arena>,
+	/// The current type that the existential at each index should be replaced
+	/// with
 	substitutions: Vec<GrugType<'a>, &'a Arena>,
+	/// A list of constraints that still need to be evaluated
 	constraints: Vec<(GrugType<'a>, GrugType<'a>), &'a Arena>,
 }
 
@@ -1368,6 +1419,7 @@ impl<'a> TyCtx<'a> {
 	}
 }
 
+/// A linked list whose elements live on the stack
 #[derive(Clone, Copy)]
 struct StackLL<'a, T> {
 	current: T,
@@ -1437,6 +1489,22 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
 			}
 			_ => (),
 		}
+		Ok(())
+	}
+}
+
+struct TypeListDisplay<'a>(&'a [GrugType<'a>]);
+
+impl<'a> std::fmt::Display for TypeListDisplay<'a> {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		f.write_str("[")?;
+		for (i, ty) in self.0.iter().enumerate() {
+			write!(f, "{}", ty)?;
+			if i != self.0.len() - 1 {
+				f.write_str(", ")?;
+			}
+		}
+		f.write_str("]")?;
 		Ok(())
 	}
 }

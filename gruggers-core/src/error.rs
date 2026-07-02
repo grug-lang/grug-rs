@@ -85,24 +85,25 @@ pub struct ErrorKind([u8;4]);
 const _: () = const {assert!(std::mem::size_of::<ErrorKind>() == 4)};
 
 impl ErrorKind {
-	pub const NONE:               Self = Self([0x0, 0, 0, 0]);
-	pub const INIT_ERROR:         Self = Self([0x1, 0, 0, 0]);
-	pub const COMPILE_ERROR:      Self = Self([0x2, 0, 0, 0]);
-	pub const RUNTIME_ERROR:      Self = Self([0x3, 0, 0, 0]);
+	pub const NONE:                        Self = Self([0x0, 0, 0, 0]);
+	pub const INIT_ERROR:                  Self = Self([0x1, 0, 0, 0]);
+	pub const COMPILE_ERROR:               Self = Self([0x2, 0, 0, 0]);
+	pub const RUNTIME_ERROR:               Self = Self([0x3, 0, 0, 0]);
 
-	pub const MOD_API_ERROR:      Self = Self::INIT_ERROR.add_component(0x1);
+	pub const MOD_API_ERROR:               Self = Self::INIT_ERROR.add_component(0x1);
+	pub const FUNCTION_REGISTRATION_ERROR: Self = Self::INIT_ERROR.add_component(0x2);
 
-	pub const MOD_API_IO_ERROR:   Self = Self::MOD_API_ERROR.add_component(0x1);
-	pub const MOD_API_JSON_ERROR: Self = Self::MOD_API_ERROR.add_component(0x2);
+	pub const MOD_API_IO_ERROR:            Self = Self::MOD_API_ERROR.add_component(0x1);
+	pub const MOD_API_JSON_ERROR:          Self = Self::MOD_API_ERROR.add_component(0x2);
 
-	pub const IO_ERROR:           Self = Self::COMPILE_ERROR.add_component(0x1);
-	pub const FILE_NAME_ERROR:    Self = Self::COMPILE_ERROR.add_component(0x2);
-	pub const UTF8_ERROR:         Self = Self::COMPILE_ERROR.add_component(0x3);
-	pub const TOKENIZER_ERROR:    Self = Self::COMPILE_ERROR.add_component(0x4);
-	pub const PARSER_ERROR:       Self = Self::COMPILE_ERROR.add_component(0x5);
-	pub const TYPE_CHECKER_ERROR: Self = Self::COMPILE_ERROR.add_component(0x6);
+	pub const IO_ERROR:                    Self = Self::COMPILE_ERROR.add_component(0x1);
+	pub const FILE_NAME_ERROR:             Self = Self::COMPILE_ERROR.add_component(0x2);
+	pub const UTF8_ERROR:                  Self = Self::COMPILE_ERROR.add_component(0x3);
+	pub const TOKENIZER_ERROR:             Self = Self::COMPILE_ERROR.add_component(0x4);
+	pub const PARSER_ERROR:                Self = Self::COMPILE_ERROR.add_component(0x5);
+	pub const TYPE_CHECKER_ERROR:          Self = Self::COMPILE_ERROR.add_component(0x6);
 
-	pub const EMPTY_FILE:         Self = Self::FILE_NAME_ERROR.add_component(0x1);
+	pub const EMPTY_FILE:                  Self = Self::FILE_NAME_ERROR.add_component(0x1);
 
 	pub const fn add_component(mut self, other: u8) -> Self {
 		let mut i = 0;

@@ -7,7 +7,6 @@ use crate::ntstring::NTStrPtr;
 use crate::state::State;
 use crate::ast::GrugType;
 
-// TODO: Remove the "Grug" prefix from these types
 
 /// A function pointer to a function that provides specialized versions of
 /// generic host functions
@@ -29,7 +28,43 @@ use crate::ast::GrugType;
 ///
 /// For methods, it is the number of elements in the "used_generics"
 /// field of the class and the method combined.
-pub type GameFnRegisterer = extern "C" fn (*const GrugType) -> GameFnPtr;
+pub type HostFnReg<const N: usize, State> = for<'a> extern "C" fn (&'a [GrugType<'a>; N]) -> Option<GameFnPtrState<State>>;
+
+/// Type erased version of HostFnReg
+///
+/// This is the version of HostFnReg that grug.h exports. 
+/// 
+/// [`HostFnReg`] can be transmuted into [`HostFnRegErased`] and it is sound
+/// to call as long as the number of elements provided to the function is the
+/// same as the generic `N` in [`HostFnReg`]
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct HostFnRegErased(for<'a> unsafe extern "C" fn (*const GrugType<'a>) -> Option<GameFnPtr>);
+
+impl<const N: usize, GrugState: State> From<HostFnReg<N, GrugState>> for HostFnRegErased {
+	fn from(other: HostFnReg<N, GrugState>) -> HostFnRegErased {
+		// HostFnReg has the exact same ABI as HostFnRegErased.
+		//
+		// HostFnRegErased is unsafe. The requirement for calling it is that
+		// the number of generics expected by HostFnReg (N).
+		//
+		// As long as the unsafe precondition is met, the call is safe
+		unsafe{std::mem::transmute::<HostFnReg<N, GrugState>, HostFnRegErased>(other)}
+	}
+}
+impl From<for<'a> unsafe extern "C" fn (*const GrugType<'a>) -> Option<GameFnPtr>> for HostFnRegErased {
+	fn from(other: for<'a> unsafe extern "C" fn (*const GrugType<'a>) -> Option<GameFnPtr>) -> HostFnRegErased {
+		Self(other)
+	}
+}
+
+
+impl std::ops::Deref for HostFnRegErased {
+	type Target = unsafe extern "C" fn (*const GrugType) -> Option<GameFnPtr>;
+	fn deref(&self) -> &Self::Target {
+		&self.0
+	}
+}
 
 /// A function pointer to a game function
 /// Game functions have one the following signature

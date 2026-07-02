@@ -4,7 +4,9 @@ n: void = list.push(2)
 export run(message: string) {
     y: List[Pair[List[number], number]] = list()
 
-    z: Dict[number, Dict[number, number]] = dict()
+    z: Dict[number, Dict[List[number], number]] = dict()
 
     z.put(25, dict_from_list(y))
+
+
 }
