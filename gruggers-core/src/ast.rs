@@ -142,14 +142,17 @@ impl<'a> std::fmt::Display for GrugType<'a> {
 				generics,
 			} => {
 				write!(f, "{}", name)?;
-				write!(f, "[")?;
-				for (i, generic) in generics.iter().enumerate() {
-					write!(f, "{}", generic)?;
-					if i != generics.len() - 1 {
-						write!(f, ", ")?;
+				if !generics.is_empty() {
+					write!(f, "[")?;
+					for (i, generic) in generics.iter().enumerate() {
+						write!(f, "{}", generic)?;
+						if i != generics.len() - 1 {
+							write!(f, ", ")?;
+						}
 					}
+					write!(f, "]")?;
 				}
-				write!(f, "]")
+				Ok(())
 			}
 			Self::Resource {
 				extension: _,

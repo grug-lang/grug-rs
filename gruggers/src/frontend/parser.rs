@@ -338,7 +338,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
 
 				// return type
-				let (return_type, return_type_span) = if let Ok([_, _]) = peek_next_tokens(&tokens) {
+				let (return_type, return_type_span) = if let Ok([_, _]) = assert_next_token_types(&tokens, &[TokenType::Space, TokenType::Word]) {
 					consume_space(&mut tokens).unwrap();
 					let (return_type, return_type_span) = parser.parse_type(&mut tokens, arena)?;
 					match return_type {

@@ -37,6 +37,22 @@ pub(super) struct TypePropagator<'mod_api, 'arena: 'temp, 'temp> {
 	temp_arena: &'temp Arena,
 }
 
+struct TypeMismatch<'a> {
+	span: SourceSpan,
+	diff: TypeDiff<'a>,
+}
+
+enum TypeInferenceError<'a> {
+	Error(Error),
+	Mismatch(TypeMismatch<'a>),
+}
+
+impl<'a> From<Error> for TypeInferenceError<'a> {
+	fn from(other: Error) -> Self {
+		Self::Error(other)
+	}
+}
+
 impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 'temp> {
 	// TODO: This should only be called with fill_result_types
 	pub fn new (
@@ -71,15 +87,15 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 	}
 
 	#[track_caller]
-	fn new_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, Error> {
-		Err(Error::new(
+	fn new_error(&self, span: SourceSpan, args: std::fmt::Arguments) -> Error {
+		Error::new(
 			ErrorKind::TYPE_CHECKER_ERROR,
 			self.current_fn_name.unwrap_or("member scope"),
 			self.file_path,
 			self.file_text, 
 			span,
 			args
-		))
+		)
 	}
 
 	pub fn fill_result_types(
@@ -129,20 +145,20 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			type_propagator.check_global_expr(&variable.assignment_expr, variable.name.to_str())?;
 
 			type_propagator.verify_generics(variable.ty, variable.type_span)?;
-			let result_ty = type_propagator.fill_complete_expr(&mut variable.assignment_expr, Some(variable.ty))?;
+			let result_ty = type_propagator.fill_complete_expr(&mut variable.assignment_expr, Some(variable.ty)).map_err(|err| match err {
+				TypeInferenceError::Error(err) => err,
+				TypeInferenceError::Mismatch(mismatch) => type_propagator.new_error(
+					mismatch.span,
+					format_args!("Can't assign {} to '{}', which has type {}", mismatch.diff.swapped(), variable.name, mismatch.diff)
+				)
+			})?;
 
 			if let ExprData::Identifier(name) = &variable.assignment_expr.data 
 				&& name.to_str() == "me" {
-				return type_propagator.new_error(
+				return Err(type_propagator.new_error(
 					variable.assignment_expr.span,
 					format_args!("Global variables can't be assigned 'me'")
-				);
-			}
-			if variable.ty != result_ty {
-				return type_propagator.new_error(
-					variable.assignment_expr.span,
-					format_args!("Can't assign {} to '{}', which has type {}", result_ty, variable.name, variable.ty)
-				);
+				));
 			}
 			type_propagator.add_global_variable(variable.name.to_str(), result_ty, variable.span)?;
 		}
@@ -169,10 +185,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
 			if previous_on_fn_index > current_index {
 				type_propagator.current_fn_name = Some(on_fn_name);
-				return type_propagator.new_error(
+				return Err(type_propagator.new_error(
 					current_on_fn.span,
 					format_args!("The function '{}' needs to be moved before or after a different export function, according to the entity '{}' in mod_api.json", current_on_fn.name.to_str(), entity_type)
-				);
+				));
 			}
 			previous_on_fn_index = current_index;
 
@@ -180,30 +196,30 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			
 			if mod_api_on_fn.parameters.len() > current_on_fn.parameters.len() {
 				let param = &mod_api_on_fn.parameters[current_on_fn.parameters.len()];
-				return type_propagator.new_error(
+				return Err(type_propagator.new_error(
 					current_on_fn.span,
 					format_args!("Function '{}' expected the parameter '{}' with type {}", current_on_fn.name.to_str(), param.name.to_str(), param.ty)
-				);
+				));
 			} else if mod_api_on_fn.parameters.len() < current_on_fn.parameters.len() {
 				let param = &current_on_fn.parameters[mod_api_on_fn.parameters.len()];
-				return type_propagator.new_error(
+				return Err(type_propagator.new_error(
 					param.name_span,
 					format_args!("Function '{}' got an unexpected extra parameter '{}' with type {}", current_on_fn.name.to_str(), param.name.to_str(), param.ty)
-				);
+				));
 			}
 			for (param, arg) in mod_api_on_fn.parameters.iter().zip(current_on_fn.parameters.iter()) {
 				type_propagator.verify_generics(arg.ty, arg.type_span)?;
 				if param.name != arg.name {
-					return type_propagator.new_error(
+					return Err(type_propagator.new_error(
 						arg.name_span,
 						format_args!("Function '{}' its '{}' parameter was supposed to be named '{}'", current_on_fn.name.to_str(), arg.name.to_str(), param.name.to_str())
-					);
+					));
 				}
 				if param.ty != arg.ty {
-					return type_propagator.new_error(
+					return Err(type_propagator.new_error(
 						arg.type_span,
 						format_args!("Function '{}' its '{}' parameter was supposed to have the type {}, but got {}", current_on_fn.name.to_str(), param.name.to_str(), param.ty, arg.ty)
-					);
+					));
 				}
 			}
 			type_propagator.push_scope();
@@ -221,10 +237,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			let on_fn_name = on_fn.name.to_ntstr();
 			if !entity_on_functions.iter().any(|(name, _)| *name == on_fn_name) {
 				type_propagator.current_fn_name = Some(on_fn_name.as_str());
-				return type_propagator.new_error(
+				return Err(type_propagator.new_error(
 					on_fn.span,
 					format_args!("The function '{}' was not declared by entity '{}' in mod_api.json", on_fn_name, entity_type)
-				);
+				));
 			}
 		}
 
@@ -255,10 +271,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					type_propagator.fill_statements(body_statements, return_type)?;
 
 					if *return_type != GrugType::Void && !matches!(body_statements.last(), Some(Statement::Return{..})) {
-						return type_propagator.new_error(
+						return Err(type_propagator.new_error(
 							*span,
 							format_args!("Function '{}' is supposed to return {} as its last line", name, return_type)
-						);
+						));
 					}
 
 					type_propagator.pop_scope();
@@ -277,20 +293,20 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		if let GrugType::Id{name, generics} = ty {
 			if let Some(class) = self.mod_api.classes().get(name.to_str()) {
 				if generics.len() != class.generics.len() {
-					return self.new_error(
+					return Err(self.new_error(
 						err_span,
 						format_args!("type {} has {} generics, but was given {}", name, class.generics.len(), generics.len()),
-					)
+					))
 				}
 				for generic in generics {
 					self.verify_generics(*generic, err_span)?;
 				}
 				Ok(())
 			} else if !generics.is_empty() {
-				self.new_error(
+				Err(self.new_error(
 					err_span,
 					format_args!("type {} has {} generics, but was given {}", name, 0, generics.len()),
-				)
+				))
 			} else {
 				Ok(())
 			}
@@ -312,43 +328,46 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				} => {
 					if let Some(ty) = ty {
 						self.verify_generics(**ty, *type_span)?;
-						let result_ty = self.fill_complete_expr(assignment_expr, Some(**ty))?;
+						self.fill_complete_expr(assignment_expr, Some(**ty)).map_err(|err| match err {
+							TypeInferenceError::Error(err) => err,
+							TypeInferenceError::Mismatch(mismatch) => self.new_error(
+								mismatch.span,
+								format_args!("Can't assign {} to '{}', which has type {}", mismatch.diff.swapped(), name, mismatch.diff)
+							)
+						})?;
 						self.add_local_variable(name.to_str(), **ty, *name_span)?;
-						if **ty != result_ty {
-							return self.new_error(
-								assignment_expr.span,
-								format_args!("Can't assign {} to '{}', which has type {}", result_ty, name, ty)
-							);
-						}
 					} else {
-						let result_ty = self.fill_complete_expr(assignment_expr, ty.copied())?;
 						let ty = if let Some(ty) = self.get_global_variable_type(name.to_str()) {
 							if matches!(ty, GrugType::Id {..}) {
-								return self.new_error(
+								return Err(self.new_error(
 									assignment_expr.span,
 									format_args!("Global id variables can't be reassigned")
-								);
+								));
 							}
 							ty
 						} else if let Some(ty) = self.get_local_variable_type(name.to_str()) {
 							ty
 						} else {
-							return self.new_error(
+							return Err(self.new_error(
 								*name_span,
 								format_args!("Can't assign to the variable '{}', since it does not exist", name)
-							);
+							));
 						};
 
-						if ty != result_ty {
-							return self.new_error(
-								assignment_expr.span,
-								format_args!("Can't assign {} to '{}', which has type {}", result_ty, name, ty)
-							);
-						}
+						self.fill_complete_expr(assignment_expr, Some(ty)).map_err(|err| match err {
+							TypeInferenceError::Error(err) => err,
+							TypeInferenceError::Mismatch(mismatch) => self.new_error(
+								mismatch.span,
+								format_args!("Can't assign {} to '{}', which has type {}", mismatch.diff.swapped(), name, mismatch.diff)
+							)
+						})?;
 					}
 				}
 				Statement::Call(expr) => {
-					self.fill_complete_expr(expr, None)?;
+					self.fill_complete_expr(expr, None).map_err(|err| match err {
+						TypeInferenceError::Error(err) => err,
+						TypeInferenceError::Mismatch(_) => unreachable!(),
+					})?;
 				}
 				Statement::If {
 					condition,
@@ -361,13 +380,13 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					let mut if_block = if_block;
 					let mut else_block = else_block;
 					loop {
-						let cond_type = self.fill_complete_expr(condition, Some(GrugType::Bool))?;
-						if cond_type != GrugType::Bool {
-							return self.new_error(
-								condition.span,
-								format_args!("If condition must be bool but got '{}'", cond_type)
-							);
-						}
+						self.fill_complete_expr(condition, Some(GrugType::Bool)).map_err(|err| match err {
+							TypeInferenceError::Error(err) => err,
+							TypeInferenceError::Mismatch(mismatch) => self.new_error(
+								mismatch.span,
+								format_args!("If condition must be bool but got '{}'", mismatch.diff.swapped())
+							)
+						})?;
 						self.fill_statements(if_block, expected_return_type)?;
 						if !else_block.is_empty() {
 							if *is_chained {
@@ -391,13 +410,13 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					condition,
 					block,
 				} => {
-					let cond_type = self.fill_complete_expr(condition, Some(GrugType::Bool))?;
-					if cond_type != GrugType::Bool {
-						return self.new_error(
-							condition.span,
-							format_args!("While condition must be bool but got '{}'", cond_type)
-						);
-					}
+					self.fill_complete_expr(condition, Some(GrugType::Bool)).map_err(|err| match err {
+						TypeInferenceError::Error(err) => err,
+						TypeInferenceError::Mismatch(mismatch) => self.new_error(
+							mismatch.span,
+							format_args!("While condition must be bool but got '{}'", mismatch.diff.swapped())
+						)
+					})?;
 					self.num_while_loops_deep += 1;
 					self.fill_statements(block, expected_return_type)?;
 					self.num_while_loops_deep -= 1;
@@ -406,42 +425,41 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					return_span,
 					expr,
 				} => {
-					let (return_ty, span) = expr.as_mut()
-						.map(|expr| Ok((self.fill_complete_expr(expr, Some(*expected_return_type))?, expr.span)))
-						.unwrap_or(Ok((GrugType::Void, *return_span)))?;
-					if *expected_return_type != return_ty {
-						if return_ty == GrugType::Void {
-							return self.new_error(
-								span,
+					if let Some(expr) = expr {
+						self.fill_complete_expr(expr, Some(*expected_return_type)).map_err(|err| match err {
+							TypeInferenceError::Error(err) => err,
+							TypeInferenceError::Mismatch(mismatch) if mismatch.diff.print == GrugType::Void => self.new_error(
+								mismatch.span,
+								format_args!("Function '{}' wasn't supposed to return any value but it returned {}", self.current_fn_name.unwrap(), mismatch.diff.swapped())
+							),
+							TypeInferenceError::Mismatch(mismatch) => self.new_error(
+								mismatch.span,
+								format_args!("Function '{}' is supposed to return {}, not {}", self.current_fn_name.unwrap(), mismatch.diff, mismatch.diff.swapped())
+							),
+						})?;
+					} else {
+						if *expected_return_type != GrugType::Void {
+							return Err(self.new_error(
+								*return_span,
 								format_args!("Function '{}' is supposed to return a value of type {}", self.current_fn_name.unwrap(), expected_return_type)
-							);
-						} else if *expected_return_type == GrugType::Void {
-							return self.new_error(
-								span,
-								format_args!("Function '{}' wasn't supposed to return any value", self.current_fn_name.unwrap())
-							);
-						} else {
-							return self.new_error(
-								span,
-								format_args!("Function '{}' is supposed to return {}, not {}", self.current_fn_name.unwrap(), expected_return_type, return_ty)
-							);
+							));
 						}
 					}
 				}
 				Statement::Break(span) => {
 					if self.num_while_loops_deep == 0 {
-						return self.new_error(
+						return Err(self.new_error(
 							*span,
 							format_args!("There is a break statement that isn't inside of a while loop")
-						);
+						));
 					}
 				}
 				Statement::Continue(span) => {
 					if self.num_while_loops_deep == 0 {
-						return self.new_error(
+						return Err(self.new_error(
 							*span,
 							format_args!("There is a continue statement that isn't inside of a while loop")
-						);
+						));
 					}
 				}
 				_ => (),
@@ -484,10 +502,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			} => {
 				let fn_name = fn_name.to_str();
 				if fn_name.starts_with("_") {
-					return self.new_error(
+					return Err(self.new_error(
 						assignment_expr.span,
 						format_args!("The global variable '{}' isn't allowed to call local functions", name)
-					);
+					));
 				}
 				args.iter().map(|argument| self.check_global_expr(argument, name))
 					.collect::<Result<Vec<_>, _>>()?;
@@ -556,8 +574,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 	/// see
 	/// (this)[https://smallcultfollowing.com/babysteps/blog/2017/03/25/unification-in-chalk-part-1/]
 	/// blog post for an explanation of how constraints work
-	fn fill_complete_expr(&mut self, expr: &mut Expr<'arena>, expected_type: Option<GrugType<'arena>>) -> Result<GrugType<'arena>, Error> {
-		let mut ty_ctx = TyCtx::new(self.temp_arena);
+	fn fill_complete_expr(&mut self, expr: &mut Expr<'arena>, expected_type: Option<GrugType<'arena>>) -> Result<GrugType<'arena>, TypeInferenceError<'temp>> {
+		let mut ty_ctx = TyCtx::new(self.current_fn_name.unwrap_or("member_scope"), self.file_path, self.file_text, self.temp_arena);
 		// First run through the expression, We do not have a list of substitutions.
 		//
 		// the `fill_expr` function writes the result of the expression into
@@ -584,17 +602,17 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		//    `fill_result_types`
 		let expr_type = self.fill_expr(&mut ty_ctx, None, unsafe{std::mem::transmute::<&mut Expr<'arena>, &mut Expr<'temp>>(expr)}, self.temp_arena)?;
 		if let Some(expected_type) = expected_type {
-			ty_ctx.add_constraint(expected_type, expr_type).map_err(|err| err.into_err(expr.span, self))?;
+			ty_ctx.add_constraint(expr.span, expected_type, expr_type)?;
 		}
 		let substitutions = ty_ctx.substitute(self.arena);
 		// Clear the typing context for the second pass. 
 		// This time, the type context is only used to keep track of the number
 		// of existentials that have been created
 		
-		self.fill_expr(&mut TyCtx::new(self.arena), Some(substitutions), expr, self.arena)
+		Ok(self.fill_expr(&mut TyCtx::new(self.current_fn_name.unwrap_or("member_scope"), self.file_path, self.file_text, self.arena), Some(substitutions), expr, self.arena)?)
 	}
 
-	fn fill_expr<'a>(&mut self, ty_ctx: &mut TyCtx<'a>, substitutions: Option<&[GrugType<'arena>]>, assignment_expr: &mut Expr<'a>, arena: &'a Arena) -> Result<GrugType<'a>, Error> where
+	fn fill_expr<'a>(&mut self, ty_ctx: &mut TyCtx<'a, 'arena>, substitutions: Option<&[GrugType<'arena>]>, assignment_expr: &mut Expr<'a>, arena: &'a Arena) -> Result<GrugType<'a>, Error> where
 		'arena: 'a,
 	{
 		let result_ty = match &mut assignment_expr.data {
@@ -605,10 +623,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			ExprData::Entity{..} => GrugType::Entity{entity_type: None},
 			ExprData::Identifier(name) => {
 				let Some(ty) = self.get_variable_type(name.to_str()) else {
-					return self.new_error(
+					return Err(self.new_error(
 						assignment_expr.span,
 						format_args!("The variable '{}' does not exist", name.to_str())
-					);
+					));
 				};
 				ty
 			},
@@ -621,29 +639,41 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				op_span,
 			} => {
 				if let Expr{data: ExprData::Unary{op: next_op, ..}, ..} = expr && next_op == op {
-					return self.new_error(
+					return Err(self.new_error(
 						*op_span,
 						format_args!("Found '{0}' directly next to another '{0}', which can be simplified by just removing both of them", op)
-					);
+					));
 				}
 				let result_ty = self.fill_expr(ty_ctx, substitutions, expr, arena)?;
 				match (op, &result_ty) {
 					(UnaryOperator::Not, GrugType::Bool) => (),
 					(UnaryOperator::Not, GrugType::Existential{idx}) => {
-						ty_ctx.add_constraint(GrugType::Bool, GrugType::Existential{idx: *idx}).map_err(|err| err.into_err(expr.span, self))?;
+						ty_ctx.add_constraint(*op_span, GrugType::Bool, GrugType::Existential{idx: *idx}).map_err(|err| match err {
+							TypeInferenceError::Error(err) => err,
+							TypeInferenceError::Mismatch(mismatch) => self.new_error(
+								mismatch.span,
+								format_args!("Found 'not' before {}, but it can only be put before a bool", mismatch.diff.swapped())
+							)
+						})?;
 					}
-					(UnaryOperator::Not, got) => return self.new_error(
+					(UnaryOperator::Not, got) => return Err(self.new_error(
 						*op_span,
 						format_args!("Found 'not' before {}, but it can only be put before a bool", got)
-					),
+					)),
 					(UnaryOperator::Minus, GrugType::Number) => (),
 					(UnaryOperator::Minus, GrugType::Existential{idx}) => {
-						ty_ctx.add_constraint(GrugType::Number, GrugType::Existential{idx: *idx}).map_err(|err| err.into_err(expr.span, self))?
+						ty_ctx.add_constraint(*op_span, GrugType::Number, GrugType::Existential{idx: *idx}).map_err(|err| match err {
+							TypeInferenceError::Error(err) => err,
+							TypeInferenceError::Mismatch(mismatch) => self.new_error(
+								mismatch.span,
+								format_args!("Found '-' before {}, but it can only be put before a number", mismatch.diff.swapped())
+							)
+						})?;
 					}
-					(UnaryOperator::Minus, got) => return self.new_error(
+					(UnaryOperator::Minus, got) => return Err(self.new_error(
 						*op_span,
 						format_args!("Found '-' before {}, but it can only be put before a number", got)
-					),
+					)),
 					// _ => (),
 				};
 				result_ty
@@ -660,103 +690,55 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					(GrugType::String, GrugType::String, BinaryOperator::DoubleEquals) | 
 					(GrugType::String, GrugType::String, BinaryOperator::NotEquals) => (),
 					(GrugType::String, GrugType::String, BinaryOperator::Plus) => {
-						return self.new_error(
+						return Err(self.new_error(
 							*op_span,
 							format_args!("cannot add strings with '+'")
-						);
+						));
 					},
 					(GrugType::String, GrugType::String, _) => {
-						return self.new_error(
+						return Err(self.new_error(
 							*op_span,
 							format_args!("You can't use the '{}' operator on strings", op)
-						);
+						));
 					},
 					_ => (),
 				}
-				if result_0 != result_1 {
-					return self.new_error(
-						*op_span,
-						format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, result_0, result_1)
-					);
-				}
+				ty_ctx.add_constraint(*op_span, result_0, result_1).map_err(|err| match err {
+					TypeInferenceError::Error(err) => err,
+					TypeInferenceError::Mismatch(mismatch) => self.new_error(
+						mismatch.span,
+						format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, mismatch.diff, mismatch.diff.swapped())
+					)
+				})?;
 
-				match op {
-					BinaryOperator::Or | BinaryOperator::And => {
-						match result_0 {
-							GrugType::Existential{idx} => ty_ctx.add_constraint(GrugType::Bool, GrugType::Existential{idx}).map_err(|err| err.into_err(left.span, self))?,
-							GrugType::Bool => (),
-							_ => {
-								return self.new_error(
-									*op_span,
-									format_args!("'{}' operator expects bool", op)
-								);
-							}
+				let (expected_type, result_type) = match op {
+					BinaryOperator::Or | BinaryOperator::And => (GrugType::Bool, GrugType::Bool),
+					BinaryOperator::DoubleEquals | BinaryOperator::NotEquals => (result_0, GrugType::Bool),
+					BinaryOperator::Greater  | BinaryOperator::GreaterEquals | 
+					BinaryOperator::Less     | BinaryOperator::LessEquals    => (GrugType::Number, GrugType::Bool),
+					BinaryOperator::Plus     | BinaryOperator::Minus         |
+					BinaryOperator::Multiply | BinaryOperator::Division      => (GrugType::Number, GrugType::Number),
+				};
+				// Make sure both the left and right expressions have the expected type
+				for (expr_result, expr_span) in [(result_0, left.span), (result_1, right.span)] {
+					match expr_result {
+						GrugType::Existential{idx} => ty_ctx.add_constraint(expr_span, expected_type, GrugType::Existential{idx}).map_err(|err| match err {
+							TypeInferenceError::Error(err) => err,
+							TypeInferenceError::Mismatch(mismatch) => self.new_error(
+								mismatch.span,
+								format_args!("'{}' operator expects {} but got {}", op, expected_type, mismatch.diff.swapped())
+							)
+						})?,
+						ty if ty == expected_type => (),
+						_ => {
+							return Err(self.new_error(
+								*op_span,
+								format_args!("'{}' operator expects {} but got {}", op, expected_type, TypeDiff::new(expr_result, expected_type))
+							));
 						}
-						match result_1 {
-							GrugType::Existential{idx} => ty_ctx.add_constraint(GrugType::Bool, GrugType::Existential{idx}).map_err(|err| err.into_err(right.span, self))?,
-							GrugType::Bool => (),
-							_ => {
-								return self.new_error(
-									*op_span,
-									format_args!("'{}' operator expects bool", op)
-								);
-							}
-						}
-						GrugType::Bool
 					}
-					BinaryOperator::DoubleEquals | BinaryOperator::NotEquals => {
-						ty_ctx.add_constraint(result_0, result_1).map_err(|err| err.into_err(right.span, self))?;
-						GrugType::Bool
-					},
-					BinaryOperator::Greater | BinaryOperator::GreaterEquals | 
-					BinaryOperator::Less | BinaryOperator::LessEquals => {
-						match result_0 {
-							GrugType::Existential{idx} => ty_ctx.add_constraint(GrugType::Number, GrugType::Existential{idx}).map_err(|err| err.into_err(right.span, self))?,
-							GrugType::Number => (),
-							_ => {
-								return self.new_error(
-									*op_span,
-									format_args!("'{}' operator expects number", op)
-								);
-							}
-						}
-						match result_1 {
-							GrugType::Existential{idx} => ty_ctx.add_constraint(GrugType::Number, GrugType::Existential{idx}).map_err(|err| err.into_err(right.span, self))?,
-							GrugType::Number => (),
-							_ => {
-								return self.new_error(
-									*op_span,
-									format_args!("'{}' operator expects number", op)
-								);
-							}
-						}
-						GrugType::Bool
-					},
-					BinaryOperator::Plus | BinaryOperator::Minus |
-					BinaryOperator::Multiply | BinaryOperator::Division => {
-						match result_0 {
-							GrugType::Existential{idx} => ty_ctx.add_constraint(GrugType::Number, GrugType::Existential{idx}).map_err(|err| err.into_err(right.span, self))?,
-							GrugType::Number => (),
-							_ => {
-								return self.new_error(
-									*op_span,
-									format_args!("'{}' operator expects number", op)
-								);
-							}
-						}
-						match result_1 {
-							GrugType::Existential{idx} => ty_ctx.add_constraint(GrugType::Number, GrugType::Existential{idx}).map_err(|err| err.into_err(right.span, self))?,
-							GrugType::Number => (),
-							_ => {
-								return self.new_error(
-									*op_span,
-									format_args!("'{}' operator expects number", op)
-								);
-							}
-						}
-						result_0
-					},
 				}
+				result_type
 			},
 			ExprData::Call{
 				receiver: None,
@@ -825,10 +807,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 								if let Some(result) = result {
 									*ptr = Some(result);
 								} else {
-									return self.new_error(
+									return Err(self.new_error(
 										*name_span,
 										format_args!("generic function '{}' instantiation failed for types {}", name, TypeListDisplay(generics))
-									);
+									));
 								}
 							} else {
 								panic!("Game function {} was not registered (Note: This error is not triggerred by grug_tests)", name);
@@ -841,20 +823,20 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					}
 					Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
 				} else if name.starts_with("_") {
-					return self.new_error(
+					return Err(self.new_error(
 						*name_span,
 						format_args!("The local function '{}' was not defined by this grug file", name)
-					);
+					));
 				} else if self.export_fns.iter().any(|(fn_name, _)| *fn_name == name) {
-					return self.new_error(
+					return Err(self.new_error(
 						*name_span,
 						format_args!("Mods aren't allowed to call their own export functions")
-					);
+					));
 				} else {
-					return self.new_error(
+					return Err(self.new_error(
 						*name_span,
 						format_args!("The game function '{}' was not declared by mod_api.json", name)
-					);
+					));
 				}
 			},
 			ExprData::Call{
@@ -870,19 +852,19 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 						receiver: Some(_),
 						..
 					} => {
-						return self.new_error(
+						return Err(self.new_error(
 							receiver.span,
 							format_args!("Method chaining is not allowed")
-						);
+						));
 					}
 					ExprData::Call {
 						receiver: None,
 						..
 					} => {
-						return self.new_error(
+						return Err(self.new_error(
 							receiver.span,
 							format_args!("Cannot call method on the result of a function call")
-						);
+						));
 					}
 					_ => (),
 				};
@@ -893,32 +875,32 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 						let ty = ty_ctx.get_current_type(idx);
 						match ty {
 							Some(GrugType::Id{name, ..}) => name.to_str(),
-							None => return self.new_error(
+							None => return Err(self.new_error(
 								receiver.span,
 								format_args!("Unable to infer type of method receiver"),
-							),
-							Some(ty) => return self.new_error(
+							)),
+							Some(ty) => return Err(self.new_error(
 								receiver.span,
 								format_args!("Cannot call method on '{}' type", ty)
-							),
+							)),
 						}
 					}
-					ty => return self.new_error(
+					ty => return Err(self.new_error(
 						receiver.span,
 						format_args!("Cannot call method on '{}' type", ty)
-					)
+					))
 				};
 				let Some(class) = self.mod_api.classes().get(receiver_name) else {
-					return self.new_error(
+					return Err(self.new_error(
 						receiver.span,
 						format_args!("Type '{}' does not have any methods", receiver_name)
-					);
+					));
 				};
 				let Some((_, host_fn)) = class.methods.iter().find(|(fn_name, _)| fn_name.as_str() == name) else {
-					return self.new_error(
+					return Err(self.new_error(
 						receiver.span,
 						format_args!("Cannot find method '{}' on type '{}'", name, receiver_name)
-					);
+					));
 				};
 
 				// Create the actual types to represent generics
@@ -945,7 +927,13 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
 				// do the same for the method receiver, and add a constraint between that and the actual type of the receiver
 				let mod_api_receiver_type = Self::convert_mod_api_type(class.ty, generics, arena);
-				ty_ctx.add_constraint(mod_api_receiver_type, receiver_type).map_err(|err| err.into_err(receiver.span, self))?;
+				ty_ctx.add_constraint(receiver.span, mod_api_receiver_type, receiver_type).map_err(|err| match err {
+					TypeInferenceError::Error(err) => err,
+					TypeInferenceError::Mismatch(mismatch) => self.new_error(
+						mismatch.span,
+						format_args!("Expected {} but got {}", mismatch.diff, mismatch.diff.swapped())
+					)
+				})?;
 				
 				self.fill_arguments(name, ty_ctx, substitutions, *name_span, parameters, args, arena)?;
 
@@ -980,10 +968,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 							if let Some(result) = result {
 								*ptr = Some(result);
 							} else {
-								return self.new_error(
+								return Err(self.new_error(
 									*name_span,
 									format_args!("generic method {}.{} instantiation failed for types {}", receiver_name, name, TypeListDisplay(generics))
-								);
+								));
 							}
 						} else {
 							panic!("generic method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", receiver_name, name);
@@ -1003,7 +991,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
 	fn fill_arguments<'a>(&mut self, 
 		function_name: &str, 
-		ty_ctx: &mut TyCtx<'a>,
+		ty_ctx: &mut TyCtx<'a, 'arena>,
 		substitutions: Option<&[GrugType<'arena>]>,
 		name_span: SourceSpan, 
 		signature: &[Parameter<'a>], 
@@ -1014,17 +1002,17 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 	{
 		if signature.len() > arguments.len() {
 			let param = signature[arguments.len()];
-			return self.new_error(
+			return Err(self.new_error(
 				name_span,
 				format_args!("Function call '{}' expected the argument '{}' with type {}", function_name, param.name.to_str(), param.ty)
-			);
+			));
 		} else if signature.len() < arguments.len() {
 			let arg = &mut arguments[signature.len()];
 			let got_type = self.fill_expr(ty_ctx, substitutions, arg, arena)?;
-			return self.new_error(
+			return Err(self.new_error(
 				arg.span,
 				format_args!("Function call '{}' got an unexpected extra argument with type {}", function_name, got_type)
-			);
+			));
 		}
 		for (param, arg) in signature.iter().zip(arguments) {
 			let arg_result_ty = self.fill_expr(ty_ctx, substitutions, arg, arena)?;
@@ -1039,32 +1027,38 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			// argument is a literal string but resource is expected
 			} else if let GrugType::Resource{..} = param.ty 
 				&& let ExprData::String(string) = arg.data {
-				return self.new_error(
+				return Err(self.new_error(
 					arg.span,
 					format_args!("The host function '{}' expects a resource string, so put an 'r' in front of string \"{}\"", function_name, string)
-				);
+				));
 			// argument is a literal string but entity is expected
 			} else if let GrugType::Entity{..} = param.ty 
 				&& let ExprData::String(string) = arg.data {
-				return self.new_error(
+				return Err(self.new_error(
 					arg.span,
 					format_args!("The host function '{}' expects an entity string, so put an 'e' in front of string \"{}\"", function_name, string)
-				);
+				));
 			// if argument is void
 			} else if &arg_result_ty == &GrugType::Void {
-				return self.new_error(
+				return Err(self.new_error(
 					arg.span,
 					format_args!("Function call '{}' expected the type {} for argument '{}', but got a function call that doesn't return anything", function_name, param.ty, param.name)
-				);
+				));
 			// If the shape of the argument type matches the shape of the expected parameter including generics
 			} else if arg_result_ty.matches(&param.ty) {
-				ty_ctx.add_constraint(param.ty, arg_result_ty).map_err(|err| err.into_err(arg.span, self))?;
+				ty_ctx.add_constraint(arg.span, param.ty, arg_result_ty).map_err(|err| match err {
+					TypeInferenceError::Error(err) => err,
+					TypeInferenceError::Mismatch(mismatch) => self.new_error(
+						mismatch.span,
+						format_args!("Function call '{}' expected the type {} for argument '{}', but got {}", function_name, mismatch.diff, param.name, mismatch.diff.swapped())
+					)
+				})?;
 			// mismatch
 			} else {
-				return self.new_error(
+				return Err(self.new_error(
 					arg.span,
 					format_args!("Function call '{}' expected the type {} for argument '{}', but got {}", function_name, param.ty, param.name, arg_result_ty)
-				);
+				));
 			}
 		}
 		Ok(())
@@ -1072,54 +1066,54 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
 	fn validate_and_fix_resource_string<'a>(&mut self, value: &str, extension: &str, span: SourceSpan, arena: &'a Arena) -> Result<&'a NTStr, Error> {
 		if value.is_empty() {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("Resources can't be empty strings")
-			);
+			));
 		} else if value.starts_with("/") {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("Remove the leading slash from the resource \"{}\"", value)
-			);
+			));
 		} else if value.ends_with("/") {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("Remove the trailing slash from the resource \"{}\"", value)
-			);
+			));
 		} else if value.contains("\\") {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("Replace the '\\' with '/' in the resource \"{}\"", value)
-			);
+			));
 		} else if value.contains("//") {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("Replace the '//' with '/' in the resource \"{}\"", value)
-			);
+			));
 		} else if value == ".." || value.starts_with("../") 
 		       || value.ends_with("/..") || value.contains("/../") {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("Remove the '..' from the resource \"{}\"", value)
-			);
+			));
 		} else if value == "." || value.starts_with("./") 
 		       || value.ends_with("/.") || value.contains("/./") {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("Remove the '.' from the resource \"{}\"", value)
-			);
+			));
 		} else if value.ends_with(".") {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("resource name \"{}\" cannot end with .", value)
-			);
+			));
 		} else if value.ends_with(extension) {
 
 		} else {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("The resource '{}' was supposed to have the extension '{}'", value, extension)
-			);
+			));
 		}
 		// fix string
 		let mut string = PathBuf::from(self.current_mod_name);
@@ -1131,10 +1125,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		full_path.push(resource_str.as_str());
 		// we can't do `Ok(true) == std::fs::exists(&full_path)` because std::io::Error is not PartialEq
 		if !std::fs::exists(&full_path).is_ok_and(std::convert::identity) {
-			self.new_error(
+			Err(self.new_error(
 				span,
 				format_args!("resource '{}' does not exist", value)
-			)
+			))
 		} else {
 			self.resources.push(self.arena.copy_str_into(resource_str).as_ref());
 			Ok(resource_str)
@@ -1145,30 +1139,30 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		let entity_string = entity_string_old.to_str();
 		// Validate string
 		if entity_string.is_empty() {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("Entities can't be empty strings")
-			);
+			));
 		}
 
 		let (mod_name, entity_name) = if let Some((mod_name, entity_name)) = entity_string.split_once(":") {
 			if mod_name.is_empty() {
-				return self.new_error(
+				return Err(self.new_error(
 					span,
 					format_args!("Entity '{}' is missing a mod name", entity_string)
-				);
+				));
 			}
 			if entity_name.is_empty() {
-				return self.new_error(
+				return Err(self.new_error(
 					span,
 					format_args!("Entity '{}' missing entity name", entity_string)
-				);
+				));
 			}
 			if mod_name == self.current_mod_name {
-				return self.new_error(
+				return Err(self.new_error(
 					span,
 					format_args!("Entity string ('{}') cannot refer to its own mod", entity_string)
-				);
+				));
 			}
 			(mod_name, entity_name)
 		} else {
@@ -1176,16 +1170,16 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		};
 
 		if let Some(ch) = mod_name.chars().find(|ch| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '_' || *ch == '-')) {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("Entity '{}' its mod name contains the invalid character '{}'", entity_string, ch)
-			);
+			));
 		}
 		if let Some(ch) = entity_name.chars().find(|ch| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '_' || *ch == '-')) {
-			return self.new_error(
+			return Err(self.new_error(
 				span,
 				format_args!("Entity '{}' its entity name contains the invalid character '{}'", entity_string, ch)
-			);
+			));
 		}
 
 		// Fix string
@@ -1228,16 +1222,16 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
 	fn add_local_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), Error> {
 		if self.get_global_variable_type(name).is_some() {
-			return self.new_error(
+			return Err(self.new_error(
 				name_span,
 				format_args!("The local variable '{}' shadows an earlier global variable", name),
-			);
+			));
 		}
 		if self.get_local_variable_type(name).is_some() {
-			return self.new_error(
+			return Err(self.new_error(
 				name_span,
 				format_args!("The local variable '{}' shadows an earlier local variable", name),
-			);
+			));
 		}
 		let result = self.local_variables.last_mut().expect("There is no local scope to push onto").insert(name, ty).is_none();
 		debug_assert!(result);
@@ -1246,17 +1240,20 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
 	fn add_global_variable(&mut self, name: &'arena str, ty: GrugType<'arena>, name_span: SourceSpan) -> Result<(), Error> {
 		match self.global_variables.entry(name) {
-			Entry::Occupied(_) => return self.new_error(
+			Entry::Occupied(_) => return Err(self.new_error(
 				name_span,
 				format_args!("The global variable '{}' shadows an earlier global variable", name),
-			),
+			)),
 			Entry::Vacant(x) => {x.insert(ty);},
 		}
 		Ok(())
 	}
 }
 
-struct TyCtx<'a> {
+struct TyCtx<'a, 'err> {
+	function_name: &'err str,
+	file_path: &'err OsStr,
+	file_text: &'err str,
 	/// The names of each existential that has been created in this context so
 	/// far, The index of the existential refers to the index into these
 	/// vectors that contains the data about that existential
@@ -1268,42 +1265,33 @@ struct TyCtx<'a> {
 	constraints: Vec<(GrugType<'a>, GrugType<'a>), &'a Arena>,
 }
 
-#[derive(Clone, Copy)]
-enum TypeInferenceError<'a> {
-	Mismatch {
-		left: GrugType<'a>,
-		right: GrugType<'a>,
-	},
-	Resource,
-	Entity,
-}
-
-impl<'a> TypeInferenceError<'a> {
-	fn into_err(self, err_span: SourceSpan, context: &TypePropagator) -> Error {
-		match self {
-			Self::Mismatch{left, right} => context.new_error::<std::convert::Infallible>(
-				err_span,
-				format_args!("Expected {} but got {}", TypeDiff::new(left, right), TypeDiff::new(right, left)),
-			),
-			Self::Resource => context.new_error::<std::convert::Infallible>(
-				err_span,
-				format_args!("cannot use resource strings in generics"),
-			),
-			Self::Entity   => context.new_error::<std::convert::Infallible>(
-				err_span,
-				format_args!("cannot use entity strings in generics"),
-			),
-		}.unwrap_err()
-	}
-}
-
-impl<'a> TyCtx<'a> {
-	fn new(temp_arena: &'a Arena) -> Self {
+impl<'a, 'err> TyCtx<'a, 'err> {
+	fn new(
+		function_name: &'err str,
+		file_path: &'err OsStr,
+		file_text: &'err str,
+		temp_arena: &'a Arena
+	) -> Self {
 		Self {
+			function_name,
+			file_path,
+			file_text,
 			existentials: Vec::new_in(temp_arena),
 			substitutions: Vec::new_in(temp_arena),
 			constraints: Vec::new_in(temp_arena),
 		}
+	}
+
+	#[track_caller]
+	fn new_error(&self, span: SourceSpan, args: std::fmt::Arguments) -> Error {
+		Error::new(
+			ErrorKind::TYPE_CHECKER_ERROR,
+			self.function_name,
+			self.file_path,
+			self.file_text, 
+			span,
+			args
+		)
 	}
 
 	// Returns the first currently known replacement type for an existential
@@ -1333,8 +1321,7 @@ impl<'a> TyCtx<'a> {
 		new_existential
 	}
 
-	#[track_caller]
-	fn add_constraint(&mut self, left: GrugType<'a>, right: GrugType<'a>) -> Result<(), TypeInferenceError<'a>> {
+	fn add_constraint(&mut self, err_span: SourceSpan, left: GrugType<'a>, right: GrugType<'a>) -> Result<(), TypeInferenceError<'a>> {
 		self.constraints.push((left, right));
 		// This ensures recursive calls only handle the constraints relevant to them
 		let mut constraints_to_check = 1;
@@ -1345,11 +1332,20 @@ impl<'a> TyCtx<'a> {
 				(GrugType::Number, GrugType::Number) => (),
 				(GrugType::String, GrugType::String) => (),
 				(_, GrugType::Resource{..}) | 
-				(GrugType::Resource{..}, _) => return Err(TypeInferenceError::Resource),
+				(GrugType::Resource{..}, _) => return Err(TypeInferenceError::Error(self.new_error(
+					err_span,
+					format_args!("cannot use resource strings in generics"),
+				))),
 				(_, GrugType::Entity{..}) | 
-				(GrugType::Entity{..}, _) => return Err(TypeInferenceError::Entity),
+				(GrugType::Entity{..}, _) => return Err(TypeInferenceError::Error(self.new_error(
+					err_span,
+					format_args!("cannot use entity strings in generics"),
+				))),
 				(GrugType::Id{name: left_name, ..}, GrugType::Id{name: right_name, ..}) if left_name != right_name => {
-					return Err(TypeInferenceError::Mismatch{left, right});
+					return Err(TypeInferenceError::Mismatch(TypeMismatch{
+						span: err_span,
+						diff: TypeDiff::new(left, right)
+					}));
 				}
 				// This part is *not* recursive. The error should contain the original types
 				(GrugType::Id{generics: left_generics, ..}, GrugType::Id{generics: right_generics, ..}) => {
@@ -1359,7 +1355,7 @@ impl<'a> TyCtx<'a> {
 					}
 					constraints_to_check += left_generics.len();
 				}
-				// An existential is always equal to itself
+				// An existential is always equal to it
 				(GrugType::Existential{idx: left_idx}, GrugType::Existential{idx: right_idx}) if left_idx == right_idx => (),
 				// At least one side is an existential
 				// This part *is* recursive. The error should contain the new types
@@ -1369,10 +1365,19 @@ impl<'a> TyCtx<'a> {
 					// self.occurs_in(StackLL{current: idx, parent: None}, other)?;
 					let old_substitution = self.substitutions[idx];
 					self.substitutions[idx] = other;
-					self.add_constraint(other, old_substitution)?;
+					self.add_constraint(err_span, other, old_substitution).map_err(|err| match err {
+						TypeInferenceError::Error(err) => err,
+						TypeInferenceError::Mismatch(mismatch) => self.new_error(
+							mismatch.span,
+							format_args!("Expected {} but got {}", mismatch.diff, mismatch.diff.swapped())
+						)
+					})?;
 				}
 				_ => {
-					return Err(TypeInferenceError::Mismatch{left, right});
+					return Err(TypeInferenceError::Mismatch(TypeMismatch{
+						span: err_span,
+						diff: TypeDiff::new(left, right)
+					}));
 				}
 			}
 			constraints_to_check -= 1;
@@ -1434,16 +1439,24 @@ impl<'a, T> std::ops::Deref for StackLL<'a, T> {
 }
 
 /// Its Display implementation only shows the parts of the types that are different
+#[derive(Clone, Copy)]
 struct TypeDiff<'a> {
-	expected: GrugType<'a>,
-	got     : GrugType<'a>,
+	print: GrugType<'a>,
+	diff : GrugType<'a>,
 }
 
 impl<'a> TypeDiff<'a> {
-	fn new(expected: GrugType<'a>, got: GrugType<'a>) -> Self {
+	fn new(print: GrugType<'a>, diff: GrugType<'a>) -> Self {
 		Self {
-			expected,
-			got
+			print,
+			diff
+		}
+	}
+
+	fn swapped(self) -> Self {
+		Self {
+			print: self.diff,
+			diff : self.print,
 		}
 	}
 }
@@ -1466,20 +1479,20 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
 			}
 		}
 
-		if self.expected.matches(&self.got) {
+		if self.print.matches(&self.diff) {
 			return f.write_str("_")
 		}
-		f.write_str(get_type_name(self.expected))?;
-		match (self.expected, self.got) {
+		f.write_str(get_type_name(self.print))?;
+		match (self.print, self.diff) {
 			(
 				GrugType::Id{name: name_left, generics: generics_left}, 
 				GrugType::Id{name: name_right, generics: generics_right}
 			) if name_left == name_right => {
 				f.write_str("[")?;
-				for (i, (expected, got)) in generics_left.iter().copied().zip(generics_right.iter().copied()).enumerate() {
+				for (i, (print, diff)) in generics_left.iter().copied().zip(generics_right.iter().copied()).enumerate() {
 					Self {
-						expected,
-						got
+						print,
+						diff
 					}.fmt(f)?;
 					if i != generics_left.len() - 1 {
 						f.write_str(", ")?;
