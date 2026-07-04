@@ -599,6 +599,12 @@ impl GrugState {
 		// threads are parked waiting to receive more compile commands. This
 		// means that they cannot have an active reference to the mod_api data
 		// during this call to get_mut_unchecked
+
+		// Note: We dont want to use interior mutability here because that would
+		// technically allow the compiler threads to modify the data too.
+		// 
+		// In that case, there would actually be a thread safety issue with
+		// this
 		
 		// Note: This is the same as the unstable get_mut_unchecked on Arc;
 		// Once that is stabilized, this can be replaced
@@ -623,6 +629,12 @@ impl GrugState {
 		// threads are parked waiting to receive more compile commands. This
 		// means that they cannot have an active reference to the mod_api data
 		// during this call to get_mut_unchecked
+		
+		// Note: We dont want to use interior mutability here because that would
+		// technically allow the compiler threads to modify the data too.
+		// 
+		// In that case, there would actually be a thread safety issue with
+		// this
 		
 		// Note: This is the same as the unstable get_mut_unchecked on Arc;
 		// Once that is stabilized, this can be replaced

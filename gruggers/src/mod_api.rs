@@ -417,7 +417,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		write!(location, "{}", &self.json_path).expect("writing into a vec can never fail");
 		let location = unsafe{std::str::from_utf8_unchecked(location.leak())};
 		Error::new(
-			ErrorKind::MOD_API_JSON_ERROR,
+			ErrorKind::MOD_API_ERROR,
 			location,
 			self.path.as_ref(), 
 			self.text,
@@ -608,6 +608,53 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			registerer: None,
 		})
 	}
+
+	fn validate_function(&mut self, parameters: &[Parameter<'a>], return_type: GrugType<'a>, known_types: &[(&str, usize)]) -> Result<()> {
+		self.push_path(JsonPathComponent::ObjectKey("parameters"));
+		for parameter in parameters {
+			self.push_path(JsonPathComponent::ArrayKey(parameter.name.to_str()));
+			self.validate_type(parameter.ty, known_types)?;
+			self.pop_path();
+		}
+		self.pop_path();
+		self.push_path(JsonPathComponent::ObjectKey("return_type"));
+		self.validate_type(return_type, known_types)?;
+		self.pop_path();
+		Ok(())
+	}
+
+	fn validate_type(&mut self, ty: GrugType<'a>, known_types: &[(&str, usize)]) -> Result<()> {
+		match ty {
+			GrugType::Id {
+				name,
+				generics
+			} => {
+				// If the type is found, then check if the number of generics
+				// match and also recursively check types
+				self.push_path(JsonPathComponent::ObjectKey("generics"));
+				if let Some((_, num_generics)) = known_types.iter().find(|(ty_name, _)| *ty_name == name.to_str()) {
+					if *num_generics != generics.len() {
+						return Err(self.new_error(self.arena.fmt_into(format_args!(": {} was declared to have {} generics but here it has {}", name, num_generics, generics.len()))));
+					}
+					for (i, generic) in generics.iter().enumerate() {
+						self.push_path(JsonPathComponent::ArrayIdx(i));
+						self.validate_type(*generic, known_types)?;
+						self.pop_path();
+					}
+				// TODO: Change the mod api format so this always throws an
+				// error
+				// if not found, number of generics MUST be 0
+				} else {
+					if generics.len() != 0 {
+						return Err(self.new_error(self.arena.fmt_into(format_args!(": {} was not declared in \"classes\", so it cannot have generics", name))));
+					}
+				}
+				self.pop_path();
+			}
+			_ => (),
+		}
+		Ok(())
+	}
 }
 
 struct JsonPath<'a>(Vec<JsonPathComponent<'a>, &'a Arena>);
@@ -647,18 +694,28 @@ pub(crate) fn get_mod_api(mod_api_path: impl AsRef<Path>) -> Result<ModApi> {
 
 pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text: &str) -> Result<ModApi> {
 	let arena = Arena::new();
-	let context: ModApiContext = ModApiContext::new(mod_api_path.as_ref(), mod_api_text, &arena);
+	let mod_api_path = mod_api_path.as_ref();
 
 	let mod_api_json = json::parse(mod_api_text).map_err(|err| {
-		context.new_error(arena.fmt_into(format_args!("{err}")))
+		Error::new(
+			ErrorKind::MOD_API_JSON_ERROR,
+			"",
+			mod_api_path.as_ref(),
+			mod_api_text,
+			SourceSpan{offset: 0, line: 0},
+			format_args!("{err}"),
+		)
 	})?;
+
+	let context = ModApiContext::new(mod_api_path, mod_api_text, &arena);
+
 	let JsonValue::Object(mod_api_root) = mod_api_json else {
 		return Err(context.new_error("is not an object"));
 	};
 
-	// This is needed to get around the drop checker
+	// This is needed to get around the drop check
 	let mut context = context;
-
+	
 	let entities = context.get_key(&mod_api_root, "entities")?;
 	let JsonValue::Object(entities) = entities else {
 		return Err(context.new_error("is not an object"));
@@ -821,6 +878,65 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 	context.pop_path();
 	
 	assert_eq!(0, context.json_path.0.len(), "{}", &context.json_path);
+
+	let mut known_types = Vec::with_capacity_in(entities.len() + classes.len(), &arena);
+	// Collect all entities as types with no generics
+	context.push_path(JsonPathComponent::ObjectKey("entities"));
+	for entity_name in entities.keys() {
+		// Dont need to check for duplicates yet because there can't be any
+		known_types.push((entity_name.as_str(), 0));
+	}
+	context.pop_path();
+
+	context.push_path(JsonPathComponent::ObjectKey("classes"));
+	// Collect all classes and the number of generics they declare
+	for (class_name, class_data) in classes.iter() {
+		context.push_path(JsonPathComponent::ObjectKey(class_name));
+		if known_types.iter().find(|(type_name, _)| *type_name == class_name.as_str()).is_some() {
+			return Err(context.new_error("class name already exists"));
+		}
+		known_types.push((class_name.as_str(), class_data.generics.len()));
+		context.pop_path();
+	}
+
+	let known_types = known_types.leak();
+	// Check every type within each class and its methods to make sure the
+	// number of generics they use is correct
+	for (class_name, class_data) in classes.iter() {
+		context.push_path(JsonPathComponent::ObjectKey(class_name));
+		context.push_path(JsonPathComponent::ObjectKey("methods"));
+		for (method_name, host_fn) in &*class_data.methods {
+			context.push_path(JsonPathComponent::ObjectKey(method_name));
+			context.validate_function(host_fn.parameters, host_fn.return_ty, known_types)?;
+			context.pop_path();
+		}
+		context.pop_path();
+		context.pop_path();
+	}
+	context.pop_path();
+
+	context.push_path(JsonPathComponent::ObjectKey("host_functions"));
+	// Check every type within each host function and make sure the number of
+	// generics they use is correct
+	for (fn_name, host_fn) in host_fns.iter() {
+		context.push_path(JsonPathComponent::ObjectKey(fn_name));
+		context.validate_function(host_fn.parameters, host_fn.return_ty, known_types)?;
+		context.pop_path();
+	}
+	context.pop_path();
+	// Check every type within each entity and its export functions and make
+	// sure the number of generics they use is correct
+	context.push_path(JsonPathComponent::ObjectKey("entities"));
+	for (entity_name, entity) in entities.iter() {
+		context.push_path(JsonPathComponent::ObjectKey(entity_name));
+		for (fn_name, export_fn) in entity.export_fns {
+			context.push_path(JsonPathComponent::ObjectKey(fn_name));
+			context.validate_function(export_fn.parameters, GrugType::Void, known_types)?;
+			context.pop_path();
+		}
+		context.pop_path();
+	}
+	context.pop_path();
 	drop(context);
 
 	Ok(ModApi{
