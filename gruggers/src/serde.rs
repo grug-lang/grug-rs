@@ -350,7 +350,6 @@ mod de {
 		GlobalStatementNotObject,
 		GlobalStatementKindNotString,
 		GlobalVariableNameNotString,
-		GlobalVariableTypeNotString,
 		ExpressionNotObject,
 		ExpressionKindNotString,
 		LiteralExpressionValueNotString,
@@ -363,18 +362,18 @@ mod de {
 		ParametersNotArray,
 		ParameterNotObject,
 		ParameterNameNotString,
-		ParameterTypeNotString,
 		StatementsNotArray,
 		StatementNotObject,
 		StatementKindNotString,
 		LocalVariableNameNotString,
-		LocalVariableTypeNotString,
 		ElseBlockNotArray,
 		CommentValueNotString,
 		HelperFunctionNameNotString,
-		HelperFunctionReturnTypeNotString,
 		InvalidGlobalStatementType,
 		UnrecognizedOperator,
+		TypeNotObject,
+		TypeNameNotString,
+		GenericsNotArray,
 	}
 
 	pub fn json_to_text(input: &JsonValue) -> Result<String, JsonDeserializeError> {
@@ -404,11 +403,9 @@ mod de {
 					output.push_str(name);
 					output.push_str(": ");
 
-					let Some(ty) = get_object_field(global_statement, "variable_type", "GLOBAL_VARIABLE")?.as_str() else {
-						return Err(JsonDeserializeError::GlobalVariableTypeNotString)
-					};
+					let ty = get_object_field(global_statement, "variable_type", "GLOBAL_VARIABLE")?;
 
-					output.push_str(ty);
+					apply_type(ty, output)?;
 					output.push_str(" = ");
 
 					let assignment_expr = get_object_field(global_statement, "assignment", "GLOBAL_VARIABLE")?;
@@ -444,10 +441,8 @@ mod de {
 					output.push_str(") ");
 
 					if let Ok(ty) = get_object_field(global_statement, "return_type", "GLOBAL_HELPER_FN") {
-						let Some(ty) = ty.as_str() else {
-							return Err(JsonDeserializeError::HelperFunctionReturnTypeNotString);
-						};
-						output.push_str(ty);
+						apply_type(ty, output)?;
+						
 						output.push_str(" ");
 					}
 					let body_statements = get_object_field(global_statement, "statements", "GLOBAL_HELPER_FN")?;
@@ -484,12 +479,10 @@ mod de {
 			let Some(name) = get_object_field(parameter, "name", "argument")?.as_str() else {
 				return Err(JsonDeserializeError::ParameterNameNotString)
 			};
-			let Some(ty) = get_object_field(parameter, "type", "argument")?.as_str() else {
-				return Err(JsonDeserializeError::ParameterTypeNotString)
-			};
+			let ty = get_object_field(parameter, "type", "argument")?;
 			output.push_str(name);
 			output.push_str(": ");
-			output.push_str(ty);
+			apply_type(ty, output)?;
 			if i < parameters.len() - 1 {
 				output.push_str(", ");
 			}
@@ -519,11 +512,8 @@ mod de {
 					output.push_str(name);
 
 					if let Ok(ty) = get_object_field(statement, "variable_type", "VARIABLE_STATEMENT") {
-						let Some(ty) = ty.as_str() else {
-							return Err(JsonDeserializeError::LocalVariableTypeNotString);
-						};
 						output.push_str(": ");
-						output.push_str(ty);
+						apply_type(ty, output)?;
 					}
 
 					output.push_str(" = ");
@@ -632,6 +622,30 @@ mod de {
 		}
 		apply_indentation(indentation - 1, output);
 		output.push_str("}");
+		Ok(())
+	}
+
+	fn apply_type(ty: &JsonValue, output: &mut String) -> Result<(), JsonDeserializeError> {
+		let JsonValue::Object(ty) = ty else {
+			return Err(JsonDeserializeError::TypeNotObject)
+		};
+		let Some(name) = get_object_field(ty, "name", "type")?.as_str() else {
+			return Err(JsonDeserializeError::TypeNameNotString);
+		};
+		output.push_str(name);
+		if let Ok(generics) = get_object_field(ty, "generics", "type") {
+			output.push_str("[");
+			let JsonValue::Array(generics) = generics else {
+				return Err(JsonDeserializeError::GenericsNotArray);
+			};
+			for (i, generic) in generics.iter().enumerate() {
+				apply_type(generic, output)?;
+				if i != generics.len() - 1 {
+					output.push_str(", ");
+				}
+			}
+			output.push_str("]");
+		}
 		Ok(())
 	}
 

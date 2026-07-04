@@ -1019,11 +1019,15 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			// If argument is resource
 			if let GrugType::Resource{extension} = param.ty 
 				&& let ExprData::Resource(ref mut value) = arg.data {
-				*value = self.validate_and_fix_resource_string(value.to_str(), extension.to_str(), arg.span, arena)?.as_ntstrptr();
+				if let Some(_) = substitutions {
+					*value = self.validate_and_fix_resource_string(value.to_str(), extension.to_str(), arg.span, arena)?.as_ntstrptr();
+				}
 			// If argument is entity
 			} else if let GrugType::Entity{entity_type: _} = param.ty 
 				&& let ExprData::Entity(ref mut value) = arg.data {
-				self.validate_and_fix_entity_string(value, arg.span, arena)?;
+				if let Some(_) = substitutions {
+					self.validate_and_fix_entity_string(value, arg.span, arena)?;
+				}
 			// argument is a literal string but resource is expected
 			} else if let GrugType::Resource{..} = param.ty 
 				&& let ExprData::String(string) = arg.data {

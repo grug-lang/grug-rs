@@ -29,6 +29,7 @@ pub use gruggers_core::ntstring;
 pub use gruggers_core::nt;
 
 
+// TODO: Replace custom errors in serde.rs with Error
 // TODO: Remove Grug prefix in types.rs
 // TODO: Rename GameFnPtr to HostFn
 // TODO: (WIP) Add #[track_caller] to error functions for tracing
