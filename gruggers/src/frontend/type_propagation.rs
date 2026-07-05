@@ -686,6 +686,17 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			} => {
 				let result_0 = self.fill_expr(ty_ctx, substitutions, left, arena)?;
 				let result_1 = self.fill_expr(ty_ctx, substitutions, right, arena)?;
+				ty_ctx.add_constraint(*op_span, result_0, result_1).map_err(|err| match err {
+					TypeInferenceError::Error(err) => err,
+					TypeInferenceError::Mismatch(mismatch) => self.new_error(
+						mismatch.span,
+						format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, mismatch.diff, mismatch.diff.swapped())
+					)
+				})?;
+				// If the types are strings, we want to find out here
+				let result_0 = if let Some(ty) = ty_ctx.get_current_type(result_0) {ty} else {result_0};
+				let result_1 = if let Some(ty) = ty_ctx.get_current_type(result_1) {ty} else {result_1};
+
 				match (&result_0, &result_1, *op) {
 					(GrugType::String, GrugType::String, BinaryOperator::DoubleEquals) | 
 					(GrugType::String, GrugType::String, BinaryOperator::NotEquals) => (),
@@ -703,13 +714,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					},
 					_ => (),
 				}
-				ty_ctx.add_constraint(*op_span, result_0, result_1).map_err(|err| match err {
-					TypeInferenceError::Error(err) => err,
-					TypeInferenceError::Mismatch(mismatch) => self.new_error(
-						mismatch.span,
-						format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, mismatch.diff, mismatch.diff.swapped())
-					)
-				})?;
 
 				let (expected_type, result_type) = match op {
 					BinaryOperator::Or | BinaryOperator::And => (GrugType::Bool, GrugType::Bool),
@@ -779,13 +783,9 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					// Try to get the best return type the first time through
 					for generic in generics.iter_mut() {
 						// replace any existential in the generics with its current best type
-						match generic {
-							GrugType::Existential{idx} => {
-								if let Some(better_type) = ty_ctx.get_current_type(*idx) {
-									*generic = better_type;
-								}
-							}
-							_ => (),
+						
+						if let Some(better_type) = ty_ctx.get_current_type(*generic) {
+							*generic = better_type;
 						}
 					}
 
@@ -869,22 +869,15 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					_ => (),
 				};
 				let receiver_type = self.fill_expr(ty_ctx, substitutions, receiver, arena)?;
+				let receiver_type = if let Some(ty) = ty_ctx.get_current_type(receiver_type) {ty} else {
+					return Err(self.new_error(
+						receiver.span,
+						format_args!("Unable to infer type of method receiver"),
+					));
+				};
+				
 				let receiver_name = match receiver_type {
 					GrugType::Id{name, ..} => name.to_str(),
-					GrugType::Existential{idx} => {
-						let ty = ty_ctx.get_current_type(idx);
-						match ty {
-							Some(GrugType::Id{name, ..}) => name.to_str(),
-							None => return Err(self.new_error(
-								receiver.span,
-								format_args!("Unable to infer type of method receiver"),
-							)),
-							Some(ty) => return Err(self.new_error(
-								receiver.span,
-								format_args!("Cannot call method on '{}' type", ty)
-							)),
-						}
-					}
 					ty => return Err(self.new_error(
 						receiver.span,
 						format_args!("Cannot call method on '{}' type", ty)
@@ -940,13 +933,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				// Try to get the best return type the first time through
 				for generic in generics.iter_mut() {
 					// replace any existential in the generics with its current best type
-					match generic {
-						GrugType::Existential{idx} => {
-							if let Some(better_type) = ty_ctx.get_current_type(*idx) {
-								*generic = better_type;
-							}
-						}
-						_ => (),
+					if let Some(better_type) = ty_ctx.get_current_type(*generic) {
+						*generic = better_type;
 					}
 				}
 
@@ -1299,7 +1287,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 	}
 
 	// Returns the first currently known replacement type for an existential
-	fn get_current_type(&self, idx: usize) -> Option<GrugType<'a>> {
+	fn get_current_type(&self, ty: GrugType<'a>) -> Option<GrugType<'a>> {
 		fn get_current_type_inner<'a>(substitutions: &[GrugType<'a>], stack: StackLL<usize>) -> Option<GrugType<'a>> {
 			match substitutions[stack.current] {
 				GrugType::Existential{idx} => {
@@ -1315,7 +1303,10 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 				ty => Some(ty)
 			}
 		}
-		get_current_type_inner(&self.substitutions, StackLL{current: idx, parent: None})
+		match ty {
+			GrugType::Existential{idx} => get_current_type_inner(&self.substitutions, StackLL{current: idx, parent: None}),
+			_ => Some(ty)
+		}
 	}
 
 	fn create_existential(&mut self, name: &'a str) -> GrugType<'static> {

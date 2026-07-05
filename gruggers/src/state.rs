@@ -487,29 +487,55 @@ impl GrugState {
 	pub fn all_host_fns_registered(&self) -> Result<(), Error> {
 		// Check all normal host functions
 		for (host_fn_name, host_fn) in self.mod_api.host_fns() {
-			if let None = host_fn.fn_ptr {
-				return Err(Error::new(
-					ErrorKind::INIT_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("host function '{host_fn_name}' has not been registered"),
-				));
-			}
-		}
-		// check all methods
-		for (class_name, class) in self.mod_api.classes() {
-			for (method_name, method) in &*class.methods {
-				if let None = method.fn_ptr {
+			if host_fn.generics.is_empty() {
+				if let None = host_fn.fn_ptr {
 					return Err(Error::new(
 						ErrorKind::INIT_ERROR,
 						"",
 						"".as_ref(),
 						"",
 						SourceSpan{offset: 0, line: 0},
-						format_args!("method '{method_name}' in class '{class_name}' has not been registered"),
+						format_args!("host function '{host_fn_name}' has not been registered"),
 					));
+				}
+			} else {
+				if let None = host_fn.registerer {
+					return Err(Error::new(
+						ErrorKind::INIT_ERROR,
+						"",
+						"".as_ref(),
+						"",
+						SourceSpan{offset: 0, line: 0},
+						format_args!("generic host function '{host_fn_name}' has not been registered"),
+					));
+				}
+			}
+		}
+		// check all methods
+		for (class_name, class) in self.mod_api.classes() {
+			for (method_name, method) in &*class.methods {
+				if method.generics.is_empty() {
+					if let None = method.fn_ptr {
+						return Err(Error::new(
+							ErrorKind::INIT_ERROR,
+							"",
+							"".as_ref(),
+							"",
+							SourceSpan{offset: 0, line: 0},
+							format_args!("method '{method_name}' in class '{class_name}' has not been registered"),
+						));
+					}
+				} else {
+					if let None = method.registerer {
+						return Err(Error::new(
+							ErrorKind::INIT_ERROR,
+							"",
+							"".as_ref(),
+							"",
+							SourceSpan{offset: 0, line: 0},
+							format_args!("generic method '{method_name}' in class '{class_name}' has not been registered"),
+						));
+					}
 				}
 			}
 		}

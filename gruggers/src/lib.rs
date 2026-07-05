@@ -29,6 +29,7 @@ pub use gruggers_core::ntstring;
 pub use gruggers_core::nt;
 
 
+// TODO: rename "arguments" to "parameters" in mod_api
 // TODO: Mod api should throw if type is not declared in classes.
 // 			- Prevents ambiguity when entity and class have same name
 // 			- This error message should be more clear

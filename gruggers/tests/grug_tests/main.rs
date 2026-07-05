@@ -236,7 +236,8 @@ mod test_bindings {
 use test_bindings::*;
 
 mod game_fn_bindings {
-	use gruggers::types::GrugValue;
+	use gruggers::types::{GrugValue, GameFnPtrState};
+	use gruggers::ast::GrugType;
 	use gruggers::state::GrugState;
 	use gruggers::error::Error;
 	#[link(name = "tests", kind="dylib")]
@@ -286,6 +287,17 @@ mod game_fn_bindings {
         safe fn game_fn_vec_number_push         <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_vec_number_pop          <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
         safe fn game_fn_vec_number_insert       <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
+
+		safe fn reg_game_fn_vec_new                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
+		safe fn reg_game_fn_vec_push                (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
+		safe fn reg_game_fn_vec_pop                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
+		safe fn reg_game_fn_vec_insert              (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
+
+		safe fn reg_game_fn_box                     (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
+		safe fn reg_game_fn_box_get                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
+		safe fn reg_game_fn_box_set                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
+		
+		safe fn reg_game_fn_default                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
 	}
 	pub fn register_game_functions(state: &mut GrugState) -> Result<(), Error> { unsafe {
 		state.register_host_fn("nothing",                  game_fn_nothing             )?; 
@@ -332,6 +344,17 @@ mod game_fn_bindings {
 		state.register_method("VecNumber", "push",   game_fn_vec_number_push     )?; 
 		state.register_method("VecNumber", "pop",    game_fn_vec_number_pop      )?; 
 		state.register_method("VecNumber", "insert", game_fn_vec_number_insert   )?; 
+
+		state.register_generic_fn("vec", reg_game_fn_vec_new)?;
+		state.register_generic_method("Vec", "push"  , reg_game_fn_vec_push  )?; 
+		state.register_generic_method("Vec", "pop"   , reg_game_fn_vec_pop   )?; 
+		state.register_generic_method("Vec", "insert", reg_game_fn_vec_insert)?; 
+
+		state.register_generic_fn("box", reg_game_fn_box)?;
+		state.register_generic_method("Box", "get"   , reg_game_fn_box_set   )?; 
+		state.register_generic_method("Box", "set"   , reg_game_fn_box_get   )?; 
+
+		state.register_generic_fn("default", reg_game_fn_default   )?; 
 		Ok(())
 	}}
 }

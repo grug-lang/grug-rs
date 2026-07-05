@@ -250,6 +250,27 @@
 					}
 				}
 			]
+		},
+		"ref": {
+			"used_generics": [
+				"$T"
+			],
+			"return_type": {
+				"name": "Ref",
+				"generics": [
+					{
+						"name": "$T"
+					}
+				]
+			},
+			"parameters": [
+				{
+					"name": "item",
+					"type": {
+						"name": "$T"
+					}
+				}
+			]
 		}
 	}
 }
