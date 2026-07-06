@@ -1004,27 +1004,29 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		}
 		for (param, arg) in signature.iter().zip(arguments) {
 			let arg_result_ty = self.fill_expr(ty_ctx, substitutions, arg, arena)?;
+			let arg_result_ty = if let Some(ty) = ty_ctx.get_current_type(arg_result_ty) {ty} else {arg_result_ty};
+			let param_ty = if let Some(ty) = ty_ctx.get_current_type(param.ty) {ty} else {param.ty};
 			// If argument is resource
-			if let GrugType::Resource{extension} = param.ty 
+			if let GrugType::Resource{extension} = param_ty 
 				&& let ExprData::Resource(ref mut value) = arg.data {
 				if let Some(_) = substitutions {
 					*value = self.validate_and_fix_resource_string(value.to_str(), extension.to_str(), arg.span, arena)?.as_ntstrptr();
 				}
 			// If argument is entity
-			} else if let GrugType::Entity{entity_type: _} = param.ty 
+			} else if let GrugType::Entity{entity_type: _} = param_ty 
 				&& let ExprData::Entity(ref mut value) = arg.data {
 				if let Some(_) = substitutions {
 					self.validate_and_fix_entity_string(value, arg.span, arena)?;
 				}
 			// argument is a literal string but resource is expected
-			} else if let GrugType::Resource{..} = param.ty 
+			} else if let GrugType::Resource{..} = param_ty 
 				&& let ExprData::String(string) = arg.data {
 				return Err(self.new_error(
 					arg.span,
 					format_args!("The host function '{}' expects a resource string, so put an 'r' in front of string \"{}\"", function_name, string)
 				));
 			// argument is a literal string but entity is expected
-			} else if let GrugType::Entity{..} = param.ty 
+			} else if let GrugType::Entity{..} = param_ty 
 				&& let ExprData::String(string) = arg.data {
 				return Err(self.new_error(
 					arg.span,
@@ -1034,11 +1036,11 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			} else if &arg_result_ty == &GrugType::Void {
 				return Err(self.new_error(
 					arg.span,
-					format_args!("Function call '{}' expected the type {} for argument '{}', but got a function call that doesn't return anything", function_name, param.ty, param.name)
+					format_args!("Function call '{}' expected the type {} for argument '{}', but got a function call that doesn't return anything", function_name, param_ty, param.name)
 				));
 			// If the shape of the argument type matches the shape of the expected parameter including generics
-			} else if arg_result_ty.matches(&param.ty) {
-				ty_ctx.add_constraint(arg.span, param.ty, arg_result_ty).map_err(|err| match err {
+			} else if arg_result_ty.matches(&param_ty) {
+				ty_ctx.add_constraint(arg.span, param_ty, arg_result_ty).map_err(|err| match err {
 					TypeInferenceError::Error(err) => err,
 					TypeInferenceError::Mismatch(mismatch) => self.new_error(
 						mismatch.span,
@@ -1047,9 +1049,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				})?;
 			// mismatch
 			} else {
+				let type_diff = TypeDiff::new(param_ty, arg_result_ty);
 				return Err(self.new_error(
 					arg.span,
-					format_args!("Function call '{}' expected the type {} for argument '{}', but got {}", function_name, param.ty, param.name, arg_result_ty)
+					format_args!("Function call '{}' expected the type {} for argument '{}', but got {}", function_name, type_diff, param.name, type_diff.swapped())
 				));
 			}
 		}
@@ -1360,6 +1363,8 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 					// self.occurs_in(StackLL{current: idx, parent: None}, other)?;
 					let old_substitution = self.substitutions[idx];
 					self.substitutions[idx] = other;
+					// Return just a type mismatch here, but there needs to be
+					// a way to unify the outer type with the inner type
 					self.add_constraint(err_span, other, old_substitution).map_err(|err| match err {
 						TypeInferenceError::Error(err) => err,
 						TypeInferenceError::Mismatch(mismatch) => self.new_error(
@@ -1413,6 +1418,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 
 	fn substitute<'arena>(&mut self, arena: &'arena Arena) -> &'arena [GrugType<'arena>] {
 		// Copy all types into the permanent arena
+		// TODO: Handle inference failure gracefully
 		arena.slice_from_iter(self.substitutions.iter().enumerate().map(|(i, ty)| {
 			self.copy_type_into(*ty, StackLL{current: i, parent: None}, arena)
 		}))

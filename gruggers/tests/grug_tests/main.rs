@@ -298,6 +298,10 @@ mod game_fn_bindings {
 		safe fn reg_game_fn_box_set                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
 		
 		safe fn reg_game_fn_default                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
+
+		safe fn reg_game_fn_dict                    (types: &[GrugType;2]) -> Option<GameFnPtrState<GrugState>>;
+		safe fn reg_game_fn_dict_from_vec          (types: &[GrugType;2]) -> Option<GameFnPtrState<GrugState>>;
+		safe fn reg_game_fn_dict_put                (types: &[GrugType;2]) -> Option<GameFnPtrState<GrugState>>;
 	}
 	pub fn register_game_functions(state: &mut GrugState) -> Result<(), Error> { unsafe {
 		state.register_host_fn("nothing",                  game_fn_nothing             )?; 
@@ -354,7 +358,11 @@ mod game_fn_bindings {
 		state.register_generic_method("Box", "get"   , reg_game_fn_box_set   )?; 
 		state.register_generic_method("Box", "set"   , reg_game_fn_box_get   )?; 
 
-		state.register_generic_fn("default", reg_game_fn_default   )?; 
+		state.register_generic_fn("default", reg_game_fn_default)?; 
+
+		state.register_generic_fn("dict", reg_game_fn_dict)?; 
+		state.register_generic_fn("dict_from_vec", reg_game_fn_dict_from_vec)?; 
+		state.register_generic_method("Dict", "put"   , reg_game_fn_dict_put )?; 
 		Ok(())
 	}}
 }
