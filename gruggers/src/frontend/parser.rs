@@ -189,20 +189,17 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				consume_space(&mut tokens)?;
 
 				let (global_type, global_type_span) = parser.parse_type(&mut tokens, arena)?;
-				match global_type {
-					GrugType::Resource{..} => {
-						return parser.new_error(
-							global_type_span,
-							format_args!("The global variable '{}' can't have 'resource' as its type", global_name)
-						);
-					},
-					GrugType::Entity{..} => {
-						return parser.new_error(
-							global_type_span,
-							format_args!("The global variable '{}' can't have 'entity' as its type", global_name)
-						);
-					},
-					_ => (),
+				if type_contains_resource(global_type) {
+					return parser.new_error(
+						global_type_span,
+						format_args!("The global variable '{}' can't contain 'resource' in its type", global_name)
+					);
+				}
+				if type_contains_entity(global_type) {
+					return parser.new_error(
+						global_type_span,
+						format_args!("The global variable '{}' can't contain 'entity' in its type", global_name)
+					);
 				}
 
 				// TODO: I think this will error on this line
@@ -341,20 +338,17 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				let (return_type, return_type_span) = if let Ok([_, _]) = assert_next_token_types(&tokens, &[TokenType::Space, TokenType::Word]) {
 					consume_space(&mut tokens).unwrap();
 					let (return_type, return_type_span) = parser.parse_type(&mut tokens, arena)?;
-					match return_type {
-						GrugType::Resource{..} => {
-							return parser.new_error(
-								return_type_span,
-								format_args!("The function '{}' can't have 'resource' as its return type", fn_name)
-							);
-						},
-						GrugType::Entity{..} => {
-							return parser.new_error(
-								return_type_span,
-								format_args!("The function '{}' can't have 'entity' as its return type", fn_name)
-							);
-						},
-						_ => (),
+					if type_contains_resource(return_type) {
+						return parser.new_error(
+							return_type_span,
+							format_args!("The function '{}' can't contain 'resource' in its return type", fn_name)
+						);
+					}
+					if type_contains_entity(return_type) {
+						return parser.new_error(
+							return_type_span,
+							format_args!("The function '{}' can't contain 'entity' in its return type", fn_name)
+						);
 					}
 					(return_type, return_type_span)
 				} else {
@@ -484,20 +478,17 @@ impl<'a> Parser<'a> {
 
 			let (param_type, type_span) = self.parse_type(tokens, arena)?;
 
-			match param_type {
-				GrugType::Resource{..} => {
-					return self.new_error(
-						type_span,
-						format_args!("The argument '{}' can't have 'resource' as its type", arg_name)
-					);
-				},
-				GrugType::Entity{..} => {
-					return self.new_error(
-						type_span,
-						format_args!("The argument '{}' can't have 'entity' as its type", arg_name)
-					);
-				},
-				_ => (),
+			if type_contains_resource(param_type) {
+				return self.new_error(
+					type_span,
+					format_args!("The argument '{}' can't contain 'resource' in its type", arg_name)
+				);
+			}
+			if type_contains_entity(param_type) {
+				return self.new_error(
+					type_span,
+					format_args!("The argument '{}' can't contain 'entity' in its type", arg_name)
+				);
 			}
 			arguments.push(Parameter{
 				name: Box::leak(NTStr::box_from_str_in(arg_name, arena)).as_ntstrptr(),
@@ -718,20 +709,17 @@ impl<'a> Parser<'a> {
 			consume_space(tokens)?;
 			let (ty, type_span) = self.parse_type(tokens, arena)?;
 
-			match ty {
-				GrugType::Resource{..} => {
-					return self.new_error(
-						type_span,
-						format_args!("The variable '{}' can't have 'resource' as its type", local_name)
-					);
-				},
-				GrugType::Entity{..} => {
-					return self.new_error(
-						type_span,
-						format_args!("The variable '{}' can't have 'entity' as its type", local_name)
-					);
-				},
-				_ => (),
+			if type_contains_resource(ty) {
+				return self.new_error(
+					type_span,
+					format_args!("The variable '{}' can't contain 'resource' in its type", local_name)
+				);
+			}
+			if type_contains_entity(ty) {
+				return self.new_error(
+					type_span,
+					format_args!("The variable '{}' can't contain 'entity' in its type", local_name)
+				);
 			}
 			(Some(ty), type_span)
 		} else {
@@ -1118,6 +1106,26 @@ impl<'a> Parser<'a> {
 				}
 			}
 		}, type_token.span))
+	}
+}
+
+fn type_contains_resource(ty: GrugType) -> bool {
+	match ty {
+		GrugType::Resource{..} => true,
+		GrugType::Id{generics, name: _} => {
+			generics.iter().copied().any(type_contains_resource)
+		}
+		_ => false,
+	}
+}
+
+fn type_contains_entity(ty: GrugType) -> bool {
+	match ty {
+		GrugType::Entity{..} => true,
+		GrugType::Id{generics, name: _} => {
+			generics.iter().copied().any(type_contains_entity)
+		}
+		_ => false,
 	}
 }
 
