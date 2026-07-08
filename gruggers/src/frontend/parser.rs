@@ -172,7 +172,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 		while let Ok(token) = peek_next_token(&tokens) {
 			if let Ok([name_token, _]) = consume_next_token_types(&mut tokens, &[TokenType::Word, TokenType::Colon]) {
 				if seen_on_fn {
-					return parser.new_parse_error(
+					return parser.new_error(
 						name_token.span,
 						format_args!("Cannot declare member variables after on_ functions")
 					);
@@ -181,7 +181,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				let global_name = name_token.value; 
 
 				if global_name == "me" {
-					return parser.new_parse_error(
+					return parser.new_error(
 						name_token.span,
 						format_args!("variable cannot be named 'me'")
 					);
@@ -191,13 +191,13 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				let (global_type, global_type_span) = parser.parse_type(&mut tokens, arena)?;
 				match global_type {
 					GrugType::Resource{..} => {
-						return parser.new_parse_error(
+						return parser.new_error(
 							global_type_span,
 							format_args!("The global variable '{}' can't have 'resource' as its type", global_name)
 						);
 					},
 					GrugType::Entity{..} => {
-						return parser.new_parse_error(
+						return parser.new_error(
 							global_type_span,
 							format_args!("The global variable '{}' can't have 'entity' as its type", global_name)
 						);
@@ -211,7 +211,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				// The error message is not going to be helpful in that case
 				match get_next_token(&mut tokens)? {
 					Token{ty: TokenType::Space, ..} => (),
-					Token{span, ..} => return parser.new_parse_error(
+					Token{span, ..} => return parser.new_error(
 						*span,
 						format_args!("The global variable '{}' was not assigned a value", global_name)
 					),
@@ -242,7 +242,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				
 				// expect newline after each item
 				if newline_required {
-					return parser.new_parse_error(
+					return parser.new_error(
 						name_token.span,
 						format_args!("Expected an empty line")
 					);
@@ -252,7 +252,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 
 				// Cannot have global function after helper function
 				if seen_helper_fn {
-					return parser.new_parse_error(
+					return parser.new_error(
 						name_token.span,
 						format_args!("{}() must be defined before all local functions", fn_name)
 					);
@@ -269,7 +269,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				let body_statements = parser.parse_statements(&mut tokens, 0, 1, arena)?;
 
 				if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
-					return parser.new_parse_error(
+					return parser.new_error(
 						name_token.span,
 						format_args!("{}() can't be empty", fn_name),
 					);
@@ -283,7 +283,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				};
 
 				if parser.export_fn_signatures.iter().any(|(name, _)| *name == fn_name) {
-					return parser.new_parse_error(
+					return parser.new_error(
 						name_token.span,
 						format_args!("The function '{}' was defined several times in the same file", fn_name),
 					);
@@ -305,7 +305,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
 				if !name_token.value.starts_with("_") {
 					parser.current_function = name_token.value;
-					return parser.new_parse_error(
+					return parser.new_error(
 						name_token.span,
 						format_args!("Local function name must begin with '_'")
 					);
@@ -313,7 +313,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				let fn_name = name_token.value;
 				// expect newline after each item
 				if newline_required {
-					return parser.new_parse_error(
+					return parser.new_error(
 						name_token.span,
 						format_args!("Expected an empty line")
 					);
@@ -322,7 +322,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				parser.current_function = fn_name;
 
 				if !parser.called_local_functions.contains(&fn_name) {
-					return parser.new_parse_error(
+					return parser.new_error(
 						name_token.span,
 						format_args!("{}() is defined before the first time it gets called", fn_name)
 					);
@@ -343,13 +343,13 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 					let (return_type, return_type_span) = parser.parse_type(&mut tokens, arena)?;
 					match return_type {
 						GrugType::Resource{..} => {
-							return parser.new_parse_error(
+							return parser.new_error(
 								return_type_span,
 								format_args!("The function '{}' can't have 'resource' as its return type", fn_name)
 							);
 						},
 						GrugType::Entity{..} => {
-							return parser.new_parse_error(
+							return parser.new_error(
 								return_type_span,
 								format_args!("The function '{}' can't have 'entity' as its return type", fn_name)
 							);
@@ -364,7 +364,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				let body_statements = parser.parse_statements(&mut tokens, 0, 1, arena)?;
 
 				if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
-					return parser.new_parse_error(
+					return parser.new_error(
 						name_token.span,
 						format_args!("{}() can't be empty", fn_name),
 					);
@@ -382,7 +382,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				seen_helper_fn = true;
 
 				if parser.local_fn_signatures.iter().any(|(name, _)| *name == fn_name) {
-					return parser.new_parse_error(
+					return parser.new_error(
 						name_token.span,
 						format_args!("The function '{}' was defined several times in the same file", fn_name),
 					);
@@ -399,7 +399,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
 			} else if let Ok([token]) = consume_next_token_types(&mut tokens, &[TokenType::NewLine]) {
 				if !newline_allowed {
-					return parser.new_parse_error(
+					return parser.new_error(
 						token.span,
 						format_args!("Unexpected empty line")
 					);
@@ -429,7 +429,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 		if !newline_allowed && newline_seen {
 			// a newline has been seen so the line number will be incremented by one
 			// but we want the line number of the previous line
-			return parser.new_parse_error(
+			return parser.new_error(
 				last_newline_token_span,
 				format_args!("Unexpected empty line")
 			);
@@ -462,7 +462,7 @@ impl<'a> Parser<'a> {
 
 	#[track_caller]
 	#[inline]
-	fn new_parse_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, ParserError<'static>> {
+	fn new_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, ParserError<'static>> {
 		Err(ParserError::GrugError(Error::new(
 			ErrorKind::PARSER_ERROR,
 			self.current_function,
@@ -486,13 +486,13 @@ impl<'a> Parser<'a> {
 
 			match param_type {
 				GrugType::Resource{..} => {
-					return self.new_parse_error(
+					return self.new_error(
 						type_span,
 						format_args!("The argument '{}' can't have 'resource' as its type", arg_name)
 					);
 				},
 				GrugType::Entity{..} => {
-					return self.new_parse_error(
+					return self.new_error(
 						type_span,
 						format_args!("The argument '{}' can't have 'entity' as its type", arg_name)
 					);
@@ -527,14 +527,14 @@ impl<'a> Parser<'a> {
 		while !is_end_of_block(tokens, indentation)? {
 			// newlines
 			if let Ok([indentation_token, _]) = consume_next_token_types(tokens, &[TokenType::Indentation, TokenType::NewLine]) {
-				return self.new_parse_error(
+				return self.new_error(
 					indentation_token.span,
 					format_args!("Empty line cannot have indentation")
 				);
 			} else if let Ok([token]) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
 				last_new_line = *token;
 				if !newline_allowed {
-					return self.new_parse_error(
+					return self.new_error(
 						token.span,
 						format_args!("Unexpected empty line")
 					);
@@ -557,7 +557,7 @@ impl<'a> Parser<'a> {
 		if !newline_allowed && newline_seen {
 			// a newline has been seen so the line number will be incremented by one
 			// but we want the line number of the previous line
-			return self.new_parse_error(
+			return self.new_error(
 				last_new_line.span,
 				format_args!("Unexpected empty line")
 			);
@@ -584,7 +584,7 @@ impl<'a> Parser<'a> {
 						self.parse_local_variable(tokens, parsing_depth + 1, arena)
 					}
 					_ => {
-						self.new_parse_error(
+						self.new_error(
 							next_tokens[1].span,
 							format_args!("Expected '(', or ':', or ' =' after the word '{}' on line {}", next_tokens[0].value, next_tokens[0].span.line),
 						)
@@ -694,7 +694,7 @@ impl<'a> Parser<'a> {
 				})
 			}
 			got_token => {
-				self.new_parse_error(
+				self.new_error(
 					next_tokens[0].span,
 					format_args!("Expected a statement token, but got {} on line {}", got_token, next_tokens[0].span.line)
 				)
@@ -710,7 +710,7 @@ impl<'a> Parser<'a> {
 
 		let (ty, type_span) = if consume_next_token_types(tokens, &[TokenType::Colon]).is_ok() {
 			if local_name == "me" {
-				return self.new_parse_error(
+				return self.new_error(
 					name_token.span,
 					format_args!("variable cannot be named 'me'"),
 				);
@@ -720,13 +720,13 @@ impl<'a> Parser<'a> {
 
 			match ty {
 				GrugType::Resource{..} => {
-					return self.new_parse_error(
+					return self.new_error(
 						type_span,
 						format_args!("The variable '{}' can't have 'resource' as its type", local_name)
 					);
 				},
 				GrugType::Entity{..} => {
-					return self.new_parse_error(
+					return self.new_error(
 						type_span,
 						format_args!("The variable '{}' can't have 'entity' as its type", local_name)
 					);
@@ -741,14 +741,14 @@ impl<'a> Parser<'a> {
 		// to be different to match the required error message
 		match get_next_token(tokens)? {
 			Token{ty: TokenType::Space, ..} => (),
-			Token{span, ..} => return self.new_parse_error(
+			Token{span, ..} => return self.new_error(
 				*span,
 				format_args!("Variable '{}' was not assigned a value", local_name)
 			),
 		}
 
 		if local_name == "me" {
-			return self.new_parse_error(
+			return self.new_error(
 				name_token.span,
 				// TODO: "Cannot assign to 'me'"
 				format_args!("Assigning a new value to the entity's 'me' variable is not allowed"),
@@ -885,13 +885,13 @@ impl<'a> Parser<'a> {
 				TokenType::Float32 => {
 					let number = value.parse::<f64>().unwrap();
 					if number > f64::MAX {
-						return self.new_parse_error(
+						return self.new_error(
 							*span,
 							format_args!("The number {} is too big", value)
 						);
 					} else if (number != 0. && number < f64::MIN_POSITIVE) 
 						   || (number == 0. && value.contains(['1', '2', '3', '4', '5', '6', '7', '8', '9'])) {
-						return self.new_parse_error(
+						return self.new_error(
 							*span,
 							format_args!("The number {} is too close to zero", value)
 						);
@@ -925,7 +925,7 @@ impl<'a> Parser<'a> {
 					}
 				}
 				_ =>  {
-					return self.new_parse_error(
+					return self.new_error(
 						*span,
 						format_args!("Expected a primary expression token but got {}", ty)
 					);
@@ -982,7 +982,7 @@ impl<'a> Parser<'a> {
 					};
 				} else {
 					// Reserved for struct field accesses
-					return self.new_parse_error(
+					return self.new_error(
 						next_token.span,
 						format_args!("Method call expected '('")
 					);
@@ -1082,7 +1082,7 @@ impl<'a> Parser<'a> {
 	fn parse_type(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<(GrugType<'a>, SourceSpan), ParserError<'a>> {
 		let [type_token] = consume_next_token_types(tokens, &[TokenType::Word])?;
 		if type_token.ty != TokenType::Word {
-			return self.new_parse_error(
+			return self.new_error(
 				type_token.span,
 				format_args!("Expected word but got {}", type_token.ty)
 			);
