@@ -109,6 +109,8 @@ impl<'a> GrugType<'a> {
 			(Bool, Bool) => true,
 			(Number, Number) => true,
 			(String, String) => true,
+			(Existential{..}, _) => true,
+			(_, Existential{..}) => true,
 			(Id{name: name_1, generics: generics_1, ..}, Id{name: name_2, generics: generics_2, ..}) => 
 				name_1 == name_2 && generics_1.iter().zip(*generics_2).all(|(x, y)| x.matches(y)),
 			(
@@ -123,8 +125,6 @@ impl<'a> GrugType<'a> {
 			) => ty_1 == ty_2,
 			(Entity{..}, _) => false,
 			(_, Entity{..}) => false,
-			(Existential{..}, _) => true,
-			(_, Existential{..}) => true,
 			_ => false,
 		}
 	}

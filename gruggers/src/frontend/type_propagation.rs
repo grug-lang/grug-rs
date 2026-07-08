@@ -142,9 +142,9 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		let variables = ast.global_statements
 			.iter_mut().filter_map(|st| match st {GlobalStatement::Variable(x) => Some(x), _ => None});
 		for variable in variables {
+			type_propagator.verify_generics(variable.ty, variable.type_span)?;
 			type_propagator.check_global_expr(&variable.assignment_expr, variable.name.to_str())?;
 
-			type_propagator.verify_generics(variable.ty, variable.type_span)?;
 			let result_ty = type_propagator.fill_complete_expr(&mut variable.assignment_expr, Some(variable.ty)).map_err(|err| match err {
 				TypeInferenceError::Error(err) => err,
 				TypeInferenceError::Mismatch(mismatch) => type_propagator.new_error(
@@ -604,7 +604,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		if let Some(expected_type) = expected_type {
 			ty_ctx.add_constraint(expr.span, expected_type, expr_type)?;
 		}
-		let substitutions = ty_ctx.substitute(self.arena);
+		let substitutions = ty_ctx.substitute(self.arena)?;
 		// Clear the typing context for the second pass. 
 		// This time, the type context is only used to keep track of the number
 		// of existentials that have been created
@@ -664,10 +664,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					(UnaryOperator::Minus, GrugType::Existential{idx}) => {
 						ty_ctx.add_constraint(*op_span, GrugType::Number, GrugType::Existential{idx: *idx}).map_err(|err| match err {
 							TypeInferenceError::Error(err) => err,
-							TypeInferenceError::Mismatch(mismatch) => self.new_error(
-								mismatch.span,
-								format_args!("Found '-' before {}, but it can only be put before a number", mismatch.diff.swapped())
-							)
+							TypeInferenceError::Mismatch(mismatch) => {
+								self.new_error(
+									mismatch.span,
+									format_args!("Found '-' before {}, but it can only be put before a number", mismatch.diff.swapped())
+								)
+							}
 						})?;
 					}
 					(UnaryOperator::Minus, got) => return Err(self.new_error(
@@ -759,14 +761,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					// Create the actual types to represent generics
 					let generics = if let Some(substitutions) = substitutions {
 						// for the second time through, replace the existentials as they are created
-						arena.slice_from_iter(host_fn.generics.iter().map(|generic| {
-							let GrugType::Existential{idx} = ty_ctx.create_existential(*generic) else {unreachable!()};
+						arena.slice_from_iter(host_fn.generics.iter().map(|_| {
+							let GrugType::Existential{idx} = ty_ctx.create_existential(name, *name_span) else {unreachable!()};
 							substitutions[idx]
 						}))
 					} else {
 						// The first time through, just create the existentials
-						arena.slice_from_iter(host_fn.generics.iter().map(|generic| {
-							ty_ctx.create_existential(*generic)
+						arena.slice_from_iter(host_fn.generics.iter().map(|_| {
+							ty_ctx.create_existential(name, *name_span)
 						}))
 					};
 
@@ -779,15 +781,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					}));
 					
 					self.fill_arguments(name, ty_ctx, substitutions, *name_span, parameters, args, arena)?;
-
-					// Try to get the best return type the first time through
-					for generic in generics.iter_mut() {
-						// replace any existential in the generics with its current best type
-						
-						if let Some(better_type) = ty_ctx.get_current_type(*generic) {
-							*generic = better_type;
-						}
-					}
 
 					// only fill in the host function pointer the second time
 					// through.
@@ -869,6 +862,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					_ => (),
 				};
 				let receiver_type = self.fill_expr(ty_ctx, substitutions, receiver, arena)?;
+				// We want to at least know the first level of the type is known
 				let receiver_type = if let Some(ty) = ty_ctx.get_current_type(receiver_type) {ty} else {
 					return Err(self.new_error(
 						receiver.span,
@@ -899,14 +893,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				// Create the actual types to represent generics
 				let generics = if let Some(substitutions) = substitutions {
 					// for the second time through, replace the existentials as they are created
-					arena.slice_from_iter(host_fn.generics.iter().map(|generic| {
-						let GrugType::Existential{idx} = ty_ctx.create_existential(*generic) else {unreachable!()};
+					arena.slice_from_iter(host_fn.generics.iter().map(|_| {
+						let GrugType::Existential{idx} = ty_ctx.create_existential(name, *name_span) else {unreachable!()};
 						substitutions[idx]
 					}))
 				} else {
 					// The first time through, just create the existentials
-					arena.slice_from_iter(host_fn.generics.iter().map(|generic| {
-						ty_ctx.create_existential(*generic)
+					arena.slice_from_iter(host_fn.generics.iter().map(|_| {
+						ty_ctx.create_existential(name, *name_span)
 					}))
 				};
 
@@ -929,14 +923,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				})?;
 				
 				self.fill_arguments(name, ty_ctx, substitutions, *name_span, parameters, args, arena)?;
-
-				// Try to get the best return type the first time through
-				for generic in generics.iter_mut() {
-					// replace any existential in the generics with its current best type
-					if let Some(better_type) = ty_ctx.get_current_type(*generic) {
-						*generic = better_type;
-					}
-				}
 
 				// only fill in the host function pointer the second time
 				// through.
@@ -1004,29 +990,27 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		}
 		for (param, arg) in signature.iter().zip(arguments) {
 			let arg_result_ty = self.fill_expr(ty_ctx, substitutions, arg, arena)?;
-			let arg_result_ty = if let Some(ty) = ty_ctx.get_current_type(arg_result_ty) {ty} else {arg_result_ty};
-			let param_ty = if let Some(ty) = ty_ctx.get_current_type(param.ty) {ty} else {param.ty};
 			// If argument is resource
-			if let GrugType::Resource{extension} = param_ty 
+			if let GrugType::Resource{extension} = param.ty 
 				&& let ExprData::Resource(ref mut value) = arg.data {
 				if let Some(_) = substitutions {
 					*value = self.validate_and_fix_resource_string(value.to_str(), extension.to_str(), arg.span, arena)?.as_ntstrptr();
 				}
 			// If argument is entity
-			} else if let GrugType::Entity{entity_type: _} = param_ty 
+			} else if let GrugType::Entity{entity_type: _} = param.ty 
 				&& let ExprData::Entity(ref mut value) = arg.data {
 				if let Some(_) = substitutions {
 					self.validate_and_fix_entity_string(value, arg.span, arena)?;
 				}
 			// argument is a literal string but resource is expected
-			} else if let GrugType::Resource{..} = param_ty 
+			} else if let GrugType::Resource{..} = param.ty 
 				&& let ExprData::String(string) = arg.data {
 				return Err(self.new_error(
 					arg.span,
 					format_args!("The host function '{}' expects a resource string, so put an 'r' in front of string \"{}\"", function_name, string)
 				));
 			// argument is a literal string but entity is expected
-			} else if let GrugType::Entity{..} = param_ty 
+			} else if let GrugType::Entity{..} = param.ty 
 				&& let ExprData::String(string) = arg.data {
 				return Err(self.new_error(
 					arg.span,
@@ -1036,11 +1020,11 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			} else if &arg_result_ty == &GrugType::Void {
 				return Err(self.new_error(
 					arg.span,
-					format_args!("Function call '{}' expected the type {} for argument '{}', but got a function call that doesn't return anything", function_name, param_ty, param.name)
+					format_args!("Function call '{}' expected the type {} for argument '{}', but got a function call that doesn't return anything", function_name, param.ty, param.name)
 				));
 			// If the shape of the argument type matches the shape of the expected parameter including generics
-			} else if arg_result_ty.matches(&param_ty) {
-				ty_ctx.add_constraint(arg.span, param_ty, arg_result_ty).map_err(|err| match err {
+			} else if arg_result_ty.matches(&param.ty) {
+				ty_ctx.add_constraint(arg.span, param.ty, arg_result_ty).map_err(|err| match err {
 					TypeInferenceError::Error(err) => err,
 					TypeInferenceError::Mismatch(mismatch) => self.new_error(
 						mismatch.span,
@@ -1049,7 +1033,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				})?;
 			// mismatch
 			} else {
-				let type_diff = TypeDiff::new(param_ty, arg_result_ty);
+				let type_diff = TypeDiff::new(param.ty, arg_result_ty);
 				return Err(self.new_error(
 					arg.span,
 					format_args!("Function call '{}' expected the type {} for argument '{}', but got {}", function_name, type_diff, param.name, type_diff.swapped())
@@ -1245,6 +1229,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 	}
 }
 
+#[derive(Clone, Copy)]
+struct ExistentialData<'a> {
+	// span of the name of the function that declared the existential
+	function_name_span: SourceSpan,
+	// name of the function that declared the existential
+	function_name: &'a str,
+}
+
 struct TyCtx<'a, 'err> {
 	function_name: &'err str,
 	file_path: &'err OsStr,
@@ -1252,12 +1244,16 @@ struct TyCtx<'a, 'err> {
 	/// The names of each existential that has been created in this context so
 	/// far, The index of the existential refers to the index into these
 	/// vectors that contains the data about that existential
-	existentials: Vec<&'a str, &'a Arena>,
+	existentials: Vec<ExistentialData<'a>,
+		&'a Arena
+	>,
 	/// The current type that the existential at each index should be replaced
 	/// with
 	substitutions: Vec<GrugType<'a>, &'a Arena>,
 	/// A list of constraints that still need to be evaluated
 	constraints: Vec<(GrugType<'a>, GrugType<'a>), &'a Arena>,
+	/// The arena that all data is allocated in while typechecking
+	temp_arena: &'a Arena,
 }
 
 impl<'a, 'err> TyCtx<'a, 'err> {
@@ -1274,6 +1270,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 			existentials: Vec::new_in(temp_arena),
 			substitutions: Vec::new_in(temp_arena),
 			constraints: Vec::new_in(temp_arena),
+			temp_arena,
 		}
 	}
 
@@ -1312,9 +1309,12 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 		}
 	}
 
-	fn create_existential(&mut self, name: &'a str) -> GrugType<'static> {
+	fn create_existential(&mut self, function_name: &'a str, function_name_span: SourceSpan) -> GrugType<'static> {
 		let new_existential = GrugType::Existential { idx: self.existentials.len() };
-		self.existentials.push(name);
+		self.existentials.push(ExistentialData{
+			function_name_span, 
+			function_name,
+		});
 		self.substitutions.push(new_existential);
 		new_existential
 	}
@@ -1322,8 +1322,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 	fn add_constraint(&mut self, err_span: SourceSpan, left: GrugType<'a>, right: GrugType<'a>) -> Result<(), TypeInferenceError<'a>> {
 		self.constraints.push((left, right));
 		// This ensures recursive calls only handle the constraints relevant to them
-		let mut constraints_to_check = 1;
-		while constraints_to_check != 0 && let Some(constraint) = self.constraints.pop() {
+		while let Some(constraint) = self.constraints.pop() {
 			match constraint {
 				(GrugType::Void, GrugType::Void) => (),
 				(GrugType::Bool, GrugType::Bool) => (),
@@ -1342,7 +1341,9 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 				(GrugType::Id{name: left_name, ..}, GrugType::Id{name: right_name, ..}) if left_name != right_name => {
 					return Err(TypeInferenceError::Mismatch(TypeMismatch{
 						span: err_span,
-						diff: TypeDiff::new(left, right)
+						// SAFETY: This is an error case, so we never send this type to the backend
+						// The occurs check also ensures types are never recursive
+						diff: unsafe{TypeDiff::new(self.copy_type_into(left, self.temp_arena), self.copy_type_into(right, self.temp_arena))}
 					}));
 				}
 				// This part is *not* recursive. The error should contain the original types
@@ -1351,7 +1352,6 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 					for (left, right) in left_generics.iter().zip(right_generics) {
 						self.constraints.push((*left, *right));
 					}
-					constraints_to_check += left_generics.len();
 				}
 				// An existential is always equal to it
 				(GrugType::Existential{idx: left_idx}, GrugType::Existential{idx: right_idx}) if left_idx == right_idx => (),
@@ -1362,66 +1362,97 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 					// TODO, recursive `occurs` check
 					// self.occurs_in(StackLL{current: idx, parent: None}, other)?;
 					let old_substitution = self.substitutions[idx];
-					self.substitutions[idx] = other;
+					if let GrugType::Existential{idx: found_idx} = old_substitution && found_idx == idx {
+						self.substitutions[idx] = other;
+					}
 					// Return just a type mismatch here, but there needs to be
 					// a way to unify the outer type with the inner type
-					self.add_constraint(err_span, other, old_substitution).map_err(|err| match err {
-						TypeInferenceError::Error(err) => err,
-						TypeInferenceError::Mismatch(mismatch) => self.new_error(
-							mismatch.span,
-							format_args!("Expected {} but got {}", mismatch.diff, mismatch.diff.swapped())
-						)
-					})?;
+					self.constraints.push((other, old_substitution));
 				}
 				_ => {
 					return Err(TypeInferenceError::Mismatch(TypeMismatch{
 						span: err_span,
-						diff: TypeDiff::new(left, right)
+						diff: unsafe{TypeDiff::new(self.copy_type_into(left, self.temp_arena), self.copy_type_into(right, self.temp_arena))}
 					}));
 				}
 			}
-			constraints_to_check -= 1;
 		}
 		Ok(())
 	}
 
-	fn copy_type_into<'arena>(&self, ty: GrugType<'a>, parent_existentials: StackLL<usize>, arena: &'arena Arena) -> GrugType<'arena> {
+	// # Safety:
+	// If not all types are fully concrete, then the returned type will have
+	// existentials, which should not be passed to the backend
+	//
+	// # Note: 
+	// If there are any non-trivial loops, this will result in a stack overflow
+	unsafe fn copy_type_into<'arena>(&self, ty: GrugType<'a>, arena: &'arena Arena) -> GrugType<'arena> {
 		match ty {
+			GrugType::Resource{extension} => GrugType::Resource{extension: arena.copy_str_into_nt(extension.to_str()).as_ntstrptr()},
+			GrugType::Entity{entity_type: Some(entity_type)} => GrugType::Entity{entity_type: Some(arena.copy_str_into_nt(entity_type.to_str()).as_ntstrptr())},
+			GrugType::Existential{idx} => {
+				if let GrugType::Existential{idx} = self.substitutions[idx]{
+					return GrugType::Existential{idx};
+				}
+				let return_type = unsafe{self.copy_type_into(
+					self.substitutions[idx], 
+					arena
+				)};
+				return_type
+			}
+			GrugType::Id{name, generics} => GrugType::Id{
+				name: arena.copy_str_into_nt(name.to_str()).as_ntstrptr(),
+				generics: arena.slice_from_iter(generics.iter().map(|ty| unsafe{self.copy_type_into(*ty, arena)})),
+			},
 			GrugType::Void => GrugType::Void,
 			GrugType::Bool => GrugType::Bool,
 			GrugType::Number => GrugType::Number,
 			GrugType::String => GrugType::String,
 			GrugType::Entity{entity_type: None} => GrugType::Entity{entity_type: None},
-			GrugType::Resource{extension} => GrugType::Resource{extension: arena.copy_str_into_nt(extension.to_str()).as_ntstrptr()},
-			GrugType::Entity{entity_type: Some(entity_type)} => GrugType::Entity{entity_type: Some(arena.copy_str_into_nt(entity_type.to_str()).as_ntstrptr())},
-			GrugType::Existential{idx} => {
-				let mut current = Some(&parent_existentials);
-				while let Some(cur) = current {
-					if **cur == idx {
-						panic!("Infinitely recursive type found during unification");
-					}
-					current = cur.parent;
-				}
-				let return_type = self.copy_type_into(
-					self.substitutions[idx], 
-					StackLL{current: idx, parent: Some(&parent_existentials)}, 
-					arena
-				);
-				return_type
-			}
-			GrugType::Id{name, generics} => GrugType::Id{
-				name: arena.copy_str_into_nt(name.to_str()).as_ntstrptr(),
-				generics: arena.slice_from_iter(generics.iter().map(|ty| self.copy_type_into(*ty, parent_existentials, arena))),
-			},
 		}
 	}
 
-	fn substitute<'arena>(&mut self, arena: &'arena Arena) -> &'arena [GrugType<'arena>] {
+	fn check_consistency(&self, ty: GrugType, parent_existentials: StackLL<usize>) -> Result<(), Error> {
+		match ty {
+			GrugType::Existential{idx} => {
+				if idx == *parent_existentials {
+					let data = self.existentials[idx];
+					return Err(self.new_error(
+						data.function_name_span,
+						format_args!("unable to infer generics in function `{}`", data.function_name)
+					));
+				}
+				let mut current = Some(&parent_existentials);
+				while let Some(cur) = current {
+					if **cur == idx {
+						let data = self.existentials[idx];
+						return Err(self.new_error(
+							data.function_name_span,
+							format_args!("Infinitely recursive type found during type inference of function `{}`", data.function_name)
+						));
+					}
+					current = cur.parent;
+				}
+				self.check_consistency(self.substitutions[idx], StackLL{current: idx, parent: Some(&parent_existentials)})?;
+			}
+			GrugType::Id{name: _, generics} => for generic in generics {
+				self.check_consistency(*generic, parent_existentials)?
+			}
+			_ => (),
+		}
+		Ok(())
+	}
+
+	fn substitute<'arena>(&mut self, arena: &'arena Arena) -> Result<&'arena [GrugType<'arena>], Error> {
 		// Copy all types into the permanent arena
 		// TODO: Handle inference failure gracefully
-		arena.slice_from_iter(self.substitutions.iter().enumerate().map(|(i, ty)| {
-			self.copy_type_into(*ty, StackLL{current: i, parent: None}, arena)
-		}))
+		for i in 0..self.substitutions.len() {
+			self.check_consistency(self.substitutions[i], StackLL{current: i, parent: None})?;
+		}
+		Ok(arena.slice_from_iter(self.substitutions.iter().map(|ty| {
+			// SAFETY: Consistency check has been performed on all existentials
+			unsafe {self.copy_type_into(*ty, arena)}
+		})))
 	}
 }
 
