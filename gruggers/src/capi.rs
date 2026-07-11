@@ -5,7 +5,7 @@
 #![allow(improper_ctypes_definitions)]
 use crate::state::{ExportFnEntry, GrugEntityHandle, GrugInitSettings, GrugState, Files, FileInfo};
 use crate::ntstring::NTStrPtr;
-use crate::types::{GrugFileId, GrugOnFnId, GrugEntity, GrugValue, GameFnPtrState, INVALID_GRUG_SCRIPT_ID};
+use crate::types::{FileId, ExportFnId, GrugEntity, Value, HostFnWithState, INVALID_GRUG_SCRIPT_ID};
 use crate::error::{Error, GrugError};
 
 use std::ffi::OsString;
@@ -36,7 +36,7 @@ pub extern "C" fn grug_deinit(_: Option<Box<CState>>) {}
 /// # SAFETY
 /// same as [`CState::register_host_fn`]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_register_host_fn<'a>(state: &'a mut CState, game_fn_name: NTStrPtr<'static>, func: GameFnPtrState<GrugState>) -> Option<&'a GrugError<'a>> {
+pub unsafe extern "C" fn grug_register_host_fn<'a>(state: &'a mut CState, game_fn_name: NTStrPtr<'static>, func: HostFnWithState<GrugState>) -> Option<&'a GrugError<'a>> {
 	// SAFETY: This function is exposed to C and is inherently unsafe
 	if let Err(err) = unsafe{state.0.register_host_fn(game_fn_name.to_str(), func)} {
 		Some(state.1.get_mut().insert(err).inner())
@@ -61,7 +61,7 @@ pub extern "C" fn grug_update(state: &CState) -> &[FileInfo<'_>] {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_compile_file(state: &CState, file_path: NTStrPtr<'_>) -> GrugFileId {
+pub extern "C" fn grug_compile_file(state: &CState, file_path: NTStrPtr<'_>) -> FileId {
 	match state.0.compile_grug_file(file_path.to_str()) {
 		Ok(id) => id,
 		Err(err) => {
@@ -72,7 +72,7 @@ pub extern "C" fn grug_compile_file(state: &CState, file_path: NTStrPtr<'_>) -> 
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_create_entity(state: &CState, file_id: GrugFileId) -> Option<GrugEntityHandle<'_>> {
+pub extern "C" fn grug_create_entity(state: &CState, file_id: FileId) -> Option<GrugEntityHandle<'_>> {
 	state.0.create_entity(file_id)
 }
 
@@ -81,7 +81,7 @@ pub extern "C" fn grug_deinit_entity(state: &CState, handle: GrugEntityHandle<'_
 	state.0.destroy_entity(handle)
 }
 
-const INVALID_GRUG_ON_FN_ID: GrugOnFnId = u64::MAX;
+const INVALID_GRUG_ON_FN_ID: ExportFnId = ExportFnId(u64::MAX);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_get_fn_ids(state: &CState) -> &[ExportFnEntry<'_>] {
@@ -89,7 +89,7 @@ pub extern "C" fn grug_get_fn_ids(state: &CState) -> &[ExportFnEntry<'_>] {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_get_on_fn_id(state: &CState, entity_type: NTStrPtr<'_>, on_fn_name: NTStrPtr<'_>) -> GrugOnFnId {
+pub extern "C" fn grug_get_on_fn_id(state: &CState, entity_type: NTStrPtr<'_>, on_fn_name: NTStrPtr<'_>) -> ExportFnId {
 	match state.0.get_export_fn_id(entity_type.to_str(), on_fn_name.to_str()) {
 		Ok(id) => id,
 		Err(err) => {
@@ -103,7 +103,7 @@ pub extern "C" fn grug_get_on_fn_id(state: &CState, entity_type: NTStrPtr<'_>, o
 /// `values` must point to a buffer that contains at least `values_len`
 /// elements
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_call_export_fn(state: &CState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue, values_len: usize) -> bool {
+pub unsafe extern "C" fn grug_call_export_fn(state: &CState, entity: &GrugEntity, on_fn_id: ExportFnId, values: *const Value, values_len: usize) -> bool {
 	unsafe{state.0.call_export_fn(entity, on_fn_id, std::slice::from_raw_parts(values, values_len))}
 }
 

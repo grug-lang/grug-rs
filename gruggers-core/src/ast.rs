@@ -10,13 +10,13 @@
 //! deallocates them automatically after the call to [`Backend::insert_file`](crate::backend::Backend::insert_file).
 //! This may be changed in a later release
 use crate::ntstring::{NTStrPtr, NTStr};
-use crate::types::GameFnPtr;
+use crate::types::HostFn;
 use crate::error::SourceSpan;
 
 /// Represents the type of a value in grug
 #[derive(Clone, Copy, Debug)]
 #[repr(C, u32)]
-pub enum GrugType<'a> {
+pub enum Type<'a> {
 	/// Return type of a function with no return value
 	///
 	/// An expression can only have a value of type Void if it is the top level
@@ -49,7 +49,7 @@ pub enum GrugType<'a> {
 	/// TODO: Explain usage of ID types in grug
 	Id{
 		name: NTStrPtr<'a>,
-		generics: &'a [GrugType<'a>]
+		generics: &'a [Type<'a>]
 	},
 	/// Type of a resource string
 	///
@@ -69,10 +69,10 @@ pub enum GrugType<'a> {
 	}
 }
 
-impl<'a> Eq for GrugType<'a> { }
-impl<'a> PartialEq for GrugType<'a> {
+impl<'a> Eq for Type<'a> { }
+impl<'a> PartialEq for Type<'a> {
 	fn eq(&self, other: &Self) -> bool {
-		use GrugType::*;
+		use Type::*;
 		match (self, other) {
 			(Void, Void) => true,
 			(Bool, Bool) => true,
@@ -101,9 +101,9 @@ impl<'a> PartialEq for GrugType<'a> {
 	}
 }
 
-impl<'a> GrugType<'a> {
+impl<'a> Type<'a> {
 	pub fn matches(&self, other: &Self) -> bool {
-		use GrugType::*;
+		use Type::*;
 		match (self, other) {
 			(Void, Void) => true,
 			(Bool, Bool) => true,
@@ -130,7 +130,7 @@ impl<'a> GrugType<'a> {
 	}
 }
 
-impl<'a> std::fmt::Display for GrugType<'a> {
+impl<'a> std::fmt::Display for Type<'a> {
 	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
 		match self {
 			Self::Void => write!(f, "void"),
@@ -176,9 +176,9 @@ impl<'a> std::fmt::Display for GrugType<'a> {
 pub enum UnaryOperator {
 	/// Logical `not` operator.
 	///
-	/// The inner expression must have an output type of [`GrugType::Bool`].
+	/// The inner expression must have an output type of [`Type::Bool`].
 	///
-	/// The output type of the expression is [`GrugType::Bool`]
+	/// The output type of the expression is [`Type::Bool`]
 	///
 	/// ```text
 	/// x: bool = not true
@@ -187,9 +187,9 @@ pub enum UnaryOperator {
 	Not = 0,
 	/// Unary `Negate` operator.
 	///
-	/// The inner expression must have an output type of [`GrugType::Number`].
+	/// The inner expression must have an output type of [`Type::Number`].
 	///
-	/// The output type of the expression is [`GrugType::Number`]
+	/// The output type of the expression is [`Type::Number`]
 	///
 	/// ```text
 	/// x: number = -25
@@ -213,9 +213,9 @@ impl std::fmt::Display for UnaryOperator {
 pub enum BinaryOperator {
 	/// Logical `or` operator.
 	///
-	/// Both sides of the expression must have an output type of [`GrugType::Bool`].
+	/// Both sides of the expression must have an output type of [`Type::Bool`].
 	///
-	/// The output type of the expression is [`GrugType::Bool`]
+	/// The output type of the expression is [`Type::Bool`]
 	///
 	/// ```text
 	/// x: bool = true or false
@@ -224,9 +224,9 @@ pub enum BinaryOperator {
 	Or = 0,
 	/// Logical `and` operator
 	///
-	/// Both sides of the expression must have an output type of [`GrugType::Bool`]
+	/// Both sides of the expression must have an output type of [`Type::Bool`]
 	///
-	/// The output type of the expression is [`GrugType::Bool`]
+	/// The output type of the expression is [`Type::Bool`]
 	///
 	/// ```text
 	/// x: bool = true and false
@@ -237,7 +237,7 @@ pub enum BinaryOperator {
 	///
 	/// Both sides of the expression must have the same output type
 	///
-	/// The output type of the expression is [`GrugType::Bool`]
+	/// The output type of the expression is [`Type::Bool`]
 	///
 	/// ```text
 	/// x: number = 25
@@ -249,7 +249,7 @@ pub enum BinaryOperator {
 	///
 	/// Both sides of the expression must have the same output type
 	///
-	/// The output type of the expression is [`GrugType::Bool`]
+	/// The output type of the expression is [`Type::Bool`]
 	///
 	/// ```text
 	/// x: number = 25
@@ -259,9 +259,9 @@ pub enum BinaryOperator {
 	NotEquals,
 	/// `Greater than` operator
 	///
-	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	/// Both sides of the expression must have an output type of [`Type::Number`]
 	///
-	/// The output type of the expression is [`GrugType::Bool`]
+	/// The output type of the expression is [`Type::Bool`]
 	///
 	/// ```text
 	/// x: number = 25
@@ -271,9 +271,9 @@ pub enum BinaryOperator {
 	Greater,
 	/// `Greater than or equal to` operator
 	///
-	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	/// Both sides of the expression must have an output type of [`Type::Number`]
 	///
-	/// The output type of the expression is [`GrugType::Bool`]
+	/// The output type of the expression is [`Type::Bool`]
 	///
 	/// ```text
 	/// x: number = 25
@@ -283,9 +283,9 @@ pub enum BinaryOperator {
 	GreaterEquals,
 	/// `Less than` operator
 	///
-	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	/// Both sides of the expression must have an output type of [`Type::Number`]
 	///
-	/// The output type of the expression is [`GrugType::Bool`]
+	/// The output type of the expression is [`Type::Bool`]
 	///
 	/// ```text
 	/// x: number = 25
@@ -295,9 +295,9 @@ pub enum BinaryOperator {
 	Less,
 	/// `Less than or equal to` operator
 	///
-	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	/// Both sides of the expression must have an output type of [`Type::Number`]
 	///
-	/// The output type of the expression is [`GrugType::Bool`]
+	/// The output type of the expression is [`Type::Bool`]
 	///
 	/// ```text
 	/// x: number = 25
@@ -307,9 +307,9 @@ pub enum BinaryOperator {
 	LessEquals,
 	/// Addition operator
 	///
-	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	/// Both sides of the expression must have an output type of [`Type::Number`]
 	///
-	/// The output type of the expression is [`GrugType::Number`]
+	/// The output type of the expression is [`Type::Number`]
 	///
 	/// ```text
 	/// x: number = 25
@@ -319,9 +319,9 @@ pub enum BinaryOperator {
 	Plus,
 	/// Subtraction operator
 	///
-	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	/// Both sides of the expression must have an output type of [`Type::Number`]
 	///
-	/// The output type of the expression is [`GrugType::Number`]
+	/// The output type of the expression is [`Type::Number`]
 	///
 	/// ```text
 	/// x: number = 25
@@ -331,9 +331,9 @@ pub enum BinaryOperator {
 	Minus,
 	/// Multiplication operator
 	///
-	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	/// Both sides of the expression must have an output type of [`Type::Number`]
 	///
-	/// The output type of the expression is [`GrugType::Number`]
+	/// The output type of the expression is [`Type::Number`]
 	///
 	/// ```text
 	/// x: number = 25
@@ -343,9 +343,9 @@ pub enum BinaryOperator {
 	Multiply,
 	/// Division operator
 	///
-	/// Both sides of the expression must have an output type of [`GrugType::Number`]
+	/// Both sides of the expression must have an output type of [`Type::Number`]
 	///
-	/// The output type of the expression is [`GrugType::Number`]
+	/// The output type of the expression is [`Type::Number`]
 	///
 	/// ```text
 	/// x: number = 25
@@ -473,7 +473,7 @@ pub enum ExprData<'a> {
 		/// Expressions for each of the arguments of the function call
 		args : &'a mut [Expr<'a>],
 		/// Pointer to the host function if this expression is a game function call
-		ptr  : Option<GameFnPtr>,
+		ptr  : Option<HostFn>,
 		/// Span of the function or method name,
 		name_span: SourceSpan,
 	},
@@ -485,7 +485,7 @@ pub enum ExprData<'a> {
 	/// ```
 	Parenthesized(&'a mut Expr<'a>),
 }
-const _: () = const {assert!(std::mem::size_of::<Option<GameFnPtr>>() == std::mem::size_of::<GameFnPtr>())};
+const _: () = const {assert!(std::mem::size_of::<Option<HostFn>>() == std::mem::size_of::<HostFn>())};
 
 /// Represents a complete expression. Can contain nested expressions
 #[derive(Debug)]
@@ -494,7 +494,7 @@ pub struct Expr<'a> {
 	/// Output type of the expression.
 	/// This is filled in during typechecking. 
 	/// Backends will never see the [`None`] value of this field.
-	pub result_type : Option<&'a GrugType<'a>>,
+	pub result_type : Option<&'a Type<'a>>,
 	/// Actual data needed to represent the expression
 	pub data        : ExprData<'a>,
 	/// Span of the expression
@@ -517,7 +517,7 @@ pub struct MemberVariable<'a> {
 	/// Name of the variable
 	pub name           : NTStrPtr<'a>,
 	/// Type of the variable
-	pub ty             : GrugType<'a>,
+	pub ty             : Type<'a>,
 	/// Source Span of the type
 	pub type_span      : SourceSpan,
 	/// Initializer of the variable.
@@ -550,7 +550,7 @@ pub enum Statement<'a> {
 		/// Name of the variable
 		name            : NTStrPtr<'a>,
 		/// Type of the variable if the statement is a declaration
-		ty              : Option<&'a GrugType<'a>>,
+		ty              : Option<&'a Type<'a>>,
 		/// Span of the type, if it exists, or just the span of the name again,
 		type_span       : SourceSpan,
 		/// Expression to assign to the variable
@@ -706,7 +706,7 @@ pub struct Parameter<'a> {
 	pub name: NTStrPtr<'a>,
 	/// Type of the parameter
 	/// `number` is the type in the example
-	pub ty  : GrugType<'a>,
+	pub ty  : Type<'a>,
 	/// Span of the name
 	pub name_span: SourceSpan,
 	/// Span of the type
@@ -766,8 +766,8 @@ pub struct HelperFunction<'a> {
 	pub name: NTStrPtr<'a>,
 	/// Return type of the function. 
 	///
-	/// Return type is [`GrugType::Void`] if there is no return type
-	pub return_type: GrugType<'a>,
+	/// Return type is [`Type::Void`] if there is no return type
+	pub return_type: Type<'a>,
 	/// Source Span of the return type
 	pub return_type_span: SourceSpan,
 	/// List of parameters to the function and their types 

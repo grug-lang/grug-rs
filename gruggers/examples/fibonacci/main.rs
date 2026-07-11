@@ -1,104 +1,104 @@
 #![deny(warnings)]
 #![allow(static_mut_refs)]
 use gruggers::state::{GrugInitSettings, GrugState};
-use gruggers::types::GrugValue;
+use gruggers::types::Value;
 
 mod game_fns {
 	use super::*;
 	use super::GrugState;
-	pub extern "C" fn print_number<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn print_number<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let number = (*arguments).number;
 			println!("{}", number);
 		}
-		GrugValue{void: ()}
+		Value{void: ()}
 	}
-	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let string = (*arguments).string.to_str();
 			println!("{}", string);
 		}
-		GrugValue{void: ()}
+		Value{void: ()}
 	}
-	pub extern "C" fn list_number<'a>(_state: &'a GrugState, _arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number<'a>(_state: &'a GrugState, _arguments: *const Value) -> Value {
 		println!("creating list");
 		unsafe {
 			let id = _state.get_next_entity_id();
 			let x = Vec::<f64>::new();
 			OBJECTS.insert(id, Box::new(x));
-			GrugValue{id}
+			Value{id}
 		}
 	}
-	pub extern "C" fn list_number_insert<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number_insert<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let value = (*arguments.add(1)).number;
 			let location = (*arguments.add(2)).number;
 			OBJECTS.get_mut(&list).unwrap().downcast_mut::<Vec<f64>>().unwrap().insert(location as usize, value);
 		}
-		GrugValue{void: ()}
+		Value{void: ()}
 	}
-	pub extern "C" fn list_number_remove<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number_remove<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let location = (*arguments.add(2)).number;
 			let ret_val = OBJECTS.get_mut(&list).unwrap().downcast_mut::<Vec<f64>>().unwrap().remove(location as usize);
-			GrugValue{number: ret_val}
+			Value{number: ret_val}
 		}
 	}
-	pub extern "C" fn list_number_push<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number_push<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let value = (*arguments.add(1)).number;
 			OBJECTS.get_mut(&list).unwrap().downcast_mut::<Vec<f64>>().unwrap().push(value);
 		}
-		GrugValue{void: ()}
+		Value{void: ()}
 	}
-	pub extern "C" fn list_number_pop<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number_pop<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let ret_val = OBJECTS.get_mut(&list).unwrap().downcast_mut::<Vec<f64>>().unwrap().pop().unwrap();
-			GrugValue{number: ret_val}
+			Value{number: ret_val}
 		}
 	}
-	pub extern "C" fn list_number_len<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number_len<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let ret_val = OBJECTS.get(&list).unwrap().downcast_ref::<Vec<f64>>().unwrap().len();
-			GrugValue{number: ret_val as f64}
+			Value{number: ret_val as f64}
 		}
 	}
-	pub extern "C" fn list_number_get<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number_get<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let location = (*arguments.add(1)).number;
 			let ret_val = *OBJECTS.get(&list).unwrap().downcast_ref::<Vec<f64>>().unwrap().get(location as usize).unwrap();
-			GrugValue{number: ret_val}
+			Value{number: ret_val}
 		}
 	}
-	pub extern "C" fn list_number_set<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn list_number_set<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let value = (*arguments.add(1)).number;
 			let location = (*arguments.add(2)).number;
 			*OBJECTS.get_mut(&list).unwrap().downcast_mut::<Vec<f64>>().unwrap().get_mut(location as usize).unwrap() = value;
 		}
-		GrugValue{void: ()}
+		Value{void: ()}
 	}
-	pub extern "C" fn print_list_number<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn print_list_number<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let id = (*arguments).id;
 			let vec = OBJECTS.get(&id).unwrap().downcast_ref::<Vec<f64>>().unwrap();
 			println!("{:2.0?}", vec);
 		}
-		GrugValue{void: ()}
+		Value{void: ()}
 	}
 }
 use game_fns::*;
 
-use gruggers::types::GrugId;
+use gruggers::types::Id;
 use std::any::Any;
-pub type GameObjects = HashMap<GrugId, Box<dyn Any>>;
+pub type GameObjects = HashMap<Id, Box<dyn Any>>;
 
 use std::mem::MaybeUninit;
 use std::collections::HashMap;
@@ -168,7 +168,7 @@ fn main () {
 
 		println!("Naive implementation");
 		for i in 0..10 {
-			if !STATE.call_export_fn(&*script, naive_id, &[GrugValue{number:i as f64}]) {
+			if !STATE.call_export_fn(&*script, naive_id, &[Value{number:i as f64}]) {
 				break
 			};
 		}
@@ -176,7 +176,7 @@ fn main () {
 		println!("iterative implementation");
 		for i in 0..10 {
 			print!("{i} : ");
-			if !STATE.call_export_fn(&*script, iterative_id, &[GrugValue{number:i as f64}]) {
+			if !STATE.call_export_fn(&*script, iterative_id, &[Value{number:i as f64}]) {
 				break
 			};
 		}
@@ -184,7 +184,7 @@ fn main () {
 		println!("memoized implementation");
 		for i in 0..10 {
 			// print!("{i} : ");
-			if !STATE.call_export_fn(&*script, memo_id, &[GrugValue{number:i as f64}]) {
+			if !STATE.call_export_fn(&*script, memo_id, &[Value{number:i as f64}]) {
 				break
 			};
 		}

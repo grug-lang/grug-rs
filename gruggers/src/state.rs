@@ -44,7 +44,7 @@ use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{GrugValue, GrugId, GameFnPtr, GameFnPtrState, HostFnReg, GrugOnFnId, GrugFileId, GrugEntity, INVALID_GRUG_SCRIPT_ID};
+use crate::types::{Value, Id, HostFn, HostFnWithState, HostFnReg, ExportFnId, FileId, GrugEntity, INVALID_GRUG_SCRIPT_ID};
 use crate::xar::Xar;
 use crate::ntstring::{NTStrPtr};
 use crate::arena::Arena;
@@ -280,15 +280,15 @@ pub struct GrugState {
 	/// lifetime
 	/// If a later change makes mod_api mutable, these need to be allocated separately
 	export_functions: Vec<ExportFnEntry<'static>>,
-	pub(crate) path_to_script_ids: RefCell<HashMap<OsString, (OsString, GrugFileId)>>,
+	pub(crate) path_to_script_ids: RefCell<HashMap<OsString, (OsString, FileId)>>,
 	next_script_id: AtomicU64,
 
 	pub(crate) backend: ErasedBackend<Self>,
 	// for use when compiling
 	pub(crate) arenas : RefCell<Vec<Arena>>,
 	// pub(crate) backend: Interpreter,
-	pub(crate) current_script: Cell<Option<GrugFileId>>,
-	pub(crate) current_export_fn_id: Cell<Option<GrugOnFnId>>,
+	pub(crate) current_script: Cell<Option<FileId>>,
+	pub(crate) current_export_fn_id: Cell<Option<ExportFnId>>,
 	pub(crate) is_errorring: Cell<bool>,
 
 	pub(crate) changes: Receiver<Result<OsString, std::io::Error>>,
@@ -398,7 +398,7 @@ impl GrugState {
 		})
 	}
 
-	pub(crate) fn get_or_insert_script_id(&self, path: &Path) -> GrugFileId {
+	pub(crate) fn get_or_insert_script_id(&self, path: &Path) -> FileId {
 		let mut canonicalized = PathBuf::from(self.mods_dir_path.clone());
 		canonicalized.push(path);
 		let canonicalized = canonicalized.canonicalize().expect("error while canonicalizing");
@@ -418,7 +418,7 @@ impl GrugState {
 		self.mods_dir_path.as_ref()
 	}
 
-	pub fn get_export_fn_id(&self, entity_type: &str, fn_name: &str) -> Result<GrugOnFnId, Error> {
+	pub fn get_export_fn_id(&self, entity_type: &str, fn_name: &str) -> Result<ExportFnId, Error> {
 		if !self.mod_api.entities().contains_key(entity_type) {
 			return Err(Error::new(
 				ErrorKind::INIT_ERROR,
@@ -431,7 +431,7 @@ impl GrugState {
 		}
 		for (i, on_fn_entry) in self.export_functions.iter().enumerate() {
 			if on_fn_entry.entity_type() == entity_type && on_fn_entry.event_fn_name() == fn_name {
-				return Ok(i as u64)
+				return Ok(ExportFnId(i as u64))
 			}
 		}
 		return Err(Error::new(
@@ -444,8 +444,8 @@ impl GrugState {
 		));
 	}
 	
-	pub fn get_export_fn_name(&self, fn_id: GrugOnFnId) -> Option<&str> {
-		self.export_functions.get(fn_id as usize).map(|entry| entry.event_fn_name())
+	pub fn get_export_fn_name(&self, fn_id: ExportFnId) -> Option<&str> {
+		self.export_functions.get(fn_id.0 as usize).map(|entry| entry.event_fn_name())
 	}
 
 	pub fn get_export_fns(&self) -> &[ExportFnEntry<'_>] {
@@ -475,7 +475,7 @@ impl GrugState {
 	}
 
 	// This should only happen during an error so its okay if its slow
-	pub fn get_script_path_rel(&self, script_id: GrugFileId) -> Option<&OsStr> {
+	pub fn get_script_path_rel(&self, script_id: FileId) -> Option<&OsStr> {
 		let string = Ref::filter_map(self.path_to_script_ids.borrow(), |inner|
 			inner.values().find(|(_, v)| *v == script_id).map(|x| &*x.0)
 		).ok()?;
@@ -542,12 +542,12 @@ impl GrugState {
 		Ok(())
 	}
 
-	pub(crate) fn get_next_script_id(&self) -> GrugFileId {
-		GrugId::new(self.next_script_id.fetch_add(1, Ordering::Relaxed))
+	pub(crate) fn get_next_script_id(&self) -> FileId {
+		Id::new(self.next_script_id.fetch_add(1, Ordering::Relaxed))
 	}
 
-	pub fn get_next_entity_id(&self) -> GrugId {
-		GrugId::new(self.next_entity_id.fetch_add(1, Ordering::Relaxed))
+	pub fn get_next_entity_id(&self) -> Id {
+		Id::new(self.next_entity_id.fetch_add(1, Ordering::Relaxed))
 	}
 
 	/// # Safety
@@ -559,11 +559,11 @@ impl GrugState {
 	}
 
 	/// Create a new entity from the input file id
-	pub fn create_entity(&self, file_id: GrugFileId) -> Option<GrugEntityHandle<'_>> {
+	pub fn create_entity(&self, file_id: FileId) -> Option<GrugEntityHandle<'_>> {
 		let old_script   = self.current_script  .get();
 		let old_fn_id = self.current_export_fn_id.get();
 		self.current_script  .set(Some(file_id));
-		self.current_export_fn_id.set(Some(0));
+		self.current_export_fn_id.set(Some(ExportFnId(0)));
 
 		let entity = self.entities.insert(unsafe{GrugEntity::new_uninit(self.get_next_entity_id(), file_id)});
 		let entity = unsafe{GrugEntityHandle::new(entity)};
@@ -602,24 +602,24 @@ impl GrugState {
 	}
 
 	/// get the index of the export function within its entity
-	fn get_export_fn_index(&self, id: GrugOnFnId) -> usize {
-		self.export_functions[id as usize].index
+	fn get_export_fn_index(&self, id: ExportFnId) -> usize {
+		self.export_functions[id.0 as usize].index
 	}
 }
 
 // Registration functions
 impl GrugState {
 	/// Register a non generic host function
-	pub unsafe fn register_host_fn(&mut self, fn_name: &str, func: GameFnPtrState<Self>) -> Result<(), Error> {
+	pub unsafe fn register_host_fn(&mut self, fn_name: &str, func: HostFnWithState<Self>) -> Result<(), Error> {
 		unsafe{self.register_host_fn_internal(None, fn_name, func)}
 	}
 
 	/// Register a non generic host method
-	pub unsafe fn register_method(&mut self, class_name: &str, fn_name: &str, func: GameFnPtrState<Self>) -> Result<(), Error> {
+	pub unsafe fn register_method(&mut self, class_name: &str, fn_name: &str, func: HostFnWithState<Self>) -> Result<(), Error> {
 		unsafe{self.register_host_fn_internal(Some(class_name), fn_name, func)}
 	}
 
-	unsafe fn register_host_fn_internal(&mut self, class_name: Option<&str>, fn_name: &str, func: GameFnPtrState<Self>) -> Result<(), Error> {
+	unsafe fn register_host_fn_internal(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFnWithState<Self>) -> Result<(), Error> {
 		// SAFETY: This Arc is shared between the state and all the compiler
 		// threads.  Because we have a &mut self, we assume that all compiler
 		// threads are parked waiting to receive more compile commands. This
@@ -636,7 +636,7 @@ impl GrugState {
 		// Once that is stabilized, this can be replaced
 		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
 		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
-		unsafe{(&mut *mod_api).register_fn(class_name, fn_name, GameFnPtr::from_ptr(func))}
+		unsafe{(&mut *mod_api).register_fn(class_name, fn_name, HostFn::from_ptr(func))}
 	}
 
 	/// Registers a generic host function
@@ -699,7 +699,7 @@ impl GrugState {
 	/// the number of arguments expected by `function_name`. If there are no arguments, 
 	/// `values` may be null
 	#[must_use]
-	pub unsafe fn call_export_fn_raw(&self, entity: &GrugEntity, fn_id: GrugOnFnId, values: *const GrugValue) -> bool {
+	pub unsafe fn call_export_fn_raw(&self, entity: &GrugEntity, fn_id: ExportFnId, values: *const Value) -> bool {
 		let old_script   = self.current_script  .get();
 		let old_fn_id = self.current_export_fn_id.get();
 		self.current_script  .set(Some(entity.file_id));
@@ -716,7 +716,7 @@ impl GrugState {
 	}
 
 	#[must_use]
-	pub fn call_export_fn(&self, entity: &GrugEntity, fn_id: GrugOnFnId, values: &[GrugValue]) -> bool {
+	pub fn call_export_fn(&self, entity: &GrugEntity, fn_id: ExportFnId, values: &[Value]) -> bool {
 		let old_script   = self.current_script  .get();
 		let old_fn_id = self.current_export_fn_id.get();
 		self.current_script  .set(Some(entity.file_id));
@@ -800,7 +800,7 @@ mod files {
 	use crate::own_ptr::OwnPtr;
 	use crate::arena::Arena;
 	use crate::ntstring::{NTBytes, NTStrPtr};
-	use crate::types::GrugFileId;
+	use crate::types::FileId;
 	use crate::error::GrugError;
 	use crate::state::INVALID_GRUG_SCRIPT_ID;
 
@@ -852,14 +852,14 @@ mod files {
 		pub(crate) entity_type: NTStrPtr<'a>,
 		/// Portion of the filename before the '-'
 		pub(crate) entity_name: NTBytes<'a>,
-		/// These two files are actually a Result<GrugFileId, GrugError<'a>>
+		/// These two files are actually a Result<FileId, GrugError<'a>>
 		/// Err case is when file_id === INVALID_GRUG_SCRIPT_ID
-		pub(crate) file_id: GrugFileId,
+		pub(crate) file_id: FileId,
 		pub(crate) error: MaybeUninit<GrugError<'a>>,
 	}
 
 	impl<'a> FileInfo<'a> {
-		pub(crate) fn new_in(path: &OsStr, file_name: &OsStr, mod_name: &OsStr, entity_type: &str, entity_name: &OsStr, result: Result<GrugFileId, GrugError>, arena: &'a Arena) -> Self {
+		pub(crate) fn new_in(path: &OsStr, file_name: &OsStr, mod_name: &OsStr, entity_type: &str, entity_name: &OsStr, result: Result<FileId, GrugError>, arena: &'a Arena) -> Self {
 			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
 			let path = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(path.as_encoded_bytes()))};
 			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
@@ -930,7 +930,7 @@ mod files {
 		pub fn entity_name (&self) -> &OsStr {
 			unsafe{OsStr::from_encoded_bytes_unchecked(self.entity_name.to_bytes())}
 		}
-		pub fn result (&self) -> Result<GrugFileId, GrugError<'_>> {
+		pub fn result (&self) -> Result<FileId, GrugError<'_>> {
 			if self.file_id == INVALID_GRUG_SCRIPT_ID {unsafe{Err(*self.error.assume_init_ref())}}
 			else {Ok(self.file_id)}
 		}

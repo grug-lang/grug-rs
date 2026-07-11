@@ -1,6 +1,6 @@
 use crate::state::{GrugState, Files, FileInfo};
 use crate::arena::Arena;
-use crate::types::GrugFileId;
+use crate::types::FileId;
 use crate::ast::*;
 use crate::ntstring::NTStrPtr;
 use crate::error::{Error, ErrorKind, SourceSpan};
@@ -147,7 +147,7 @@ impl GrugState {
 	/// Compile a grug file at a relative path within the mods directory. Once
 	/// compiled directly once, the file will be automatically hot reloaded by
 	/// the state. 
-	pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<GrugFileId, Error> {
+	pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<FileId, Error> {
 		let path = path.as_ref();
 		let mut path_buf = self.mods_dir_path.clone();
 		path_buf.push("/");
@@ -170,7 +170,7 @@ impl GrugState {
 	///
 	/// If a file has already been compiled with the same path, the script will
 	/// be hot reloaded.
-	pub fn compile_grug_file_from_str(&self, path: impl AsRef<OsStr>, file_text: &str) -> Result<GrugFileId, Error> {
+	pub fn compile_grug_file_from_str(&self, path: impl AsRef<OsStr>, file_text: &str) -> Result<FileId, Error> {
 		use super::frontend::*;
 		let path = path.as_ref();
 

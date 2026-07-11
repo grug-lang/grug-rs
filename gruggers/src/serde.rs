@@ -83,7 +83,7 @@ mod ser {
 					// TODO: rename this to "parameters"
 					object["arguments"] = parameters.iter().map(serialize_parameter).collect::<Vec<_>>().into();
 				}
-				if *return_type != GrugType::Void {
+				if *return_type != Type::Void {
 					// TODO: rename this to "parameters"
 					object["return_type"] = serialize_type(return_type);
 				}
@@ -105,21 +105,21 @@ mod ser {
 		}).collect::<Vec<_>>().into()
 	}
 
-	fn serialize_type(ty: &GrugType) -> JsonValue {
+	fn serialize_type(ty: &Type) -> JsonValue {
 		match ty {
-			GrugType::Void => object!{
+			Type::Void => object!{
 				"name": "void"
 			},
-			GrugType::Bool => object!{
+			Type::Bool => object!{
 				"name": "bool",
 			},
-			GrugType::Number => object! {
+			Type::Number => object! {
 				"name": "number",
 			},
-			GrugType::String => object! {
+			Type::String => object! {
 				"name": "string",
 			},
-			GrugType::Id{
+			Type::Id{
 				name,
 				generics,
 			} => {
@@ -131,9 +131,9 @@ mod ser {
 				}
 				object
 			}
-			GrugType::Resource   {..} => unreachable!(),
-			GrugType::Entity     {..} => unreachable!(),
-			GrugType::Existential{..} => unreachable!(),
+			Type::Resource   {..} => unreachable!(),
+			Type::Entity     {..} => unreachable!(),
+			Type::Existential{..} => unreachable!(),
 		}
 	}
 

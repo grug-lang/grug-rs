@@ -3,11 +3,11 @@ use std::path::Path;
 use std::io::Write;
 
 use crate::ntstring::NTStr;
-use crate::ast::{Parameter, GrugType};
+use crate::ast::{Parameter, Type};
 use crate::arena::Arena;
 use crate::state::GrugState;
 use crate::error::{ErrorKind, Error, SourceSpan, Result};
-use crate::types::{GameFnPtr, HostFnReg, HostFnRegErased};
+use crate::types::{HostFn, HostFnReg, HostFnRegErased};
 
 use allocator_api2::vec::Vec;
 
@@ -44,7 +44,7 @@ impl ModApi {
 		&self.host_fns
 	}
 
-	pub(crate) fn register_fn(&mut self, class_name: Option<&str>, fn_name: &str, ptr: GameFnPtr) -> Result<()> {
+	pub(crate) fn register_fn(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFn) -> Result<()> {
 		if let Some(class_name) = class_name {
 			let Some(class) = self.classes.get_mut(class_name) else {
 				return Err(Error::new(
@@ -323,17 +323,17 @@ impl ModApi {
 
 	pub(crate) unsafe fn register_dummies(&mut self) {
 		use crate::state::GrugState;
-		use crate::types::GrugValue;
-		extern "C" fn dummy_host_fn(_state: &GrugState, _arguments: *const GrugValue) -> GrugValue {
-			GrugValue{void: ()}
+		use crate::types::Value;
+		extern "C" fn dummy_host_fn(_state: &GrugState, _arguments: *const Value) -> Value {
+			Value{void: ()}
 		}
-		unsafe extern "C" fn dummy_generic_fn<'a>(_: *const GrugType<'a>) -> Option<GameFnPtr> {
-			Some(GameFnPtr::from_ptr(dummy_host_fn))
+		unsafe extern "C" fn dummy_generic_fn<'a>(_: *const Type<'a>) -> Option<HostFn> {
+			Some(HostFn::from_ptr(dummy_host_fn))
 		}
-		let dummy_generic_fn = (dummy_generic_fn as for<'a> unsafe extern "C" fn (*const GrugType<'a>) -> _).into();
+		let dummy_generic_fn = (dummy_generic_fn as for<'a> unsafe extern "C" fn (*const Type<'a>) -> _).into();
 		for (_, host_fn) in &mut self.host_fns {
 			if host_fn.generics.is_empty() {
-				host_fn.fn_ptr = const{Some(GameFnPtr::from_ptr(dummy_host_fn))};
+				host_fn.fn_ptr = const{Some(HostFn::from_ptr(dummy_host_fn))};
 			} else {
 				host_fn.registerer = Some(dummy_generic_fn);
 			}
@@ -341,7 +341,7 @@ impl ModApi {
 		for (_, class) in &mut self.classes {
 			for (_, host_fn) in &mut *class.methods {
 				if host_fn.generics.is_empty() {
-					host_fn.fn_ptr = const{Some(GameFnPtr::from_ptr(dummy_host_fn))};
+					host_fn.fn_ptr = const{Some(HostFn::from_ptr(dummy_host_fn))};
 				} else {
 					host_fn.registerer = Some(dummy_generic_fn);
 				}
@@ -355,7 +355,7 @@ pub(crate) struct ModApiClass<'a> {
 	#[allow(dead_code)]
 	pub(crate) description: Option< &'a str>,
 	#[allow(dead_code)]
-	pub(crate) ty: GrugType<'a>,
+	pub(crate) ty: Type<'a>,
 	pub(crate) methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
 	pub(crate) generics: &'a [&'a NTStr],
 }
@@ -386,8 +386,8 @@ pub(crate) struct ModApiHostFn<'a> {
 	pub(crate) description: Option<&'a str>,
 	pub(crate) generics: &'a [&'a NTStr],
 	pub(crate) parameters: &'a [Parameter<'a>],
-	pub(crate) return_ty: GrugType<'a>,
-	pub(crate) fn_ptr: Option<GameFnPtr>,
+	pub(crate) return_ty: Type<'a>,
+	pub(crate) fn_ptr: Option<HostFn>,
 	pub(crate) registerer: Option<HostFnRegErased>,
 }
 
@@ -432,13 +432,13 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		object.get(key).ok_or_else(|| self.new_error("does not exist"))
 	}
 
-	fn parse_type<'b>(&mut self, object: &'a JsonValue, used_generics: &'b[&'b NTStr], arena: &'b Arena) -> Result<GrugType<'b>> {
+	fn parse_type<'b>(&mut self, object: &'a JsonValue, used_generics: &'b[&'b NTStr], arena: &'b Arena) -> Result<Type<'b>> {
 		let JsonValue::Object(object) = object else {
 			return Err(self.new_error("is not an object"));
 		};
 		// "name" string
 		let ty = match object.get("name") {
-			None => return Ok(GrugType::Void),
+			None => return Ok(Type::Void),
 			Some(str) => {
 				self.push_path(JsonPathComponent::ObjectKey("name"));
 				str.as_str().ok_or_else(|| self.new_error("is not a string"))?
@@ -447,15 +447,15 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		self.pop_path();
 
 		let ty = match ty {
-			"void"     => GrugType::Void,
-			"bool"     => GrugType::Bool,
-			"number"   => GrugType::Number,
-			"string"   => GrugType::String,
+			"void"     => Type::Void,
+			"bool"     => Type::Bool,
+			"number"   => Type::Number,
+			"string"   => Type::String,
 			"entity"   => {
 				// "entity_type" string
 				let entity_type = self.get_key(object, "entity_type")?.as_str().ok_or_else(|| self.new_error("is not a string"))?;
 				self.pop_path();
-				GrugType::Entity{
+				Type::Entity{
 					entity_type: (!entity_type.is_empty()).then(|| {
 						arena.copy_str_into_nt(entity_type).as_ntstrptr()
 					})
@@ -465,14 +465,14 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 				// "resource_extension" string
 				let entity_type = self.get_key(object, "resource_extension")?.as_str().ok_or_else(|| self.new_error("is not a string"))?;
 				self.pop_path();
-				GrugType::Resource {
+				Type::Resource {
 					extension: arena.copy_str_into_nt(entity_type).as_ntstrptr(),
 				}
 			}
 			generic if generic.starts_with("$") => {
 				for (i, name) in used_generics.iter().enumerate() {
 					if &***name == generic {
-						return Ok(GrugType::Existential{idx: i});
+						return Ok(Type::Existential{idx: i});
 					}
 				}
 				self.push_path(JsonPathComponent::ObjectKey("name"));
@@ -497,7 +497,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 				} else {
 					&[]
 				};
-				GrugType::Id {
+				Type::Id {
 					name,
 					generics,
 				}
@@ -530,7 +530,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			let ty = self.get_key(param_values, "type")?;
 			let ty = self.parse_type(ty, generics, arena)?;
 			match &ty {
-				GrugType::Void => return Err(self.new_error("cannot be void")),
+				Type::Void => return Err(self.new_error("cannot be void")),
 				_ => (),
 			}
 			self.pop_path();
@@ -589,14 +589,14 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			self.push_path(JsonPathComponent::ObjectKey("return_type"));
 			let return_ty = self.parse_type(return_ty, generics, arena)?;
 			match &return_ty {
-				GrugType::Entity{..} => return Err(self.new_error("cannot be entity")),
-				GrugType::Resource{..} => return Err(self.new_error("cannot be resource")),
+				Type::Entity{..} => return Err(self.new_error("cannot be entity")),
+				Type::Resource{..} => return Err(self.new_error("cannot be resource")),
 				_ => (),
 			}
 			self.pop_path();
 			return_ty
 		} else {
-			GrugType::Void
+			Type::Void
 		};
 
 		Ok(ModApiHostFn{
@@ -609,7 +609,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		})
 	}
 
-	fn validate_function(&mut self, parameters: &[Parameter<'a>], return_type: GrugType<'a>, known_types: &[(&str, usize)]) -> Result<()> {
+	fn validate_function(&mut self, parameters: &[Parameter<'a>], return_type: Type<'a>, known_types: &[(&str, usize)]) -> Result<()> {
 		self.push_path(JsonPathComponent::ObjectKey("parameters"));
 		for parameter in parameters {
 			self.push_path(JsonPathComponent::ArrayKey(parameter.name.to_str()));
@@ -623,9 +623,9 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		Ok(())
 	}
 
-	fn validate_type(&mut self, ty: GrugType<'a>, known_types: &[(&str, usize)]) -> Result<()> {
+	fn validate_type(&mut self, ty: Type<'a>, known_types: &[(&str, usize)]) -> Result<()> {
 		match ty {
-			GrugType::Id {
+			Type::Id {
 				name,
 				generics
 			} => {
@@ -829,10 +829,10 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		}
 		let generics = used_generics.leak();
 
-		let ty = GrugType::Id {
+		let ty = Type::Id {
 			name: class_name.as_ntstrptr(),
 			generics: arena.slice_from_iter((0..(generics.len())).map(|i| {
-				GrugType::Existential{idx: i}
+				Type::Existential{idx: i}
 			})),
 		};
 
@@ -931,7 +931,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		context.push_path(JsonPathComponent::ObjectKey(entity_name));
 		for (fn_name, export_fn) in entity.export_fns {
 			context.push_path(JsonPathComponent::ObjectKey(fn_name));
-			context.validate_function(export_fn.parameters, GrugType::Void, known_types)?;
+			context.validate_function(export_fn.parameters, Type::Void, known_types)?;
 			context.pop_path();
 		}
 		context.pop_path();

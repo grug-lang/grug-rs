@@ -1,6 +1,6 @@
 use super::tokenizer::{Token, TokenType};
 use crate::ast::{
-	GrugType, HelperFunction, Statement, OnFunction, Parameter,
+	Type, HelperFunction, Statement, OnFunction, Parameter,
 	MemberVariable, Expr, ExprData, UnaryOperator,
 	BinaryOperator, 
 };
@@ -136,7 +136,7 @@ const MAX_PARSING_DEPTH: usize = 100;
 
 pub(crate) struct Ast<'arena> {
 	pub global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
-	pub local_fn_signatures: &'arena [(&'arena str, (GrugType<'arena>, &'arena [Parameter<'arena>]))],
+	pub local_fn_signatures: &'arena [(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>]))],
 	pub export_fn_signatures: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
 }
 
@@ -151,7 +151,7 @@ struct Parser<'arena> {
 	pub(crate) current_function: &'arena str,
 	pub(crate) global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
 	pub(crate) called_local_functions: Vec<&'arena str, &'arena Arena>, 
-	pub(crate) local_fn_signatures: Vec<(&'arena str, (GrugType<'arena>, &'arena [Parameter<'arena>])), &'arena Arena>,
+	pub(crate) local_fn_signatures: Vec<(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>])), &'arena Arena>,
 	pub(crate) export_fn_signatures: Vec<(&'arena str, &'arena [Parameter<'arena>]), &'arena Arena>,
 }
 
@@ -352,7 +352,7 @@ pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a st
 					}
 					(return_type, return_type_span)
 				} else {
-					(GrugType::Void, name_token.span)
+					(Type::Void, name_token.span)
 				};
 				
 				let body_statements = parser.parse_statements(&mut tokens, 0, 1, arena)?;
@@ -1067,7 +1067,7 @@ impl<'a> Parser<'a> {
 		}
 	}
 
-	fn parse_type(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<(GrugType<'a>, SourceSpan), ParserError<'a>> {
+	fn parse_type(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<(Type<'a>, SourceSpan), ParserError<'a>> {
 		let [type_token] = consume_next_token_types(tokens, &[TokenType::Word])?;
 		if type_token.ty != TokenType::Word {
 			return self.new_error(
@@ -1076,14 +1076,14 @@ impl<'a> Parser<'a> {
 			);
 		}
 		Ok((match type_token.value {
-			"void"     => GrugType::Void,
-			"bool"     => GrugType::Bool,
-			"number"   => GrugType::Number,
-			"string"   => GrugType::String,
-			"resource" => GrugType::Resource{
+			"void"     => Type::Void,
+			"bool"     => Type::Bool,
+			"number"   => Type::Number,
+			"string"   => Type::String,
+			"resource" => Type::Resource{
 				extension: Box::leak(NTStr::box_from_str_in("", arena)).as_ntstrptr(),
 			},
-			"entity"   => GrugType::Entity {
+			"entity"   => Type::Entity {
 				entity_type: None,
 			},
 			type_name => {
@@ -1100,7 +1100,7 @@ impl<'a> Parser<'a> {
 				} else {
 					&[]
 				};
-				GrugType::Id {
+				Type::Id {
 					name: arena.copy_str_into_nt(type_name).as_ntstrptr(),
 					generics,
 				}
@@ -1109,20 +1109,20 @@ impl<'a> Parser<'a> {
 	}
 }
 
-fn type_contains_resource(ty: GrugType) -> bool {
+fn type_contains_resource(ty: Type) -> bool {
 	match ty {
-		GrugType::Resource{..} => true,
-		GrugType::Id{generics, name: _} => {
+		Type::Resource{..} => true,
+		Type::Id{generics, name: _} => {
 			generics.iter().copied().any(type_contains_resource)
 		}
 		_ => false,
 	}
 }
 
-fn type_contains_entity(ty: GrugType) -> bool {
+fn type_contains_entity(ty: Type) -> bool {
 	match ty {
-		GrugType::Entity{..} => true,
-		GrugType::Id{generics, name: _} => {
+		Type::Entity{..} => true,
+		Type::Id{generics, name: _} => {
 			generics.iter().copied().any(type_contains_entity)
 		}
 		_ => false,

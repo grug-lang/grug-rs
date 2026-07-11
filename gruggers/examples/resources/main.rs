@@ -1,19 +1,19 @@
 #![deny(warnings)]
 use gruggers::state::{GrugInitSettings, GrugState};
-use gruggers::types::GrugValue;
+use gruggers::types::Value;
 
 use std::time::Duration;
 
 mod game_fns {
 	use super::*;
-	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let string = (*arguments).string.to_str();
 			println!("{}", string);
 		}
-		GrugValue{void: ()}
+		Value{void: ()}
 	}
-	pub extern "C" fn print_file<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn print_file<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let file_path = (*arguments).string.to_str();
 			let mut path = std::path::PathBuf::from(_state.mods_dir_path());
@@ -21,7 +21,7 @@ mod game_fns {
 
 			print!("{}", std::fs::read_to_string(path).unwrap());
 		}
-		GrugValue{void: ()}
+		Value{void: ()}
 	}
 }
 use game_fns::*;

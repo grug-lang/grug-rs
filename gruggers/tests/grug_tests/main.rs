@@ -7,7 +7,7 @@ mod test_bindings {
 	use gruggers::state::{GrugInitSettings, GrugState, State, GrugEntityHandle};
 	use gruggers::backend::BytecodeBackend;
 	use gruggers_core::runtime_error::RuntimeError;
-	use gruggers::types::{GrugValue, GrugFileId};
+	use gruggers::types::{Value, FileId};
 	use gruggers::ntstring::{NTStrPtr, NTBytes};
 	use gruggers::serde;
 	use gruggers::nt;
@@ -46,7 +46,7 @@ mod test_bindings {
 
 	pub extern "C" fn destroy_grug_state<'a>(_state: Box<CState>) { }
 
-	pub extern "C" fn compile_grug_file<'a>(cstate: &'a CState, path: NTBytes<'_>, err_out: &'_ mut Option<NTStrPtr<'a>>) -> GrugFileId {
+	pub extern "C" fn compile_grug_file<'a>(cstate: &'a CState, path: NTBytes<'_>, err_out: &'_ mut Option<NTStrPtr<'a>>) -> FileId {
 		let path = path.to_bytes();
 		let (state, arena) = cstate;
 		
@@ -58,15 +58,15 @@ mod test_bindings {
 			}
 			Err(err) => {
 				*err_out = Some(arena.copy_str_into_nt(err.inner().error_string.to_str()).as_ntstrptr());
-				return GrugFileId::new(u64::MAX);
+				return FileId::new(u64::MAX);
 			}
 		}
 	}
 
 	// This is actually a noop
-	pub extern "C" fn destroy_grug_file(_: &CState, _file_id: GrugFileId) {}
+	pub extern "C" fn destroy_grug_file(_: &CState, _file_id: FileId) {}
 
-	pub extern "C" fn create_entity<'a>((state, _): &'a CState, file_id: GrugFileId, err_out: &'_ mut Option<NTStrPtr<'a>>) -> Option<GrugEntityHandle<'a>> {
+	pub extern "C" fn create_entity<'a>((state, _): &'a CState, file_id: FileId, err_out: &'_ mut Option<NTStrPtr<'a>>) -> Option<GrugEntityHandle<'a>> {
 		unsafe{state.set_next_entity_id(42)};
 		match state.create_entity(file_id) {
 			Some(entity) => {*err_out = None; Some(entity)},
@@ -99,7 +99,7 @@ mod test_bindings {
 	}
 
 	#[allow(unused_variables)]
-	pub extern "C" fn call_export_fn<'a> ((state, _): &CState, entity: GrugEntityHandle<'a>, fn_name: NTStrPtr<'a>, args: *const GrugValue, args_count: usize) {
+	pub extern "C" fn call_export_fn<'a> ((state, _): &CState, entity: GrugEntityHandle<'a>, fn_name: NTStrPtr<'a>, args: *const Value, args_count: usize) {
 		state.clear_error();
 		unsafe{state.set_next_entity_id(42)};
 
@@ -169,17 +169,17 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	pub type destroy_grug_state_t = extern "C" fn(Box<CState>);
 	#[allow(non_camel_case_types)]
-	pub type compile_grug_file_t = for<'a> extern "C" fn(&'a CState, NTBytes<'_>, &mut Option<NTStrPtr<'a>>) -> GrugFileId;
+	pub type compile_grug_file_t = for<'a> extern "C" fn(&'a CState, NTBytes<'_>, &mut Option<NTStrPtr<'a>>) -> FileId;
 	#[allow(non_camel_case_types)]
-	pub type destroy_grug_file_t = extern "C" fn(&'_ CState, GrugFileId);
+	pub type destroy_grug_file_t = extern "C" fn(&'_ CState, FileId);
 	#[allow(non_camel_case_types)]
-	pub type create_entity_t = for<'a> extern "C" fn(&'a CState, GrugFileId, &mut Option<NTStrPtr<'a>>) -> Option<GrugEntityHandle<'a>>;
+	pub type create_entity_t = for<'a> extern "C" fn(&'a CState, FileId, &mut Option<NTStrPtr<'a>>) -> Option<GrugEntityHandle<'a>>;
 	#[allow(non_camel_case_types)]
 	pub type destroy_entity_t = for<'a> extern "C" fn(&'a CState, GrugEntityHandle<'a>);
 	#[allow(non_camel_case_types)]
 	pub type update_t = for<'a> extern "C" fn (&'a CState, &mut Option<NTStrPtr<'a>>);
 	#[allow(non_camel_case_types)]
-	pub type call_export_fn_t = for<'a> extern "C" fn (&'a CState, GrugEntityHandle<'a>, NTStrPtr<'_>, *const GrugValue, usize);
+	pub type call_export_fn_t = for<'a> extern "C" fn (&'a CState, GrugEntityHandle<'a>, NTStrPtr<'_>, *const Value, usize);
 	#[allow(non_camel_case_types)]
 	pub type dump_file_to_json_t = extern "C" fn (&CState, NTStrPtr<'_>, *mut u8, usize) -> i32;
 	#[allow(non_camel_case_types)]
@@ -236,72 +236,72 @@ mod test_bindings {
 use test_bindings::*;
 
 mod game_fn_bindings {
-	use gruggers::types::{GrugValue, GameFnPtrState};
-	use gruggers::ast::GrugType;
+	use gruggers::types::{Value, HostFnWithState};
+	use gruggers::ast::Type;
 	use gruggers::state::GrugState;
 	use gruggers::error::Error;
 	#[link(name = "tests", kind="dylib")]
 	#[allow(improper_ctypes)]
 	unsafe extern "C" {
-		safe fn game_fn_nothing                 <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_magic                   <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_initialize              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_initialize_bool         <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_identity                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_max                     <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_say                     <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_sin                     <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_cos                     <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_mega                    <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_get_false               <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_set_is_happy            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_mega_f32                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_mega_i32                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_draw                    <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_assert_state_is_not_null<'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_blocked_alrm            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_spawn                   <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_spawn_d                 <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_has_resource            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_has_entity              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_has_string              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_get_opponent            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_set_d                   <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_get_os                  <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_set_opponent            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_motherload              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_motherload_subless      <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_offset_32_bit_f32       <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_offset_32_bit_i32       <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_offset_32_bit_string    <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_talk                    <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_get_position            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_set_position            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_cause_game_fn_error     <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_call_on_b_fn            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_store                   <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_retrieve                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_box_number              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_print_csv               <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_vec_number_new          <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_vec_number_push         <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_vec_number_pop          <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_vec_number_insert       <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
+		safe fn game_fn_nothing                 <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_magic                   <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_initialize              <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_initialize_bool         <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_identity                <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_max                     <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_say                     <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_sin                     <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_cos                     <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_mega                    <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_get_false               <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_set_is_happy            <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_mega_f32                <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_mega_i32                <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_draw                    <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_assert_state_is_not_null<'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_blocked_alrm            <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_spawn                   <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_spawn_d                 <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_has_resource            <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_has_entity              <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_has_string              <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_get_opponent            <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_set_d                   <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_get_os                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_set_opponent            <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_motherload              <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_motherload_subless      <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_offset_32_bit_f32       <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_offset_32_bit_i32       <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_offset_32_bit_string    <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_talk                    <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_get_position            <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_set_position            <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_cause_game_fn_error     <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_call_on_b_fn            <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_store                   <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_retrieve                <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_box_number              <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_print_csv               <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_vec_number_new          <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_vec_number_push         <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_vec_number_pop          <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_vec_number_insert       <'a>(state: &'a GrugState, values: *const Value) -> Value;
 
-		safe fn reg_game_fn_vec_new                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
-		safe fn reg_game_fn_vec_push                (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
-		safe fn reg_game_fn_vec_pop                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
-		safe fn reg_game_fn_vec_insert              (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
+		safe fn reg_game_fn_vec_new                 (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_vec_push                (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_vec_pop                 (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_vec_insert              (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
 
-		safe fn reg_game_fn_box                     (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
-		safe fn reg_game_fn_box_get                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
-		safe fn reg_game_fn_box_set                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
+		safe fn reg_game_fn_box                     (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_box_get                 (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_box_set                 (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
 		
-		safe fn reg_game_fn_default                 (types: &[GrugType;1]) -> Option<GameFnPtrState<GrugState>>;
+		safe fn reg_game_fn_default                 (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
 
-		safe fn reg_game_fn_dict                    (types: &[GrugType;2]) -> Option<GameFnPtrState<GrugState>>;
-		safe fn reg_game_fn_dict_from_vec          (types: &[GrugType;2]) -> Option<GameFnPtrState<GrugState>>;
-		safe fn reg_game_fn_dict_put                (types: &[GrugType;2]) -> Option<GameFnPtrState<GrugState>>;
+		safe fn reg_game_fn_dict                    (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_dict_from_vec           (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_dict_put                (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
 	}
 	pub fn register_game_functions(state: &mut GrugState) -> Result<(), Error> { unsafe {
 		state.register_host_fn("nothing",                  game_fn_nothing             )?; 
@@ -355,8 +355,8 @@ mod game_fn_bindings {
 		state.register_generic_method("Vec", "insert", reg_game_fn_vec_insert)?; 
 
 		state.register_generic_fn("box", reg_game_fn_box)?;
-		state.register_generic_method("Box", "get"   , reg_game_fn_box_set   )?; 
-		state.register_generic_method("Box", "set"   , reg_game_fn_box_get   )?; 
+		state.register_generic_method("Box", "set"   , reg_game_fn_box_set   )?; 
+		state.register_generic_method("Box", "get"   , reg_game_fn_box_get   )?; 
 
 		state.register_generic_fn("default", reg_game_fn_default)?; 
 
