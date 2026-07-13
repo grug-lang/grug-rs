@@ -1419,7 +1419,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 					let data = self.existentials[idx];
 					return Err(self.new_error(
 						data.function_name_span,
-						format_args!("unable to infer generics in function `{}`", data.function_name)
+						format_args!("unable to infer generics in function '{}'", data.function_name)
 					));
 				}
 				let mut current = Some(&parent_existentials);

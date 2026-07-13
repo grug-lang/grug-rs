@@ -196,3 +196,39 @@ impl GrugEntity {
 		}
 	}
 }
+
+pub struct GrugStr {
+	inner: NonNull<u8>,
+}
+#[repr(C)]
+struct GrugStrInner {
+	ref_count: Cell<usize>,
+	len: usize,
+	str: [u8;0],
+}
+
+impl std::ops::Deref for GrugStr {
+	type Target = str;
+	fn deref(&self) -> &str {
+		let len = unsafe{self.inner.cast::<usize>().sub(1).read()};
+		unsafe{std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.inner.as_ptr(), len))}
+	}
+}
+
+impl GrugStr {
+	pub fn from_str(input: &str) -> Self {
+		let alloc = std::alloc::Layout::new::<GrugStrInner>().extend(std::alloc::Layout::array::<u8>(input.len() + 1).unwrap())
+			.expect("Could not create layout").0;
+		let ptr = unsafe{std::alloc::alloc(alloc).cast::<GrugStrInner>()};
+		if ptr.is_null() {
+			panic!("Could not allocate memory");
+		}
+		unsafe{ptr.write(GrugStrInner{ref_count: Cell::new(1), len: input.len(), str: []})}
+		let ret_ptr = unsafe{&raw mut (*ptr).str as *mut u8};
+		unsafe{ret_ptr.copy_from(input.as_ptr(), input.len())};
+		unsafe{ret_ptr.add(input.len()).write(b'\0')};
+		Self {
+			inner: unsafe{NonNull::new_unchecked(ret_ptr)},
+		}
+	}
+}

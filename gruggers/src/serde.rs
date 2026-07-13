@@ -61,8 +61,7 @@ mod ser {
 					"statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				};
 				if !parameters.is_empty() {
-					// TODO: rename this to "parameters"
-					object["arguments"] = parameters.iter().map(serialize_parameter).collect::<Vec<_>>().into();
+					object["parameters"] = parameters.iter().map(serialize_parameter).collect::<Vec<_>>().into();
 				}
 				object
 			},
@@ -80,8 +79,7 @@ mod ser {
 					"statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				};
 				if !parameters.is_empty() {
-					// TODO: rename this to "parameters"
-					object["arguments"] = parameters.iter().map(serialize_parameter).collect::<Vec<_>>().into();
+					object["parameters"] = parameters.iter().map(serialize_parameter).collect::<Vec<_>>().into();
 				}
 				if *return_type != Type::Void {
 					// TODO: rename this to "parameters"
@@ -419,7 +417,7 @@ mod de {
 					output.push_str("export ");
 					output.push_str(name);
 					output.push_str("(");
-					if let Ok(parameters) = get_object_field(global_statement, "arguments", "GLOBAL_ON_FN") {
+					if let Ok(parameters) = get_object_field(global_statement, "parameters", "GLOBAL_ON_FN") {
 						apply_parameters(parameters, output)?;
 					}
 					output.push_str(") ");
@@ -435,7 +433,7 @@ mod de {
 					output.push_str("local ");
 					output.push_str(name);
 					output.push_str("(");
-					if let Ok(parameters) = get_object_field(global_statement, "arguments", "GLOBAL_HELPER_FN") {
+					if let Ok(parameters) = get_object_field(global_statement, "parameters", "GLOBAL_HELPER_FN") {
 						apply_parameters(parameters, output)?;
 					}
 					output.push_str(") ");

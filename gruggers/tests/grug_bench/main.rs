@@ -39,7 +39,7 @@ mod test_bindings {
 				}
 			})
 			.build_state()
-			.map_err(|err| println!("{}", err))
+			.map_err(|err| {println!("{}", err); err})
 			.unwrap();
 		register_game_functions(&mut state);
 		state.all_host_fns_registered().unwrap();
