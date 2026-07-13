@@ -34,12 +34,13 @@ impl ModApi {
 	pub(crate) fn entities<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiEntity<'a>> {
 		&self.entities
 	}
-	#[allow(dead_code)]
+
 	pub(crate) fn classes<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiClass<'a>> {
 		// SAFETY: Invariance of the methods field requires this transmute
 		// This transmute brings it back to the actual lifetime
 		unsafe{std::mem::transmute::<&'a HashMap<&'static NTStr, ModApiClass<'static>>, &'a HashMap<&'a NTStr, ModApiClass<'a>>>(&self.classes)}
 	}
+
 	pub(crate) fn host_fns<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiHostFn<'a>> {
 		&self.host_fns
 	}
@@ -352,9 +353,8 @@ impl ModApi {
 
 #[derive(Debug)]
 pub(crate) struct ModApiClass<'a> {
-	#[allow(dead_code)]
+	#[expect(dead_code)]
 	pub(crate) description: Option< &'a str>,
-	#[allow(dead_code)]
 	pub(crate) ty: Type<'a>,
 	pub(crate) methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
 	pub(crate) generics: &'a [&'a NTStr],
@@ -362,7 +362,7 @@ pub(crate) struct ModApiClass<'a> {
 
 #[derive(Debug)]
 pub(crate) struct ModApiEntity<'a> {
-	#[allow(dead_code)]
+	#[expect(dead_code)]
 	pub(crate) description: Option<&'a str>,
 	pub(crate) export_fns: &'a [(&'a NTStr, ModApiExportFn<'a>)],
 }
@@ -375,14 +375,14 @@ impl<'a> ModApiEntity<'a> {
 
 #[derive(Debug)]
 pub(crate) struct ModApiExportFn<'a> {
-	#[allow(dead_code)]
+	#[expect(dead_code)]
 	pub(super) description: Option<&'a str>,
 	pub(super) parameters: &'a [Parameter<'a>],
 }
 
 #[derive(Debug)]
 pub(crate) struct ModApiHostFn<'a> {
-	#[allow(dead_code)]
+	#[expect(dead_code)]
 	pub(crate) description: Option<&'a str>,
 	pub(crate) generics: &'a [&'a NTStr],
 	pub(crate) parameters: &'a [Parameter<'a>],
