@@ -437,13 +437,8 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			return Err(self.new_error("is not an object"));
 		};
 		// "name" string
-		let ty = match object.get("name") {
-			None => return Ok(Type::Void),
-			Some(str) => {
-				self.push_path(JsonPathComponent::ObjectKey("name"));
-				str.as_str().ok_or_else(|| self.new_error("is not a string"))?
-			}
-		};
+		let ty = self.get_key(object, "name")?;
+		let ty = ty.as_str().ok_or_else(|| self.new_error("is not a string"))?;
 		self.pop_path();
 
 		let ty = match ty {
