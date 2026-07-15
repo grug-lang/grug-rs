@@ -354,7 +354,7 @@ impl ModApi {
 #[derive(Debug)]
 pub(crate) struct ModApiClass<'a> {
 	#[expect(dead_code)]
-	pub(crate) description: Option< &'a str>,
+	pub(crate) description: &'a str,
 	pub(crate) ty: Type<'a>,
 	pub(crate) methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
 	pub(crate) generics: &'a [&'a NTStr],
@@ -363,7 +363,7 @@ pub(crate) struct ModApiClass<'a> {
 #[derive(Debug)]
 pub(crate) struct ModApiEntity<'a> {
 	#[expect(dead_code)]
-	pub(crate) description: Option<&'a str>,
+	pub(crate) description: &'a str,
 	pub(crate) export_fns: &'a [(&'a NTStr, ModApiExportFn<'a>)],
 }
 
@@ -376,14 +376,14 @@ impl<'a> ModApiEntity<'a> {
 #[derive(Debug)]
 pub(crate) struct ModApiExportFn<'a> {
 	#[expect(dead_code)]
-	pub(super) description: Option<&'a str>,
+	pub(super) description: &'a str,
 	pub(super) parameters: &'a [Parameter<'a>],
 }
 
 #[derive(Debug)]
 pub(crate) struct ModApiHostFn<'a> {
 	#[expect(dead_code)]
-	pub(crate) description: Option<&'a str>,
+	pub(crate) description: &'a str,
 	pub(crate) generics: &'a [&'a NTStr],
 	pub(crate) parameters: &'a [Parameter<'a>],
 	pub(crate) return_ty: Type<'a>,
@@ -545,13 +545,10 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		let JsonValue::Object(host_fn_values) = host_fn_values else {
 			return Err(self.new_error("is not an object"));
 		};
-		// optional "description" string
-		let description = host_fn_values.get("description").map(|inner| {
-			self.push_path(JsonPathComponent::ObjectKey("description"));
-			let description = arena.copy_str_into(inner.as_str().ok_or_else(|| self.new_error("is not a string"))?);
-			self.pop_path();
-			Ok(description)
-		}).transpose()?;
+		// "description" string
+		let description = self.get_key(host_fn_values, "description")?;
+		let description = arena.copy_str_into(description.as_str().ok_or_else(|| self.new_error("is not a string"))?);
+		self.pop_path();
 
 		// optional "used_generics" key
 		let mut used_generics = Vec::with_capacity_in(parent_generics.len(), arena);
@@ -723,13 +720,10 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			return Err(context.new_error("is not an object"));
 		};
 
-		// optional "description" string
-		let description = entity_values.get("description").map(|inner| {
-			context.push_path(JsonPathComponent::ObjectKey("description"));
-			let description = arena.copy_str_into(inner.as_str().ok_or_else(|| context.new_error("is not a string"))?);
-			context.pop_path();
-			Ok(description)
-		}).transpose()?;
+		// "description" string
+		let description = context.get_key(entity_values, "description")?;
+		let description = arena.copy_str_into(description.as_str().ok_or_else(|| context.new_error("is not a string"))?);
+		context.pop_path();
 
 		let export_fns = if let Some(export_fns) = entity_values.get("export_functions") {
 			context.push_path(JsonPathComponent::ObjectKey("export_functions"));
@@ -751,13 +745,10 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 
 				let name = arena.copy_str_into_nt(name);
 
-				// optional "description" string
-				let description = export_fn_values.get("description").map(|inner| {
-					context.push_path(JsonPathComponent::ObjectKey("description"));
-					let description = arena.copy_str_into(inner.as_str().ok_or_else(|| context.new_error("is not a string"))?);
-					context.pop_path();
-					Ok(description)
-				}).transpose()?;
+				// "description" string
+				let description = context.get_key(export_fn_values, "description")?;
+				let description = arena.copy_str_into(description.as_str().ok_or_else(|| context.new_error("is not a string"))?);
+				context.pop_path();
 				
 				// optional "parameters" array 
 				let parameters = if let Some(parameters) = export_fn_values.get("parameters") {
@@ -800,13 +791,10 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		let JsonValue::Object(class_values) = class_values else {
 			return Err(context.new_error("is not an object"));
 		};
-		// optional "description" string
-		let description = class_values.get("description").map(|inner| {
-			context.push_path(JsonPathComponent::ObjectKey("description"));
-			let description = arena.copy_str_into(inner.as_str().ok_or_else(|| context.new_error("is not a string"))?);
-			context.pop_path();
-			Ok(description)
-		}).transpose()?;
+		// "description" string
+		let description = context.get_key(class_values, "description")?;
+		let description = arena.copy_str_into(description.as_str().ok_or_else(|| context.new_error("is not a string"))?);
+		context.pop_path();
 
 		// optional "used_generics" key
 		let mut used_generics = Vec::new_in(&arena);
