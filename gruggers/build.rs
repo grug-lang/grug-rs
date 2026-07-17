@@ -18,11 +18,11 @@ fn build_tests() {
 
 	#[cfg(target_os = "linux")]
 	{
-		if Ok(true) = std::fs::exists(&test_source_path) {
+		if let Ok(true) = std::fs::exists(&test_source_path) {
 			println!("cargo::rerun-if-changed={}", test_source_path);
 			_ = std::fs::copy(test_source_path + "/libtests.so", archive_path.clone() + "/libtests.so");
 		}
-		if Ok(true) = std::fs::exists(&bench_source_path) {
+		if let Ok(true) = std::fs::exists(&bench_source_path) {
 			println!("cargo::rerun-if-changed={}", bench_source_path);
 			_ = std::fs::copy(bench_source_path + "/libbench.so", archive_path + "/libbench.so");
 		}
