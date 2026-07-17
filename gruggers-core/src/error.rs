@@ -7,6 +7,7 @@ use std::ffi::OsStr;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 pub struct SourceSpan {
 	pub offset: usize,
 	pub line: usize,

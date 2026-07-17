@@ -127,7 +127,7 @@ pub struct Id(pub u64);
 
 /// An id that uniquely refers to a script path. 
 pub type FileId = Id;
-pub const INVALID_GRUG_SCRIPT_ID: FileId = FileId::new(u64::MAX);
+pub const INVALID_GRUG_FILE_ID: FileId = FileId::new(u64::MAX);
 
 impl std::fmt::Display for Id {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {

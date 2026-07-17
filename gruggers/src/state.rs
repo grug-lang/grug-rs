@@ -44,7 +44,7 @@ use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{Value, Id, HostFn, HostFnWithState, HostFnReg, ExportFnId, FileId, GrugEntity, INVALID_GRUG_SCRIPT_ID};
+use crate::types::{Value, Id, HostFn, HostFnWithState, HostFnReg, HostFnRegErased, ExportFnId, FileId, GrugEntity, INVALID_GRUG_FILE_ID};
 use crate::xar::Xar;
 use crate::ntstring::{NTStrPtr};
 use crate::arena::Arena;
@@ -341,16 +341,16 @@ impl GrugState {
 				// lifetime, which is the same as the 'mod_api lifetime they
 				// actually have
 				entity_type   : unsafe{entity_type.as_ntstrptr().detach_lifetime()},
-				event_fn_name : unsafe{init_globals.as_ntstrptr().detach_lifetime()},
+				fn_name : unsafe{init_globals.as_ntstrptr().detach_lifetime()},
 				index      : 0,
 			});
-			for (i, (event_fn_name, _)) in entity.export_fns.iter().enumerate() {
+			for (i, (fn_name, _)) in entity.export_fns.iter().enumerate() {
 				on_fns.push(ExportFnEntry{
 					// SAFETY: All EventFnEntries we give out have a 'self
 					// lifetime, which is the same as the 'mod_api lifetime they
 					// actually have
 					entity_type   : unsafe{entity_type.as_ntstrptr().detach_lifetime()},
-					event_fn_name : unsafe{event_fn_name.as_ntstrptr().detach_lifetime()},
+					fn_name : unsafe{fn_name.as_ntstrptr().detach_lifetime()},
 					index         : i,
 				});
 			}
@@ -430,7 +430,7 @@ impl GrugState {
 			));
 		}
 		for (i, on_fn_entry) in self.export_functions.iter().enumerate() {
-			if on_fn_entry.entity_type() == entity_type && on_fn_entry.event_fn_name() == fn_name {
+			if on_fn_entry.entity_type() == entity_type && on_fn_entry.fn_name() == fn_name {
 				return Ok(ExportFnId(i as u64))
 			}
 		}
@@ -445,7 +445,7 @@ impl GrugState {
 	}
 	
 	pub fn get_export_fn_name(&self, fn_id: ExportFnId) -> Option<&str> {
-		self.export_functions.get(fn_id.0 as usize).map(|entry| entry.event_fn_name())
+		self.export_functions.get(fn_id.0 as usize).map(|entry| entry.fn_name())
 	}
 
 	pub fn get_export_fns(&self) -> &[ExportFnEntry<'_>] {
@@ -669,6 +669,27 @@ impl GrugState {
 		unsafe{(&mut *mod_api).register_generic_fn(class_name, fn_name, func)}
 	}
 
+	/// Registers a generics function without checking the number of generic parameters
+	pub(crate) unsafe fn register_generic_fn_internal_unsafe(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFnRegErased) -> Result<(), Error> {
+		// SAFETY: This Arc is shared between the state and all the compiler
+		// threads.  Because we have a &mut self, we assume that all compiler
+		// threads are parked waiting to receive more compile commands. This
+		// means that they cannot have an active reference to the mod_api data
+		// during this call to get_mut_unchecked
+		
+		// Note: We dont want to use interior mutability here because that would
+		// technically allow the compiler threads to modify the data too.
+		// 
+		// In that case, there would actually be a thread safety issue with
+		// this
+		
+		// Note: This is the same as the unstable get_mut_unchecked on Arc;
+		// Once that is stabilized, this can be replaced
+		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
+		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
+		unsafe{(&mut *mod_api).register_generic_fn_unchecked(class_name, fn_name, func)}
+	}
+
 	/// Register a dummy function for each game function defined in the mod_api
 	///
 	/// # Safety
@@ -734,7 +755,7 @@ impl GrugState {
 // TODO: This should be moved to gruggers-core
 pub struct ExportFnEntry<'a> {
 	entity_type   : NTStrPtr<'a>,
-	event_fn_name : NTStrPtr<'a>,
+	fn_name : NTStrPtr<'a>,
 	pub index      : usize,
 }
 
@@ -744,8 +765,8 @@ impl<'a> ExportFnEntry<'a> {
 		self.entity_type.to_str()
 	}
 	/// Turns the null terminated string representing the event function name into a [`&str`]
-	pub fn event_fn_name(&self) -> &str {
-		self.event_fn_name.to_str()
+	pub fn fn_name(&self) -> &str {
+		self.fn_name.to_str()
 	}
 }
 
@@ -802,7 +823,7 @@ mod files {
 	use crate::ntstring::{NTBytes, NTStrPtr};
 	use crate::types::FileId;
 	use crate::error::GrugError;
-	use crate::state::INVALID_GRUG_SCRIPT_ID;
+	use crate::state::INVALID_GRUG_FILE_ID;
 
 	use std::ffi::OsStr;
 	use std::path::Path;
@@ -844,7 +865,7 @@ mod files {
 		/// Filename component of the path
 		pub(crate) file_name: NTBytes<'a>,
 		/// first level directory within the mods directory
-		// TODO: Check that mods directly within the mods directory don't
+		// TODO: Check that mods directly within the mods directory (i.e, mods with an empty mod_name) don't
 		// cause problems. This is technically disallowed by grug but grugc
 		// uses this behavior
 		pub(crate) mod_name: NTBytes<'a>,
@@ -853,7 +874,7 @@ mod files {
 		/// Portion of the filename before the '-'
 		pub(crate) entity_name: NTBytes<'a>,
 		/// These two files are actually a Result<FileId, GrugError<'a>>
-		/// Err case is when file_id === INVALID_GRUG_SCRIPT_ID
+		/// Err case is when file_id === INVALID_GRUG_FILE_ID
 		pub(crate) file_id: FileId,
 		pub(crate) error: MaybeUninit<GrugError<'a>>,
 	}
@@ -874,7 +895,7 @@ mod files {
 			let entity_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(entity_name.as_encoded_bytes()))};
 			let (file_id, error) = match result {
 				Ok(id) => (id, MaybeUninit::uninit()),
-				Err(err) => (INVALID_GRUG_SCRIPT_ID, MaybeUninit::new(err.copy_into(arena)))
+				Err(err) => (INVALID_GRUG_FILE_ID, MaybeUninit::new(err.copy_into(arena)))
 			};
 			FileInfo {
 				path,
@@ -899,9 +920,9 @@ mod files {
 			let entity_type = arena.copy_str_into_nt(self.entity_type.to_str()).as_ntstrptr();
 			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
 			let entity_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.entity_name.to_bytes()))};
-			let (file_id, error) = if self.file_id == INVALID_GRUG_SCRIPT_ID {
-				// SAFETY: self.error is intialized if self.file_id == INVALID_GRUG_SCRIPT_ID
-				(INVALID_GRUG_SCRIPT_ID, MaybeUninit::new(unsafe{self.error.assume_init()}.copy_into(arena)))
+			let (file_id, error) = if self.file_id == INVALID_GRUG_FILE_ID {
+				// SAFETY: self.error is intialized if self.file_id == INVALID_GRUG_FILE_ID
+				(INVALID_GRUG_FILE_ID, MaybeUninit::new(unsafe{self.error.assume_init()}.copy_into(arena)))
 			} else {
 				(self.file_id, MaybeUninit::uninit())
 			};
@@ -931,7 +952,7 @@ mod files {
 			unsafe{OsStr::from_encoded_bytes_unchecked(self.entity_name.to_bytes())}
 		}
 		pub fn result (&self) -> Result<FileId, GrugError<'_>> {
-			if self.file_id == INVALID_GRUG_SCRIPT_ID {unsafe{Err(*self.error.assume_init_ref())}}
+			if self.file_id == INVALID_GRUG_FILE_ID {unsafe{Err(*self.error.assume_init_ref())}}
 			else {Ok(self.file_id)}
 		}
 	}

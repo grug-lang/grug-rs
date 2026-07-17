@@ -238,7 +238,6 @@ impl ModApi {
 	/// mod_api. 
 	///
 	/// This is intended to be used directly by c code
-	#[expect(unused)]
 	pub(crate) unsafe fn register_generic_fn_unchecked(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnRegErased) -> Result<()> {
 		if let Some(class_name) = class_name {
 			let Some(class) = self.classes.get_mut(class_name) else {
