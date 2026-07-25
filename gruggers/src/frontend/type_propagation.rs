@@ -47,6 +47,12 @@ enum TypeInferenceError<'a> {
 	Mismatch(TypeMismatch<'a>),
 }
 
+impl<'a> From<TypeMismatch<'a>> for TypeInferenceError<'a> {
+	fn from(other: TypeMismatch<'a>) -> Self {
+		Self::Mismatch(other)
+	}
+}
+
 impl<'a> From<Error> for TypeInferenceError<'a> {
 	fn from(other: Error) -> Self {
 		Self::Error(other)
@@ -54,7 +60,7 @@ impl<'a> From<Error> for TypeInferenceError<'a> {
 }
 
 impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 'temp> {
-	// TODO: This should only be called with fill_result_types
+	// TODO: This should only be called within fill_result_types
 	pub fn new (
 		file_text: &'arena str,
 		file_path: &'arena OsStr,
@@ -645,39 +651,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					));
 				}
 				let result_ty = self.fill_expr(ty_ctx, substitutions, expr, arena)?;
-				match (op, &result_ty) {
-					(UnaryOperator::Not, Type::Bool) => (),
-					(UnaryOperator::Not, Type::Existential{idx}) => {
-						ty_ctx.add_constraint(*op_span, Type::Bool, Type::Existential{idx: *idx}).map_err(|err| match err {
-							TypeInferenceError::Error(err) => err,
-							TypeInferenceError::Mismatch(mismatch) => self.new_error(
-								mismatch.span,
-								format_args!("Found 'not' before {}, but it can only be put before a bool", mismatch.diff.swapped())
-							)
-						})?;
-					}
-					(UnaryOperator::Not, got) => return Err(self.new_error(
-						*op_span,
-						format_args!("Found 'not' before {}, but it can only be put before a bool", got)
-					)),
-					(UnaryOperator::Minus, Type::Number) => (),
-					(UnaryOperator::Minus, Type::Existential{idx}) => {
-						ty_ctx.add_constraint(*op_span, Type::Number, Type::Existential{idx: *idx}).map_err(|err| match err {
-							TypeInferenceError::Error(err) => err,
-							TypeInferenceError::Mismatch(mismatch) => {
-								self.new_error(
-									mismatch.span,
-									format_args!("Found '-' before {}, but it can only be put before a number", mismatch.diff.swapped())
-								)
-							}
-						})?;
-					}
-					(UnaryOperator::Minus, got) => return Err(self.new_error(
-						*op_span,
-						format_args!("Found '-' before {}, but it can only be put before a number", got)
-					)),
-					// _ => (),
+				let expected = match op {
+					UnaryOperator::Not   => Type::Bool,
+					UnaryOperator::Minus => Type::Number,
 				};
+				ty_ctx.add_constraint(*op_span, expected, result_ty).map_err(|err| self.new_error(
+					err.span,
+					format_args!("Found '{}' before {}, but it can only be put before a {}", op, err.diff.swapped(), expected)
+				))?;
 				result_ty
 			},
 			ExprData::Binary{
@@ -688,13 +669,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			} => {
 				let result_0 = self.fill_expr(ty_ctx, substitutions, left, arena)?;
 				let result_1 = self.fill_expr(ty_ctx, substitutions, right, arena)?;
-				ty_ctx.add_constraint(*op_span, result_0, result_1).map_err(|err| match err {
-					TypeInferenceError::Error(err) => err,
-					TypeInferenceError::Mismatch(mismatch) => self.new_error(
-						mismatch.span,
-						format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, mismatch.diff, mismatch.diff.swapped())
-					)
-				})?;
+				ty_ctx.add_constraint(*op_span, result_0, result_1).map_err(|err| self.new_error(
+					err.span,
+					format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, err.diff, err.diff.swapped())
+				))?;
 				// If the types are strings, we want to find out here
 				let result_0 = if let Some(ty) = ty_ctx.get_current_type(result_0) {ty} else {result_0};
 				let result_1 = if let Some(ty) = ty_ctx.get_current_type(result_1) {ty} else {result_1};
@@ -727,22 +705,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				};
 				// Make sure both the left and right expressions have the expected type
 				for (expr_result, expr_span) in [(result_0, left.span), (result_1, right.span)] {
-					match expr_result {
-						Type::Existential{idx} => ty_ctx.add_constraint(expr_span, expected_type, Type::Existential{idx}).map_err(|err| match err {
-							TypeInferenceError::Error(err) => err,
-							TypeInferenceError::Mismatch(mismatch) => self.new_error(
-								mismatch.span,
-								format_args!("'{}' operator expects {} but got {}", op, expected_type, mismatch.diff.swapped())
-							)
-						})?,
-						ty if ty == expected_type => (),
-						_ => {
-							return Err(self.new_error(
-								*op_span,
-								format_args!("'{}' operator expects {} but got {}", op, expected_type, TypeDiff::new(expr_result, expected_type))
-							));
-						}
-					}
+					ty_ctx.add_constraint(expr_span, expected_type, expr_result).map_err(|err| self.new_error(
+						*op_span,
+						format_args!("'{}' operator expects {} but got {}", op, expected_type, err.diff.swapped())
+					))?;
 				}
 				result_type
 			},
@@ -914,13 +880,11 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
 				// do the same for the method receiver, and add a constraint between that and the actual type of the receiver
 				let mod_api_receiver_type = Self::convert_mod_api_type(class.ty, generics, arena);
-				ty_ctx.add_constraint(receiver.span, mod_api_receiver_type, receiver_type).map_err(|err| match err {
-					TypeInferenceError::Error(err) => err,
-					TypeInferenceError::Mismatch(mismatch) => self.new_error(
-						mismatch.span,
-						format_args!("Expected {} but got {}", mismatch.diff, mismatch.diff.swapped())
-					)
-				})?;
+				// TODO: Fix the error message here (i actually don't know if this can even error)
+				ty_ctx.add_constraint(receiver.span, mod_api_receiver_type, receiver_type).map_err(|err| self.new_error(
+					err.span,
+					format_args!("Expected {} but got {}", err.diff, err.diff.swapped())
+				))?;
 				
 				self.fill_arguments(name, ty_ctx, substitutions, *name_span, parameters, args, arena)?;
 
@@ -1024,13 +988,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				));
 			// If the shape of the argument type matches the shape of the expected parameter including generics
 			} else if arg_result_ty.matches(&param.ty) {
-				ty_ctx.add_constraint(arg.span, param.ty, arg_result_ty).map_err(|err| match err {
-					TypeInferenceError::Error(err) => err,
-					TypeInferenceError::Mismatch(mismatch) => self.new_error(
-						mismatch.span,
-						format_args!("Function call '{}' expected the type {} for argument '{}', but got {}", function_name, mismatch.diff, param.name, mismatch.diff.swapped())
-					)
-				})?;
+				ty_ctx.add_constraint(arg.span, param.ty, arg_result_ty).map_err(|err| self.new_error(
+					err.span,
+					format_args!("Function call '{}' expected the type {} for argument '{}', but got {}", function_name, err.diff, param.name, err.diff.swapped())
+				))?;
 			// mismatch
 			} else {
 				let type_diff = TypeDiff::new(param.ty, arg_result_ty);
@@ -1319,7 +1280,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 		new_existential
 	}
 
-	fn add_constraint(&mut self, err_span: SourceSpan, left: Type<'a>, right: Type<'a>) -> Result<(), TypeInferenceError<'a>> {
+	fn add_constraint(&mut self, err_span: SourceSpan, left: Type<'a>, right: Type<'a>) -> Result<(), TypeMismatch<'a>> {
 		self.constraints.push((left, right));
 		// This ensures recursive calls only handle the constraints relevant to them
 		while let Some(constraint) = self.constraints.pop() {
@@ -1329,22 +1290,16 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 				(Type::Number, Type::Number) => (),
 				(Type::String, Type::String) => (),
 				(_, Type::Resource{..}) | 
-				(Type::Resource{..}, _) => return Err(TypeInferenceError::Error(self.new_error(
-					err_span,
-					format_args!("cannot use resource strings in generics"),
-				))),
+				(Type::Resource{..}, _) => unreachable!("resource strings never appear in generics"),
 				(_, Type::Entity{..}) | 
-				(Type::Entity{..}, _) => return Err(TypeInferenceError::Error(self.new_error(
-					err_span,
-					format_args!("cannot use entity strings in generics"),
-				))),
+				(Type::Entity{..}, _) => unreachable!("entity strings never appear in generics"),
 				(Type::Id{name: left_name, ..}, Type::Id{name: right_name, ..}) if left_name != right_name => {
-					return Err(TypeInferenceError::Mismatch(TypeMismatch{
+					return Err(TypeMismatch{
 						span: err_span,
 						// SAFETY: This is an error case, so we never send this type to the backend
 						// The occurs check also ensures types are never recursive
 						diff: unsafe{TypeDiff::new(self.copy_type_into(left, self.temp_arena), self.copy_type_into(right, self.temp_arena))}
-					}));
+					});
 				}
 				// This part is *not* recursive. The error should contain the original types
 				(Type::Id{generics: left_generics, ..}, Type::Id{generics: right_generics, ..}) => {
@@ -1360,20 +1315,17 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 				(Type::Existential{idx}, other) |
 				(other, Type::Existential{idx}) => {
 					// TODO, recursive `occurs` check
-					// self.occurs_in(StackLL{current: idx, parent: None}, other)?;
 					let old_substitution = self.substitutions[idx];
 					if let Type::Existential{idx: found_idx} = old_substitution && found_idx == idx {
 						self.substitutions[idx] = other;
 					}
-					// Return just a type mismatch here, but there needs to be
-					// a way to unify the outer type with the inner type
 					self.constraints.push((other, old_substitution));
 				}
 				_ => {
-					return Err(TypeInferenceError::Mismatch(TypeMismatch{
+					return Err(TypeMismatch{
 						span: err_span,
 						diff: unsafe{TypeDiff::new(self.copy_type_into(left, self.temp_arena), self.copy_type_into(right, self.temp_arena))}
-					}));
+					});
 				}
 			}
 		}
@@ -1445,7 +1397,6 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 
 	fn substitute<'arena>(&mut self, arena: &'arena Arena) -> Result<&'arena [Type<'arena>], Error> {
 		// Copy all types into the permanent arena
-		// TODO: Handle inference failure gracefully
 		for i in 0..self.substitutions.len() {
 			self.check_consistency(self.substitutions[i], StackLL{current: i, parent: None})?;
 		}

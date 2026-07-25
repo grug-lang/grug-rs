@@ -1076,7 +1076,6 @@ impl<'a> Parser<'a> {
 			);
 		}
 		Ok((match type_token.value {
-			"void"     => Type::Void,
 			"bool"     => Type::Bool,
 			"number"   => Type::Number,
 			"string"   => Type::String,
