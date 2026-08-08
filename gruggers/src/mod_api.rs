@@ -425,6 +425,21 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		)
 	}
 
+	#[track_caller]
+	fn new_fmt_error(&self, message: std::fmt::Arguments) -> Error {
+		let mut location = Vec::new_in(self.arena);
+		write!(location, "{}", &self.json_path).expect("writing into a vec can never fail");
+		let location = unsafe{std::str::from_utf8_unchecked(location.leak())};
+		Error::new(
+			ErrorKind::MOD_API_ERROR,
+			location,
+			self.path.as_ref(), 
+			self.text,
+			SourceSpan{offset: 0, line: 0},
+			format_args!("{} {}", location, message),
+		)
+	}
+
 	// gets the key and pushes the path onto self
 	fn get_key<'b>(&mut self, object: &'b Object, key: &'a str) -> Result<&'b JsonValue> {
 		self.push_path(JsonPathComponent::ObjectKey(key));
@@ -470,7 +485,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 					}
 				}
 				self.push_path(JsonPathComponent::ObjectKey("name"));
-				return Err(self.new_error("is an undeclared generic"));
+				return Err(self.new_fmt_error(format_args!("is an undeclared generic (\"{}\")", generic)));
 			}
 			type_name => {
 				let name = arena.copy_str_into_nt(type_name).as_ntstrptr();
@@ -561,6 +576,12 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 				self.push_path(JsonPathComponent::ArrayIdx(i));
 				used_generics.push(arena.copy_str_into_nt(generic.as_str().ok_or_else(|| self.new_error("is not a string"))?));
 				self.pop_path();
+			}
+			for (i, generic) in used_generics.iter().enumerate() {
+				if !generic.starts_with("$") {
+					self.push_path(JsonPathComponent::ArrayIdx(i));
+					return Err(self.new_error("must begin with '$'"));
+				}
 			}
 			self.pop_path();
 		}
@@ -808,6 +829,12 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				context.pop_path();
 			}
 			context.pop_path();
+		}
+		for (i, generic) in used_generics.iter().enumerate() {
+			if !generic.starts_with("$") {
+				context.push_path(JsonPathComponent::ArrayIdx(i));
+				return Err(context.new_error("must begin with '$'"));
+			}
 		}
 		let generics = used_generics.leak();
 

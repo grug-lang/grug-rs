@@ -5,10 +5,10 @@ use gruggers::nt;
 
 mod test_bindings {
 	use gruggers::state::{GrugInitSettings, GrugState, State, GrugEntityHandle};
-	use gruggers::backend::BytecodeBackend;
+	use gruggers::backend::{BytecodeBackend, StubBackend};
 	use gruggers_core::runtime_error::RuntimeError;
 	use gruggers::types::{Value, FileId};
-	use gruggers::ntstring::{NTStrPtr, NTBytes};
+	use gruggers::ntstring::{NTStrPtr, NTBytes, NTStr};
 	use gruggers::serde;
 	use gruggers::nt;
 	use gruggers::arena::Arena;
@@ -17,6 +17,22 @@ mod test_bindings {
 	use std::ffi::OsStr;
 
 	type CState = (GrugState, Arena);
+
+	pub extern "C" fn parse_mod_api(mod_api_path: NTBytes) -> Option<NTBytes<'static>>{
+		let state = GrugInitSettings::new()
+			.set_mod_api_path(unsafe{OsStr::from_encoded_bytes_unchecked(mod_api_path.to_bytes())})
+			.set_mods_dir(unsafe{OsStr::from_encoded_bytes_unchecked(b".")})
+			.set_backend(StubBackend)
+			.build_state();
+		match state {
+			Ok(_) => None,
+			Err(err) => {
+				let return_str: &NTStr = (&*format!("{}\0", err).leak()).try_into().unwrap();
+				
+				Some(return_str.into())
+			}
+		}
+	}
 
 	pub extern "C" fn create_grug_state<'a>(mod_api_path: NTBytes<'a>, mods_dir_path: NTBytes<'a>, _unsafe_mode: bool) -> Option<Box<CState>> {
 		let mut state = GrugInitSettings::new()
@@ -165,6 +181,8 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	// pub type c_size_t = u64;
 	#[allow(non_camel_case_types)]
+	pub type parse_mod_api_t = for<'a> extern "C" fn(NTBytes<'a>) -> Option<NTBytes<'static>>;
+	#[allow(non_camel_case_types)]
 	pub type create_grug_state_t = for<'a> extern "C" fn(NTBytes<'a>, NTBytes<'a>, bool) -> Option<Box<CState>>;
 	#[allow(non_camel_case_types)]
 	pub type destroy_grug_state_t = extern "C" fn(Box<CState>);
@@ -189,6 +207,7 @@ mod test_bindings {
 
 	#[repr(C)]
 	pub struct GrugStateVTable {
+		parse_mod_api: parse_mod_api_t,
 		create_grug_state: create_grug_state_t,
 		destroy_grug_state: destroy_grug_state_t,
 		compile_grug_file: compile_grug_file_t,
@@ -203,6 +222,7 @@ mod test_bindings {
 	}
 
 	pub const STATE_VTABLE: GrugStateVTable = GrugStateVTable {
+		parse_mod_api,
 		create_grug_state,
 		destroy_grug_state,
 		compile_grug_file,
@@ -279,6 +299,7 @@ mod game_fn_bindings {
         safe fn game_fn_set_position                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
         safe fn game_fn_cause_game_fn_error           <'a>(state: &'a GrugState, values: *const Value) -> Value;
         safe fn game_fn_call_on_b_fn                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_call_on_b_fn_number           <'a>(state: &'a GrugState, values: *const Value) -> Value;
         safe fn game_fn_store                         <'a>(state: &'a GrugState, values: *const Value) -> Value;
         safe fn game_fn_retrieve                      <'a>(state: &'a GrugState, values: *const Value) -> Value;
         safe fn game_fn_box_number                    <'a>(state: &'a GrugState, values: *const Value) -> Value;
@@ -292,20 +313,27 @@ mod game_fn_bindings {
         safe fn game_fn_Utils_cause_game_fn_error     <'a>(state: &'a GrugState, values: *const Value) -> Value;
         safe fn game_fn_Utils_call_on_b_fn            <'a>(state: &'a GrugState, values: *const Value) -> Value;
 
-		safe fn reg_game_fn_vec_new                 (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
-		safe fn reg_game_fn_vec_push                (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
-		safe fn reg_game_fn_vec_pop                 (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
-		safe fn reg_game_fn_vec_insert              (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_vec_new                           (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_vec_push                          (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_vec_pop                           (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_vec_insert                        (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
 
-		safe fn reg_game_fn_box                     (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
-		safe fn reg_game_fn_box_get                 (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
-		safe fn reg_game_fn_box_set                 (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_box                               (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_box_get                           (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_box_set                           (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
 		
-		safe fn reg_game_fn_default                 (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_default                           (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
 
-		safe fn reg_game_fn_dict                    (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
-		safe fn reg_game_fn_dict_from_vec           (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
-		safe fn reg_game_fn_dict_put                (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_dict                              (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_dict_from_vec                     (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_dict_put                          (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+
+		safe fn reg_game_fn_cause_game_fn_error_generic       (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_Utils_cause_game_fn_error_generic (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+
+		safe fn reg_game_fn_make_pair                         (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_pair_first                        (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_pair_second                       (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
 	}
 	pub fn register_game_functions(state: &mut GrugState) -> Result<(), Error> { unsafe {
 		state.register_host_fn("nothing",                  game_fn_nothing             )?; 
@@ -344,6 +372,7 @@ mod game_fn_bindings {
 		state.register_host_fn("set_position",             game_fn_set_position        )?; 
 		state.register_host_fn("cause_game_fn_error",      game_fn_cause_game_fn_error )?; 
 		state.register_host_fn("call_on_b_fn",             game_fn_call_on_b_fn        )?; 
+		state.register_host_fn("call_on_b_fn_number",      game_fn_call_on_b_fn_number )?; 
 		state.register_host_fn("store",                    game_fn_store               )?; 
 		state.register_host_fn("retrieve",                 game_fn_retrieve            )?; 
 		state.register_host_fn("box_number",               game_fn_box_number          )?; 
@@ -357,6 +386,7 @@ mod game_fn_bindings {
 		state.register_method("Utils", "assert_state_is_not_null", game_fn_Utils_assert_state_is_not_null)?; 
 		state.register_method("Utils", "cause_game_fn_error",      game_fn_Utils_cause_game_fn_error     )?; 
 		state.register_method("Utils", "call_on_b_fn",             game_fn_Utils_call_on_b_fn           )?; 
+		state.register_generic_method("Utils", "cause_game_fn_error_generic", reg_game_fn_Utils_cause_game_fn_error_generic)?; 
 
 		state.register_generic_fn("vec", reg_game_fn_vec_new)?;
 		state.register_generic_method("Vec", "push"  , reg_game_fn_vec_push  )?; 
@@ -367,11 +397,17 @@ mod game_fn_bindings {
 		state.register_generic_method("Box", "set"   , reg_game_fn_box_set   )?; 
 		state.register_generic_method("Box", "get"   , reg_game_fn_box_get   )?; 
 
-		state.register_generic_fn("default", reg_game_fn_default)?; 
+		state.register_generic_fn("make_pair",                   reg_game_fn_make_pair)?; 
+		state.register_generic_method("Pair", "first" ,          reg_game_fn_pair_first)?; 
+		state.register_generic_method("Pair", "second",          reg_game_fn_pair_second)?; 
 
-		state.register_generic_fn("dict", reg_game_fn_dict)?; 
-		state.register_generic_fn("dict_from_vec", reg_game_fn_dict_from_vec)?; 
-		state.register_generic_method("Dict", "put"   , reg_game_fn_dict_put )?; 
+		state.register_generic_fn("dict",                        reg_game_fn_dict)?; 
+		state.register_generic_fn("dict_from_vec",               reg_game_fn_dict_from_vec)?; 
+		state.register_generic_method("Dict", "put"   , reg_game_fn_dict_put)?; 
+
+		state.register_generic_fn("default", reg_game_fn_default)?; 
+		state.register_generic_fn("cause_game_fn_error_generic", reg_game_fn_cause_game_fn_error_generic)?; 
+
 		Ok(())
 	}}
 }

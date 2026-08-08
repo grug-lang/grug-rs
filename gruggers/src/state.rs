@@ -721,8 +721,8 @@ impl GrugState {
 	/// `values` may be null
 	#[must_use]
 	pub unsafe fn call_export_fn_raw(&self, entity: &GrugEntity, fn_id: ExportFnId, values: *const Value) -> bool {
-		let old_script   = self.current_script  .get();
-		let old_fn_id = self.current_export_fn_id.get();
+		let old_script   = self.current_script.get();
+		let old_fn_id    = self.current_export_fn_id.get();
 		self.current_script  .set(Some(entity.file_id));
 		self.current_export_fn_id.set(Some(fn_id));
 

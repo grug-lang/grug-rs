@@ -156,8 +156,8 @@ struct Parser<'arena> {
 }
 
 pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a str, file_path: &'a OsStr) -> Result<Ast<'a>, Error> {
-	let final_token = tokens.last().map(|token| token.span).unwrap_or(SourceSpan{offset: 0, line: 0});
-	let mut parser = Parser::new_in(final_token, file_text, file_path, arena);
+	let final_token_span = tokens.last().map(|token| token.span).unwrap_or(SourceSpan{offset: 0, line: 1});
+	let mut parser = Parser::new_in(final_token_span, file_text, file_path, arena);
 	let mut seen_helper_fn = false;
 
 	let mut seen_on_fn = false;

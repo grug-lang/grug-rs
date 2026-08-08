@@ -20,11 +20,13 @@
 	},
 	"classes": {
 		"Ref": {
+			"description": "Reference to an item allocated elsewhere",
 			"used_generics": [
 				"$T"
 			],
 			"methods": {
 				"set": {
+					"description": "Set a new value behind the reference",
 					"parameters": [
 						{
 							"name": "value",
@@ -35,6 +37,7 @@
 					]
 				},
 				"get": {
+					"description": "Get the value behind the reference",
 					"return_type": {
 						"name": "$T"
 					}
@@ -42,12 +45,14 @@
 			}
 		},
 		"Dict": {
+			"description": "Dictionary",
 			"used_generics": [
 				"$K",
 				"$V"
 			],
 			"methods": {
 				"put": {
+					"description": "Puts a key and value into the dictionary",
 					"parameters": [
 						{
 							"name": "key",
@@ -63,21 +68,23 @@
 						}
 					]
 				}
-
 			}
 		},
 		"Pair": {
+			"description": "A pair of two values of different types",
 			"used_generics": [
 				"$K",
 				"$V"
 			]
 		},
 		"List": {
+			"description": "A list of values",
 			"used_generics": [
 				"$T"
 			],
 			"methods": {
 				"push": {
+					"description": "adds a value to the end of the list",
 					"parameters": [
 						{
 							"name": "item",
@@ -88,6 +95,7 @@
 					]
 				},
 				"get": {
+					"description": "Gets the value at a particular index",
 					"return_type": {
 						"name": "$T"
 					},
@@ -101,6 +109,7 @@
 					]
 				},
 				"get_checked": {
+					"description": "Gets the value at a particular index, returns None if the value is not present",
 					"return_type": {
 						"name": "Option",
 						"generics": [
@@ -121,16 +130,19 @@
 			}
 		},
 		"Option": {
+			"description": "Indicates that a value may not be present",
 			"used_generics": [
 				"$T"
 			],
 			"methods": {
 				"is": {
+					"description": "Checks if a value is present",
 					"return_type": {
 						"name": "bool"
 					}
 				},
 				"unwrap": {
+					"description": "Gets the value if present",
 					"return_type": {
 						"name": "$T"
 					}
@@ -140,6 +152,7 @@
 	},
 	"host_functions": {
 		"dict_from_list": {
+			"description": "Creates a dict from a list of pairs of keys and values",
 			"used_generics": [
 				"$K",
 				"$V"
@@ -178,6 +191,7 @@
 			]
 		},
 		"list": {
+			"description": "Creates an empty list",
 			"used_generics": [
 				"$T"
 			],
@@ -191,6 +205,7 @@
 			}
 		},
 		"make_pair": {
+			"description": "Creates a pair",
 			"used_generics": [
 				"$T0",
 				"$T1"
@@ -222,6 +237,7 @@
 			]
 		},
 		"dict": {
+			"description": "Creates an empty dictionary",
 			"used_generics": [
 				"$K",
 				"$V"
@@ -239,6 +255,7 @@
 			}
 		},
 		"print": {
+			"description": "Prints a generic value",
 			"used_generics": [
 				"$T"
 			],
@@ -252,6 +269,7 @@
 			]
 		},
 		"ref": {
+			"description": "Creates a reference to a primitive value",
 			"used_generics": [
 				"$T"
 			],

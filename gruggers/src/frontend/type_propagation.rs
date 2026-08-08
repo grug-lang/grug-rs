@@ -768,7 +768,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 								} else {
 									return Err(self.new_error(
 										*name_span,
-										format_args!("generic function '{}' instantiation failed for types {}", name, TypeListDisplay(generics))
+										format_args!("generic function '{}' failed instantiation for types {}", name, TypeListDisplay(generics))
 									));
 								}
 							} else {
@@ -806,27 +806,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				name_span,
 			} => {
 				let name = name.to_str();
-				match &receiver.data {
-					ExprData::Call {
-						receiver: Some(_),
-						..
-					} => {
-						return Err(self.new_error(
-							receiver.span,
-							format_args!("Method chaining is not allowed")
-						));
-					}
-					ExprData::Call {
-						receiver: None,
-						..
-					} => {
-						return Err(self.new_error(
-							receiver.span,
-							format_args!("Cannot call method on the result of a function call")
-						));
-					}
-					_ => (),
-				};
 				let receiver_type = self.fill_expr(ty_ctx, substitutions, receiver, arena)?;
 				// We want to at least know the first level of the type is known
 				let receiver_type = if let Some(ty) = ty_ctx.get_current_type(receiver_type) {ty} else {
@@ -908,7 +887,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 							} else {
 								return Err(self.new_error(
 									*name_span,
-									format_args!("generic method {}.{} instantiation failed for types {}", receiver_name, name, TypeListDisplay(generics))
+									format_args!("generic method '{}.{}' failed instantiation for types {}", receiver_name, name, TypeListDisplay(generics))
 								));
 							}
 						} else {
@@ -1458,7 +1437,7 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
 				} => name.to_str(),
 				Type::Resource{..} => "resource",
 				Type::Entity{..} => "entity",
-				Type::Existential {..} => "_",
+				Type::Existential {..} => unreachable!(),
 			}
 		}
 

@@ -49,7 +49,7 @@ fn main() -> Result<()> {
 	let mut has_error = false;
 
 	for file_to_compile in args.files_to_compile {
-		if compile_files(&grug_state, &file_to_compile).is_err() {has_error = true;};
+		has_error |= compile_files(&grug_state, &file_to_compile);
 	}
 	
 	if has_error {
@@ -59,32 +59,38 @@ fn main() -> Result<()> {
 	Ok(())
 }
 
-fn compile_files<P: AsRef<Path>>(state: &GrugState, path: P) -> Result<()> {
+fn compile_files<P: AsRef<Path>>(state: &GrugState, path: P) -> bool {
 	let Ok(metadata) = std::fs::metadata(&path) else {
 		println!("Could not open path {}", path.as_ref().display());
 		std::process::exit(2);
 	};
 	
 	let mut has_error = false;
-	if metadata.is_dir() {
-		for dir_entry in std::fs::read_dir(path)? {
-			compile_files(state, &dir_entry?.path())?;
-		}
-	} else if let Some(extension) = path.as_ref().extension() && extension == "grug" {
-		let file_text = std::fs::read_to_string(&path)?;
-		match state.compile_grug_file_from_str(path.as_ref(), &file_text) {
-			Ok(_) => (),
-			Err(err) => {
-				eprintln!("{}", err);
-				has_error = true;
+	let result: Result<()> = (|| {
+		if metadata.is_dir() {
+			for dir_entry in std::fs::read_dir(path)? {
+				has_error |= compile_files(state, &dir_entry?.path());
+			}
+		} else if let Some(extension) = path.as_ref().extension() && extension == "grug" {
+			let file_text = std::fs::read_to_string(&path)?;
+			match state.compile_grug_file_from_str(path.as_ref(), &file_text) {
+				Ok(_) => (),
+				Err(err) => {
+					eprintln!("{}", err);
+					has_error = true;
+				}
 			}
 		}
-	}
-	if has_error {
-		Err(Box::from("err")).into()
-	} else {
 		Ok(())
+	})();
+	match result {
+		Ok(()) => (),
+		Err(err) => {
+			eprintln!("{}", err);
+			has_error = true;
+		}
 	}
+	return has_error;
 }
 
 fn search_mod_api_path() -> Result<String> {

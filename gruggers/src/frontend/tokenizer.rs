@@ -449,13 +449,12 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(file_text: &'a str, arena: &'a Arena, file_
 					"A comment has trailing whitespace on line {}", cur_line
 				));
 			}
-			cur_line += 1;
 
 			// SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
 			tokens.push(Token{
 				ty: TokenType::Comment, 
 				value: unsafe{str::from_utf8_unchecked(&file_text[start..i])},
-				span: SourceSpan{offset: old_i, line: cur_line - 1},
+				span: SourceSpan{offset: old_i, line: cur_line},
 			});
 			continue;
 		}
