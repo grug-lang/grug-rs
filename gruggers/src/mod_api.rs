@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::io::Write;
 use std::ptr::NonNull;
+use std::cell::UnsafeCell;
 
 use crate::ntstring::NTStr;
 use crate::ast::{Parameter, Type};
@@ -359,7 +360,7 @@ pub(crate) struct TraitImplementor<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Trait<'a> {
-	pub(crate) name: &'a NTStr,
+	pub(crate) name: &'a str,
 	pub(crate) implementors: &'a [TraitImplementor<'a>]
 }
 
@@ -471,6 +472,11 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			format_args!("{} {}", location, message),
 		)
 	}
+	
+	// gets the key as a str and pushes the path onto self
+	fn get_str<'b>(&mut self, object: &'b Object, key: &'a str) -> Result<&'b str> {
+		self.get_key(object, key)?.as_str().ok_or_else(|| self.new_error("is not a string"))
+	}
 
 	// gets the key and pushes the path onto self
 	fn get_key<'b>(&mut self, object: &'b Object, key: &'a str) -> Result<&'b JsonValue> {
@@ -483,8 +489,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			return Err(self.new_error("is not an object"));
 		};
 		// "name" string
-		let ty = self.get_key(object, "name")?;
-		let ty = ty.as_str().ok_or_else(|| self.new_error("is not a string"))?;
+		let ty = self.get_str(object, "name")?;
 		self.pop_path();
 
 		let ty = match ty {
@@ -494,7 +499,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			"string"   => Type::String,
 			"entity"   => {
 				// "entity_type" string
-				let entity_type = self.get_key(object, "entity_type")?.as_str().ok_or_else(|| self.new_error("is not a string"))?;
+				let entity_type = self.get_str(object, "entity_type")?;
 				self.pop_path();
 				Type::Entity{
 					entity_type: (!entity_type.is_empty()).then(|| {
@@ -504,10 +509,10 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			},
 			"resource" => {
 				// "resource_extension" string
-				let entity_type = self.get_key(object, "resource_extension")?.as_str().ok_or_else(|| self.new_error("is not a string"))?;
+				let extension = self.get_str(object, "resource_extension")?;
 				self.pop_path();
 				Type::Resource {
-					extension: arena.copy_str_into_nt(entity_type).as_ntstrptr(),
+					extension: arena.copy_str_into_nt(extension).as_ntstrptr(),
 				}
 			}
 			generic if generic.starts_with("$") => {
@@ -558,7 +563,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 				return Err(self.new_error("is not an object"));
 			};
 			// required "name" string
-			let param_name = self.get_key(param_values, "name")?.as_str().ok_or_else(|| self.new_error("is not a string"))?;
+			let param_name = self.get_str(param_values, "name")?;
 			self.pop_path();
 
 			// replace [index] with ["<name>"] in path
@@ -592,8 +597,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			return Err(self.new_error("is not an object"));
 		};
 		// "description" string
-		let description = self.get_key(host_fn_values, "description")?;
-		let description = arena.copy_str_into(description.as_str().ok_or_else(|| self.new_error("is not a string"))?);
+		let description = arena.copy_str_into(self.get_str(host_fn_values, "description")?);
 		self.pop_path();
 
 		// optional "used_generics" key
@@ -762,171 +766,244 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		return Err(context.new_error("is not an object"));
 	};
 
-	// This is needed to get around the drop check
+	// This is needed to get around the drop check.
+	// context must be dropped before mod_api_root
 	let mut context = context;
-	
-	let entities = context.get_key(&mod_api_root, "entities")?;
-	let JsonValue::Object(entities) = entities else {
-		return Err(context.new_error("is not an object"));
-	};
 
-	let entities = entities.iter().map(|(entity_name, entity_values)| {
-		context.push_path(JsonPathComponent::ObjectKey(entity_name));
-		let entity_name = arena.copy_str_into_nt(entity_name);
-		let JsonValue::Object(entity_values) = entity_values else {
+	if let Some(constraints) = mod_api_root.get("constraints") {
+		context.push_path(JsonPathComponent::ObjectKey("constraints"));
+		let JsonValue::Object(constraints) = constraints else {
 			return Err(context.new_error("is not an object"));
 		};
-
-		// "description" string
-		let description = context.get_key(entity_values, "description")?;
-		let description = arena.copy_str_into(description.as_str().ok_or_else(|| context.new_error("is not a string"))?);
-		context.pop_path();
-
-		let export_fns = if let Some(export_fns) = entity_values.get("export_functions") {
-			context.push_path(JsonPathComponent::ObjectKey("export_functions"));
-			let JsonValue::Array(export_fns) = export_fns else {
-				return Err(context.new_error("is not an array"));
-			};
-			let mut temp = Vec::new_in(&arena);
-			for (i, export_fn_values) in export_fns.iter().enumerate() {
-				context.push_path(JsonPathComponent::ArrayIdx(i));
-				let JsonValue::Object(export_fn_values) = export_fn_values else {
-					return Err(context.new_error("is not an object"));
-				};
-				// required "name" string
-				let name = context.get_key(export_fn_values, "name")?.as_str().ok_or_else(|| context.new_error("is not a string"))?;
-				context.pop_path();
-
-				context.pop_path();
-				context.push_path(JsonPathComponent::ArrayKey(name));
-
-				let name = arena.copy_str_into_nt(name);
-
-				// "description" string
-				let description = context.get_key(export_fn_values, "description")?;
-				let description = arena.copy_str_into(description.as_str().ok_or_else(|| context.new_error("is not a string"))?);
-				context.pop_path();
-				
-				// optional "parameters" array 
-				let parameters = if let Some(parameters) = export_fn_values.get("parameters") {
-					context.push_path(JsonPathComponent::ObjectKey("parameters"));
-					let parameters = context.parse_parameters(parameters, &[], &arena)?;
-					context.pop_path();
-					parameters
-				} else {
-					&[]
-				};
-
-				context.pop_path();
-				temp.push((name, ModApiExportFn{
-					description,
-					parameters,
-				}))
-			}
-
-			context.pop_path();
-			temp.leak()
-		} else {
-			&mut []
-		};
-		context.pop_path();
-		Ok((entity_name, ModApiEntity{
-			description,
-			export_fns
-		}))
-	}).collect::<Result<HashMap<_, _>>>()?;
-	context.pop_path();
-	
-	// "classes" object
-	let classes = context.get_key(&mod_api_root, "classes")?;
-	let JsonValue::Object(classes) = classes else {
-		return Err(context.new_error("is not an object"));
-	};
-	let classes = classes.iter().map(|(class_name, class_values)| {
-		context.push_path(JsonPathComponent::ObjectKey(class_name));
-		let class_name = arena.copy_str_into_nt(class_name);
-		let JsonValue::Object(class_values) = class_values else {
-			return Err(context.new_error("is not an object"));
-		};
-		// "description" string
-		let description = context.get_key(class_values, "description")?;
-		let description = arena.copy_str_into(description.as_str().ok_or_else(|| context.new_error("is not a string"))?);
-		context.pop_path();
-
-		// optional "used_generics" key
-		let mut used_generics = Vec::new_in(&arena);
-		if let Some(generics) = class_values.get("used_generics") {
-			context.push_path(JsonPathComponent::ObjectKey("used_generics"));
-			let JsonValue::Array(generics) = generics else {
-				return Err(context.new_error("is not an array"));
-			};
-			for (i, generic) in generics.iter().enumerate() {
-				context.push_path(JsonPathComponent::ArrayIdx(i));
-				used_generics.push(
-					Generic {
-						name: arena.copy_str_into_nt(generic.as_str().ok_or_else(|| context.new_error("is not a string"))?),
-						traits: &[],
-					}
-				);
-				context.pop_path();
-			}
-			context.pop_path();
-		}
-		for (i, generic) in used_generics.iter().enumerate() {
-			if !generic.name.starts_with("$") {
-				context.push_path(JsonPathComponent::ArrayIdx(i));
-				return Err(context.new_error("must begin with '$'"));
-			}
-		}
-		let generics = used_generics.leak();
-
-		let ty = Type::Id {
-			name: class_name.as_ntstrptr(),
-			generics: arena.slice_from_iter((0..(generics.len())).map(|i| {
-				Type::Existential{idx: i}
-			})),
-		};
-
-		// optional "methods" object
-		let methods = if let Some(methods) = class_values.get("methods") {
-			context.push_path(JsonPathComponent::ObjectKey("methods"));
-			let JsonValue::Object(methods) = methods else {
+		// "constraints": {
+		// 		"Hash": {
+		// 			"description": "Foo"
+		// 			"implementors": [
+		// 				{
+		// 					"used_generics": [
+		// 						{
+		// 							"name": "$T"
+		// 							"constraints": [
+		// 								"Hash"
+		// 							]
+		// 						}
+		// 					]
+		// 					"type": {
+		//						...
+		//					}
+		// 				}
+		// 			]
+		// 		}
+		// }
+		let data = arena.slice_from_iter(constraints.iter().map(|(name, data)| UnsafeCell::new(Trait{name, implementors: &[]})));
+		
+		for (constraint_name, constraint_values) in constraints.iter() {
+			context.push_path(JsonPathComponent::ObjectKey(constraint_name));
+			let JsonValue::Object(constraint_values) = constraint_values else {
 				return Err(context.new_error("is not an object"));
 			};
-			let mut temp = Vec::new_in(&arena);
-			for (method_name, method_values) in methods.iter() {
-				context.push_path(JsonPathComponent::ObjectKey(method_name));
-				let method_name = arena.copy_str_into_nt(method_name);
-				temp.push((method_name, context.parse_host_fn(method_values, generics, &arena)?));
-				context.pop_path();
+			
+			// "description" string
+			let description = arena.copy_str_into(context.get_str(constraint_values, "description")?);
+			context.pop_path();
+
+			let implementors = context.get_key(constraint_values, "implementors")?;
+			let JsonValue::Array(implementors) = implementors else {
+				return Err(context.new_error("is not an array"));
+			};
+			for (i, implementor) in implementors.iter().enumerate() {
+				context.push_path(JsonPathComponent::ArrayIdx(i));
+				let used_generics = context.get_key(constraint_values, "used_generics")?;
+				let JsonValue::Array(used_generics) = used_generics else {
+					return Err(context.new_error("is not an array"));
+				};
+				for (i, used_generic) in used_generics.iter().enumerate() {
+					context.push_path(JsonPathComponent::ArrayIdx(i));
+					context.pop_path()
+				}
+				context.pop_path()
 			}
 			context.pop_path();
-			temp.leak()
-		} else {
-			&mut []
-		};
+			context.pop_path();
+		}
+
 		context.pop_path();
-		Ok((class_name, ModApiClass {
-			description,
-			ty,
-			generics,
-			methods,
-		}))
-	}).collect::<Result<HashMap<_, _>>>()?;
-	context.pop_path();
+	}
 	
-	let host_fns = context.get_key(&mod_api_root, "host_functions")?;
-	let JsonValue::Object(host_fns) = host_fns else {
-		return Err(context.new_error("is not an object"));
-	};
-	let host_fns = host_fns.iter().map(|(host_fn_name, host_fn_values)| {
-		context.push_path(JsonPathComponent::ObjectKey(host_fn_name));
-		let host_fn_name = arena.copy_str_into_nt(host_fn_name);
-		let host_fn = context.parse_host_fn(host_fn_values, &[], &arena)?;
+	let entities = if let Some(entities) = mod_api_root.get("entities") {
+		context.push_path(JsonPathComponent::ObjectKey("entities"));
+		let JsonValue::Object(entities) = entities else {
+			return Err(context.new_error("is not an object"));
+		};
+
+		let entities = entities.iter().map(|(entity_name, entity_values)| {
+			context.push_path(JsonPathComponent::ObjectKey(entity_name));
+			let entity_name = arena.copy_str_into_nt(entity_name);
+			let JsonValue::Object(entity_values) = entity_values else {
+				return Err(context.new_error("is not an object"));
+			};
+
+			// "description" string
+			let description = arena.copy_str_into(context.get_str(entity_values, "description")?);
+			context.pop_path();
+
+			let export_fns = if let Some(export_fns) = entity_values.get("export_functions") {
+				context.push_path(JsonPathComponent::ObjectKey("export_functions"));
+				let JsonValue::Array(export_fns) = export_fns else {
+					return Err(context.new_error("is not an array"));
+				};
+				let mut temp = Vec::new_in(&arena);
+				for (i, export_fn_values) in export_fns.iter().enumerate() {
+					context.push_path(JsonPathComponent::ArrayIdx(i));
+					let JsonValue::Object(export_fn_values) = export_fn_values else {
+						return Err(context.new_error("is not an object"));
+					};
+					// required "name" string
+					let name = context.get_str(export_fn_values, "name")?;
+					context.pop_path();
+
+					context.pop_path();
+					context.push_path(JsonPathComponent::ArrayKey(name));
+
+					let name = arena.copy_str_into_nt(name);
+
+					// "description" string
+					let description = arena.copy_str_into(context.get_str(export_fn_values, "description")?);
+					context.pop_path();
+					
+					// optional "parameters" array 
+					let parameters = if let Some(parameters) = export_fn_values.get("parameters") {
+						context.push_path(JsonPathComponent::ObjectKey("parameters"));
+						let parameters = context.parse_parameters(parameters, &[], &arena)?;
+						context.pop_path();
+						parameters
+					} else {
+						&[]
+					};
+
+					context.pop_path();
+					temp.push((name, ModApiExportFn{
+						description,
+						parameters,
+					}))
+				}
+
+				context.pop_path();
+				temp.leak()
+			} else {
+				&mut []
+			};
+			context.pop_path();
+			Ok((entity_name, ModApiEntity{
+				description,
+				export_fns
+			}))
+		}).collect::<Result<HashMap<_, _>>>()?;
 		context.pop_path();
-		Ok((host_fn_name, host_fn))
-	}).collect::<Result<HashMap<_, _>>>()?;
-	context.pop_path();
+		entities
+	} else {
+		HashMap::new()
+	};
+	
+	// "classes" object
+	let classes = if let Some(classes) = mod_api_root.get("classes") {
+		context.push_path(JsonPathComponent::ObjectKey("classes"));
+		let JsonValue::Object(classes) = classes else {
+			return Err(context.new_error("is not an object"));
+		};
+		let classes = classes.iter().map(|(class_name, class_values)| {
+			context.push_path(JsonPathComponent::ObjectKey(class_name));
+			let class_name = arena.copy_str_into_nt(class_name);
+			let JsonValue::Object(class_values) = class_values else {
+				return Err(context.new_error("is not an object"));
+			};
+			// "description" string
+			let description = arena.copy_str_into(context.get_str(class_values, "description")?);
+			context.pop_path();
+
+			// optional "used_generics" key
+			let mut used_generics = Vec::new_in(&arena);
+			if let Some(generics) = class_values.get("used_generics") {
+				context.push_path(JsonPathComponent::ObjectKey("used_generics"));
+				let JsonValue::Array(generics) = generics else {
+					return Err(context.new_error("is not an array"));
+				};
+				for (i, generic) in generics.iter().enumerate() {
+					context.push_path(JsonPathComponent::ArrayIdx(i));
+					used_generics.push(
+						Generic {
+							name: arena.copy_str_into_nt(generic.as_str().ok_or_else(|| context.new_error("is not a string"))?),
+							traits: &[],
+						}
+					);
+					context.pop_path();
+				}
+				context.pop_path();
+			}
+			for (i, generic) in used_generics.iter().enumerate() {
+				if !generic.name.starts_with("$") {
+					context.push_path(JsonPathComponent::ArrayIdx(i));
+					return Err(context.new_error("must begin with '$'"));
+				}
+			}
+			let generics = used_generics.leak();
+
+			let ty = Type::Id {
+				name: class_name.as_ntstrptr(),
+				generics: arena.slice_from_iter((0..(generics.len())).map(|i| {
+					Type::Existential{idx: i}
+				})),
+			};
+
+			// optional "methods" object
+			let methods = if let Some(methods) = class_values.get("methods") {
+				context.push_path(JsonPathComponent::ObjectKey("methods"));
+				let JsonValue::Object(methods) = methods else {
+					return Err(context.new_error("is not an object"));
+				};
+				let mut temp = Vec::new_in(&arena);
+				for (method_name, method_values) in methods.iter() {
+					context.push_path(JsonPathComponent::ObjectKey(method_name));
+					let method_name = arena.copy_str_into_nt(method_name);
+					temp.push((method_name, context.parse_host_fn(method_values, generics, &arena)?));
+					context.pop_path();
+				}
+				context.pop_path();
+				temp.leak()
+			} else {
+				&mut []
+			};
+			context.pop_path();
+			Ok((class_name, ModApiClass {
+				description,
+				ty,
+				generics,
+				methods,
+			}))
+		}).collect::<Result<HashMap<_, _>>>()?;
+		context.pop_path();
+		classes
+	} else {
+		HashMap::new()
+	};
+	
+	let host_fns = if let Some(host_fns) = mod_api_root.get("host_functions") {
+		context.push_path(JsonPathComponent::ObjectKey("host_functions"));
+		let JsonValue::Object(host_fns) = host_fns else {
+			return Err(context.new_error("is not an object"));
+		};
+		let host_fns = host_fns.iter().map(|(host_fn_name, host_fn_values)| {
+			context.push_path(JsonPathComponent::ObjectKey(host_fn_name));
+			let host_fn_name = arena.copy_str_into_nt(host_fn_name);
+			let host_fn = context.parse_host_fn(host_fn_values, &[], &arena)?;
+			context.pop_path();
+			Ok((host_fn_name, host_fn))
+		}).collect::<Result<HashMap<_, _>>>()?;
+		context.pop_path();
+		host_fns
+	} else {
+		HashMap::new()
+	};
 	
 	assert_eq!(0, context.json_path.0.len(), "{}", &context.json_path);
 
