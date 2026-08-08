@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::io::Write;
+use std::ptr::NonNull;
 
 use crate::ntstring::NTStr;
 use crate::ast::{Parameter, Type};
@@ -350,13 +351,44 @@ impl ModApi {
 	}
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TraitImplementor<'a> {
+	pub(crate) generics: &'a[Generic<'a>],
+	pub(crate) ty: Type<'a>
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Trait<'a> {
+	pub(crate) name: &'a NTStr,
+	pub(crate) implementors: &'a [TraitImplementor<'a>]
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Generic<'a> {
+	pub(crate) name: &'a NTStr,
+	// Actually supposed to be &'a [&'a Trait<'a>],
+	// but it has to be NonNull to allow mutation during construction
+	traits: &'a [NonNull<Trait<'a>>],
+}
+
+impl<'a> Generic<'a> {
+	pub(crate) fn traits(&self) -> &[&'a Trait<'a>] {
+		// SAFETY: This is the actual type, but i have to use NonNull to allow
+		// mutation during construction.
+		
+		// Note: This function is only safe to call after construction is
+		// finished
+		unsafe{std::mem::transmute::<&[NonNull<Trait<'a>>], &[&'a Trait<'a>]>(self.traits)}
+	}
+}
+
 #[derive(Debug)]
 pub(crate) struct ModApiClass<'a> {
 	#[expect(dead_code)]
 	pub(crate) description: &'a str,
 	pub(crate) ty: Type<'a>,
 	pub(crate) methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
-	pub(crate) generics: &'a [&'a NTStr],
+	pub(crate) generics: &'a [Generic<'a>],
 }
 
 #[derive(Debug)]
@@ -383,7 +415,7 @@ pub(crate) struct ModApiExportFn<'a> {
 pub(crate) struct ModApiHostFn<'a> {
 	#[expect(dead_code)]
 	pub(crate) description: &'a str,
-	pub(crate) generics: &'a [&'a NTStr],
+	pub(crate) generics: &'a [Generic<'a>],
 	pub(crate) parameters: &'a [Parameter<'a>],
 	pub(crate) return_ty: Type<'a>,
 	pub(crate) fn_ptr: Option<HostFn>,
@@ -446,7 +478,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		object.get(key).ok_or_else(|| self.new_error("does not exist"))
 	}
 
-	fn parse_type<'b>(&mut self, object: &'a JsonValue, used_generics: &'b[&'b NTStr], arena: &'b Arena) -> Result<Type<'b>> {
+	fn parse_type<'b>(&mut self, object: &'a JsonValue, used_generics: &'_[Generic<'_>], arena: &'b Arena) -> Result<Type<'b>> {
 		let JsonValue::Object(object) = object else {
 			return Err(self.new_error("is not an object"));
 		};
@@ -479,8 +511,8 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 				}
 			}
 			generic if generic.starts_with("$") => {
-				for (i, name) in used_generics.iter().enumerate() {
-					if &***name == generic {
+				for (i, used_generic) in used_generics.iter().enumerate() {
+					if &**used_generic.name == generic {
 						return Ok(Type::Existential{idx: i});
 					}
 				}
@@ -515,7 +547,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		Ok(ty)
 	}
 
-	fn parse_parameters<'b>(&mut self, parameters: &'a JsonValue, generics: &'b [&'b NTStr], arena: &'b Arena) -> Result<&'b [Parameter<'b>]> {
+	fn parse_parameters<'b>(&mut self, parameters: &'a JsonValue, generics: &'_ [Generic<'_>], arena: &'b Arena) -> Result<&'b [Parameter<'b>]> {
 		let JsonValue::Array(parameters) = parameters else {
 			return Err(self.new_error("is not an array"));
 		};
@@ -555,7 +587,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		Ok(temp.leak())
 	}
 
-	fn parse_host_fn<'b>(&mut self, host_fn_values: &'a JsonValue, parent_generics: &[&'b NTStr], arena: &'b Arena) -> Result<ModApiHostFn<'b>> {
+	fn parse_host_fn<'b>(&mut self, host_fn_values: &'a JsonValue, parent_generics: &'_ [Generic<'b>], arena: &'b Arena) -> Result<ModApiHostFn<'b>> {
 		let JsonValue::Object(host_fn_values) = host_fn_values else {
 			return Err(self.new_error("is not an object"));
 		};
@@ -574,11 +606,16 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			};
 			for (i, generic) in generics.iter().enumerate() {
 				self.push_path(JsonPathComponent::ArrayIdx(i));
-				used_generics.push(arena.copy_str_into_nt(generic.as_str().ok_or_else(|| self.new_error("is not a string"))?));
+				used_generics.push(
+					Generic {
+						name: arena.copy_str_into_nt(generic.as_str().ok_or_else(|| self.new_error("is not a string"))?),
+						traits: &[],
+					}
+				);
 				self.pop_path();
 			}
 			for (i, generic) in used_generics.iter().enumerate() {
-				if !generic.starts_with("$") {
+				if !generic.name.starts_with("$") {
 					self.push_path(JsonPathComponent::ArrayIdx(i));
 					return Err(self.new_error("must begin with '$'"));
 				}
@@ -825,13 +862,18 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			};
 			for (i, generic) in generics.iter().enumerate() {
 				context.push_path(JsonPathComponent::ArrayIdx(i));
-				used_generics.push(arena.copy_str_into_nt(generic.as_str().ok_or_else(|| context.new_error("is not a string"))?));
+				used_generics.push(
+					Generic {
+						name: arena.copy_str_into_nt(generic.as_str().ok_or_else(|| context.new_error("is not a string"))?),
+						traits: &[],
+					}
+				);
 				context.pop_path();
 			}
 			context.pop_path();
 		}
 		for (i, generic) in used_generics.iter().enumerate() {
-			if !generic.starts_with("$") {
+			if !generic.name.starts_with("$") {
 				context.push_path(JsonPathComponent::ArrayIdx(i));
 				return Err(context.new_error("must begin with '$'"));
 			}

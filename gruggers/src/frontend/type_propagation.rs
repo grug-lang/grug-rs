@@ -14,7 +14,7 @@ use crate::frontend::GlobalStatement;
 use crate::nt;
 use crate::arena::Arena;
 use crate::frontend::parser::Ast;
-use crate::mod_api::{ModApiEntity, ModApi};
+use crate::mod_api::{ModApiEntity, ModApi, Trait, Generic};
 
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
@@ -726,11 +726,15 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				} else if let Some(host_fn) = self.mod_api.host_fns().get(name) {
 					// Create the actual types to represent generics
 					let generics = if let Some(substitutions) = substitutions {
-						// for the second time through, replace the existentials as they are created
-						arena.slice_from_iter(host_fn.generics.iter().map(|_| {
+						// for the second time through, replace the existentials as they are created, and also verify traits
+						let mut generics = Vec::with_capacity_in(host_fn.generics.len(), arena);
+						for generic in host_fn.generics {
 							let Type::Existential{idx} = ty_ctx.create_existential(name, *name_span) else {unreachable!()};
-							substitutions[idx]
-						}))
+							let actual_ty = substitutions[idx];
+							ty_ctx.verify_traits(actual_ty, generic.traits(), *name_span, name)?;
+							generics.push(actual_ty)
+						}
+						generics.leak()
 					} else {
 						// The first time through, just create the existentials
 						arena.slice_from_iter(host_fn.generics.iter().map(|_| {
@@ -837,11 +841,15 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
 				// Create the actual types to represent generics
 				let generics = if let Some(substitutions) = substitutions {
-					// for the second time through, replace the existentials as they are created
-					arena.slice_from_iter(host_fn.generics.iter().map(|_| {
+					// for the second time through, replace the existentials as they are created, and also verify traits
+					let mut generics = Vec::with_capacity_in(host_fn.generics.len(), arena);
+					for generic in host_fn.generics {
 						let Type::Existential{idx} = ty_ctx.create_existential(name, *name_span) else {unreachable!()};
-						substitutions[idx]
-					}))
+						let actual_ty = substitutions[idx];
+						ty_ctx.verify_traits(actual_ty, generic.traits(), *name_span, name)?;
+						generics.push(actual_ty)
+					}
+					generics.leak()
 				} else {
 					// The first time through, just create the existentials
 					arena.slice_from_iter(host_fn.generics.iter().map(|_| {
@@ -1383,6 +1391,39 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 			// SAFETY: Consistency check has been performed on all existentials
 			unsafe {self.copy_type_into(*ty, arena)}
 		})))
+	}
+
+	fn verify_traits(&self, ty: Type, traits: &[&Trait], err_span: SourceSpan, function_name: &str) -> Result<(), Error> {
+		fn type_matches_implementor(ty: Type, imp_ty: Type, generics: &[Generic]) -> bool {
+			match (ty, imp_ty) {
+				(Type::Id{name: ty_name, generics: ty_generics}, Type::Id{name: imp_name, generics: imp_generics}) if 
+					ty_name == imp_name => {
+						debug_assert_eq!(ty_generics.len(), imp_generics.len());
+						ty_generics.iter().zip(imp_generics).all(|(ty, imp)| type_matches_implementor(*ty, *imp, generics))
+					}
+				(ty, Type::Existential{idx}) => {
+					generics.get(idx).expect("existential should always point to a valid generic")
+						.traits().into_iter().all(|tr| {
+							tr.implementors.into_iter().any(|imp| type_matches_implementor(ty, imp.ty, imp.generics))
+						})
+				}
+				(Type::Void, Type::Void) => true,
+				(Type::Bool, Type::Bool) => true,
+				(Type::Number, Type::Number) => true,
+				(Type::String, Type::String) => true,
+				(Type::Resource{..}, _) |
+				(_, Type::Resource{..}) => unreachable!("resource strings cannot be used in generics"),
+				(Type::Entity{..}, _) |
+				(_, Type::Entity{..}) => unreachable!("entity strings cannot be used in generics"),
+				_ => false
+			}
+		}
+		for tr in traits {
+			if !tr.implementors.into_iter().any(|imp| type_matches_implementor(ty, imp.ty, imp.generics)) {
+				return Err(self.new_error(err_span, format_args!("function {} expected {} to implement {} but it doesn't", function_name, ty, tr.name)));
+			}
+		} 
+		Ok(())
 	}
 }
 
