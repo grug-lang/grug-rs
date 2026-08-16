@@ -28,7 +28,9 @@ pub use gruggers_core::ast;
 pub use gruggers_core::ntstring;
 pub use gruggers_core::nt;
 
+const HAS_CONSTRAINTS: bool = false;
 
+// TODO: Check for duplicates in used_generics and combine their requirements
 // TODO: Add Debug info to backends and improve runtime errors
 // TODO: Specify grug's string lifetimes.
 // TODO: Outline Debugger implementation

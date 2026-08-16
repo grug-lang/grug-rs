@@ -1,4 +1,44 @@
 {
+	"constraints": {
+		"Hash": {
+			"description": "foo",
+			"implementors": [
+				{
+					"type": {
+						"name": "string"
+					}
+				},
+				{
+					"type": {
+						"name": "number"
+					}
+				},
+				{
+					"type": {
+						"name": "bool"
+					}
+				},
+				{
+					"used_generics": [
+						{
+							"name": "$T",
+							"constraints": [
+								"Hash"
+							]
+						}
+					],
+					"type": {
+						"name": "List",
+						"generics": [
+							{
+								"name": "$T"
+							}
+						]
+					}
+				}
+			]
+		}
+	},
 	"entities": {
 		"Test": {
 			"description": "Test Entity",
@@ -22,7 +62,9 @@
 		"Ref": {
 			"description": "Reference to an item allocated elsewhere",
 			"used_generics": [
-				"$T"
+				{
+					"name": "$T"
+				}
 			],
 			"methods": {
 				"set": {
@@ -47,8 +89,15 @@
 		"Dict": {
 			"description": "Dictionary",
 			"used_generics": [
-				"$K",
-				"$V"
+				{
+					"name": "$K",
+					"constraints": [
+						"Hash"
+					]
+				},
+				{
+					"name": "$V"
+				}
 			],
 			"methods": {
 				"put": {
@@ -73,14 +122,20 @@
 		"Pair": {
 			"description": "A pair of two values of different types",
 			"used_generics": [
-				"$K",
-				"$V"
+				{
+					"name": "$T1"
+				},
+				{
+					"name": "$T2"
+				}
 			]
 		},
 		"List": {
 			"description": "A list of values",
 			"used_generics": [
-				"$T"
+				{
+					"name": "$T"
+				}
 			],
 			"methods": {
 				"push": {
@@ -132,7 +187,9 @@
 		"Option": {
 			"description": "Indicates that a value may not be present",
 			"used_generics": [
-				"$T"
+				{
+					"name": "$T"
+				}
 			],
 			"methods": {
 				"is": {
@@ -154,8 +211,15 @@
 		"dict_from_list": {
 			"description": "Creates a dict from a list of pairs of keys and values",
 			"used_generics": [
-				"$K",
-				"$V"
+				{
+					"name": "$K",
+					"constraints": [
+						"Hash"
+					]
+				},
+				{
+					"name": "$V"
+				}
 			],
 			"return_type": {
 				"name": "Dict",
@@ -193,7 +257,9 @@
 		"list": {
 			"description": "Creates an empty list",
 			"used_generics": [
-				"$T"
+				{
+					"name": "$T"
+				}
 			],
 			"return_type": {
 				"name": "List",
@@ -207,8 +273,12 @@
 		"make_pair": {
 			"description": "Creates a pair",
 			"used_generics": [
-				"$T0",
-				"$T1"
+				{
+					"name": "$T0"
+				},
+				{
+					"name": "$T1"
+				}
 			],
 			"return_type": {
 				"name": "Pair",
@@ -239,8 +309,15 @@
 		"dict": {
 			"description": "Creates an empty dictionary",
 			"used_generics": [
-				"$K",
-				"$V"
+				{
+					"name": "$K",
+					"constraints": [
+						"Hash"
+					]
+				},
+				{
+					"name": "$V"
+				}
 			],
 			"return_type": {
 				"name": "Dict",
@@ -257,7 +334,9 @@
 		"print": {
 			"description": "Prints a generic value",
 			"used_generics": [
-				"$T"
+				{
+					"name": "$T"
+				}
 			],
 			"parameters": [
 				{
@@ -271,7 +350,9 @@
 		"ref": {
 			"description": "Creates a reference to a primitive value",
 			"used_generics": [
-				"$T"
+				{
+					"name": "$T"
+				}
 			],
 			"return_type": {
 				"name": "Ref",

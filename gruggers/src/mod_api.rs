@@ -10,6 +10,7 @@ use crate::arena::Arena;
 use crate::state::GrugState;
 use crate::error::{ErrorKind, Error, SourceSpan, Result};
 use crate::types::{HostFn, HostFnReg, HostFnRegErased};
+use crate::HAS_CONSTRAINTS;
 
 use allocator_api2::vec::Vec;
 
@@ -443,7 +444,6 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 	fn push_path(&mut self, value: JsonPathComponent<'a>) {self.json_path.0.push(value)}
 	fn pop_path (&mut self)                               {self.json_path.0.pop().unwrap();}
 
-	#[track_caller]
 	fn new_error(&self, message: &str) -> Error {
 		let mut location = Vec::new_in(self.arena);
 		write!(location, "{}", &self.json_path).expect("writing into a vec can never fail");
@@ -476,6 +476,14 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 	// gets the key as a str and pushes the path onto self
 	fn get_str<'b>(&mut self, object: &'b Object, key: &'a str) -> Result<&'b str> {
 		self.get_key(object, key)?.as_str().ok_or_else(|| self.new_error("is not a string"))
+	}
+	
+	// gets the key as a list and pushes the path onto self
+	fn get_list<'b>(&mut self, object: &'b Object, key: &'a str) -> Result<&'b std::vec::Vec<JsonValue>> {
+		let JsonValue::Array(value) = self.get_key(object, key)? else {
+			return Err(self.new_error("is not an array"))
+		};
+		Ok(value)
 	}
 
 	// gets the key and pushes the path onto self
@@ -592,7 +600,68 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		Ok(temp.leak())
 	}
 
-	fn parse_host_fn<'b>(&mut self, host_fn_values: &'a JsonValue, parent_generics: &'_ [Generic<'b>], arena: &'b Arena) -> Result<ModApiHostFn<'b>> {
+	fn parse_used_generics<'b>(&mut self, used_generics_json: &'a JsonValue, traits: &HashMap<&str, &'b Trait<'b>>, arena: &'b Arena) -> Result<&'b[Generic<'b>]> {
+		let JsonValue::Array(used_generics_json) = used_generics_json else {
+			return Err(self.new_error("is not an array"));
+		};
+		let mut used_generics = Vec::with_capacity_in(used_generics_json.len(), arena);
+		for (i, used_generic) in used_generics_json.iter().enumerate() {
+			self.push_path(JsonPathComponent::ArrayIdx(i));
+			let generic = if HAS_CONSTRAINTS {
+				let JsonValue::Object(used_generic) = used_generic else {
+					return Err(self.new_error("is not an object"));
+				};
+				let name = arena.copy_str_into_nt(self.get_str(used_generic, "name")?);
+				if !name.starts_with("$") {
+					return Err(self.new_error("must begin with '$'"));
+				}
+				self.pop_path(); // "name"
+
+				let constraints = if let Some(json_constraints) = used_generic.get("constraints") {
+					self.push_path(JsonPathComponent::ObjectKey("constraints"));
+					let JsonValue::Array(json_constraints) = json_constraints else {
+						return Err(self.new_error("is not an array"));
+					};
+
+					let mut constraints = Vec::with_capacity_in(json_constraints.len(), arena);
+
+					for (i, constraint) in json_constraints.iter().enumerate() {
+						self.push_path(JsonPathComponent::ArrayIdx(i));
+						let Some(constraint) = constraint.as_str() else {
+							return Err(self.new_error("is not a string"));
+						};
+						self.pop_path();
+						self.push_path(JsonPathComponent::ArrayKey(constraint));
+						if let Some(data) = traits.get(constraint) {
+							constraints.push(NonNull::from_ref(*data));
+							self.pop_path(); // array idx for constraint
+						} else {
+							return Err(self.new_error("is an unknown constraint"));
+						}
+					}
+					self.pop_path(); 
+					constraints.leak()
+				} else {
+					&mut []
+				};
+				Generic{name, traits: &*constraints}
+			} else {
+				let Some(used_generic) = used_generic.as_str() else {
+					return Err(self.new_error("is not a string"));
+				};
+				let name = arena.copy_str_into_nt(used_generic);
+				if !name.starts_with("$") {
+					return Err(self.new_error("must begin with '$'"));
+				}
+				Generic{name, traits: &[]}
+			};
+			used_generics.push(generic);
+			self.pop_path(); // used generics idx
+		}
+		Ok(used_generics.leak())
+	}
+
+	fn parse_host_fn<'b>(&mut self, host_fn_values: &'a JsonValue, parent_generics: &'_ [Generic<'b>], traits: &HashMap<&str, &'b Trait<'b>>, arena: &'b Arena) -> Result<ModApiHostFn<'b>> {
 		let JsonValue::Object(host_fn_values) = host_fn_values else {
 			return Err(self.new_error("is not an object"));
 		};
@@ -605,25 +674,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		used_generics.extend(parent_generics);
 		if let Some(generics) = host_fn_values.get("used_generics") {
 			self.push_path(JsonPathComponent::ObjectKey("used_generics"));
-			let JsonValue::Array(generics) = generics else {
-				return Err(self.new_error("is not an array"));
-			};
-			for (i, generic) in generics.iter().enumerate() {
-				self.push_path(JsonPathComponent::ArrayIdx(i));
-				used_generics.push(
-					Generic {
-						name: arena.copy_str_into_nt(generic.as_str().ok_or_else(|| self.new_error("is not a string"))?),
-						traits: &[],
-					}
-				);
-				self.pop_path();
-			}
-			for (i, generic) in used_generics.iter().enumerate() {
-				if !generic.name.starts_with("$") {
-					self.push_path(JsonPathComponent::ArrayIdx(i));
-					return Err(self.new_error("must begin with '$'"));
-				}
-			}
+			used_generics.extend(self.parse_used_generics(generics, traits, arena)?);
 			self.pop_path();
 		}
 		let generics = used_generics.leak();
@@ -770,65 +821,131 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 	// context must be dropped before mod_api_root
 	let mut context = context;
 
-	if let Some(constraints) = mod_api_root.get("constraints") {
+	let traits = if let Some(constraints) = mod_api_root.get("constraints") && HAS_CONSTRAINTS {
 		context.push_path(JsonPathComponent::ObjectKey("constraints"));
 		let JsonValue::Object(constraints) = constraints else {
 			return Err(context.new_error("is not an object"));
 		};
-		// "constraints": {
-		// 		"Hash": {
-		// 			"description": "Foo"
-		// 			"implementors": [
-		// 				{
-		// 					"used_generics": [
-		// 						{
-		// 							"name": "$T"
-		// 							"constraints": [
-		// 								"Hash"
-		// 							]
-		// 						}
-		// 					]
-		// 					"type": {
-		//						...
-		//					}
-		// 				}
-		// 			]
-		// 		}
-		// }
-		let data = arena.slice_from_iter(constraints.iter().map(|(name, data)| UnsafeCell::new(Trait{name, implementors: &[]})));
+		let traits_storage = arena.slice_from_iter(constraints.iter().map(|(name, _)| 
+			UnsafeCell::new(Trait{
+				name: arena.copy_str_into_nt(name), 
+				implementors: &[]
+			})
+		));
 		
-		for (constraint_name, constraint_values) in constraints.iter() {
+		let traits = constraints.iter().enumerate().map(|(i, (constraint_name, constraint_values))| {
 			context.push_path(JsonPathComponent::ObjectKey(constraint_name));
 			let JsonValue::Object(constraint_values) = constraint_values else {
 				return Err(context.new_error("is not an object"));
 			};
 			
 			// "description" string
-			let description = arena.copy_str_into(context.get_str(constraint_values, "description")?);
+			let _description = arena.copy_str_into(context.get_str(constraint_values, "description")?);
 			context.pop_path();
 
-			let implementors = context.get_key(constraint_values, "implementors")?;
-			let JsonValue::Array(implementors) = implementors else {
+			let implementors_json = context.get_key(constraint_values, "implementors")?;
+			let JsonValue::Array(implementors_json) = implementors_json else {
 				return Err(context.new_error("is not an array"));
 			};
-			for (i, implementor) in implementors.iter().enumerate() {
+			let mut implementors = Vec::with_capacity_in(implementors_json.len(), &arena);
+			for (i, implementor) in implementors_json.iter().enumerate() {
 				context.push_path(JsonPathComponent::ArrayIdx(i));
-				let used_generics = context.get_key(constraint_values, "used_generics")?;
-				let JsonValue::Array(used_generics) = used_generics else {
-					return Err(context.new_error("is not an array"));
+				let JsonValue::Object(implementor) = implementor else {
+					return Err(context.new_error("is not an object"));
 				};
-				for (i, used_generic) in used_generics.iter().enumerate() {
-					context.push_path(JsonPathComponent::ArrayIdx(i));
-					context.pop_path()
-				}
+				// Optional "used_generics" key
+				// This cannot use context.parse_used_generics because the
+				// traits hashmap hasn't been created yet.
+				let used_generics = if let Some(used_generics_json) = implementor.get("used_generics") {
+					context.push_path(JsonPathComponent::ObjectKey("used_generics"));
+					let JsonValue::Array(used_generics_json) = used_generics_json else {
+						return Err(context.new_error("is not an array"));
+					};
+					let mut used_generics = Vec::with_capacity_in(used_generics_json.len(), &arena);
+					for (i, used_generic) in used_generics_json.iter().enumerate() {
+						context.push_path(JsonPathComponent::ArrayIdx(i));
+						let JsonValue::Object(used_generic) = used_generic else {
+							return Err(context.new_error("is not an object"));
+						};
+						let name = arena.copy_str_into_nt(context.get_str(used_generic, "name")?);
+						context.pop_path();
+
+						let json_constraints = context.get_list(used_generic, "constraints")?;
+
+						let mut constraints = Vec::with_capacity_in(json_constraints.len(), &arena);
+
+						'outer: for (i, constraint) in json_constraints.iter().enumerate() {
+							context.push_path(JsonPathComponent::ArrayIdx(i));
+							let Some(constraint) = constraint.as_str() else {
+								return Err(context.new_error("is not a string"));
+							};
+							context.pop_path();
+							context.push_path(JsonPathComponent::ArrayKey(constraint));
+							for data in traits_storage.iter() {
+								// SAFETY: This is a temporary reference and
+								// nothing else holds a reference to the inner
+								// value at this time
+								if unsafe{(&*data.get()).name} == constraint {
+									// SAFETY: Pointer from UnsafeCell is always
+									// non null
+									constraints.push(unsafe{NonNull::new_unchecked(data.get())});
+									context.pop_path();
+									continue 'outer;
+								}
+							}
+							return Err(context.new_error("is an unknown constraint"));
+						}
+						context.pop_path();
+						used_generics.push(Generic{name, traits: constraints.leak()});
+						context.pop_path()
+					}
+					context.pop_path();
+					used_generics.leak()
+				} else {
+					&mut []
+				};
+
+				let ty = context.get_key(implementor, "type")?;
+				let ty = context.parse_type(ty, used_generics, &arena)?;
+				context.pop_path();
+
+				implementors.push(TraitImplementor{generics: used_generics, ty});
 				context.pop_path()
 			}
 			context.pop_path();
 			context.pop_path();
-		}
+			let implementors = implementors.leak();
+
+			let data = traits_storage[i].get();
+
+			// Note(nikhil): It is important that each of these statement
+			// dereferences data separately to prevent UB from aliasing
+			// mutable references
+			//
+			// SAFETY: This is a temporary read reference and
+			// nothing else holds an exclusive reference to the inner
+			// value at this time
+			//
+			// This implementation relies on iteration order of hashmaps being
+			// repeatable. This should be true as long as the order does not
+			// change without mutation. This assertion just verifies that.
+			assert!(unsafe{&*data}.name == constraint_name);
+
+			// SAFETY: This is the only place where a mutable
+			// reference is needed. 
+			// A shared reference is put into the storage _after_ this
+			// loop iteration, but there is no shared reference at the same time
+			unsafe{&mut *data}.implementors = implementors;
+			
+			let data = unsafe{&*data};
+			return Ok((data.name, data));
+		}).collect::<Result<HashMap<_, _>>>()?;
 
 		context.pop_path();
-	}
+		traits
+	} else {
+		HashMap::new()
+	};
 	
 	let entities = if let Some(entities) = mod_api_root.get("entities") {
 		context.push_path(JsonPathComponent::ObjectKey("entities"));
@@ -904,6 +1021,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 	} else {
 		HashMap::new()
 	};
+	assert_eq!(0, context.json_path.0.len(), "{}", &context.json_path);
 	
 	// "classes" object
 	let classes = if let Some(classes) = mod_api_root.get("classes") {
@@ -920,31 +1038,13 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			// "description" string
 			let description = arena.copy_str_into(context.get_str(class_values, "description")?);
 			context.pop_path();
-
+			
 			// optional "used_generics" key
 			let mut used_generics = Vec::new_in(&arena);
 			if let Some(generics) = class_values.get("used_generics") {
 				context.push_path(JsonPathComponent::ObjectKey("used_generics"));
-				let JsonValue::Array(generics) = generics else {
-					return Err(context.new_error("is not an array"));
-				};
-				for (i, generic) in generics.iter().enumerate() {
-					context.push_path(JsonPathComponent::ArrayIdx(i));
-					used_generics.push(
-						Generic {
-							name: arena.copy_str_into_nt(generic.as_str().ok_or_else(|| context.new_error("is not a string"))?),
-							traits: &[],
-						}
-					);
-					context.pop_path();
-				}
+				used_generics.extend(context.parse_used_generics(generics, &traits, &arena)?);
 				context.pop_path();
-			}
-			for (i, generic) in used_generics.iter().enumerate() {
-				if !generic.name.starts_with("$") {
-					context.push_path(JsonPathComponent::ArrayIdx(i));
-					return Err(context.new_error("must begin with '$'"));
-				}
 			}
 			let generics = used_generics.leak();
 
@@ -965,7 +1065,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				for (method_name, method_values) in methods.iter() {
 					context.push_path(JsonPathComponent::ObjectKey(method_name));
 					let method_name = arena.copy_str_into_nt(method_name);
-					temp.push((method_name, context.parse_host_fn(method_values, generics, &arena)?));
+					temp.push((method_name, context.parse_host_fn(method_values, generics, &traits, &arena)?));
 					context.pop_path();
 				}
 				context.pop_path();
@@ -995,7 +1095,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		let host_fns = host_fns.iter().map(|(host_fn_name, host_fn_values)| {
 			context.push_path(JsonPathComponent::ObjectKey(host_fn_name));
 			let host_fn_name = arena.copy_str_into_nt(host_fn_name);
-			let host_fn = context.parse_host_fn(host_fn_values, &[], &arena)?;
+			let host_fn = context.parse_host_fn(host_fn_values, &[], &traits, &arena)?;
 			context.pop_path();
 			Ok((host_fn_name, host_fn))
 		}).collect::<Result<HashMap<_, _>>>()?;
@@ -1042,6 +1142,18 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		context.pop_path();
 	}
 	context.pop_path();
+	
+	// Check every implementor of every constraint to make sure the number of
+	// generics they use is correct
+	for (trait_name, tr) in traits.iter() {
+		context.push_path(JsonPathComponent::ObjectKey(trait_name));
+		for (i, imp) in tr.implementors.iter().enumerate() {
+			context.push_path(JsonPathComponent::ArrayIdx(i));
+			context.validate_type(imp.ty, known_types)?;
+			context.pop_path();
+		}
+		context.pop_path();
+	}
 
 	context.push_path(JsonPathComponent::ObjectKey("host_functions"));
 	// Check every type within each host function and make sure the number of

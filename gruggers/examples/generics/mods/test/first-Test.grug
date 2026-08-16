@@ -1,5 +1,4 @@
 list: List[number] = list()
-n: void = list.push(2)
 
 export run(message: string) {
     y: List[Pair[List[number], number]] = list()
