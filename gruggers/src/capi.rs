@@ -17,20 +17,104 @@ use std::mem::MaybeUninit;
 // TODO: Create an actual struct for these
 type CState = (GrugState, /* last error */ UnsafeCell<Option<Error>>, /* info from last compile */ UnsafeCell<Files>, /* resources from last compile */ UnsafeCell<Vec<OsString>>);
 
-#[unsafe(no_mangle)]
-pub extern "C" fn grug_default_settings() -> GrugInitSettings<'static> {
-	GrugInitSettings::new()
+#[repr(C)]
+pub struct CGrugRuntimeErrorHandler {
+    pub user_data: *mut std::ffi::c_void,
+    pub drop_fn: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub handler_fn: Option<extern "C" fn(
+        data: *mut std::ffi::c_void,
+        err_kind: u32,
+        reason_str: *mut std::ffi::c_char,
+        reason_len: usize,
+        export_fn_name: *mut std::ffi::c_char,
+        export_fn_name_len: usize,
+        script_path: *mut std::ffi::c_char,
+        script_path_len: usize,
+    )>,
+}
+
+#[repr(C)]
+pub struct CGrugBackend {
+    pub obj: *mut std::ffi::c_void,
+    pub vtable: *mut std::ffi::c_void,
+}
+
+#[repr(C)]
+pub struct CGrugInitSettings {
+    pub mod_api_path: *const std::ffi::c_char,
+    pub mods_dir_path: *const std::ffi::c_char,
+    pub runtime_error_handler: CGrugRuntimeErrorHandler,
+    pub backend: CGrugBackend,
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_init(settings: GrugInitSettings, out_err: &mut MaybeUninit<GrugError<'static>>) -> Option<Box<CState>> {
-	match settings.build_state() {
-		Ok(state) => Some(Box::new((state, UnsafeCell::new(None), UnsafeCell::new(Files::empty()), UnsafeCell::new(vec![])))),
-		Err(err) => {
-			unsafe{*out_err.as_mut_ptr() = err.leak()};
-			None
-		}
-	}
+pub extern "C" fn grug_default_settings() -> CGrugInitSettings {
+    CGrugInitSettings {
+        mod_api_path: std::ptr::null(),
+        mods_dir_path: std::ptr::null(),
+        runtime_error_handler: CGrugRuntimeErrorHandler {
+            user_data: std::ptr::null_mut(),
+            drop_fn: None,
+            handler_fn: None,
+        },
+        backend: CGrugBackend {
+            obj: std::ptr::null_mut(),
+            vtable: std::ptr::null_mut(),
+        },
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn grug_init(
+    c_settings_ptr: *const CGrugInitSettings, 
+    out_err: &mut MaybeUninit<GrugError<'static>>
+) -> Option<Box<CState>> {
+    println!("[Rust] Entered grug_init");
+    
+    if c_settings_ptr.is_null() {
+        println!("[Rust] Error: c_settings_ptr is null!");
+        return None;
+    }
+
+    let c_settings = unsafe { &*c_settings_ptr };
+    println!("[Rust] Read c_settings pointer successfully.");
+    println!("[Rust] mod_api_path ptr: {:?}", c_settings.mod_api_path);
+    println!("[Rust] mods_dir_path ptr: {:?}", c_settings.mods_dir_path);
+
+    let mod_api_path = if c_settings.mod_api_path.is_null() {
+        String::new()
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(c_settings.mod_api_path) }.to_string_lossy().into_owned()
+    };
+    
+    let mods_dir_path = if c_settings.mods_dir_path.is_null() {
+        String::new()
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(c_settings.mods_dir_path) }.to_string_lossy().into_owned()
+    };
+
+    println!("[Rust] Parsed paths -> API: '{}', Mods: '{}'", mod_api_path, mods_dir_path);
+
+    let mod_api_path_leaked: &'static str = Box::leak(mod_api_path.into_boxed_str());
+    let mods_dir_path_leaked: &'static str = Box::leak(mods_dir_path.into_boxed_str());
+
+    println!("[Rust] Building GrugInitSettings...");
+    let rust_settings = GrugInitSettings::new()
+        .set_mod_api_path(mod_api_path_leaked)
+        .set_mods_dir(mods_dir_path_leaked);
+        
+    println!("[Rust] Calling build_state()...");
+    match rust_settings.build_state() {
+        Ok(state) => {
+            println!("[Rust] build_state() succeeded!");
+            Some(Box::new((state, UnsafeCell::new(None), UnsafeCell::new(Files::empty()), UnsafeCell::new(vec![]))))
+        }
+        Err(err) => {
+            println!("[Rust] build_state() failed!");
+            unsafe { out_err.as_mut_ptr().write(err.leak()) };
+            None
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
