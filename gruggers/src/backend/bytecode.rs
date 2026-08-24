@@ -508,8 +508,8 @@ impl Backend for BytecodeBackend {
 				let ret_val = unsafe{stack.run(state, globals, &compiled_file.instructions, 1, 0)}.is_some();
 				unsafe{(*old_entity.as_ptr()).members.set(NonNull::from_ref(globals).cast::<()>())};
 
+                stack = stack.reset();
 				self.stacks.borrow_mut().push(stack);
-
 				!ret_val
 			}).for_each(drop);
 			*compiled_file.entities.get_mut() = old_entities;
