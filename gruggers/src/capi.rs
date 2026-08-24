@@ -1,4 +1,4 @@
-//! Provides a public c api for use when compiling as a static library. 
+//! Provides a public c api for use when compiling as a static library.
 //!
 //! These functions have the same safety requirements as the equivalent
 //! functions in state.rs
@@ -66,7 +66,7 @@ pub extern "C" fn grug_default_settings() -> CGrugInitSettings {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_init(
-    c_settings_ptr: *const CGrugInitSettings, 
+    c_settings_ptr: *const CGrugInitSettings,
     out_err: &mut MaybeUninit<GrugError<'static>>
 ) -> Option<Box<CState>> {
     if c_settings_ptr.is_null() {
@@ -80,7 +80,7 @@ pub extern "C" fn grug_init(
     } else {
         unsafe { std::ffi::CStr::from_ptr(c_settings.mod_api_path) }.to_string_lossy().into_owned()
     };
-    
+
     let mods_dir_path = if c_settings.mods_dir_path.is_null() {
         String::new()
     } else {
@@ -93,7 +93,7 @@ pub extern "C" fn grug_init(
     let rust_settings = GrugInitSettings::new()
         .set_mod_api_path(mod_api_path_leaked)
         .set_mods_dir(mods_dir_path_leaked);
-        
+
     match rust_settings.build_state() {
         Ok(state) => {
             Some(Box::new((state, UnsafeCell::new(None), UnsafeCell::new(Files::empty()), UnsafeCell::new(vec![]))))
