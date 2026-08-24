@@ -90,9 +90,29 @@ pub extern "C" fn grug_init(
     let mod_api_path_leaked: &'static str = Box::leak(mod_api_path.into_boxed_str());
     let mods_dir_path_leaked: &'static str = Box::leak(mods_dir_path.into_boxed_str());
 
-    let rust_settings = GrugInitSettings::new()
+    let mut rust_settings = GrugInitSettings::new()
         .set_mod_api_path(mod_api_path_leaked)
         .set_mods_dir(mods_dir_path_leaked);
+
+    if let Some(c_handler_fn) = c_settings.runtime_error_handler.handler_fn {
+        let c_user_data = c_settings.runtime_error_handler.user_data as usize;
+
+        rust_settings = rust_settings.set_runtime_error_handler(
+            move |err_kind, reason_str, export_fn_name, script_path| {
+                let user_data_ptr = c_user_data as *mut std::ffi::c_void;
+                c_handler_fn(
+                    user_data_ptr,
+                    err_kind,
+                    reason_str.as_ptr() as *mut std::ffi::c_char,
+                    reason_str.len(),
+                    export_fn_name.as_ptr() as *mut std::ffi::c_char,
+                    export_fn_name.len(),
+                    script_path.as_ptr() as *mut std::ffi::c_char,
+                    script_path.len()
+                );
+            }
+        );
+    }
 
     match rust_settings.build_state() {
         Ok(state) => {
