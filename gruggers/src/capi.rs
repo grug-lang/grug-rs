@@ -183,6 +183,7 @@ pub extern "C" fn grug_compile_all_files(state: &CState) -> &[FileInfo<'_>] {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_update(state: &CState) -> &[FileInfo<'_>] {
+	state.0.clear_error();
 	let files = unsafe{&mut *state.2.get()};
 	let resources = unsafe{&mut *state.3.get()};
 	(*resources, *files) = state.0.update_files();
@@ -207,6 +208,7 @@ pub unsafe extern "C" fn grug_set_next_entity_id(state: &CState, next_id: u64) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_create_entity(state: &CState, file_id: FileId) -> Option<GrugEntityHandle<'_>> {
+	state.0.clear_error();
 	state.0.create_entity(file_id)
 }
 
@@ -238,6 +240,7 @@ pub extern "C" fn grug_get_on_fn_id(state: &CState, entity_type: NTStrPtr<'_>, o
 /// elements
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn grug_call_export_fn(state: &CState, entity: &GrugEntity, on_fn_id: ExportFnId, values: *const Value, values_len: usize) -> bool {
+	state.0.clear_error();
 	unsafe{state.0.call_export_fn(entity, on_fn_id, std::slice::from_raw_parts(values, values_len))}
 }
 
