@@ -109,6 +109,11 @@ pub extern "C" fn grug_compile_file(state: &CState, file_path: NTStrPtr<'_>) -> 
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn grug_set_next_entity_id(state: &CState, next_id: u64) {
+    unsafe { state.0.set_next_entity_id(next_id) };
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn grug_create_entity(state: &CState, file_id: FileId) -> Option<GrugEntityHandle<'_>> {
 	state.0.create_entity(file_id)
 }
