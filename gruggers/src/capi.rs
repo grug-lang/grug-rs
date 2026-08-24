@@ -69,17 +69,11 @@ pub extern "C" fn grug_init(
     c_settings_ptr: *const CGrugInitSettings, 
     out_err: &mut MaybeUninit<GrugError<'static>>
 ) -> Option<Box<CState>> {
-    println!("[Rust] Entered grug_init");
-    
     if c_settings_ptr.is_null() {
-        println!("[Rust] Error: c_settings_ptr is null!");
         return None;
     }
 
     let c_settings = unsafe { &*c_settings_ptr };
-    println!("[Rust] Read c_settings pointer successfully.");
-    println!("[Rust] mod_api_path ptr: {:?}", c_settings.mod_api_path);
-    println!("[Rust] mods_dir_path ptr: {:?}", c_settings.mods_dir_path);
 
     let mod_api_path = if c_settings.mod_api_path.is_null() {
         String::new()
@@ -93,24 +87,18 @@ pub extern "C" fn grug_init(
         unsafe { std::ffi::CStr::from_ptr(c_settings.mods_dir_path) }.to_string_lossy().into_owned()
     };
 
-    println!("[Rust] Parsed paths -> API: '{}', Mods: '{}'", mod_api_path, mods_dir_path);
-
     let mod_api_path_leaked: &'static str = Box::leak(mod_api_path.into_boxed_str());
     let mods_dir_path_leaked: &'static str = Box::leak(mods_dir_path.into_boxed_str());
 
-    println!("[Rust] Building GrugInitSettings...");
     let rust_settings = GrugInitSettings::new()
         .set_mod_api_path(mod_api_path_leaked)
         .set_mods_dir(mods_dir_path_leaked);
         
-    println!("[Rust] Calling build_state()...");
     match rust_settings.build_state() {
         Ok(state) => {
-            println!("[Rust] build_state() succeeded!");
             Some(Box::new((state, UnsafeCell::new(None), UnsafeCell::new(Files::empty()), UnsafeCell::new(vec![]))))
         }
         Err(err) => {
-            println!("[Rust] build_state() failed!");
             unsafe { out_err.as_mut_ptr().write(err.leak()) };
             None
         }
