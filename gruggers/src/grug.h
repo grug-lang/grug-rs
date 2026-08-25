@@ -252,7 +252,9 @@ struct grug_backend {
 struct grug_init_settings {
 	// TODO: We probably want a way to define the mod_api as a string (at least for prototyping)
 	char const* mod_api_path;
+	size_t mod_api_path_len;
 	char const* mods_dir_path;
+	size_t mods_dir_path_len;
 	struct grug_runtime_error_handler runtime_error_handler;
 	struct grug_backend backend;
 };
