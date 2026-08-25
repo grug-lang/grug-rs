@@ -57,7 +57,7 @@ pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<
 				Err(err) => if !f(Err(err)) {return;},
 			}
 			
-			std::thread::sleep(std::time::Duration::from_secs(1));
+			std::thread::sleep(std::time::Duration::from_millis(10));
 		}
 	});
 	Ok(())
