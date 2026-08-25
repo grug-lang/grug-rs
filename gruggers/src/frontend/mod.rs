@@ -281,12 +281,18 @@ impl GrugState {
 				// Create FileInfo from this result
 				let path = <OsStr as AsRef<Path>>::as_ref(path);
 				let mod_dir_path = path.parent().expect("must have at least component in path").components().next().unwrap().as_os_str();
+
+				let entity_type = get_entity_type(path.as_os_str()).unwrap_or("");
+				let file_prefix = path.file_prefix().unwrap().to_str().unwrap_or("");
+				let dash_suffix = format!("-{}", entity_type);
+				let entity_name = file_prefix.strip_suffix(&dash_suffix).unwrap_or(file_prefix);
+
 				let info = FileInfo::new_in(
 					path.as_os_str(),
 					path.file_name().unwrap(),
 					mod_dir_path,
-					get_entity_type(path.as_os_str()).unwrap_or(""),
-					path.file_prefix().unwrap(),
+					entity_type,
+					arena.copy_str_into(entity_name).as_ref(),
 					result,
 					&arena
 				);
@@ -375,12 +381,18 @@ impl GrugState {
 				// Create FileInfo from this result
 				let path = <OsStr as AsRef<Path>>::as_ref(path);
 				let mod_dir_path = path.parent().expect("must have at least one component in path").components().next().unwrap().as_os_str();
+
+				let entity_type = get_entity_type(path.as_os_str()).unwrap_or("");
+				let file_prefix = path.file_prefix().unwrap().to_str().unwrap_or("");
+				let dash_suffix = format!("-{}", entity_type);
+				let entity_name = file_prefix.strip_suffix(&dash_suffix).unwrap_or(file_prefix);
+
 				let info = FileInfo::new_in(
 					path.as_os_str(),
 					path.file_name().unwrap(),
 					mod_dir_path,
-					get_entity_type(path.as_os_str()).unwrap_or(""),
-					path.file_prefix().unwrap(),
+					entity_type,
+					arena.copy_str_into(entity_name).as_ref(),
 					result,
 					&arena
 				);
