@@ -36,15 +36,109 @@ impl Resources {
 // TODO: Create an actual struct for these
 type CState = (GrugState, /* last error */ UnsafeCell<Option<Error>>, /* info from last compile */ UnsafeCell<Files>, /* resources from last compile */ UnsafeCell<Resources>);
 
-#[unsafe(no_mangle)]
-pub extern "C" fn grug_default_settings() -> GrugInitSettings<'static> {
-    GrugInitSettings::new()
+#[repr(C)]
+pub struct CGrugRuntimeErrorHandler {
+    pub user_data: *mut std::ffi::c_void,
+    pub drop_fn: Option<extern "C" fn(*mut std::ffi::c_void)>,
+    pub handler_fn: Option<extern "C" fn(
+        data: *mut std::ffi::c_void,
+        err_kind: u32,
+        reason_str: *mut std::ffi::c_char,
+        reason_len: usize,
+        export_fn_name: *mut std::ffi::c_char,
+        export_fn_name_len: usize,
+        script_path: *mut std::ffi::c_char,
+        script_path_len: usize,
+    )>,
+}
+
+#[repr(C)]
+pub struct CGrugBackend {
+    pub obj: *mut std::ffi::c_void,
+    pub vtable: *mut std::ffi::c_void,
+}
+
+#[repr(C)]
+pub struct CGrugInitSettings {
+    pub mod_api_path: *const u8,
+    pub mod_api_path_len: usize,
+    pub mods_dir_path: *const u8,
+    pub mods_dir_path_len: usize,
+    pub runtime_error_handler: CGrugRuntimeErrorHandler,
+    pub backend: CGrugBackend,
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_init(settings: GrugInitSettings, out_err: &mut MaybeUninit<GrugError<'static>>) -> Option<Box<CState>> {
-    match settings.build_state() {
-        Ok(state) => Some(Box::new((state, UnsafeCell::new(None), UnsafeCell::new(Files::empty()), UnsafeCell::new(Resources::empty())))),
+pub extern "C" fn grug_default_settings() -> CGrugInitSettings {
+    CGrugInitSettings {
+        mod_api_path: std::ptr::null(),
+        mod_api_path_len: 0,
+        mods_dir_path: std::ptr::null(),
+        mods_dir_path_len: 0,
+        runtime_error_handler: CGrugRuntimeErrorHandler {
+            user_data: std::ptr::null_mut(),
+            drop_fn: None,
+            handler_fn: None,
+        },
+        backend: CGrugBackend {
+            obj: std::ptr::null_mut(),
+            vtable: std::ptr::null_mut(),
+        },
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn grug_init(
+    c_settings: CGrugInitSettings,
+    out_err: &mut MaybeUninit<GrugError<'static>>
+) -> Option<Box<CState>> {
+    // Because C passed the exact lengths, we don't need to leak or duplicate the strings!
+    // The lifetimes of these OsStrs only need to survive until build_state() completes.
+    let mod_api_path = unsafe {
+        std::ffi::OsStr::from_encoded_bytes_unchecked(std::slice::from_raw_parts(
+            c_settings.mod_api_path,
+            c_settings.mod_api_path_len,
+        ))
+    };
+    let mods_dir_path = unsafe {
+        std::ffi::OsStr::from_encoded_bytes_unchecked(std::slice::from_raw_parts(
+            c_settings.mods_dir_path,
+            c_settings.mods_dir_path_len,
+        ))
+    };
+
+    let mut rust_settings = GrugInitSettings::new()
+        .set_mod_api_path(mod_api_path)
+        .set_mods_dir(mods_dir_path);
+
+    // Safely wrap the C function pointer into a Rust closure
+    if let Some(c_handler_fn) = c_settings.runtime_error_handler.handler_fn {
+        let c_user_data = c_settings.runtime_error_handler.user_data as usize;
+
+        rust_settings = rust_settings.set_runtime_error_handler(
+            move |err_kind, reason_str, export_fn_name, script_path| {
+                let user_data_ptr = c_user_data as *mut std::ffi::c_void;
+                c_handler_fn(
+                    user_data_ptr,
+                    err_kind,
+                    reason_str.as_ptr() as *mut std::ffi::c_char,
+                    reason_str.len(),
+                    export_fn_name.as_ptr() as *mut std::ffi::c_char,
+                    export_fn_name.len(),
+                    script_path.as_ptr() as *mut std::ffi::c_char,
+                    script_path.len(),
+                );
+            }
+        );
+    }
+
+    match rust_settings.build_state() {
+        Ok(state) => Some(Box::new((
+            state,
+            UnsafeCell::new(None),
+            UnsafeCell::new(Files::empty()),
+            UnsafeCell::new(Resources::empty()),
+        ))),
         Err(err) => {
             unsafe { out_err.as_mut_ptr().write(err.leak()) };
             None
