@@ -196,7 +196,7 @@ pub unsafe extern "C" fn grug_call_export_fn(state: &CState, entity: &GrugEntity
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn grug_set_runtime_error(state: &CState, message: NTStrPtr) {
-	state.0.set_runtime_error(RuntimeError::GameFunctionError{message: message.to_str()});
+	state.0.set_runtime_error(RuntimeError::GameFunctionError{message: message.to_str().to_string()});
 }
 
 #[unsafe(no_mangle)]

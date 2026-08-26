@@ -175,7 +175,7 @@ mod test_bindings {
 	}
 
 	pub extern "C" fn game_fn_error ((state, _): &CState, msg: NTStrPtr<'static>) {
-		state.set_runtime_error(RuntimeError::GameFunctionError{message: msg.to_str()});
+		state.set_runtime_error(RuntimeError::GameFunctionError{message: msg.to_str().to_string()});
 	}
 
 	#[allow(non_camel_case_types)]

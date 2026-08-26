@@ -225,18 +225,19 @@ struct CStateWithHandler {
 
 impl State for CStateWithHandler {
 	fn set_runtime_error(&self, error: RuntimeError) {
+		let code = error.code();
 		match error {
 			RuntimeError::StackOverflow |
-			RuntimeError::ExceededTimeLimit => (self.set_runtime_error)(self.state, error.code(), None),
+			RuntimeError::ExceededTimeLimit => (self.set_runtime_error)(self.state, code, None),
 			RuntimeError::GameFunctionError{message} => {
 				let string;
-				let message = if let Some(message) = NTStr::try_from_str(message) {
-					message
+				let message_nt = if let Some(nt) = NTStr::try_from_str(&message) {
+					nt
 				} else {
 					string = format!("{}\n", message);
 					NTStr::try_from_str(&string).unwrap()
 				};
-				(self.set_runtime_error)(self.state, error.code(), Some(message.as_ntstrptr()));
+				(self.set_runtime_error)(self.state, code, Some(message_nt.as_ntstrptr()));
 			}
 		}
 	}
