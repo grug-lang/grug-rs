@@ -598,14 +598,13 @@ impl Interpreter {
 				ptr: Some(ptr),
 				..
 			} => {
-				let ptr = unsafe{ptr.as_ptr()};
 				let mut values = if let Some(receiver) = receiver {
 					vec![self.run_expr(call_stack, state, file, entity, receiver)?]
 				} else {
 					vec![]
 				};
 				args.iter().map(|arg| Some(values.push(self.run_expr(call_stack, state, file, entity, arg)?))).collect::<Option<Vec<()>>>()?;
-				let ret_val = ptr(state, values.as_ptr());
+				let ret_val = unsafe{ptr(state as *const _ as _, values.as_ptr(), &[] as *const _)};
 				let ret_val = if expr.result_type == Some(&Type::Void) {Value{void: ()}} else {ret_val};
 				if state.is_errorring() {
 					return None;

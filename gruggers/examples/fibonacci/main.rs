@@ -6,21 +6,22 @@ use gruggers::types::Value;
 mod game_fns {
 	use super::*;
 	use super::GrugState;
-	pub extern "C" fn print_number<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
+	use gruggers::ast::Type;
+	pub extern "C" fn print_number<'a>(_state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value {
 		unsafe {
 			let number = (*arguments).number;
 			println!("{}", number);
 		}
 		Value{void: ()}
 	}
-	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
+	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value {
 		unsafe {
 			let string = (*arguments).string.to_str();
 			println!("{}", string);
 		}
 		Value{void: ()}
 	}
-	pub extern "C" fn list_number<'a>(_state: &'a GrugState, _arguments: *const Value) -> Value {
+	pub extern "C" fn list_number<'a>(_state: &'a GrugState, _arguments: *const Value, _: &[Type;0]) -> Value {
 		println!("creating list");
 		unsafe {
 			let id = _state.get_next_entity_id();
@@ -29,7 +30,7 @@ mod game_fns {
 			Value{id}
 		}
 	}
-	pub extern "C" fn list_number_insert<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
+	pub extern "C" fn list_number_insert<'a>(_state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let value = (*arguments.add(1)).number;
@@ -38,7 +39,7 @@ mod game_fns {
 		}
 		Value{void: ()}
 	}
-	pub extern "C" fn list_number_remove<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
+	pub extern "C" fn list_number_remove<'a>(_state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let location = (*arguments.add(2)).number;
@@ -46,7 +47,7 @@ mod game_fns {
 			Value{number: ret_val}
 		}
 	}
-	pub extern "C" fn list_number_push<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
+	pub extern "C" fn list_number_push<'a>(_state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let value = (*arguments.add(1)).number;
@@ -54,21 +55,21 @@ mod game_fns {
 		}
 		Value{void: ()}
 	}
-	pub extern "C" fn list_number_pop<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
+	pub extern "C" fn list_number_pop<'a>(_state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let ret_val = OBJECTS.get_mut(&list).unwrap().downcast_mut::<Vec<f64>>().unwrap().pop().unwrap();
 			Value{number: ret_val}
 		}
 	}
-	pub extern "C" fn list_number_len<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
+	pub extern "C" fn list_number_len<'a>(_state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let ret_val = OBJECTS.get(&list).unwrap().downcast_ref::<Vec<f64>>().unwrap().len();
 			Value{number: ret_val as f64}
 		}
 	}
-	pub extern "C" fn list_number_get<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
+	pub extern "C" fn list_number_get<'a>(_state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let location = (*arguments.add(1)).number;
@@ -76,7 +77,7 @@ mod game_fns {
 			Value{number: ret_val}
 		}
 	}
-	pub extern "C" fn list_number_set<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
+	pub extern "C" fn list_number_set<'a>(_state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value {
 		unsafe {
 			let list = (*arguments).id;
 			let value = (*arguments.add(1)).number;
@@ -85,7 +86,7 @@ mod game_fns {
 		}
 		Value{void: ()}
 	}
-	pub extern "C" fn print_list_number<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
+	pub extern "C" fn print_list_number<'a>(_state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value {
 		unsafe {
 			let id = (*arguments).id;
 			let vec = OBJECTS.get(&id).unwrap().downcast_ref::<Vec<f64>>().unwrap();

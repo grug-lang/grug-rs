@@ -3,13 +3,14 @@ use std::path::Path;
 use std::io::Write;
 use std::ptr::NonNull;
 use std::cell::UnsafeCell;
+use std::ffi::c_void;
 
 use crate::ntstring::NTStr;
 use crate::ast::{Parameter, Type};
 use crate::arena::Arena;
 use crate::state::GrugState;
 use crate::error::{ErrorKind, Error, SourceSpan, Result};
-use crate::types::{HostFn, HostFnReg, HostFnRegErased};
+use crate::types::{HostFn, HostFnWithState, HostFnReg, HostFnRegErased};
 use crate::HAS_CONSTRAINTS;
 
 use allocator_api2::vec::Vec;
@@ -48,7 +49,7 @@ impl ModApi {
 		&self.host_fns
 	}
 
-	pub(crate) fn register_fn(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFn) -> Result<()> {
+	pub(crate) fn register_fn<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnWithState<N, GrugState>) -> Result<()> {
 		if let Some(class_name) = class_name {
 			let Some(class) = self.classes.get_mut(class_name) else {
 				return Err(Error::new(
@@ -57,7 +58,7 @@ impl ModApi {
 					"".as_ref(),
 					"",
 					SourceSpan{offset: 0, line: 0},
-					format_args!("Class with name '{}' is not found in mod_api.json", class_name),
+					format_args!("Class '{}' is not found in mod_api.json", class_name),
 				));
 			};
 			let Some((_, host_fn_data)) = class.methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) else {
@@ -67,19 +68,32 @@ impl ModApi {
 					"".as_ref(),
 					"",
 					SourceSpan{offset: 0, line: 0},
-					format_args!("Class with name '{}' does not contain method with name '{}'", class_name, fn_name),
+					format_args!("Class '{}' does not contain method with name '{}'", class_name, fn_name),
 				));
 			};
-			if !host_fn_data.generics.is_empty() {
+
+			if !host_fn_data.generics.is_empty() && N == 0 {
 				return Err(Error::new(
 					ErrorKind::FUNCTION_REGISTRATION_ERROR,
 					"",
 					"".as_ref(),
 					"",
 					SourceSpan{offset: 0, line: 0},
-					format_args!("Host method '{}' on class '{}' is generic", class_name, fn_name),
+					format_args!("Host method '{}.{}' is supposed to be generic", class_name, fn_name),
 				));
 			}
+
+			if host_fn_data.generics.len() != N {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host method '{}.{}' is supposed to have {} generics, but it has {}", class_name, fn_name, host_fn_data.generics.len(), N),
+				));
+			}
+
 			match &mut host_fn_data.fn_ptr {
 				Some(_) => {
 					return Err(Error::new(
@@ -88,10 +102,10 @@ impl ModApi {
 						"".as_ref(),
 						"",
 						SourceSpan{offset: 0, line: 0},
-						format_args!("Host method named '{}' on class '{}' has already been registered", fn_name, class_name),
+						format_args!("Host method '{}.{}' has already been registered", class_name, fn_name),
 					));
 				}
-				x => *x = Some(ptr),
+				x => *x = Some(HostFn::from_ptr(ptr)),
 			}
 		} else {
 			let Some(host_fn_data) = self.host_fns.get_mut(fn_name) else {
@@ -101,17 +115,18 @@ impl ModApi {
 					"".as_ref(),
 					"",
 					SourceSpan{offset: 0, line: 0},
-					format_args!("Host function named '{}' is not found in mod_api.json", fn_name),
+					format_args!("Host function '{}' is not found in mod_api.json", fn_name),
 				));
 			};
-			if !host_fn_data.generics.is_empty() {
+
+			if host_fn_data.generics.len() != N {
 				return Err(Error::new(
 					ErrorKind::FUNCTION_REGISTRATION_ERROR,
 					"",
 					"".as_ref(),
 					"",
 					SourceSpan{offset: 0, line: 0},
-					format_args!("Host function '{}' is generic", fn_name),
+					format_args!("Host method '{}' is supposed to have {} generics, but it has {}", fn_name, host_fn_data.generics.len(), N),
 				));
 			}
 			match &mut host_fn_data.fn_ptr {
@@ -122,10 +137,10 @@ impl ModApi {
 						"".as_ref(),
 						"",
 						SourceSpan{offset: 0, line: 0},
-						format_args!("Host function named '{}' has already been registered", fn_name),
+						format_args!("Host function '{}' has already been registered", fn_name),
 					));
 				}
-				x => *x = Some(ptr),
+				x => *x = Some(HostFn::from_ptr(ptr)),
 			}
 		}
 		Ok(())
@@ -325,18 +340,17 @@ impl ModApi {
 	}
 
 	pub(crate) unsafe fn register_dummies(&mut self) {
-		use crate::state::GrugState;
 		use crate::types::Value;
-		extern "C" fn dummy_host_fn(_state: &GrugState, _arguments: *const Value) -> Value {
+		extern "C" fn dummy_host_fn(_state: *const c_void, _arguments: *const Value, _generics: *const Type) -> Value {
 			Value{void: ()}
 		}
 		unsafe extern "C" fn dummy_generic_fn<'a>(_: *const Type<'a>) -> Option<HostFn> {
-			Some(HostFn::from_ptr(dummy_host_fn))
+			Some(HostFn::from_erased_ptr(dummy_host_fn))
 		}
 		let dummy_generic_fn = (dummy_generic_fn as for<'a> unsafe extern "C" fn (*const Type<'a>) -> _).into();
 		for (_, host_fn) in &mut self.host_fns {
 			if host_fn.generics.is_empty() {
-				host_fn.fn_ptr = const{Some(HostFn::from_ptr(dummy_host_fn))};
+				host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
 			} else {
 				host_fn.registerer = Some(dummy_generic_fn);
 			}
@@ -344,7 +358,7 @@ impl ModApi {
 		for (_, class) in &mut self.classes {
 			for (_, host_fn) in &mut *class.methods {
 				if host_fn.generics.is_empty() {
-					host_fn.fn_ptr = const{Some(HostFn::from_ptr(dummy_host_fn))};
+					host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
 				} else {
 					host_fn.registerer = Some(dummy_generic_fn);
 				}

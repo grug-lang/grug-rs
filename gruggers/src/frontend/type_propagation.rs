@@ -755,33 +755,20 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					// only fill in the host function pointer the second time
 					// through.
 					if substitutions.is_some() {
-						// non generic functions directly use the function
-						// from the host function data
-						if generics.len() == 0 {
-							if let Some(game_fn_ptr) = host_fn.fn_ptr {
-								*ptr = Some(game_fn_ptr);
+						if let Some(host_fn_ptr) = host_fn.fn_ptr {
+							*ptr = Some(host_fn_ptr);
+						} else if let Some(fn_registerer) = host_fn.registerer {
+							let result = unsafe{fn_registerer(generics.as_ptr())};
+							if let Some(result) = result {
+								*ptr = Some(result);
 							} else {
-								panic!("Game function {} was not registered (Note: This error is not triggerred by grug_tests)", name);
+								return Err(self.new_error(
+									*name_span,
+									format_args!("generic function '{}' failed instantiation for types {}", name, TypeListDisplay(generics))
+								));
 							}
-						// generic functions need to call the registerer
 						} else {
-							if let Some(fn_registerer) = host_fn.registerer {
-								let result = unsafe{fn_registerer(generics.as_ptr())};
-								if let Some(result) = result {
-									*ptr = Some(result);
-								} else {
-									return Err(self.new_error(
-										*name_span,
-										format_args!("generic function '{}' failed instantiation for types {}", name, TypeListDisplay(generics))
-									));
-								}
-							} else {
-								panic!("Game function {} was not registered (Note: This error is not triggerred by grug_tests)", name);
-								// return self.new_error(
-								// 	*name_span,
-								// 	format_args!("Game function {} was not registered", name)
-								// );
-							}
+							panic!("function {} was not registered (Note: This error is not triggerred by grug_tests)", name);
 						}
 					}
 					Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
@@ -880,27 +867,20 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				if substitutions.is_some() {
 					// non generic functions directly use the function
 					// from the host function data
-					if generics.len() == 0 {
-						if let Some(game_fn_ptr) = host_fn.fn_ptr {
-							*ptr = Some(game_fn_ptr);
+					if let Some(host_fn_ptr) = host_fn.fn_ptr {
+						*ptr = Some(host_fn_ptr);
+					} else if let Some(fn_registerer) = host_fn.registerer {
+						let result = unsafe{fn_registerer(generics.as_ptr())};
+						if let Some(result) = result {
+							*ptr = Some(result);
 						} else {
-							panic!("method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", receiver_name, name);
+							return Err(self.new_error(
+								*name_span,
+								format_args!("generic method '{}.{}' failed instantiation for types {}", receiver_name, name, TypeListDisplay(generics))
+							));
 						}
-					// generic functions need to call the registerer
 					} else {
-						if let Some(fn_registerer) = host_fn.registerer {
-							let result = unsafe{fn_registerer(generics.as_ptr())};
-							if let Some(result) = result {
-								*ptr = Some(result);
-							} else {
-								return Err(self.new_error(
-									*name_span,
-									format_args!("generic method '{}.{}' failed instantiation for types {}", receiver_name, name, TypeListDisplay(generics))
-								));
-							}
-						} else {
-							panic!("generic method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", receiver_name, name);
-						}
+						panic!("method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", receiver_name, name);
 					}
 				}
 				Self::convert_mod_api_type(host_fn.return_ty, generics, arena)

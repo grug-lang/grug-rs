@@ -39,7 +39,7 @@ pub extern "C" fn grug_deinit(_: Option<Box<CState>>) {}
 /// # SAFETY
 /// same as [`GrugState::register_host_fn`]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_register_host_fn<'a>(state: &'a mut CState, fn_name: NTStrPtr, func: HostFnWithState<GrugState>) -> Option<&'a GrugError<'a>> {
+pub unsafe extern "C" fn grug_register_host_fn<'a>(state: &'a mut CState, fn_name: NTStrPtr, func: HostFnWithState<0, GrugState>) -> Option<&'a GrugError<'a>> {
 	// SAFETY: This function is exposed to C and is inherently unsafe
 	if let Err(err) = unsafe{state.0.register_host_fn(fn_name.to_str(), func)} {
 		Some(state.1.get_mut().insert(err).inner())
@@ -50,7 +50,7 @@ pub unsafe extern "C" fn grug_register_host_fn<'a>(state: &'a mut CState, fn_nam
 
 /// # SAFETY
 /// same as [`GrugState::register_method`]
-pub unsafe extern "C" fn grug_register_method<'a>(state: &'a mut CState, class_name: NTStrPtr, fn_name: NTStrPtr, func: HostFnWithState<GrugState>) -> Option<&'a GrugError<'a>> {
+pub unsafe extern "C" fn grug_register_method<'a>(state: &'a mut CState, class_name: NTStrPtr, fn_name: NTStrPtr, func: HostFnWithState<0, GrugState>) -> Option<&'a GrugError<'a>> {
 	// SAFETY: This function is exposed to C and is inherently unsafe
 	if let Err(err) = unsafe{state.0.register_method(class_name.to_str(), fn_name.to_str(), func)} {
 		Some(state.1.get_mut().insert(err).inner())

@@ -690,7 +690,7 @@ struct Instructions{
 	>,
 	constants: Vec<ConstantData>,
 	helper_fn_locations: HashMap<&'static str, /* constant location */ u32>,
-	game_fn_locations: HashMap</* HostFn as usize */ usize, /* constant location */ u32>,
+	game_fn_locations: HashMap</* HostFn as usize */ HostFn, /* constant location */ u32>,
 	fn_labels: HashMap<usize, &'static str>,
 	strings: HashMap<&'static NTStr, u32>,
 	_arena: Arena,
@@ -794,7 +794,7 @@ impl Instructions {
 	}
 
 	pub fn insert_game_fn_data(&mut self, args: u32, ptr: HostFn) -> u32 {
-		*self.game_fn_locations.entry(ptr.as_usize()).or_insert_with(|| {
+		*self.game_fn_locations.entry(ptr).or_insert_with(|| {
 			let ret_val = self.constants.len();
 			self.constants.push(ConstantData{game_fn_data: (args, ptr)});
 			assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
@@ -1111,7 +1111,7 @@ impl Stack {
 					data_loc,
 				} => {
 					let (args, ptr) = unsafe{instructions.constants[data_loc as usize].game_fn_data};
-					let value = unsafe{(ptr.as_ptr())(state, self.stack.as_ptr().add(self.stack.len() - args as usize))};
+					let value = unsafe{(ptr)(state as *const _ as _, self.stack.as_ptr().add(self.stack.len() - args as usize), &[] as _)};
 					self.stack.truncate(self.stack.len() - args as usize);
 					if has_return {
 						self.stack.push(value);

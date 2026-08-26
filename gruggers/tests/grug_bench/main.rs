@@ -108,19 +108,20 @@ use test_bindings::*;
 mod game_functions {
 	use gruggers::state::GrugState;
 	use gruggers::types::Value;
+	use gruggers::ast::Type;
 
 	#[link(name = "bench", kind="dylib")]
 	unsafe extern "C" {
-		safe fn game_fn_print_number<'a>(state: &'a GrugState, arguments: *const Value) -> Value;
-		safe fn game_fn_print_bool  <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
-		safe fn game_fn_get_1       <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
-		safe fn game_fn_get_mass    <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
-		safe fn game_fn_get_number  <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
-		safe fn game_fn_x           <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
-		safe fn game_fn_y           <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
-		safe fn game_fn_sqrt        <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
-		safe fn game_fn_set_acc     <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
-		safe fn game_fn_fmod        <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
+		safe fn game_fn_print_number<'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
+		safe fn game_fn_print_bool  <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
+		safe fn game_fn_get_1       <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
+		safe fn game_fn_get_mass    <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
+		safe fn game_fn_get_number  <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
+		safe fn game_fn_x           <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
+		safe fn game_fn_y           <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
+		safe fn game_fn_sqrt        <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
+		safe fn game_fn_set_acc     <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
+		safe fn game_fn_fmod        <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
 	}
 
 	pub fn register_game_functions(state: &mut GrugState) { unsafe {

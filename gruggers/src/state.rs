@@ -44,7 +44,7 @@ use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{Value, Id, HostFn, HostFnWithState, HostFnReg, HostFnRegErased, ExportFnId, FileId, GrugEntity, INVALID_GRUG_FILE_ID};
+use crate::types::{Value, Id, HostFnWithState, HostFnReg, HostFnRegErased, ExportFnId, FileId, GrugEntity, INVALID_GRUG_FILE_ID};
 use crate::xar::Xar;
 use crate::ntstring::{NTStrPtr};
 use crate::arena::Arena;
@@ -487,55 +487,29 @@ impl GrugState {
 	pub fn all_host_fns_registered(&self) -> Result<(), Error> {
 		// Check all normal host functions
 		for (host_fn_name, host_fn) in self.mod_api.host_fns() {
-			if host_fn.generics.is_empty() {
-				if let None = host_fn.fn_ptr {
-					return Err(Error::new(
-						ErrorKind::INIT_ERROR,
-						"",
-						"".as_ref(),
-						"",
-						SourceSpan{offset: 0, line: 0},
-						format_args!("host function '{host_fn_name}' has not been registered"),
-					));
-				}
-			} else {
-				if let None = host_fn.registerer {
-					return Err(Error::new(
-						ErrorKind::INIT_ERROR,
-						"",
-						"".as_ref(),
-						"",
-						SourceSpan{offset: 0, line: 0},
-						format_args!("generic host function '{host_fn_name}' has not been registered"),
-					));
-				}
+			if let None = host_fn.fn_ptr && let None = host_fn.registerer {
+				return Err(Error::new(
+					ErrorKind::INIT_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("host function '{host_fn_name}' has not been registered"),
+				));
 			}
 		}
 		// check all methods
 		for (class_name, class) in self.mod_api.classes() {
 			for (method_name, method) in &*class.methods {
-				if method.generics.is_empty() {
-					if let None = method.fn_ptr {
-						return Err(Error::new(
-							ErrorKind::INIT_ERROR,
-							"",
-							"".as_ref(),
-							"",
-							SourceSpan{offset: 0, line: 0},
-							format_args!("method '{method_name}' in class '{class_name}' has not been registered"),
-						));
-					}
-				} else {
-					if let None = method.registerer {
-						return Err(Error::new(
-							ErrorKind::INIT_ERROR,
-							"",
-							"".as_ref(),
-							"",
-							SourceSpan{offset: 0, line: 0},
-							format_args!("generic method '{method_name}' in class '{class_name}' has not been registered"),
-						));
-					}
+				if let None = method.fn_ptr && let None = method.registerer {
+					return Err(Error::new(
+						ErrorKind::INIT_ERROR,
+						"",
+						"".as_ref(),
+						"",
+						SourceSpan{offset: 0, line: 0},
+						format_args!("method '{method_name}' in class '{class_name}' has not been registered"),
+					));
 				}
 			}
 		}
@@ -610,16 +584,16 @@ impl GrugState {
 // Registration functions
 impl GrugState {
 	/// Register a non generic host function
-	pub unsafe fn register_host_fn(&mut self, fn_name: &str, func: HostFnWithState<Self>) -> Result<(), Error> {
+	pub unsafe fn register_host_fn<const N: usize>(&mut self, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
 		unsafe{self.register_host_fn_internal(None, fn_name, func)}
 	}
 
 	/// Register a non generic host method
-	pub unsafe fn register_method(&mut self, class_name: &str, fn_name: &str, func: HostFnWithState<Self>) -> Result<(), Error> {
+	pub unsafe fn register_method<const N: usize>(&mut self, class_name: &str, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
 		unsafe{self.register_host_fn_internal(Some(class_name), fn_name, func)}
 	}
 
-	unsafe fn register_host_fn_internal(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFnWithState<Self>) -> Result<(), Error> {
+	unsafe fn register_host_fn_internal<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
 		// SAFETY: This Arc is shared between the state and all the compiler
 		// threads.  Because we have a &mut self, we assume that all compiler
 		// threads are parked waiting to receive more compile commands. This
@@ -636,7 +610,7 @@ impl GrugState {
 		// Once that is stabilized, this can be replaced
 		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
 		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
-		unsafe{(&mut *mod_api).register_fn(class_name, fn_name, HostFn::from_ptr(func))}
+		unsafe{(&mut *mod_api).register_fn(class_name, fn_name, func)}
 	}
 
 	/// Registers a generic host function

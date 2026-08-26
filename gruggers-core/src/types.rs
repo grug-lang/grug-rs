@@ -3,6 +3,7 @@ use std::ffi::c_double;
 use std::cell::Cell;
 use std::ptr::NonNull;
 use std::marker::PhantomPinned;
+use std::ffi::c_void;
 use crate::ntstring::NTStrPtr;
 use crate::state::State;
 use crate::ast::Type;
@@ -28,7 +29,7 @@ use crate::ast::Type;
 ///
 /// For methods, it is the number of elements in the "used_generics"
 /// field of the class and the method combined.
-pub type HostFnReg<const N: usize, State> = for<'a> extern "C" fn (&'a [Type<'a>; N]) -> Option<HostFnWithState<State>>;
+pub type HostFnReg<const N: usize, State> = for<'a> extern "C" fn (&'a [Type<'a>; N]) -> Option<HostFnWithState<N, State>>;
 
 /// Type erased version of HostFnReg
 ///
@@ -58,7 +59,6 @@ impl From<for<'a> unsafe extern "C" fn (*const Type<'a>) -> Option<HostFn>> for 
 	}
 }
 
-
 impl std::ops::Deref for HostFnRegErased {
 	type Target = unsafe extern "C" fn (*const Type) -> Option<HostFn>;
 	fn deref(&self) -> &Self::Target {
@@ -76,9 +76,25 @@ impl std::ops::Deref for HostFnRegErased {
 /// 
 /// Conversion to and from [`HostFnWithState`] is done using [`Self::as_ptr`] and [`Self::from_ptr`]
 /// 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, Eq)]
 #[repr(transparent)]
-pub struct HostFn(NonNull<()>);
+pub struct HostFn(ErasedHostFn);
+
+impl PartialEq for HostFn {
+	fn eq(&self, other: &Self) -> bool {
+		self.0 as usize == other.0 as usize
+	}
+}
+impl std::ops::Deref for HostFn {
+	type Target = ErasedHostFn;
+	fn deref(&self) -> &ErasedHostFn {
+		&self.0
+	}
+}
+
+/// SAFETY: This function should only be called with the same state type and
+/// number of generics it was originally created for
+type ErasedHostFn = unsafe extern "C" fn (*const c_void, *const Value, *const Type) -> Value;
 // SAFETY: HostFn is always just a function pointer
 unsafe impl Send for HostFn {}
 unsafe impl Sync for HostFn {}
@@ -90,26 +106,16 @@ unsafe impl Sync for HostFn {}
 /// 
 /// When Backends are running an export function, [`HostFnWithState`] should be
 /// cast to the same kind of state used in `call_on_function`.
-pub type HostFnWithState<GrugState> = extern "C" fn (&GrugState, *const Value) -> Value;
+pub type HostFnWithState<const N: usize, GrugState> = extern "C" fn (&GrugState, *const Value, generics: &[Type; N]) -> Value;
 
 impl HostFn {
-	/// Casts `self` to a [`HostFnWithState`] for the input state
-	/// 
-	/// # Safety
-	/// The input type must be compatible with the type used to construct
-	/// `self`
-	pub const unsafe fn as_ptr<GrugState: State>(self) -> HostFnWithState<GrugState> {
-		unsafe{std::mem::transmute::<NonNull<()>, HostFnWithState<GrugState>>(self.0)}
-	}
-
 	/// Type erases a [`HostFnWithState`]
-	pub const fn from_ptr<GrugState: State>(value: HostFnWithState<GrugState>) -> Self {
-		Self(unsafe{std::mem::transmute::<HostFnWithState<GrugState>, NonNull<()>>(value)})
+	pub const fn from_erased_ptr(value: ErasedHostFn) -> Self {
+		Self(value)
 	}
-
-	/// converts the pointer into a usize without exposing provenance
-	pub fn as_usize(self) -> usize {
-		self.0.as_ptr().addr()
+	/// Type erases a [`HostFnWithState`]
+	pub const fn from_ptr<const N: usize, GrugState: State>(value: HostFnWithState<N, GrugState>) -> Self {
+		Self(unsafe{std::mem::transmute::<HostFnWithState<N, GrugState>, ErasedHostFn>(value)})
 	}
 }
 
