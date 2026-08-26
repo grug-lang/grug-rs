@@ -1,0 +1,294 @@
+{
+	"entities": {
+		"Test": {
+			"description": "Test Entity",
+			"export_functions": [
+				{
+					"name": "run",
+					"description": "Called when the entity is supposed to run",
+					"parameters": [
+						{
+							"name": "message",
+							"type": {
+								"name": "string"
+							}
+						}
+					]
+				}
+			]
+		}
+	},
+	"classes": {
+		"Ref": {
+			"description": "Reference to an item allocated elsewhere",
+			"used_generics": [
+				"$T"
+			],
+			"methods": {
+				"set": {
+					"description": "Set a new value behind the reference",
+					"parameters": [
+						{
+							"name": "value",
+							"type": {
+								"name": "$T"
+							}
+						}
+					]
+				},
+				"get": {
+					"description": "Get the value behind the reference",
+					"return_type": {
+						"name": "$T"
+					}
+				}
+			}
+		},
+		"Dict": {
+			"description": "Dictionary",
+			"used_generics": [
+				"$K",
+				"$V"
+			],
+			"methods": {
+				"put": {
+					"description": "Puts a key and value into the dictionary",
+					"parameters": [
+						{
+							"name": "key",
+							"type": {
+								"name": "$K"
+							}
+						},
+						{
+							"name": "value",
+							"type": {
+								"name": "$V"
+							}
+						}
+					]
+				}
+			}
+		},
+		"Pair": {
+			"description": "A pair of two values of different types",
+			"used_generics": [
+				"$K",
+				"$V"
+			]
+		},
+		"List": {
+			"description": "A list of values",
+			"used_generics": [
+				"$T"
+			],
+			"methods": {
+				"push": {
+					"description": "adds a value to the end of the list",
+					"parameters": [
+						{
+							"name": "item",
+							"type": {
+								"name": "$T"
+							}
+						}
+					]
+				},
+				"get": {
+					"description": "Gets the value at a particular index",
+					"return_type": {
+						"name": "$T"
+					},
+					"parameters": [
+						{
+							"name": "idx",
+							"type": {
+								"name": "number"
+							}
+						}
+					]
+				},
+				"get_checked": {
+					"description": "Gets the value at a particular index, returns None if the value is not present",
+					"return_type": {
+						"name": "Option",
+						"generics": [
+							{
+								"name": "$T"
+							}
+						]
+					},
+					"parameters": [
+						{
+							"name": "idx",
+							"type": {
+								"name": "number"
+							}
+						}
+					]
+				}
+			}
+		},
+		"Option": {
+			"description": "Indicates that a value may not be present",
+			"used_generics": [
+				"$T"
+			],
+			"methods": {
+				"is": {
+					"description": "Checks if a value is present",
+					"return_type": {
+						"name": "bool"
+					}
+				},
+				"unwrap": {
+					"description": "Gets the value if present",
+					"return_type": {
+						"name": "$T"
+					}
+				}
+			}
+		}
+	},
+	"host_functions": {
+		"dict_from_list": {
+			"description": "Creates a dict from a list of pairs of keys and values",
+			"used_generics": [
+				"$K",
+				"$V"
+			],
+			"return_type": {
+				"name": "Dict",
+				"generics": [
+					{
+						"name": "$K"
+					},
+					{
+						"name": "$V"
+					}
+				]
+			},
+			"parameters": [
+				{
+					"name": "list",
+					"type": {
+						"name": "List",
+						"generics": [
+							{
+								"name": "Pair",
+								"generics": [
+									{
+										"name": "$K"
+									},
+									{
+										"name": "$V"
+									}
+								]
+							}
+						]
+					}
+				}
+			]
+		},
+		"list": {
+			"description": "Creates an empty list",
+			"used_generics": [
+				"$T"
+			],
+			"return_type": {
+				"name": "List",
+				"generics": [
+					{
+						"name": "$T"
+					}
+				]
+			}
+		},
+		"make_pair": {
+			"description": "Creates a pair",
+			"used_generics": [
+				"$T0",
+				"$T1"
+			],
+			"return_type": {
+				"name": "Pair",
+				"generics": [
+					{
+						"name": "$T0"
+					},
+					{
+						"name": "$T1"
+					}
+				]
+			},
+			"parameters": [
+				{
+					"name": "first",
+					"type": {
+						"name": "$T0"
+					}
+				},
+				{
+					"name": "second",
+					"type": {
+						"name": "$T1"
+					}
+				}
+			]
+		},
+		"dict": {
+			"description": "Creates an empty dictionary",
+			"used_generics": [
+				"$K",
+				"$V"
+			],
+			"return_type": {
+				"name": "Dict",
+				"generics": [
+					{
+						"name": "$K"
+					},
+					{
+						"name": "$V"
+					}
+				]
+			}
+		},
+		"print": {
+			"description": "Prints a generic value",
+			"used_generics": [
+				"$T"
+			],
+			"parameters": [
+				{
+					"name": "thing",
+					"type": {
+						"name": "$T"
+					}
+				}
+			]
+		},
+		"ref": {
+			"description": "Creates a reference to a primitive value",
+			"used_generics": [
+				"$T"
+			],
+			"return_type": {
+				"name": "Ref",
+				"generics": [
+					{
+						"name": "$T"
+					}
+				]
+			},
+			"parameters": [
+				{
+					"name": "item",
+					"type": {
+						"name": "$T"
+					}
+				}
+			]
+		}
+	}
+}

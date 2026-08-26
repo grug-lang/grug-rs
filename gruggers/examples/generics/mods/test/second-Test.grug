@@ -1,0 +1,12 @@
+list: List[number] = list()
+
+export run(message: string) {
+    x: Ref[number] = ref(25)
+    y: Ref[number] = ref(30)
+    if x.get() == y.get() {
+        return
+    }
+    return
+
+    z: Dict[number, string] = dict_from_list(dict())
+}

@@ -1,10 +1,10 @@
 use crate::types::{
-	GrugValue, GrugFileId, GrugEntity, GameFnPtr,
+	Value, FileId, GrugEntity, HostFn,
 };
 use crate::ast::{
 	GrugAst,
 	Expr, ExprData, OnFunction, Statement,
-	BinaryOperator, GrugType, HelperFunction, UnaryOperator
+	BinaryOperator, Type, HelperFunction, UnaryOperator
 };
 use crate::ntstring::{NTStrPtr, NTStr};
 use crate::arena::Arena;
@@ -79,7 +79,7 @@ impl<'a> Compiler<'a> {
 			instructions,
 			globals_size,
 			entities: RefCell::new(Vec::new()),
-			data: ErasedXar::new(Layout::array::<GrugValue>(globals_size)
+			data: ErasedXar::new(Layout::array::<Value>(globals_size)
 				 .expect("invalid layout")
 			),
 		}
@@ -129,6 +129,7 @@ impl<'a> Compiler<'a> {
 			Statement::Variable{
 				name,
 				ty,
+				type_span: _,
 				assignment_expr,
 				name_span: _,
 			} => {
@@ -301,11 +302,11 @@ impl<'a> Compiler<'a> {
 					BinaryOperator::Division      => {self.compile_expr(instructions, right); instructions.stream.push(Op::Div);}
 					BinaryOperator::DoubleEquals  => {
 						match right.result_type.unwrap() {
-							GrugType::String => {
+							Type::String => {
 								self.compile_expr(instructions, right);
 								instructions.stream.push(Op::StrEq);
 							}
-							GrugType::Void   => unreachable!(),
+							Type::Void   => unreachable!(),
 							_ => {
 								self.compile_expr(instructions, right);
 								instructions.stream.push(Op::CmpEq);
@@ -314,12 +315,12 @@ impl<'a> Compiler<'a> {
 					}
 					BinaryOperator::NotEquals     => {
 						match right.result_type.unwrap() {
-							GrugType::String => {
+							Type::String => {
 								self.compile_expr(instructions, right);
 								instructions.stream.push(Op::StrEq);
 								instructions.stream.push(Op::Not);
 							}
-							GrugType::Void   => unreachable!(),
+							Type::Void   => unreachable!(),
 							_ => {
 								self.compile_expr(instructions, right);
 								instructions.stream.push(Op::CmpNeq);
@@ -416,7 +417,7 @@ impl<'a> Compiler<'a> {
 					self.compile_expr(instructions, argument);
 				}
 				
-				let has_return = *expr.result_type.unwrap() != GrugType::Void;
+				let has_return = *expr.result_type.unwrap() != Type::Void;
 				let data_loc = instructions.insert_game_fn_data(args_count as u32, *ptr);
 				instructions.stream.push(Op::CallGameFunction {
 					has_return,
@@ -492,7 +493,7 @@ impl Default for BytecodeBackend {
 
 impl Backend for BytecodeBackend {
 	#[inline]
-	fn insert_file<GrugState: State>(&self, state: &GrugState, id: GrugFileId, file: GrugAst) {
+	fn insert_file<GrugState: State>(&self, state: &GrugState, id: FileId, file: GrugAst) {
 		let mut compiled_file = Compiler::compile(file);
 		let mut files = self.files.borrow_mut();
 		if let Some(old_file) = files.get_mut(id.0 as usize) {
@@ -500,15 +501,15 @@ impl Backend for BytecodeBackend {
 			
 			old_entities.extract_if(.., |old_entity| {
 				debug_assert!(id == unsafe{(*old_entity.as_ptr()).file_id});
-				let globals = unsafe{&*compiled_file.data.get_slot().write_slice(compiled_file.globals_size, Cell::new(GrugValue{void: ()}))};
+				let globals = unsafe{&*compiled_file.data.get_slot().write_slice(compiled_file.globals_size, Cell::new(Value{void: ()}))};
 				let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
 
-				stack.stack.push(GrugValue{id: unsafe{(*old_entity.as_ptr()).id}});
+				stack.stack.push(Value{id: unsafe{(*old_entity.as_ptr()).id}});
 				let ret_val = unsafe{stack.run(state, globals, &compiled_file.instructions, 1, 0)}.is_some();
 				unsafe{(*old_entity.as_ptr()).members.set(NonNull::from_ref(globals).cast::<()>())};
 
+                stack = stack.reset();
 				self.stacks.borrow_mut().push(stack);
-
 				!ret_val
 			}).for_each(drop);
 			*compiled_file.entities.get_mut() = old_entities;
@@ -525,9 +526,9 @@ impl Backend for BytecodeBackend {
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
 		
-		let globals = unsafe{&*file.data.get_slot().write_slice(file.globals_size, Cell::new(GrugValue{void: ()}))};
+		let globals = unsafe{&*file.data.get_slot().write_slice(file.globals_size, Cell::new(Value{void: ()}))};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
-		stack.stack.push(GrugValue{id: entity.id});
+		stack.stack.push(Value{id: entity.id});
 		let ret_val = unsafe{stack.run(state, globals, &file.instructions, 1, 0)}.is_some();
 		entity.members.set(NonNull::from_ref(globals).cast::<()>());
 
@@ -553,12 +554,12 @@ impl Backend for BytecodeBackend {
 		file.entities.borrow_mut().extract_if(.., |en| std::ptr::eq(en.as_ptr().cast_const(), entity)).for_each(|_| {});
 	}
 	#[inline]
-	unsafe fn call_on_function_raw<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
+	unsafe fn call_on_function_raw<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const Value) -> bool {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
 
-		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<GrugValue>>().as_ptr(), file.globals_size)};
+		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<Value>>().as_ptr(), file.globals_size)};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
 		let Some((start_loc, argument_count, locals_size)) = file.instructions.on_fn_locations[on_fn_index + 1] else {
 			return false;
@@ -573,12 +574,12 @@ impl Backend for BytecodeBackend {
 		ret_val
 	}
 	#[inline]
-	fn call_on_function<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
+	fn call_on_function<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[Value]) -> bool {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
 
-		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<GrugValue>>().as_ptr(), file.globals_size)};
+		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<Value>>().as_ptr(), file.globals_size)};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
 		let Some(&Some((start_loc, argument_count, locals_size))) = file.instructions.on_fn_locations.get(on_fn_index + 1) else {
 			return false;
@@ -672,7 +673,7 @@ pub union ConstantData {
 	number: f64,
 	string: NTStrPtr<'static>,
 	helper_fn_data: (/* args: */ u32, /* locals_size: */ u32, /* location: */ usize),
-	game_fn_data: (/* args: */ u32, /* ptr: */ GameFnPtr),
+	game_fn_data: (/* args: */ u32, /* ptr: */ HostFn),
 }
 
 struct Instructions{
@@ -689,7 +690,7 @@ struct Instructions{
 	>,
 	constants: Vec<ConstantData>,
 	helper_fn_locations: HashMap<&'static str, /* constant location */ u32>,
-	game_fn_locations: HashMap</* GameFnPtr as usize */ usize, /* constant location */ u32>,
+	game_fn_locations: HashMap</* HostFn as usize */ usize, /* constant location */ u32>,
 	fn_labels: HashMap<usize, &'static str>,
 	strings: HashMap<&'static NTStr, u32>,
 	_arena: Arena,
@@ -792,7 +793,7 @@ impl Instructions {
 		self.fn_labels.insert(location, name);
 	}
 
-	pub fn insert_game_fn_data(&mut self, args: u32, ptr: GameFnPtr) -> u32 {
+	pub fn insert_game_fn_data(&mut self, args: u32, ptr: HostFn) -> u32 {
 		*self.game_fn_locations.entry(ptr.as_usize()).or_insert_with(|| {
 			let ret_val = self.constants.len();
 			self.constants.push(ConstantData{game_fn_data: (args, ptr)});
@@ -911,7 +912,7 @@ impl std::fmt::Display for Instructions {
 					data_loc,
 				} => {
 					let (args, ptr) = unsafe{self.constants[*data_loc as usize].game_fn_data};
-					write!(f, "CallGameFunction {} {} 0x{:016x}", has_return, args, &unsafe{std::mem::transmute::<GameFnPtr, *const ()>(ptr).addr()})
+					write!(f, "CallGameFunction {} {} 0x{:016x}", has_return, args, &unsafe{std::mem::transmute::<HostFn, *const ()>(ptr).addr()})
 				}
 			}?;
 			// print labels: 
@@ -922,7 +923,7 @@ impl std::fmt::Display for Instructions {
 }
 
 pub struct Stack {
-	stack: Vec<GrugValue>,
+	stack: Vec<Value>,
 	stack_frames: Vec<(/* rbp */ usize, /* ip */ usize)>,
 	rbp: usize,
 }
@@ -943,10 +944,10 @@ impl Stack {
 		self
 	}
 
-	unsafe fn run<GrugState: State>(&mut self, state: &GrugState, globals: &[Cell<GrugValue>], instructions: &Instructions, locals_size: u32, start_loc: usize) -> Option<GrugValue> {
+	unsafe fn run<GrugState: State>(&mut self, state: &GrugState, globals: &[Cell<Value>], instructions: &Instructions, locals_size: u32, start_loc: usize) -> Option<Value> {
 		let mut stream = &instructions.stream[start_loc..];
 		let start_time = Instant::now();
-		self.stack.resize(self.rbp + locals_size as usize, GrugValue{void: ()});
+		self.stack.resize(self.rbp + locals_size as usize, Value{void: ()});
 		let mut i_count: usize = 1;
 		loop {
 			let (ins, next) = unsafe{stream.split_first().unwrap_unchecked()};
@@ -958,7 +959,7 @@ impl Stack {
 						self.rbp = rbp;
 						stream = unsafe{instructions.stream.get(ip..).unwrap_unchecked()};
 					} else {
-						return Some(GrugValue{void: ()});
+						return Some(Value{void: ()});
 					}
 				}
 				Op::ReturnValue          => {
@@ -972,10 +973,10 @@ impl Stack {
 						return Some(ret_val);
 					}
 				}
-				Op::LoadNumber{data_loc} => unsafe{self.stack.push(GrugValue{number: instructions.constants.get_unchecked(data_loc as usize).number})},
-				Op::LoadStr{data_loc}    => unsafe{self.stack.push(GrugValue{string: instructions.constants.get_unchecked(data_loc as usize).string})},
-				Op::LoadFalse            => self.stack.push(GrugValue{bool: 0}),
-				Op::LoadTrue             => self.stack.push(GrugValue{bool: 1}),
+				Op::LoadNumber{data_loc} => unsafe{self.stack.push(Value{number: instructions.constants.get_unchecked(data_loc as usize).number})},
+				Op::LoadStr{data_loc}    => unsafe{self.stack.push(Value{string: instructions.constants.get_unchecked(data_loc as usize).string})},
+				Op::LoadFalse            => self.stack.push(Value{bool: 0}),
+				Op::LoadTrue             => self.stack.push(Value{bool: 1}),
 				Op::Dup{index}           => {
 					unsafe{self.stack.push(*self.stack.get(self.stack.len() - 1 - index as usize).unwrap_unchecked())}
 				}
@@ -993,7 +994,7 @@ impl Stack {
 						Op::Div => first / second,
 						_ => unreachable!(),
 					};
-					self.stack.push(GrugValue{number: value});
+					self.stack.push(Value{number: value});
 				}
 				// Op::And                  |
 				// Op::Or                   => {
@@ -1004,26 +1005,26 @@ impl Stack {
 				// 		Op::Or  => (first != 0) || (second != 0),
 				// 		_ => unreachable!(),
 				// 	} as u8;
-				// 	self.stack.push(GrugValue{bool: value});
+				// 	self.stack.push(Value{bool: value});
 				// }
 				Op::Not                  => {
 					let value = unsafe{self.stack.pop().unwrap_unchecked().bool};
-					self.stack.push(GrugValue{bool: (value == 0) as u8});
+					self.stack.push(Value{bool: (value == 0) as u8});
 				}
 				Op::CmpEq | Op::CmpNeq   => {
-					let second = unsafe{self.stack.pop().unwrap_unchecked()}.as_bytes();
-					let first = unsafe{self.stack.pop().unwrap_unchecked()}.as_bytes();
+					let second = unsafe{self.stack.pop().unwrap_unchecked().bytes};
+					let first = unsafe{self.stack.pop().unwrap_unchecked().bytes};
 					let value = match ins {
 						Op::CmpEq  => first == second,
 						Op::CmpNeq => first != second,
 						_ => unreachable!(),
 					};
-					self.stack.push(GrugValue{bool: value as u8});
+					self.stack.push(Value{bool: value as u8});
 				}
 				Op::StrEq                => {
 					let second = unsafe{self.stack.pop().unwrap_unchecked().string};
 					let first = unsafe{self.stack.pop().unwrap_unchecked().string};
-					self.stack.push(GrugValue{bool: (first == second) as u8});
+					self.stack.push(Value{bool: (first == second) as u8});
 				}
 				Op::CmpG  | Op::CmpGe    |
 				Op::CmpL  | Op::CmpLe    => {
@@ -1036,7 +1037,7 @@ impl Stack {
 						Op::CmpLe => first <= second,
 						_ => unreachable!(),
 					};
-					self.stack.push(GrugValue{bool: value as u8});
+					self.stack.push(Value{bool: value as u8});
 				}
 				// Op::PrintStr             => {
 				// 	use std::ptr::NonNull;
@@ -1102,7 +1103,7 @@ impl Stack {
 						unsafe{stream.as_ptr().offset_from(instructions.stream.as_ptr()) as usize},
 					));
 					self.rbp = self.stack.len() - args as usize;
-					self.stack.resize(self.rbp + locals_size as usize, GrugValue{void: ()});
+					self.stack.resize(self.rbp + locals_size as usize, Value{void: ()});
 					stream = unsafe{instructions.stream.get(location..).unwrap_unchecked()};
 				}
 				Op::CallGameFunction {

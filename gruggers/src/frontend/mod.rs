@@ -1,6 +1,6 @@
 use crate::state::{GrugState, Files, FileInfo};
 use crate::arena::Arena;
-use crate::types::GrugFileId;
+use crate::types::FileId;
 use crate::ast::*;
 use crate::ntstring::NTStrPtr;
 use crate::error::{Error, ErrorKind, SourceSpan};
@@ -23,7 +23,7 @@ pub(crate) const SPACES_PER_INDENT: usize = 4;
 pub mod tokenizer;
 pub mod parser;
 mod type_propagation;
-use type_propagation::TypePropogator;
+use type_propagation::TypePropagator;
 
 // Compilation functions
 impl GrugState {
@@ -51,8 +51,10 @@ impl GrugState {
 		mod_api: Arc<ModApi>,
 	) -> impl FnOnce() {
 		use crate::async_fs::{open_file_async_for_read, read_files_async};
+		let mut temp_arena = Arena::new();
 		move || {
 			for (arena, files) in receiver.iter() {
+				temp_arena.clear();
 				let mut resources = Vec::new_in(&arena);
 				// This is the actual lifetime of the data but it has to be erased to send across the channel
 				fn combine_lifetimes<'a>(_: &'a Arena, input: &'static [&'static OsStr]) -> &'a [&'a OsStr] {input}
@@ -106,7 +108,8 @@ impl GrugState {
 						file_text,
 						mods_dir_path.as_ref(),
 						&mod_api,
-						&arena
+						&arena,
+						&temp_arena,
 					) {
 						Ok(data) => data,
 						Err(err) => return (Err(err), path)
@@ -144,7 +147,7 @@ impl GrugState {
 	/// Compile a grug file at a relative path within the mods directory. Once
 	/// compiled directly once, the file will be automatically hot reloaded by
 	/// the state. 
-	pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<GrugFileId, Error> {
+	pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<FileId, Error> {
 		let path = path.as_ref();
 		let mut path_buf = self.mods_dir_path.clone();
 		path_buf.push("/");
@@ -167,7 +170,7 @@ impl GrugState {
 	///
 	/// If a file has already been compiled with the same path, the script will
 	/// be hot reloaded.
-	pub fn compile_grug_file_from_str(&self, path: impl AsRef<OsStr>, file_text: &str) -> Result<GrugFileId, Error> {
+	pub fn compile_grug_file_from_str(&self, path: impl AsRef<OsStr>, file_text: &str) -> Result<FileId, Error> {
 		use super::frontend::*;
 		let path = path.as_ref();
 
@@ -179,7 +182,8 @@ impl GrugState {
 				file_text, 
 				&self.mods_dir_path, 
 				&self.mod_api, 
-				&arena
+				&arena,
+				&arena,
 			)?;
 			let mut self_resources = self.resources.borrow_mut();
 			for resource in resources {
@@ -277,12 +281,18 @@ impl GrugState {
 				// Create FileInfo from this result
 				let path = <OsStr as AsRef<Path>>::as_ref(path);
 				let mod_dir_path = path.parent().expect("must have at least component in path").components().next().unwrap().as_os_str();
+
+				let entity_type = get_entity_type(path.as_os_str()).unwrap_or("");
+				let file_prefix = path.file_prefix().unwrap().to_str().unwrap_or("");
+				let dash_suffix = format!("-{}", entity_type);
+				let entity_name = file_prefix.strip_suffix(&dash_suffix).unwrap_or(file_prefix);
+
 				let info = FileInfo::new_in(
 					path.as_os_str(),
 					path.file_name().unwrap(),
 					mod_dir_path,
-					get_entity_type(path.as_os_str()).unwrap_or(""),
-					path.file_prefix().unwrap(),
+					entity_type,
+					arena.copy_str_into(entity_name).as_ref(),
 					result,
 					&arena
 				);
@@ -371,12 +381,18 @@ impl GrugState {
 				// Create FileInfo from this result
 				let path = <OsStr as AsRef<Path>>::as_ref(path);
 				let mod_dir_path = path.parent().expect("must have at least one component in path").components().next().unwrap().as_os_str();
+
+				let entity_type = get_entity_type(path.as_os_str()).unwrap_or("");
+				let file_prefix = path.file_prefix().unwrap().to_str().unwrap_or("");
+				let dash_suffix = format!("-{}", entity_type);
+				let entity_name = file_prefix.strip_suffix(&dash_suffix).unwrap_or(file_prefix);
+
 				let info = FileInfo::new_in(
 					path.as_os_str(),
 					path.file_name().unwrap(),
 					mod_dir_path,
-					get_entity_type(path.as_os_str()).unwrap_or(""),
-					path.file_prefix().unwrap(),
+					entity_type,
+					arena.copy_str_into(entity_name).as_ref(),
 					result,
 					&arena
 				);
@@ -407,7 +423,8 @@ impl GrugState {
 		file_text: &'arena str, 
 		mods_dir_path: &'arena OsStr, 
 		mod_api: &'arena ModApi, 
-		arena: &'arena Arena
+		arena: &'arena Arena,
+		temp_arena: &'_ Arena,
 	) -> Result<(GrugAst<'arena>, &'arena [&'arena OsStr]), Error> {
 		let mod_name = get_mod_name(path);
 		let entity_type = get_entity_type(path)?;
@@ -426,7 +443,7 @@ impl GrugState {
 		// tokenize
 		let tokens = tokenizer::tokenize(file_text, arena, path)?;
 		// parse
-		let mut ast = parser::parse(tokens.leak(), arena, file_text, path)?;
+		let ast = parser::parse(tokens.leak(), arena, file_text, path)?;
 
 		// get mod api entity declaration
 		let entity = mod_api.entities().get(entity_type).ok_or_else(|| 
@@ -442,7 +459,7 @@ impl GrugState {
 		)?;
 
 		// type check 
-		let resources = TypePropogator::fill_result_types(
+		let (ast, resources) = TypePropagator::fill_result_types(
 			entity, 
 			mod_api,
 			mod_name, 
@@ -450,8 +467,9 @@ impl GrugState {
 			file_text, 
 			path,
 			entity_type,
-			&mut ast,
+			ast,
 			arena,
+			temp_arena,
 		)?;
 
 		// convert into GrugAst

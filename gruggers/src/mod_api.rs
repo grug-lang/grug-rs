@@ -3,10 +3,11 @@ use std::path::Path;
 use std::io::Write;
 
 use crate::ntstring::NTStr;
-use crate::ast::{Parameter, GrugType};
+use crate::ast::{Parameter, Type};
 use crate::arena::Arena;
+use crate::state::GrugState;
 use crate::error::{ErrorKind, Error, SourceSpan, Result};
-use crate::types::GameFnPtr;
+use crate::types::{HostFn, HostFnReg, HostFnRegErased};
 
 use allocator_api2::vec::Vec;
 
@@ -33,92 +34,317 @@ impl ModApi {
 	pub(crate) fn entities<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiEntity<'a>> {
 		&self.entities
 	}
-	#[allow(dead_code)]
+
 	pub(crate) fn classes<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiClass<'a>> {
 		// SAFETY: Invariance of the methods field requires this transmute
 		// This transmute brings it back to the actual lifetime
 		unsafe{std::mem::transmute::<&'a HashMap<&'static NTStr, ModApiClass<'static>>, &'a HashMap<&'a NTStr, ModApiClass<'a>>>(&self.classes)}
 	}
+
 	pub(crate) fn host_fns<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiHostFn<'a>> {
 		&self.host_fns
 	}
 
-	pub(crate) fn register_host_fn(&mut self, name: &str, ptr: GameFnPtr) -> Result<()> {
-		let Some(host_fn_data) = self.host_fns.get_mut(name) else {
-			return Err(Error::new(
-				ErrorKind::INIT_ERROR,
-				"",
-				"".as_ref(),
-				"",
-				SourceSpan{offset: 0, line: 0},
-				format_args!("Host function named '{}' is not found in mod_api.json", name),
-			));
-		};
-		match &mut host_fn_data.fn_ptr {
-			Some(_) => {
+	pub(crate) fn register_fn(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFn) -> Result<()> {
+		if let Some(class_name) = class_name {
+			let Some(class) = self.classes.get_mut(class_name) else {
 				return Err(Error::new(
-					ErrorKind::INIT_ERROR,
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
 					"",
 					"".as_ref(),
 					"",
 					SourceSpan{offset: 0, line: 0},
-					format_args!("Host function named '{}' has already been registered", name),
+					format_args!("Class with name '{}' is not found in mod_api.json", class_name),
+				));
+			};
+			let Some((_, host_fn_data)) = class.methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) else {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Class with name '{}' does not contain method with name '{}'", class_name, fn_name),
+				));
+			};
+			if !host_fn_data.generics.is_empty() {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host method '{}' on class '{}' is generic", class_name, fn_name),
 				));
 			}
-			x => *x = Some(ptr),
+			match &mut host_fn_data.fn_ptr {
+				Some(_) => {
+					return Err(Error::new(
+						ErrorKind::FUNCTION_REGISTRATION_ERROR,
+						"",
+						"".as_ref(),
+						"",
+						SourceSpan{offset: 0, line: 0},
+						format_args!("Host method named '{}' on class '{}' has already been registered", fn_name, class_name),
+					));
+				}
+				x => *x = Some(ptr),
+			}
+		} else {
+			let Some(host_fn_data) = self.host_fns.get_mut(fn_name) else {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host function named '{}' is not found in mod_api.json", fn_name),
+				));
+			};
+			if !host_fn_data.generics.is_empty() {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host function '{}' is generic", fn_name),
+				));
+			}
+			match &mut host_fn_data.fn_ptr {
+				Some(_) => {
+					return Err(Error::new(
+						ErrorKind::FUNCTION_REGISTRATION_ERROR,
+						"",
+						"".as_ref(),
+						"",
+						SourceSpan{offset: 0, line: 0},
+						format_args!("Host function named '{}' has already been registered", fn_name),
+					));
+				}
+				x => *x = Some(ptr),
+			}
 		}
 		Ok(())
 	}
 
-	pub(crate) fn register_method_fn(&mut self, class_name: &str, fn_name: &str, ptr: GameFnPtr) -> Result<()> {
-		let Some(class) = self.classes.get_mut(class_name) else {
-			return Err(Error::new(
-				ErrorKind::INIT_ERROR,
-				"",
-				"".as_ref(),
-				"",
-				SourceSpan{offset: 0, line: 0},
-				format_args!("Class with name '{}' is not found in mod_api.json", class_name),
-			));
-		};
-		let Some((_, host_fn_data)) = class.methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) else {
-			return Err(Error::new(
-				ErrorKind::INIT_ERROR,
-				"",
-				"".as_ref(),
-				"",
-				SourceSpan{offset: 0, line: 0},
-				format_args!("Class with name '{}' does not contain method with name '{}'", class_name, fn_name),
-			));
-		};
-		match &mut host_fn_data.fn_ptr {
-			Some(_) => {
+	/// Registers a generic function and checks that the number of generics
+	/// expected by the functions matches the number defined in the mod_api
+	pub(crate) fn register_generic_fn<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnReg<N, GrugState>) -> Result<()> {
+		if let Some(class_name) = class_name {
+			let Some(class) = self.classes.get_mut(class_name) else {
 				return Err(Error::new(
-					ErrorKind::INIT_ERROR,
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
 					"",
 					"".as_ref(),
 					"",
 					SourceSpan{offset: 0, line: 0},
-					format_args!("Host method named '{}' on class '{}' has already been registered", fn_name, class_name),
+					format_args!("Class '{}' is not found in mod_api.json", class_name),
+				));
+			};
+			let Some((_, host_fn_data)) = class.methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) else {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Method {}.{} is not found in the mod_api.json", class_name, fn_name),
+				));
+			};
+			if host_fn_data.generics.is_empty() {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Method {}.{} is not generic", class_name, fn_name),
 				));
 			}
-			x => *x = Some(ptr),
+			if host_fn_data.generics.len() != N {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Method {}.{} has {} generics but the function provided expects {} generics", class_name, fn_name, host_fn_data.generics.len(), N),
+				));
+			}
+			match &mut host_fn_data.registerer {
+				Some(_) => {
+					return Err(Error::new(
+						ErrorKind::FUNCTION_REGISTRATION_ERROR,
+						"",
+						"".as_ref(),
+						"",
+						SourceSpan{offset: 0, line: 0},
+						format_args!("Method {}.{} has already been registered", fn_name, class_name),
+					));
+				}
+				x => *x = Some(ptr.into()),
+			}
+		} else {
+			let Some(host_fn_data) = self.host_fns.get_mut(fn_name) else {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host function '{}' is not found in mod_api.json", fn_name),
+				));
+			};
+			if host_fn_data.generics.is_empty() {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host function '{}' is not generic", fn_name),
+				));
+			}
+			if host_fn_data.generics.len() != N {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host function '{}' has {} generics but the function provided expects {} generics", fn_name, host_fn_data.generics.len(), N),
+				));
+			}
+			match &mut host_fn_data.registerer {
+				Some(_) => {
+					return Err(Error::new(
+						ErrorKind::FUNCTION_REGISTRATION_ERROR,
+						"",
+						"".as_ref(),
+						"",
+						SourceSpan{offset: 0, line: 0},
+						format_args!("Host function '{}' has already been registered", fn_name),
+					));
+				}
+				x => *x = Some(ptr.into()),
+			}
+		}
+		Ok(())
+	}
+
+	/// Registers a generic function and does not check that the number of
+	/// generics expected by the functions matches the number defined in the
+	/// mod_api. 
+	///
+	/// This is intended to be used directly by c code
+	pub(crate) unsafe fn register_generic_fn_unchecked(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnRegErased) -> Result<()> {
+		if let Some(class_name) = class_name {
+			let Some(class) = self.classes.get_mut(class_name) else {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Class '{}' is not found in mod_api.json", class_name),
+				));
+			};
+			let Some((_, host_fn_data)) = class.methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) else {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Method {}.{} is not found in mod_api.json", class_name, fn_name),
+				));
+			};
+			if host_fn_data.generics.is_empty() {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Method {}.{} is not generic", class_name, fn_name),
+				));
+			}
+			match &mut host_fn_data.registerer {
+				Some(_) => {
+					return Err(Error::new(
+						ErrorKind::FUNCTION_REGISTRATION_ERROR,
+						"",
+						"".as_ref(),
+						"",
+						SourceSpan{offset: 0, line: 0},
+						format_args!("Method {}.{} has already been registered", fn_name, class_name),
+					));
+				}
+				x => *x = Some(ptr),
+			}
+		} else {
+			let Some(host_fn_data) = self.host_fns.get_mut(fn_name) else {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host function '{}' is not found in mod_api.json", fn_name),
+				));
+			};
+			if host_fn_data.generics.is_empty() {
+				return Err(Error::new(
+					ErrorKind::FUNCTION_REGISTRATION_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("Host function '{}' is not generic", fn_name),
+				));
+			}
+			match &mut host_fn_data.registerer {
+				Some(_) => {
+					return Err(Error::new(
+						ErrorKind::FUNCTION_REGISTRATION_ERROR,
+						"",
+						"".as_ref(),
+						"",
+						SourceSpan{offset: 0, line: 0},
+						format_args!("Host function '{}' has already been registered", fn_name),
+					));
+				}
+				x => *x = Some(ptr),
+			}
 		}
 		Ok(())
 	}
 
 	pub(crate) unsafe fn register_dummies(&mut self) {
 		use crate::state::GrugState;
-		use crate::types::GrugValue;
-		extern "C" fn dummy_host_fn(_state: &GrugState, _arguments: *const GrugValue) -> GrugValue {
-			GrugValue{void: ()}
+		use crate::types::Value;
+		extern "C" fn dummy_host_fn(_state: &GrugState, _arguments: *const Value) -> Value {
+			Value{void: ()}
 		}
+		unsafe extern "C" fn dummy_generic_fn<'a>(_: *const Type<'a>) -> Option<HostFn> {
+			Some(HostFn::from_ptr(dummy_host_fn))
+		}
+		let dummy_generic_fn = (dummy_generic_fn as for<'a> unsafe extern "C" fn (*const Type<'a>) -> _).into();
 		for (_, host_fn) in &mut self.host_fns {
-			host_fn.fn_ptr = const{Some(GameFnPtr::from_ptr(dummy_host_fn))};
+			if host_fn.generics.is_empty() {
+				host_fn.fn_ptr = const{Some(HostFn::from_ptr(dummy_host_fn))};
+			} else {
+				host_fn.registerer = Some(dummy_generic_fn);
+			}
 		}
 		for (_, class) in &mut self.classes {
 			for (_, host_fn) in &mut *class.methods {
-				host_fn.fn_ptr = const{Some(GameFnPtr::from_ptr(dummy_host_fn))};
+				if host_fn.generics.is_empty() {
+					host_fn.fn_ptr = const{Some(HostFn::from_ptr(dummy_host_fn))};
+				} else {
+					host_fn.registerer = Some(dummy_generic_fn);
+				}
 			}
 		}
 	}
@@ -126,16 +352,17 @@ impl ModApi {
 
 #[derive(Debug)]
 pub(crate) struct ModApiClass<'a> {
-	#[allow(dead_code)]
-	pub(crate) description: Option< &'a str>,
-	#[allow(dead_code)]
+	#[expect(dead_code)]
+	pub(crate) description: &'a str,
+	pub(crate) ty: Type<'a>,
 	pub(crate) methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
+	pub(crate) generics: &'a [&'a NTStr],
 }
 
 #[derive(Debug)]
 pub(crate) struct ModApiEntity<'a> {
-	#[allow(dead_code)]
-	pub(crate) description: Option<&'a str>,
+	#[expect(dead_code)]
+	pub(crate) description: &'a str,
 	pub(crate) export_fns: &'a [(&'a NTStr, ModApiExportFn<'a>)],
 }
 
@@ -147,22 +374,20 @@ impl<'a> ModApiEntity<'a> {
 
 #[derive(Debug)]
 pub(crate) struct ModApiExportFn<'a> {
-	#[allow(dead_code)]
-	pub(super) description: Option<&'a str>,
+	#[expect(dead_code)]
+	pub(super) description: &'a str,
 	pub(super) parameters: &'a [Parameter<'a>],
 }
 
 #[derive(Debug)]
 pub(crate) struct ModApiHostFn<'a> {
-	#[allow(dead_code)]
-	pub(crate) description: Option<&'a str>,
-	pub(crate) return_ty: GrugType<'a>,
-	pub(crate) parameters: &'a [Parameter<'a>],
-	pub(crate) fn_ptr: Option<GameFnPtr>,
-	#[cfg(feature = "generics")]
+	#[expect(dead_code)]
+	pub(crate) description: &'a str,
 	pub(crate) generics: &'a [&'a NTStr],
-	#[cfg(feature = "generics")]
-	pub(crate) registerer: Option<GameFnRegisterer>,
+	pub(crate) parameters: &'a [Parameter<'a>],
+	pub(crate) return_ty: Type<'a>,
+	pub(crate) fn_ptr: Option<HostFn>,
+	pub(crate) registerer: Option<HostFnRegErased>,
 }
 
 struct ModApiContext<'a, 'error> {
@@ -191,7 +416,22 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		write!(location, "{}", &self.json_path).expect("writing into a vec can never fail");
 		let location = unsafe{std::str::from_utf8_unchecked(location.leak())};
 		Error::new(
-			ErrorKind::MOD_API_JSON_ERROR,
+			ErrorKind::MOD_API_ERROR,
+			location,
+			self.path.as_ref(), 
+			self.text,
+			SourceSpan{offset: 0, line: 0},
+			format_args!("{} {}", location, message),
+		)
+	}
+
+	#[track_caller]
+	fn new_fmt_error(&self, message: std::fmt::Arguments) -> Error {
+		let mut location = Vec::new_in(self.arena);
+		write!(location, "{}", &self.json_path).expect("writing into a vec can never fail");
+		let location = unsafe{std::str::from_utf8_unchecked(location.leak())};
+		Error::new(
+			ErrorKind::MOD_API_ERROR,
 			location,
 			self.path.as_ref(), 
 			self.text,
@@ -206,28 +446,25 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		object.get(key).ok_or_else(|| self.new_error("does not exist"))
 	}
 
-	fn parse_type<'b>(&mut self, object: &'a Object, type_key: &'a str, arena: &'b Arena) -> Result<GrugType<'b>> {
-		// "type" string
-		let ty = match object.get(type_key) {
-			None => return Ok(GrugType::Void),
-			Some(str) => {
-				self.push_path(JsonPathComponent::ObjectKey(type_key));
-				str.as_str().ok_or_else(|| self.new_error("is not a string"))?
-			}
+	fn parse_type<'b>(&mut self, object: &'a JsonValue, used_generics: &'b[&'b NTStr], arena: &'b Arena) -> Result<Type<'b>> {
+		let JsonValue::Object(object) = object else {
+			return Err(self.new_error("is not an object"));
 		};
+		// "name" string
+		let ty = self.get_key(object, "name")?;
+		let ty = ty.as_str().ok_or_else(|| self.new_error("is not a string"))?;
 		self.pop_path();
 
 		let ty = match ty {
-			"void"     => GrugType::Void,
-			"bool"     => GrugType::Bool,
-			"number"   => GrugType::Number,
-			"string"   => GrugType::String,
-			"id"       => GrugType::Id{custom_name: None},
+			"void"     => Type::Void,
+			"bool"     => Type::Bool,
+			"number"   => Type::Number,
+			"string"   => Type::String,
 			"entity"   => {
 				// "entity_type" string
 				let entity_type = self.get_key(object, "entity_type")?.as_str().ok_or_else(|| self.new_error("is not a string"))?;
 				self.pop_path();
-				GrugType::Entity{
+				Type::Entity{
 					entity_type: (!entity_type.is_empty()).then(|| {
 						arena.copy_str_into_nt(entity_type).as_ntstrptr()
 					})
@@ -237,21 +474,48 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 				// "resource_extension" string
 				let entity_type = self.get_key(object, "resource_extension")?.as_str().ok_or_else(|| self.new_error("is not a string"))?;
 				self.pop_path();
-				GrugType::Resource {
+				Type::Resource {
 					extension: arena.copy_str_into_nt(entity_type).as_ntstrptr(),
 				}
 			}
+			generic if generic.starts_with("$") => {
+				for (i, name) in used_generics.iter().enumerate() {
+					if &***name == generic {
+						return Ok(Type::Existential{idx: i});
+					}
+				}
+				self.push_path(JsonPathComponent::ObjectKey("name"));
+				return Err(self.new_fmt_error(format_args!("is an undeclared generic (\"{}\")", generic)));
+			}
 			type_name => {
-				let extra_value = arena.copy_str_into_nt(type_name).as_ntstrptr();
-				GrugType::Id {
-					custom_name: Some(extra_value),
+				let name = arena.copy_str_into_nt(type_name).as_ntstrptr();
+				// recursively parse types within generics
+				let generics = if let Some(generics) = object.get("generics") {
+					self.push_path(JsonPathComponent::ObjectKey("generics"));
+					let mut temp = Vec::new_in(arena);
+					let JsonValue::Array(generics) = generics else {
+						return Err(self.new_error("is not an array"));
+					};
+					for (i, generic) in generics.iter().enumerate() {
+						self.push_path(JsonPathComponent::ArrayIdx(i));
+						temp.push(self.parse_type(generic, used_generics, arena)?);
+						self.pop_path();
+					}
+					self.pop_path();
+					&*temp.leak()
+				} else {
+					&[]
+				};
+				Type::Id {
+					name,
+					generics,
 				}
 			}
 		};
 		Ok(ty)
 	}
 
-	fn parse_parameters<'b>(&mut self, parameters: &'a JsonValue, arena: &'b Arena) -> Result<&'b [Parameter<'b>]> {
+	fn parse_parameters<'b>(&mut self, parameters: &'a JsonValue, generics: &'b [&'b NTStr], arena: &'b Arena) -> Result<&'b [Parameter<'b>]> {
 		let JsonValue::Array(parameters) = parameters else {
 			return Err(self.new_error("is not an array"));
 		};
@@ -272,10 +536,10 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			let param_name = arena.copy_str_into_nt(param_name);
 			
 			// required "type" string
-			let ty = self.parse_type(param_values, "type", arena)?;
-			self.push_path(JsonPathComponent::ObjectKey("type"));
+			let ty = self.get_key(param_values, "type")?;
+			let ty = self.parse_type(ty, generics, arena)?;
 			match &ty {
-				GrugType::Void => return Err(self.new_error("cannot be void")),
+				Type::Void => return Err(self.new_error("cannot be void")),
 				_ => (),
 			}
 			self.pop_path();
@@ -291,48 +555,117 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		Ok(temp.leak())
 	}
 
-	fn parse_host_fn<'b>(&mut self, host_fn_values: &'a JsonValue, arena: &'b Arena) -> Result<ModApiHostFn<'b>> {
+	fn parse_host_fn<'b>(&mut self, host_fn_values: &'a JsonValue, parent_generics: &[&'b NTStr], arena: &'b Arena) -> Result<ModApiHostFn<'b>> {
 		let JsonValue::Object(host_fn_values) = host_fn_values else {
 			return Err(self.new_error("is not an object"));
 		};
-		// optional "description" string
-		let description = host_fn_values.get("description").map(|inner| {
-			self.push_path(JsonPathComponent::ObjectKey("description"));
-			let description = arena.copy_str_into(inner.as_str().ok_or_else(|| self.new_error("is not a string"))?);
+		// "description" string
+		let description = self.get_key(host_fn_values, "description")?;
+		let description = arena.copy_str_into(description.as_str().ok_or_else(|| self.new_error("is not a string"))?);
+		self.pop_path();
+
+		// optional "used_generics" key
+		let mut used_generics = Vec::with_capacity_in(parent_generics.len(), arena);
+		used_generics.extend(parent_generics);
+		if let Some(generics) = host_fn_values.get("used_generics") {
+			self.push_path(JsonPathComponent::ObjectKey("used_generics"));
+			let JsonValue::Array(generics) = generics else {
+				return Err(self.new_error("is not an array"));
+			};
+			for (i, generic) in generics.iter().enumerate() {
+				self.push_path(JsonPathComponent::ArrayIdx(i));
+				used_generics.push(arena.copy_str_into_nt(generic.as_str().ok_or_else(|| self.new_error("is not a string"))?));
+				self.pop_path();
+			}
+			for (i, generic) in used_generics.iter().enumerate() {
+				if !generic.starts_with("$") {
+					self.push_path(JsonPathComponent::ArrayIdx(i));
+					return Err(self.new_error("must begin with '$'"));
+				}
+			}
 			self.pop_path();
-			Ok(description)
-		}).transpose()?;
+		}
+		let generics = used_generics.leak();
 		
 		// optional "parameters" array 
 		let parameters = if let Some(parameters) = host_fn_values.get("parameters") {
 			self.push_path(JsonPathComponent::ObjectKey("parameters"));
-			let parameters = self.parse_parameters(parameters, arena)?;
+			let parameters = self.parse_parameters(parameters, generics, arena)?;
 			self.pop_path();
 			parameters
 		} else {
 			&[]
 		};
 
-		let return_ty = if host_fn_values.get("return_type").is_some() {
-			let return_ty = self.parse_type(host_fn_values, "return_type", arena)?;
+		let return_ty = if let Some(return_ty) = host_fn_values.get("return_type") {
 			self.push_path(JsonPathComponent::ObjectKey("return_type"));
+			let return_ty = self.parse_type(return_ty, generics, arena)?;
 			match &return_ty {
-				GrugType::Entity{..} => return Err(self.new_error("cannot be entity")),
-				GrugType::Resource{..} => return Err(self.new_error("cannot be resource")),
+				Type::Entity{..} => return Err(self.new_error("cannot be entity")),
+				Type::Resource{..} => return Err(self.new_error("cannot be resource")),
 				_ => (),
 			}
 			self.pop_path();
 			return_ty
 		} else {
-			GrugType::Void
+			Type::Void
 		};
 
 		Ok(ModApiHostFn{
 			description,
 			return_ty,
+			generics,
 			parameters,
 			fn_ptr: None,
+			registerer: None,
 		})
+	}
+
+	fn validate_function(&mut self, parameters: &[Parameter<'a>], return_type: Type<'a>, known_types: &[(&str, usize)]) -> Result<()> {
+		self.push_path(JsonPathComponent::ObjectKey("parameters"));
+		for parameter in parameters {
+			self.push_path(JsonPathComponent::ArrayKey(parameter.name.to_str()));
+			self.validate_type(parameter.ty, known_types)?;
+			self.pop_path();
+		}
+		self.pop_path();
+		self.push_path(JsonPathComponent::ObjectKey("return_type"));
+		self.validate_type(return_type, known_types)?;
+		self.pop_path();
+		Ok(())
+	}
+
+	fn validate_type(&mut self, ty: Type<'a>, known_types: &[(&str, usize)]) -> Result<()> {
+		match ty {
+			Type::Id {
+				name,
+				generics
+			} => {
+				// If the type is found, then check if the number of generics
+				// match and also recursively check types
+				self.push_path(JsonPathComponent::ObjectKey("generics"));
+				if let Some((_, num_generics)) = known_types.iter().find(|(ty_name, _)| *ty_name == name.to_str()) {
+					if *num_generics != generics.len() {
+						return Err(self.new_error(self.arena.fmt_into(format_args!(": {} was declared to have {} generics but here it has {}", name, num_generics, generics.len()))));
+					}
+					for (i, generic) in generics.iter().enumerate() {
+						self.push_path(JsonPathComponent::ArrayIdx(i));
+						self.validate_type(*generic, known_types)?;
+						self.pop_path();
+					}
+				// TODO: Change the mod api format so this always throws an
+				// error
+				// if not found, number of generics MUST be 0
+				} else {
+					if generics.len() != 0 {
+						return Err(self.new_error(self.arena.fmt_into(format_args!(": {} was not declared in \"classes\", so it cannot have generics", name))));
+					}
+				}
+				self.pop_path();
+			}
+			_ => (),
+		}
+		Ok(())
 	}
 }
 
@@ -373,18 +706,28 @@ pub(crate) fn get_mod_api(mod_api_path: impl AsRef<Path>) -> Result<ModApi> {
 
 pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text: &str) -> Result<ModApi> {
 	let arena = Arena::new();
-	let context: ModApiContext = ModApiContext::new(mod_api_path.as_ref(), mod_api_text, &arena);
+	let mod_api_path = mod_api_path.as_ref();
 
 	let mod_api_json = json::parse(mod_api_text).map_err(|err| {
-		context.new_error(arena.fmt_into(format_args!("{err}")))
+		Error::new(
+			ErrorKind::MOD_API_JSON_ERROR,
+			"",
+			mod_api_path.as_ref(),
+			mod_api_text,
+			SourceSpan{offset: 0, line: 0},
+			format_args!("{err}"),
+		)
 	})?;
+
+	let context = ModApiContext::new(mod_api_path, mod_api_text, &arena);
+
 	let JsonValue::Object(mod_api_root) = mod_api_json else {
 		return Err(context.new_error("is not an object"));
 	};
 
-	// This is needed to get around the drop checker
+	// This is needed to get around the drop check
 	let mut context = context;
-
+	
 	let entities = context.get_key(&mod_api_root, "entities")?;
 	let JsonValue::Object(entities) = entities else {
 		return Err(context.new_error("is not an object"));
@@ -397,13 +740,10 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			return Err(context.new_error("is not an object"));
 		};
 
-		// optional "description" string
-		let description = entity_values.get("description").map(|inner| {
-			context.push_path(JsonPathComponent::ObjectKey("description"));
-			let description = arena.copy_str_into(inner.as_str().ok_or_else(|| context.new_error("is not a string"))?);
-			context.pop_path();
-			Ok(description)
-		}).transpose()?;
+		// "description" string
+		let description = context.get_key(entity_values, "description")?;
+		let description = arena.copy_str_into(description.as_str().ok_or_else(|| context.new_error("is not a string"))?);
+		context.pop_path();
 
 		let export_fns = if let Some(export_fns) = entity_values.get("export_functions") {
 			context.push_path(JsonPathComponent::ObjectKey("export_functions"));
@@ -425,18 +765,15 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 
 				let name = arena.copy_str_into_nt(name);
 
-				// optional "description" string
-				let description = export_fn_values.get("description").map(|inner| {
-					context.push_path(JsonPathComponent::ObjectKey("description"));
-					let description = arena.copy_str_into(inner.as_str().ok_or_else(|| context.new_error("is not a string"))?);
-					context.pop_path();
-					Ok(description)
-				}).transpose()?;
+				// "description" string
+				let description = context.get_key(export_fn_values, "description")?;
+				let description = arena.copy_str_into(description.as_str().ok_or_else(|| context.new_error("is not a string"))?);
+				context.pop_path();
 				
 				// optional "parameters" array 
 				let parameters = if let Some(parameters) = export_fn_values.get("parameters") {
 					context.push_path(JsonPathComponent::ObjectKey("parameters"));
-					let parameters = context.parse_parameters(parameters, &arena)?;
+					let parameters = context.parse_parameters(parameters, &[], &arena)?;
 					context.pop_path();
 					parameters
 				} else {
@@ -474,13 +811,39 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		let JsonValue::Object(class_values) = class_values else {
 			return Err(context.new_error("is not an object"));
 		};
-		// optional "description" string
-		let description = class_values.get("description").map(|inner| {
-			context.push_path(JsonPathComponent::ObjectKey("description"));
-			let description = arena.copy_str_into(inner.as_str().ok_or_else(|| context.new_error("is not a string"))?);
+		// "description" string
+		let description = context.get_key(class_values, "description")?;
+		let description = arena.copy_str_into(description.as_str().ok_or_else(|| context.new_error("is not a string"))?);
+		context.pop_path();
+
+		// optional "used_generics" key
+		let mut used_generics = Vec::new_in(&arena);
+		if let Some(generics) = class_values.get("used_generics") {
+			context.push_path(JsonPathComponent::ObjectKey("used_generics"));
+			let JsonValue::Array(generics) = generics else {
+				return Err(context.new_error("is not an array"));
+			};
+			for (i, generic) in generics.iter().enumerate() {
+				context.push_path(JsonPathComponent::ArrayIdx(i));
+				used_generics.push(arena.copy_str_into_nt(generic.as_str().ok_or_else(|| context.new_error("is not a string"))?));
+				context.pop_path();
+			}
 			context.pop_path();
-			Ok(description)
-		}).transpose()?;
+		}
+		for (i, generic) in used_generics.iter().enumerate() {
+			if !generic.starts_with("$") {
+				context.push_path(JsonPathComponent::ArrayIdx(i));
+				return Err(context.new_error("must begin with '$'"));
+			}
+		}
+		let generics = used_generics.leak();
+
+		let ty = Type::Id {
+			name: class_name.as_ntstrptr(),
+			generics: arena.slice_from_iter((0..(generics.len())).map(|i| {
+				Type::Existential{idx: i}
+			})),
+		};
 
 		// optional "methods" object
 		let methods = if let Some(methods) = class_values.get("methods") {
@@ -492,7 +855,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			for (method_name, method_values) in methods.iter() {
 				context.push_path(JsonPathComponent::ObjectKey(method_name));
 				let method_name = arena.copy_str_into_nt(method_name);
-				temp.push((method_name, context.parse_host_fn(method_values, &arena)?));
+				temp.push((method_name, context.parse_host_fn(method_values, generics, &arena)?));
 				context.pop_path();
 			}
 			context.pop_path();
@@ -503,6 +866,8 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		context.pop_path();
 		Ok((class_name, ModApiClass {
 			description,
+			ty,
+			generics,
 			methods,
 		}))
 	}).collect::<Result<HashMap<_, _>>>()?;
@@ -515,13 +880,72 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 	let host_fns = host_fns.iter().map(|(host_fn_name, host_fn_values)| {
 		context.push_path(JsonPathComponent::ObjectKey(host_fn_name));
 		let host_fn_name = arena.copy_str_into_nt(host_fn_name);
-		let host_fn = context.parse_host_fn(host_fn_values, &arena)?;
+		let host_fn = context.parse_host_fn(host_fn_values, &[], &arena)?;
 		context.pop_path();
 		Ok((host_fn_name, host_fn))
 	}).collect::<Result<HashMap<_, _>>>()?;
 	context.pop_path();
 	
 	assert_eq!(0, context.json_path.0.len(), "{}", &context.json_path);
+
+	let mut known_types = Vec::with_capacity_in(entities.len() + classes.len(), &arena);
+	// Collect all entities as types with no generics
+	context.push_path(JsonPathComponent::ObjectKey("entities"));
+	for entity_name in entities.keys() {
+		// Dont need to check for duplicates yet because there can't be any
+		known_types.push((entity_name.as_str(), 0));
+	}
+	context.pop_path();
+
+	context.push_path(JsonPathComponent::ObjectKey("classes"));
+	// Collect all classes and the number of generics they declare
+	for (class_name, class_data) in classes.iter() {
+		context.push_path(JsonPathComponent::ObjectKey(class_name));
+		if known_types.iter().find(|(type_name, _)| *type_name == class_name.as_str()).is_some() {
+			return Err(context.new_error("class name already exists"));
+		}
+		known_types.push((class_name.as_str(), class_data.generics.len()));
+		context.pop_path();
+	}
+
+	let known_types = known_types.leak();
+	// Check every type within each class and its methods to make sure the
+	// number of generics they use is correct
+	for (class_name, class_data) in classes.iter() {
+		context.push_path(JsonPathComponent::ObjectKey(class_name));
+		context.push_path(JsonPathComponent::ObjectKey("methods"));
+		for (method_name, host_fn) in &*class_data.methods {
+			context.push_path(JsonPathComponent::ObjectKey(method_name));
+			context.validate_function(host_fn.parameters, host_fn.return_ty, known_types)?;
+			context.pop_path();
+		}
+		context.pop_path();
+		context.pop_path();
+	}
+	context.pop_path();
+
+	context.push_path(JsonPathComponent::ObjectKey("host_functions"));
+	// Check every type within each host function and make sure the number of
+	// generics they use is correct
+	for (fn_name, host_fn) in host_fns.iter() {
+		context.push_path(JsonPathComponent::ObjectKey(fn_name));
+		context.validate_function(host_fn.parameters, host_fn.return_ty, known_types)?;
+		context.pop_path();
+	}
+	context.pop_path();
+	// Check every type within each entity and its export functions and make
+	// sure the number of generics they use is correct
+	context.push_path(JsonPathComponent::ObjectKey("entities"));
+	for (entity_name, entity) in entities.iter() {
+		context.push_path(JsonPathComponent::ObjectKey(entity_name));
+		for (fn_name, export_fn) in entity.export_fns {
+			context.push_path(JsonPathComponent::ObjectKey(fn_name));
+			context.validate_function(export_fn.parameters, Type::Void, known_types)?;
+			context.pop_path();
+		}
+		context.pop_path();
+	}
+	context.pop_path();
 	drop(context);
 
 	Ok(ModApi{

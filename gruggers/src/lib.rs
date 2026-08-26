@@ -29,8 +29,17 @@ pub use gruggers_core::ntstring;
 pub use gruggers_core::nt;
 
 
+// TODO: Add Debug info to backends and improve runtime errors
+// TODO: Specify grug's string lifetimes.
+// TODO: Outline Debugger implementation
+// TODO: rename "arguments" to "parameters" in mod_api
+// TODO: Replace custom errors in serde.rs with Error
 // TODO: (WIP) Add #[track_caller] to error functions for tracing
 // TODO: Standard Library
+// 		- Vec
+// 		- Box
+// 		- HashMap
+// TODO: replace quotes (') in errors with backticks (`)
 // TODO: (WIP) ModsDir struct 
 // TODO: (WIP) README and docs for gruggers
 // TODO: (WIP) Debug info to backends
