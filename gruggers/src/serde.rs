@@ -196,6 +196,7 @@ mod ser {
 				args,
 				ptr: _, 
 				name_span: _,
+				generics: _,
 			} => {
 				let mut object = object! {
 					"type": "CALL_EXPR",

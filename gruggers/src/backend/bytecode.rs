@@ -10,6 +10,7 @@ use crate::ntstring::{NTStrPtr, NTStr};
 use crate::arena::Arena;
 use crate::xar::{ErasedXar, ErasedPtr};
 use crate::backend::Backend;
+use crate::frontend::type_propagation::TypeListDisplay;
 
 use gruggers_core::runtime_error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
 use gruggers_core::state::State;
@@ -375,6 +376,7 @@ impl<'a> Compiler<'a> {
 				args,
 				ptr: None,
 				name_span: _,
+				generics: _,
 			} => {
 				let args_count = args.len();
 				if args_count > u16::MAX as usize {
@@ -396,6 +398,7 @@ impl<'a> Compiler<'a> {
 				args: _,
 				ptr: None,
 				name_span: _,
+				generics: _,
 			} => {
 				unreachable!();
 			}
@@ -405,6 +408,7 @@ impl<'a> Compiler<'a> {
 				args,
 				ptr: Some(ptr),
 				name_span: _,
+				generics,
 			} => {
 				let args_count;
 				if let Some(receiver) = receiver {
@@ -418,7 +422,7 @@ impl<'a> Compiler<'a> {
 				}
 				
 				let has_return = *expr.result_type.unwrap() != Type::Void;
-				let data_loc = instructions.insert_game_fn_data(args_count as u32, *ptr);
+				let data_loc = instructions.insert_game_fn_data(args_count as u32, generics, *ptr);
 				instructions.stream.push(Op::CallGameFunction {
 					has_return,
 					data_loc
@@ -673,7 +677,7 @@ pub union ConstantData {
 	number: f64,
 	string: NTStrPtr<'static>,
 	helper_fn_data: (/* args: */ u32, /* locals_size: */ u32, /* location: */ usize),
-	game_fn_data: (/* args: */ u32, /* ptr: */ HostFn),
+	game_fn_data: (/* args: */ u32, /* generics */ &'static [Type<'static>], /* ptr: */ HostFn),
 }
 
 struct Instructions{
@@ -793,10 +797,10 @@ impl Instructions {
 		self.fn_labels.insert(location, name);
 	}
 
-	pub fn insert_game_fn_data(&mut self, args: u32, ptr: HostFn) -> u32 {
+	pub fn insert_game_fn_data(&mut self, args: u32, generics: &'static [Type<'static>], ptr: HostFn) -> u32 {
 		*self.game_fn_locations.entry(ptr).or_insert_with(|| {
 			let ret_val = self.constants.len();
-			self.constants.push(ConstantData{game_fn_data: (args, ptr)});
+			self.constants.push(ConstantData{game_fn_data: (args, generics, ptr)});
 			assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
 			ret_val as u32
 		})
@@ -911,8 +915,8 @@ impl std::fmt::Display for Instructions {
 					has_return,
 					data_loc,
 				} => {
-					let (args, ptr) = unsafe{self.constants[*data_loc as usize].game_fn_data};
-					write!(f, "CallGameFunction {} {} 0x{:016x}", has_return, args, &unsafe{std::mem::transmute::<HostFn, *const ()>(ptr).addr()})
+					let (args, generics, ptr) = unsafe{self.constants[*data_loc as usize].game_fn_data};
+					write!(f, "CallGameFunction {} {} 0x{:016x} generics: {}", has_return, args, &unsafe{std::mem::transmute::<HostFn, *const ()>(ptr).addr()}, TypeListDisplay(generics))
 				}
 			}?;
 			// print labels: 
@@ -1110,8 +1114,8 @@ impl Stack {
 					has_return,
 					data_loc,
 				} => {
-					let (args, ptr) = unsafe{instructions.constants[data_loc as usize].game_fn_data};
-					let value = unsafe{(ptr)(state as *const _ as _, self.stack.as_ptr().add(self.stack.len() - args as usize), &[] as _)};
+					let (args, generics, ptr) = unsafe{instructions.constants[data_loc as usize].game_fn_data};
+					let value = unsafe{(ptr)(state as *const _ as _, self.stack.as_ptr().add(self.stack.len() - args as usize), generics as *const _ as _)};
 					self.stack.truncate(self.stack.len() - args as usize);
 					if has_return {
 						self.stack.push(value);

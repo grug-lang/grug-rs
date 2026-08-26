@@ -208,6 +208,7 @@ fn copy_expr<'arena>(expr: &Expr<'_>, arena: &'arena Arena) -> Expr<'arena> {
 			args,
 			ptr,
 			name_span,
+			generics,
 		} => {
 			ExprData::Call {
 				receiver: receiver.as_ref().map(|x| &mut *arena.alloc_into(copy_expr(x, arena))),
@@ -215,6 +216,7 @@ fn copy_expr<'arena>(expr: &Expr<'_>, arena: &'arena Arena) -> Expr<'arena> {
 				args: arena.slice_from_iter(args.iter().map(|expr| copy_expr(expr, arena))),
 				ptr: *ptr,
 				name_span: *name_span,
+				generics
 			}
 		},
 		ExprData::Parenthesized(expr) => ExprData::Parenthesized(Box::leak(Box::new_in(copy_expr(expr, arena), arena))),

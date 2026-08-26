@@ -444,6 +444,9 @@ pub enum ExprData<'a> {
 		ptr  : Option<HostFn>,
 		/// Span of the function or method name,
 		name_span: SourceSpan,
+		/// The generics array that should be passed to the function when
+		/// called
+		generics: &'static [Type<'static>],
 	},
 	/// Represents a parenthesized expression
 	///

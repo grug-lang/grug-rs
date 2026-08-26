@@ -6,6 +6,7 @@ use crate::ntstring::NTStrPtr;
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::mod_api::ModApi;
 use crate::own_ptr::OwnPtr;
+use crate::type_storage::TypeStorage;
 
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box as Box2;
@@ -22,7 +23,7 @@ pub(crate) const SPACES_PER_INDENT: usize = 4;
 
 pub mod tokenizer;
 pub mod parser;
-mod type_propagation;
+pub mod type_propagation;
 use type_propagation::TypePropagator;
 
 // Compilation functions
@@ -51,8 +52,10 @@ impl GrugState {
 		mod_api: Arc<ModApi>,
 	) -> impl FnOnce() {
 		use crate::async_fs::{open_file_async_for_read, read_files_async};
-		let mut temp_arena = Arena::new();
 		move || {
+			let mut temp_arena = Arena::new();
+			let mut type_storage = TypeStorage::new();
+			
 			for (arena, files) in receiver.iter() {
 				temp_arena.clear();
 				let mut resources = Vec::new_in(&arena);
@@ -110,6 +113,7 @@ impl GrugState {
 						&mod_api,
 						&arena,
 						&temp_arena,
+						&mut type_storage,
 					) {
 						Ok(data) => data,
 						Err(err) => return (Err(err), path)
@@ -184,6 +188,7 @@ impl GrugState {
 				&self.mod_api, 
 				&arena,
 				&arena,
+				&mut *self.type_storage.borrow_mut(),
 			)?;
 			let mut self_resources = self.resources.borrow_mut();
 			for resource in resources {
@@ -413,6 +418,7 @@ impl GrugState {
 		mod_api: &'arena ModApi, 
 		arena: &'arena Arena,
 		temp_arena: &'_ Arena,
+		type_storage: &mut TypeStorage,
 	) -> Result<(GrugAst<'arena>, &'arena [&'arena OsStr]), Error> {
 		let mod_name = get_mod_name(path);
 		let entity_type = get_entity_type(path)?;
@@ -458,6 +464,7 @@ impl GrugState {
 			ast,
 			arena,
 			temp_arena,
+			type_storage,
 		)?;
 
 		// convert into GrugAst

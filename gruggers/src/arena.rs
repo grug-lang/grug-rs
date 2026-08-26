@@ -1019,7 +1019,7 @@ mod mt_arena {
 		#[test]
 		fn arena_test () {
 			let x = MTArena::new();
-			assert!(x.current.get() == std::ptr::null_mut());
+			assert!(x.current.load(Ordering::Relaxed) == std::ptr::null_mut());
 			x.free(); 
 
 			let y = MTArena::new();

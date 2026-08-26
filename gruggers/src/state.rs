@@ -50,7 +50,8 @@ use crate::ntstring::{NTStrPtr};
 use crate::arena::Arena;
 use crate::own_ptr::OwnPtr;
 use crate::nt;
-use crate::watcher::{watch_changes};
+use crate::watcher::watch_changes;
+use crate::type_storage::TypeStorage;
 
 use gruggers_core::runtime_error::RuntimeError;
 pub use gruggers_core::state::State;
@@ -264,6 +265,7 @@ pub fn default_runtime_error_handler(_err_kind: u32, reason: &str, on_fn_name: &
 pub struct GrugState {
 	pub(crate) mod_api: Arc<ModApi>,
 	pub(crate) mods_dir_path: OsString,
+	pub(crate) type_storage: RefCell<TypeStorage>,
 	next_entity_id: AtomicU64,
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
@@ -380,6 +382,7 @@ impl GrugState {
 		Ok(Self {
 			mod_api,
 			mods_dir_path: mods_dir_path.into(),
+			type_storage: RefCell::new(TypeStorage::new()),
 			next_entity_id: AtomicU64::new(0),
 			runtime_error_handler: handler,
 			resources: RefCell::new(HashSet::new()),

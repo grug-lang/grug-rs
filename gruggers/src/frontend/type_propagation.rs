@@ -15,6 +15,7 @@ use crate::nt;
 use crate::arena::Arena;
 use crate::frontend::parser::Ast;
 use crate::mod_api::{ModApiEntity, ModApi, Trait, Generic};
+use crate::type_storage::TypeStorage;
 
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
@@ -35,6 +36,7 @@ pub(super) struct TypePropagator<'mod_api, 'arena: 'temp, 'temp> {
 	current_fn_name: Option<&'arena str>,
 	arena: &'arena Arena,
 	temp_arena: &'temp Arena,
+	type_storage: &'temp mut TypeStorage,
 }
 
 struct TypeMismatch<'a> {
@@ -72,6 +74,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		export_fns: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
 		arena: &'arena Arena,
 		temp_arena: &'temp Arena,
+		type_storage: &'temp mut TypeStorage,
 	) -> Self {
 		Self {
 			file_text,
@@ -88,7 +91,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			num_while_loops_deep: 0,
 			current_fn_name: None,
 			arena,
-			temp_arena
+			temp_arena,
+			type_storage,
 		}
 	}
 
@@ -123,6 +127,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		// This is the arena that contains the short lived data used only during type checking. 
 		// It may be cleared as soon as this function returns
 		temp_arena: &'temp Arena,
+		type_storage: &'temp mut TypeStorage,
 	) -> Result<(Ast<'arena>, &'arena [&'arena OsStr]), Error> {
 		let mut type_propagator = Self::new(
 			file_text, 
@@ -135,6 +140,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			&ast.export_fn_signatures,
 			arena,
 			temp_arena,
+			type_storage,
 		);
 
 		type_propagator.global_variables.insert(
@@ -505,6 +511,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				args,
 				ptr : _,
 				name_span: _,
+				generics: _,
 			} => {
 				let fn_name = fn_name.to_str();
 				if fn_name.starts_with("_") {
@@ -522,6 +529,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				args,
 				ptr : _,
 				name_span: _,
+				generics: _,
 			} => {
 				args.iter().map(|argument| self.check_global_expr(argument, name))
 					.collect::<Result<Vec<_>, _>>()?;
@@ -610,7 +618,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		if let Some(expected_type) = expected_type {
 			ty_ctx.add_constraint(expr.span, expected_type, expr_type)?;
 		}
-		let substitutions = ty_ctx.substitute(self.arena)?;
+		let substitutions = ty_ctx.substitute(&mut self.type_storage, self.arena)?;
+		let substitutions = self.type_storage.insert_type_list(substitutions);
 		// Clear the typing context for the second pass. 
 		// This time, the type context is only used to keep track of the number
 		// of existentials that have been created
@@ -618,7 +627,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		Ok(self.fill_expr(&mut TyCtx::new(self.current_fn_name.unwrap_or("member scope"), self.file_path, self.file_text, self.arena), Some(substitutions), expr, self.arena)?)
 	}
 
-	fn fill_expr<'a>(&mut self, ty_ctx: &mut TyCtx<'a, 'arena>, substitutions: Option<&[Type<'arena>]>, assignment_expr: &mut Expr<'a>, arena: &'a Arena) -> Result<Type<'a>, Error> where
+	fn fill_expr<'a>(&mut self, ty_ctx: &mut TyCtx<'a, 'arena>, substitutions: Option<&[Type<'static>]>, assignment_expr: &mut Expr<'a>, arena: &'a Arena) -> Result<Type<'a>, Error> where
 		'arena: 'a,
 	{
 		let result_ty = match &mut assignment_expr.data {
@@ -718,6 +727,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				args,
 				ptr ,
 				name_span,
+				generics: final_generics,
 			} => {
 				let name = name.to_str();
 				if let Some((_, (return_ty, sig_arguments))) = self.local_fns.iter().find(|(fn_name, _)| *fn_name == name) {
@@ -755,6 +765,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					// only fill in the host function pointer the second time
 					// through.
 					if substitutions.is_some() {
+						*final_generics = self.type_storage.insert_type_list(generics);
 						if let Some(host_fn_ptr) = host_fn.fn_ptr {
 							*ptr = Some(host_fn_ptr);
 						} else if let Some(fn_registerer) = host_fn.registerer {
@@ -795,6 +806,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				args,
 				ptr,
 				name_span,
+				generics: final_generics,
 			} => {
 				let name = name.to_str();
 				let receiver_type = self.fill_expr(ty_ctx, substitutions, receiver, arena)?;
@@ -865,6 +877,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				// only fill in the host function pointer the second time
 				// through.
 				if substitutions.is_some() {
+					*final_generics = self.type_storage.insert_type_list(generics);
 					// non generic functions directly use the function
 					// from the host function data
 					if let Some(host_fn_ptr) = host_fn.fn_ptr {
@@ -897,7 +910,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 	fn fill_arguments<'a>(&mut self, 
 		function_name: &str, 
 		ty_ctx: &mut TyCtx<'a, 'arena>,
-		substitutions: Option<&[Type<'arena>]>,
+		substitutions: Option<&[Type<'static>]>,
 		name_span: SourceSpan, 
 		signature: &[Parameter<'a>], 
 		arguments: &mut [Expr<'a>], 
@@ -1362,14 +1375,14 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 		Ok(())
 	}
 
-	fn substitute<'arena>(&mut self, arena: &'arena Arena) -> Result<&'arena [Type<'arena>], Error> {
+	fn substitute<'arena>(&mut self, type_storage: &mut TypeStorage, arena: &'arena Arena) -> Result<&'arena [Type<'static>], Error> {
 		// Copy all types into the permanent arena
 		for i in 0..self.substitutions.len() {
 			self.check_consistency(self.substitutions[i], StackLL{current: i, parent: None})?;
 		}
 		Ok(arena.slice_from_iter(self.substitutions.iter().map(|ty| {
 			// SAFETY: Consistency check has been performed on all existentials
-			unsafe {self.copy_type_into(*ty, arena)}
+			unsafe {type_storage.insert_type(self.copy_type_into(*ty, arena))}
 		})))
 	}
 
@@ -1489,7 +1502,7 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
 	}
 }
 
-struct TypeListDisplay<'a>(&'a [Type<'a>]);
+pub(crate) struct TypeListDisplay<'a>(pub(crate) &'a [Type<'a>]);
 
 impl<'a> std::fmt::Display for TypeListDisplay<'a> {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {

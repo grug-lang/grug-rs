@@ -826,6 +826,7 @@ impl<'a> Parser<'a> {
 									args: Vec::new().leak(),
 									ptr : None,
 									name_span: *span,
+									generics: &[],
 								},
 								result_type: None,
 								span: *span,
@@ -844,7 +845,8 @@ impl<'a> Parser<'a> {
 											name: value.as_ntstrptr(),
 											args: arguments.leak(),
 											ptr : None,
-											name_span: *span
+											name_span: *span,
+											generics: &[],
 										},
 										result_type: None,
 										span: *span,
@@ -943,6 +945,7 @@ impl<'a> Parser<'a> {
 								args: Vec::new().leak(),
 								ptr : None,
 								name_span,
+								generics: &[],
 							},
 							result_type: None,
 						}
@@ -961,7 +964,8 @@ impl<'a> Parser<'a> {
 										name: name.as_ntstrptr(),
 										args: arguments.leak(),
 										ptr : None,
-										name_span
+										name_span,
+										generics: &[],
 									},
 									result_type: None,
 								}
