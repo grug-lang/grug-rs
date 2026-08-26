@@ -615,7 +615,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		// This time, the type context is only used to keep track of the number
 		// of existentials that have been created
 		
-		Ok(self.fill_expr(&mut TyCtx::new(self.current_fn_name.unwrap_or("member_scope"), self.file_path, self.file_text, self.arena), Some(substitutions), expr, self.arena)?)
+		Ok(self.fill_expr(&mut TyCtx::new(self.current_fn_name.unwrap_or("member scope"), self.file_path, self.file_text, self.arena), Some(substitutions), expr, self.arena)?)
 	}
 
 	fn fill_expr<'a>(&mut self, ty_ctx: &mut TyCtx<'a, 'arena>, substitutions: Option<&[Type<'arena>]>, assignment_expr: &mut Expr<'a>, arena: &'a Arena) -> Result<Type<'a>, Error> where
@@ -1400,7 +1400,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 		}
 		for tr in traits {
 			if !tr.implementors.into_iter().any(|imp| type_matches_implementor(ty, imp.ty, imp.generics)) {
-				return Err(self.new_error(err_span, format_args!("function {} expected {} to implement {} but it doesn't", function_name, ty, tr.name)));
+				return Err(self.new_error(err_span, format_args!("host function '{}' expects type '{}' to implement constraint '{}' but it doesn't", function_name, ty, tr.name)));
 			}
 		} 
 		Ok(())

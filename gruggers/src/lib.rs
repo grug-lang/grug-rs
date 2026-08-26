@@ -18,6 +18,7 @@ mod cachemap;
 mod watcher;
 mod async_fs;
 mod own_ptr;
+mod type_storage;
 pub mod error;
 
 mod pal;

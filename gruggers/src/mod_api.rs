@@ -492,14 +492,6 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		self.get_key(object, key)?.as_str().ok_or_else(|| self.new_error("is not a string"))
 	}
 	
-	// gets the key as a list and pushes the path onto self
-	fn get_list<'b>(&mut self, object: &'b Object, key: &'a str) -> Result<&'b std::vec::Vec<JsonValue>> {
-		let JsonValue::Array(value) = self.get_key(object, key)? else {
-			return Err(self.new_error("is not an array"))
-		};
-		Ok(value)
-	}
-
 	// gets the key and pushes the path onto self
 	fn get_key<'b>(&mut self, object: &'b Object, key: &'a str) -> Result<&'b JsonValue> {
 		self.push_path(JsonPathComponent::ObjectKey(key));
@@ -884,33 +876,41 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 						let name = arena.copy_str_into_nt(context.get_str(used_generic, "name")?);
 						context.pop_path();
 
-						let json_constraints = context.get_list(used_generic, "constraints")?;
-
-						let mut constraints = Vec::with_capacity_in(json_constraints.len(), &arena);
-
-						'outer: for (i, constraint) in json_constraints.iter().enumerate() {
-							context.push_path(JsonPathComponent::ArrayIdx(i));
-							let Some(constraint) = constraint.as_str() else {
-								return Err(context.new_error("is not a string"));
+						let constraints = if let Some(json_constraints) = used_generic.get("constraints") {
+							context.push_path(JsonPathComponent::ObjectKey("constraints"));
+							let JsonValue::Array(json_constraints) = json_constraints else {
+								return Err(context.new_error("is not an array"));
 							};
-							context.pop_path();
-							context.push_path(JsonPathComponent::ArrayKey(constraint));
-							for data in traits_storage.iter() {
-								// SAFETY: This is a temporary reference and
-								// nothing else holds a reference to the inner
-								// value at this time
-								if unsafe{(&*data.get()).name} == constraint {
-									// SAFETY: Pointer from UnsafeCell is always
-									// non null
-									constraints.push(unsafe{NonNull::new_unchecked(data.get())});
-									context.pop_path();
-									continue 'outer;
+							let mut constraints = Vec::with_capacity_in(json_constraints.len(), &arena);
+
+							'outer: for (i, constraint) in json_constraints.iter().enumerate() {
+								context.push_path(JsonPathComponent::ArrayIdx(i));
+								let Some(constraint) = constraint.as_str() else {
+									return Err(context.new_error("is not a string"));
+								};
+								context.pop_path();
+								context.push_path(JsonPathComponent::ArrayKey(constraint));
+								for data in traits_storage.iter() {
+									// SAFETY: This is a temporary reference and
+									// nothing else holds a reference to the inner
+									// value at this time
+									if unsafe{(&*data.get()).name} == constraint {
+										// SAFETY: Pointer from UnsafeCell is always
+										// non null
+										constraints.push(unsafe{NonNull::new_unchecked(data.get())});
+										context.pop_path();
+										continue 'outer;
+									}
 								}
+								return Err(context.new_error("is an unknown constraint"));
 							}
-							return Err(context.new_error("is an unknown constraint"));
-						}
-						context.pop_path();
-						used_generics.push(Generic{name, traits: constraints.leak()});
+							context.pop_path();
+							&*constraints.leak()
+						} else {
+							&[]
+						};
+
+						used_generics.push(Generic{name, traits: constraints});
 						context.pop_path()
 					}
 					context.pop_path();

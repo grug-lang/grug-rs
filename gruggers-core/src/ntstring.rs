@@ -353,6 +353,11 @@ mod str {
 		pub unsafe fn from_str_unchecked(value: &'a str) -> Self {
 			unsafe{Self::from_ptr(NonNull::from_ref(value).cast::<c_char>())}
 		}
+
+		/// Checks if the underlying pointers are equal
+		pub fn ptr_eq(self, other: Self) -> bool {
+			self.0 == other.0
+		}
 		
 		/// Expects a single null byte at the end of the string and no null bytes
 		/// in the rest of the string
@@ -372,6 +377,12 @@ mod str {
 
 		pub const fn as_ntbytes(self) -> NTBytes<'a> {
 			unsafe{NTBytes::from_ptr(self.0.cast().as_ptr())}
+		}
+	}
+
+	impl<'a> std::hash::Hash for NTStrPtr<'a> {
+		fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+			std::hash::Hash::hash(self.to_str(), hasher)
 		}
 	}
 

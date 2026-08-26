@@ -14,7 +14,7 @@ use crate::types::HostFn;
 use crate::error::SourceSpan;
 
 /// Represents the type of a value in grug
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C, u32)]
 pub enum Type<'a> {
 	/// Return type of a function with no return value
@@ -66,38 +66,6 @@ pub enum Type<'a> {
 	/// For internal use, Backends should never ever see this
 	Existential {
 		idx: usize
-	}
-}
-
-impl<'a> Eq for Type<'a> { }
-impl<'a> PartialEq for Type<'a> {
-	fn eq(&self, other: &Self) -> bool {
-		use Type::*;
-		match (self, other) {
-			(Void, Void) => true,
-			(Bool, Bool) => true,
-			(Number, Number) => true,
-			(String, String) => true,
-			(Id{name: name_1, generics: generics_1, ..}, Id{name: name_2, generics: generics_2, ..}) => name_1 == name_2 && generics_1 == generics_2,
-			(
-				Resource {
-					extension: extension_1,
-				}, 
-				Resource {
-					extension: extension_2,
-				}, 
-			) => extension_1 == extension_2,
-			(
-				Entity {
-					entity_type: ty_1,
-				}, 
-				Entity {
-					entity_type: ty_2,
-				}, 
-			) => ty_1 == ty_2,
-			(Existential{idx: idx1}, Existential{idx: idx2}) => idx1 == idx2,
-			_ => false,
-		}
 	}
 }
 

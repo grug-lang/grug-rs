@@ -78,7 +78,7 @@ impl std::ops::Deref for HostFnRegErased {
 /// 
 #[derive(Clone, Copy, Hash, Eq)]
 #[repr(transparent)]
-pub struct HostFn(ErasedHostFn);
+pub struct HostFn(ErasedHostFnPtr);
 
 impl PartialEq for HostFn {
 	fn eq(&self, other: &Self) -> bool {
@@ -86,15 +86,15 @@ impl PartialEq for HostFn {
 	}
 }
 impl std::ops::Deref for HostFn {
-	type Target = ErasedHostFn;
-	fn deref(&self) -> &ErasedHostFn {
+	type Target = ErasedHostFnPtr;
+	fn deref(&self) -> &ErasedHostFnPtr {
 		&self.0
 	}
 }
 
 /// SAFETY: This function should only be called with the same state type and
 /// number of generics it was originally created for
-type ErasedHostFn = unsafe extern "C" fn (*const c_void, *const Value, *const Type) -> Value;
+type ErasedHostFnPtr = unsafe extern "C" fn (*const c_void, *const Value, *const Type) -> Value;
 // SAFETY: HostFn is always just a function pointer
 unsafe impl Send for HostFn {}
 unsafe impl Sync for HostFn {}
@@ -110,12 +110,12 @@ pub type HostFnWithState<const N: usize, GrugState> = extern "C" fn (&GrugState,
 
 impl HostFn {
 	/// Type erases a [`HostFnWithState`]
-	pub const fn from_erased_ptr(value: ErasedHostFn) -> Self {
+	pub const fn from_erased_ptr(value: ErasedHostFnPtr) -> Self {
 		Self(value)
 	}
 	/// Type erases a [`HostFnWithState`]
 	pub const fn from_ptr<const N: usize, GrugState: State>(value: HostFnWithState<N, GrugState>) -> Self {
-		Self(unsafe{std::mem::transmute::<HostFnWithState<N, GrugState>, ErasedHostFn>(value)})
+		Self(unsafe{std::mem::transmute::<HostFnWithState<N, GrugState>, ErasedHostFnPtr>(value)})
 	}
 }
 
@@ -210,6 +210,7 @@ pub struct GrugStr {
 struct GrugStrInner {
 	ref_count: Cell<usize>,
 	len: usize,
+	/// This should be treated like a flexible array member
 	str: [u8;0],
 }
 
