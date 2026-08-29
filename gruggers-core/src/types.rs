@@ -29,7 +29,7 @@ use crate::ast::Type;
 ///
 /// For methods, it is the number of elements in the "used_generics"
 /// field of the class and the method combined.
-pub type HostFnReg<const N: usize, State> = for<'a> extern "C" fn (&'a [Type<'a>; N]) -> Option<HostFnWithState<N, State>>;
+pub type HostFnReg<const N: usize, State> = extern "C" fn (&'static [Type<'static>; N]) -> Option<HostFnWithState<N, State>>;
 
 /// Type erased version of HostFnReg
 ///
@@ -40,7 +40,7 @@ pub type HostFnReg<const N: usize, State> = for<'a> extern "C" fn (&'a [Type<'a>
 /// same as the generic `N` in [`HostFnReg`]
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
-pub struct HostFnRegErased(for<'a> unsafe extern "C" fn (*const Type<'a>) -> Option<HostFn>);
+pub struct HostFnRegErased(unsafe extern "C" fn (*const Type<'static>) -> Option<HostFn>);
 
 impl<const N: usize, GrugState: State> From<HostFnReg<N, GrugState>> for HostFnRegErased {
 	fn from(other: HostFnReg<N, GrugState>) -> HostFnRegErased {
@@ -53,14 +53,14 @@ impl<const N: usize, GrugState: State> From<HostFnReg<N, GrugState>> for HostFnR
 		unsafe{std::mem::transmute::<HostFnReg<N, GrugState>, HostFnRegErased>(other)}
 	}
 }
-impl From<for<'a> unsafe extern "C" fn (*const Type<'a>) -> Option<HostFn>> for HostFnRegErased {
-	fn from(other: for<'a> unsafe extern "C" fn (*const Type<'a>) -> Option<HostFn>) -> HostFnRegErased {
+impl From<unsafe extern "C" fn (*const Type<'static>) -> Option<HostFn>> for HostFnRegErased {
+	fn from(other: unsafe extern "C" fn (*const Type<'static>) -> Option<HostFn>) -> HostFnRegErased {
 		Self(other)
 	}
 }
 
 impl std::ops::Deref for HostFnRegErased {
-	type Target = unsafe extern "C" fn (*const Type) -> Option<HostFn>;
+	type Target = unsafe extern "C" fn (*const Type<'static>) -> Option<HostFn>;
 	fn deref(&self) -> &Self::Target {
 		&self.0
 	}
@@ -94,7 +94,7 @@ impl std::ops::Deref for HostFn {
 
 /// SAFETY: This function should only be called with the same state type and
 /// number of generics it was originally created for
-type ErasedHostFnPtr = unsafe extern "C" fn (*const c_void, *const Value, *const Type) -> Value;
+type ErasedHostFnPtr = unsafe extern "C" fn (*const c_void, *const Value, *const Type<'static>) -> Value;
 // SAFETY: HostFn is always just a function pointer
 unsafe impl Send for HostFn {}
 unsafe impl Sync for HostFn {}
@@ -106,7 +106,7 @@ unsafe impl Sync for HostFn {}
 /// 
 /// When Backends are running an export function, [`HostFnWithState`] should be
 /// cast to the same kind of state used in `call_on_function`.
-pub type HostFnWithState<const N: usize, GrugState> = extern "C" fn (&GrugState, *const Value, generics: &[Type; N]) -> Value;
+pub type HostFnWithState<const N: usize, GrugState> = extern "C" fn (&GrugState, *const Value, generics: &'static [Type<'static>; N]) -> Value;
 
 impl HostFn {
 	/// Type erases a [`HostFnWithState`]

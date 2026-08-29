@@ -1,3 +1,8 @@
+// TODO: Constraints on classes have to be verified for all functions that use
+// them.
+// TODO: Using the same name for a generic on a method as a generic on the
+// class should actually add new constraints to that generic
+// TODO: Methods on entities
 use std::collections::HashMap;
 use std::path::Path;
 use std::io::Write;
@@ -344,10 +349,10 @@ impl ModApi {
 		extern "C" fn dummy_host_fn(_state: *const c_void, _arguments: *const Value, _generics: *const Type) -> Value {
 			Value{void: ()}
 		}
-		unsafe extern "C" fn dummy_generic_fn<'a>(_: *const Type<'a>) -> Option<HostFn> {
+		unsafe extern "C" fn dummy_generic_fn(_: *const Type<'static>) -> Option<HostFn> {
 			Some(HostFn::from_erased_ptr(dummy_host_fn))
 		}
-		let dummy_generic_fn = (dummy_generic_fn as for<'a> unsafe extern "C" fn (*const Type<'a>) -> _).into();
+		let dummy_generic_fn = (dummy_generic_fn as unsafe extern "C" fn (*const Type<'static>) -> _).into();
 		for (_, host_fn) in &mut self.host_fns {
 			if host_fn.generics.is_empty() {
 				host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
@@ -719,21 +724,52 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		})
 	}
 
-	fn validate_function(&mut self, parameters: &[Parameter<'a>], return_type: Type<'a>, known_types: &[(&str, usize)]) -> Result<()> {
+	fn validate_function(&mut self, parameters: &[Parameter<'a>], return_type: Type<'a>, used_generics: &[Generic], known_types: &[(&str, &[Generic])]) -> Result<()> {
 		self.push_path(JsonPathComponent::ObjectKey("parameters"));
 		for parameter in parameters {
 			self.push_path(JsonPathComponent::ArrayKey(parameter.name.to_str()));
-			self.validate_type(parameter.ty, known_types)?;
+			self.validate_type(parameter.ty, used_generics, known_types)?;
 			self.pop_path();
 		}
 		self.pop_path();
 		self.push_path(JsonPathComponent::ObjectKey("return_type"));
-		self.validate_type(return_type, known_types)?;
+		self.validate_type(return_type, used_generics, known_types)?;
 		self.pop_path();
 		Ok(())
 	}
-
-	fn validate_type(&mut self, ty: Type<'a>, known_types: &[(&str, usize)]) -> Result<()> {
+	
+	fn validate_type(&mut self, ty: Type<'a>, used_generics: &[Generic], known_types: &[(&str, &[Generic])]) -> Result<()> {
+		// Checks if a particular types matches a particular trait
+		fn type_matches_implementor(actual: (Type, &[Generic]), imp: (Type, &[Generic])) -> bool {
+			match (actual.0, imp.0) {
+				(Type::Id{name: ty_name, generics: act_generic_types}, Type::Id{name: imp_name, generics: imp_generic_types}) if 
+					ty_name == imp_name => {
+						act_generic_types.iter().zip(imp_generic_types).all(|(ty, imp_gen_type)| type_matches_implementor((*ty, actual.1), (*imp_gen_type, imp.1)))
+					}
+				(Type::Existential{idx: act_idx}, Type::Existential{idx: imp_idx}) => {
+					let act_traits = actual.1[act_idx].traits();
+					let imp_traits = imp   .1[imp_idx].traits();
+					// make sure the actual existential has at least the
+					// traits expected by the implementor
+					imp_traits.iter().all(|&imp_trait| act_traits.iter().any(|&act_trait| std::ptr::eq(imp_trait, act_trait)))
+				}
+				(ty, Type::Existential{idx}) => {
+					imp.1.get(idx).expect("existential should always point to a valid generic")
+						.traits().into_iter().all(|tr| {
+							tr.implementors.into_iter().any(|imp| type_matches_implementor((ty, actual.1), (imp.ty, imp.generics)))
+						})
+				}
+				(Type::Void, Type::Void) => true,
+				(Type::Bool, Type::Bool) => true,
+				(Type::Number, Type::Number) => true,
+				(Type::String, Type::String) => true,
+				(Type::Resource{..}, _) |
+				(_, Type::Resource{..}) => unreachable!("resource strings cannot be used in generics"),
+				(Type::Entity{..}, _) |
+				(_, Type::Entity{..}) => unreachable!("entity strings cannot be used in generics"),
+				_ => false
+			}
+		}
 		match ty {
 			Type::Id {
 				name,
@@ -742,13 +778,40 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 				// If the type is found, then check if the number of generics
 				// match and also recursively check types
 				self.push_path(JsonPathComponent::ObjectKey("generics"));
-				if let Some((_, num_generics)) = known_types.iter().find(|(ty_name, _)| *ty_name == name.to_str()) {
-					if *num_generics != generics.len() {
-						return Err(self.new_error(self.arena.fmt_into(format_args!(": {} was declared to have {} generics but here it has {}", name, num_generics, generics.len()))));
+				if let Some((_, constraints)) = known_types.iter().find(|(ty_name, _)| *ty_name == name.to_str()) {
+					if constraints.len() != generics.len() {
+						return Err(self.new_error(self.arena.fmt_into(format_args!(": {} was declared to have {} generics but here it has {}", name, constraints.len(), generics.len()))));
 					}
-					for (i, generic) in generics.iter().enumerate() {
+					for (i, (generic, constraint)) in generics.iter().zip(*constraints).enumerate() {
 						self.push_path(JsonPathComponent::ArrayIdx(i));
-						self.validate_type(*generic, known_types)?;
+						match *generic {
+							Type::Resource{..} => return Err(self.new_error("resource strings cannot be used in generics")),
+							Type::Entity{..}   => return Err(self.new_error("entity strings cannot be used in generics")),
+							_ => {
+								for tr in constraint.traits() {
+									// If the type is already an existential,
+									// then check if it already implements the
+									// constraint. If not, then go for the
+									// other check.
+									let is_existential_that_implements_constraint = if let Type::Existential{idx} = generic {
+										let act_traits = used_generics[*idx].traits();
+										act_traits.iter().any(|&act_trait| std::ptr::eq(act_trait, *tr))
+									} else {
+										false
+									};
+									let is_type_that_matches_a_trait_implementor = 
+										tr.implementors.into_iter().any(|imp| type_matches_implementor((*generic, used_generics), (imp.ty, imp.generics)));
+									if !is_existential_that_implements_constraint && !is_type_that_matches_a_trait_implementor {
+										if let Type::Existential{idx} = generic {
+											return Err(self.new_error(self.arena.fmt_into(format_args!("type '{}' must implement constraint '{}'", used_generics[*idx].name, tr.name))));
+										} else {
+											return Err(self.new_error(self.arena.fmt_into(format_args!("type '{}' must implement constraint '{}'", generic, tr.name))));
+										}
+									}
+								}
+								self.validate_type(*generic, used_generics, known_types)?;
+							}
+						}
 						self.pop_path();
 					}
 				// TODO: Change the mod api format so this always throws an
@@ -1126,7 +1189,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 	context.push_path(JsonPathComponent::ObjectKey("entities"));
 	for entity_name in entities.keys() {
 		// Dont need to check for duplicates yet because there can't be any
-		known_types.push((entity_name.as_str(), 0));
+		known_types.push((entity_name.as_str(), &[][..]));
 	}
 	context.pop_path();
 
@@ -1137,7 +1200,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		if known_types.iter().find(|(type_name, _)| *type_name == class_name.as_str()).is_some() {
 			return Err(context.new_error("class name already exists"));
 		}
-		known_types.push((class_name.as_str(), class_data.generics.len()));
+		known_types.push((class_name.as_str(), class_data.generics));
 		context.pop_path();
 	}
 
@@ -1149,7 +1212,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		context.push_path(JsonPathComponent::ObjectKey("methods"));
 		for (method_name, host_fn) in &*class_data.methods {
 			context.push_path(JsonPathComponent::ObjectKey(method_name));
-			context.validate_function(host_fn.parameters, host_fn.return_ty, known_types)?;
+			context.validate_function(host_fn.parameters, host_fn.return_ty, host_fn.generics, known_types)?;
 			context.pop_path();
 		}
 		context.pop_path();
@@ -1163,7 +1226,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		context.push_path(JsonPathComponent::ObjectKey(trait_name));
 		for (i, imp) in tr.implementors.iter().enumerate() {
 			context.push_path(JsonPathComponent::ArrayIdx(i));
-			context.validate_type(imp.ty, known_types)?;
+			context.validate_type(imp.ty, imp.generics, known_types)?;
 			context.pop_path();
 		}
 		context.pop_path();
@@ -1174,7 +1237,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 	// generics they use is correct
 	for (fn_name, host_fn) in host_fns.iter() {
 		context.push_path(JsonPathComponent::ObjectKey(fn_name));
-		context.validate_function(host_fn.parameters, host_fn.return_ty, known_types)?;
+		context.validate_function(host_fn.parameters, host_fn.return_ty, host_fn.generics, known_types)?;
 		context.pop_path();
 	}
 	context.pop_path();
@@ -1185,7 +1248,7 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 		context.push_path(JsonPathComponent::ObjectKey(entity_name));
 		for (fn_name, export_fn) in entity.export_fns {
 			context.push_path(JsonPathComponent::ObjectKey(fn_name));
-			context.validate_function(export_fn.parameters, Type::Void, known_types)?;
+			context.validate_function(export_fn.parameters, Type::Void, &[], known_types)?;
 			context.pop_path();
 		}
 		context.pop_path();
