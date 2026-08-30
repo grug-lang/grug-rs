@@ -41,6 +41,7 @@ pub mod windows {
 	impl NTSTATUS {
 		const TOP_NIBBLE: u32 = 0xF0000000;
 
+		pub const ERR_EOF: Self = Self(0xc0000011);
 		pub const PENDING: Self = Self(0x00000103);
 		// pub const SUCCESS: Self = Self(0x00000000);
 		pub fn is_success(&self) -> bool {

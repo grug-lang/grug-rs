@@ -39,6 +39,14 @@ mod str {
 	#[repr(transparent)]
 	pub struct NTStr(str);
 
+	#[derive(Debug, Clone, Copy)]
+	pub enum NTStrError {
+		UnexpectedNullByte {
+			location: usize,
+		},
+		MissingNullTerminator,
+	}
+
 	/// # SAFETY
 	///
 	/// Same as str
@@ -110,15 +118,17 @@ mod str {
 			unsafe {std::mem::transmute::<&str, &NTStr>(value)}
 		}
 		
-		pub fn try_from_str(value: &str) -> Option<&NTStr> {
+		pub fn try_from_str(value: &str) -> Result<&NTStr, NTStrError> {
 			if let Some(last) = value.as_bytes().last() && *last == b'\0' {
-				for byte in &value.as_bytes()[0..value.len()-1] {
-					if *byte == b'\0' {return None}
+				for (i, byte) in value.as_bytes()[0..value.len()-1].iter().enumerate() {
+					if *byte == b'\0' {
+						return Err(NTStrError::UnexpectedNullByte{location: i});
+					}
 				}
 				// SAFETY: last byte (if it exists) is null
-				unsafe{Some(Self::from_str_unchecked(value))}
+				unsafe{Ok(Self::from_str_unchecked(value))}
 			} else {
-				None
+				Err(NTStrError::MissingNullTerminator)
 			}
 		}
 
@@ -145,9 +155,9 @@ mod str {
 	}
 
 	impl<'a> TryFrom<&'a str> for &'a NTStr {
-		type Error = ();
+		type Error = NTStrError;
 		fn try_from(value: &str) -> Result<&NTStr, Self::Error> {
-			NTStr::try_from_str(value).ok_or(())
+			NTStr::try_from_str(value)
 		}
 	}
 
@@ -361,8 +371,8 @@ mod str {
 		
 		/// Expects a single null byte at the end of the string and no null bytes
 		/// in the rest of the string
-		pub fn try_from_str(value: &'a str) -> Option<Self> {
-			Some(NTStr::try_from_str(value)?.as_ntstrptr())
+		pub fn try_from_str(value: &'a str) -> Result<Self, NTStrError> {
+			Ok(NTStr::try_from_str(value)?.as_ntstrptr())
 		}
 		
 		/// Returns a pointer with a static lifetime. 

@@ -66,7 +66,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 	pub fn new (
 		file_text: &'arena str,
 		file_path: &'arena OsStr,
-		entity: &'mod_api ModApiEntity, 
+		entity: &'mod_api ModApiEntity<'mod_api>, 
 		mod_api: &'mod_api ModApi,
 		mod_name: &'arena OsStr, 
 		mods_dir_path: &'mod_api OsStr, 
@@ -109,7 +109,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 	}
 
 	pub fn fill_result_types(
-		entity: &'mod_api ModApiEntity, 
+		entity: &'mod_api ModApiEntity<'mod_api>, 
 		mod_api: &'mod_api ModApi,
 		mod_name: &'arena OsStr, 
 		mods_dir_path: &'mod_api OsStr, 
@@ -825,13 +825,17 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 						format_args!("Cannot call method on '{}' type", ty)
 					))
 				};
-				let Some(class) = self.mod_api.classes().get(receiver_name) else {
+				let (receiver_ty, receiver_methods) = if let Some(class) = self.mod_api.classes().get(receiver_name) {
+					(class.ty, &*class.methods)
+				} else if let Some(entity) = self.mod_api.entities().get(receiver_name) {
+					(entity.ty, &*entity.methods)
+				} else {
 					return Err(self.new_error(
 						receiver.span,
 						format_args!("Type '{}' does not have any methods", receiver_name)
 					));
 				};
-				let Some((_, host_fn)) = class.methods.iter().find(|(fn_name, _)| fn_name.as_str() == name) else {
+				let Some((_, host_fn)) = receiver_methods.iter().find(|(fn_name, _)| fn_name.as_str() == name) else {
 					return Err(self.new_error(
 						receiver.span,
 						format_args!("Cannot find method '{}' on type '{}'", name, receiver_name)
@@ -865,7 +869,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				}));
 
 				// do the same for the method receiver, and add a constraint between that and the actual type of the receiver
-				let mod_api_receiver_type = Self::convert_mod_api_type(class.ty, generics, arena);
+				let mod_api_receiver_type = Self::convert_mod_api_type(receiver_ty, generics, arena);
 				// TODO: Fix the error message here (i actually don't know if this can even error)
 				ty_ctx.add_constraint(receiver.span, mod_api_receiver_type, receiver_type).map_err(|err| self.new_error(
 					err.span,

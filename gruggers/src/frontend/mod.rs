@@ -2,7 +2,7 @@ use crate::state::{GrugState, Files, FileInfo};
 use crate::arena::Arena;
 use crate::types::FileId;
 use crate::ast::*;
-use crate::ntstring::NTStrPtr;
+use crate::ntstring::{NTStrPtr, NTStr};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::mod_api::ModApi;
 use crate::own_ptr::OwnPtr;
@@ -80,31 +80,15 @@ impl GrugState {
 					}
 				}
 				// read the contents of files that can be read
-				let ok_files_data = read_files_async(ok_files.iter().map(|(file, _)| file), &arena);
+				let ok_files_data = read_files_async(ok_files.iter().map(|(file, path)| (file, *path)), &arena);
 				// compile files one by one and collect errors, asts and resources
 				results.extend(ok_files_data.into_iter().zip(&ok_files).map(|(data, (_, path))| {
 					let path = *path;
-					let data = match data {
+					let file_text = match data {
 						Ok(data) => data,
 						Err(err) => return (Err(err), path),
 					};
 
-					// convert to utf8
-					let file_text = match std::str::from_utf8(data).map_err(|err| {
-						Error::new(
-							ErrorKind::UTF8_ERROR,
-							"",
-							path, 
-							// SAFETY: err.valid_up_to returns the length of the
-							// portion of the string that is valid utf8
-							unsafe{std::str::from_utf8_unchecked(&data[..err.valid_up_to()])},
-							SourceSpan{offset: err.valid_up_to(), line: 0},
-							format_args!("File is not valid utf8: {}", err),
-						)
-					}) {
-						Ok(file_text) => file_text,
-						Err(err) => return (Err(err), path),
-					};
 					// compile the file
 					let (ast, current_resources) = match Self::compile_inner(
 						path,
@@ -176,9 +160,12 @@ impl GrugState {
 	/// be hot reloaded.
 	pub fn compile_grug_file_from_str(&self, path: impl AsRef<OsStr>, file_text: &str) -> Result<FileId, Error> {
 		use super::frontend::*;
+		use crate::async_fs::{verify_file_data};
 		let path = path.as_ref();
 
 		let mut arena = self.arenas.borrow_mut().pop().unwrap_or_default();
+		let file_text = arena.copy_bytes_into_nt(file_text.as_bytes());
+		let file_text = verify_file_data(file_text, path)?;
 		// immediately invoked closure so we get try {} finally {}
 		let id = (|| {
 			let (file, resources) = Self::compile_inner(
@@ -413,7 +400,7 @@ impl GrugState {
 	/// Merge threaded compilation and standalone compilation
 	fn compile_inner<'arena>(
 		path: &'arena OsStr, 
-		file_text: &'arena str, 
+		file_text: &'arena NTStr, 
 		mods_dir_path: &'arena OsStr, 
 		mod_api: &'arena ModApi, 
 		arena: &'arena Arena,
@@ -489,6 +476,7 @@ impl GrugState {
 			members: member_variables.leak(),
 			on_functions: on_functions.leak(),
 			helper_functions: helper_functions.leak(),
+			file_text: file_text.as_ntstrptr(),
 		};
 		Ok((file, resources))
 	}

@@ -464,11 +464,9 @@ mod arena_impl {
 		/// See [`copy_osstr_into`]  and [`copy_str_into`] for more specific
 		/// versions of this function
 		/// 
-		/// # Panics
-		///
-		/// if `bytes` contains a null byte
+		/// This function does not check if a null byte already exists within
+		/// the input bytes
 		pub fn copy_bytes_into_nt(&self, bytes: &[u8]) -> &[u8] {
-			assert!(!bytes.contains(&b'\0'));
 			let ptr = self.alloc(Layout::array::<u8>(bytes.len() + 1).expect("invalid layout for slice"))
 				.expect("unable to allocate")
 				.cast::<u8>().as_ptr();

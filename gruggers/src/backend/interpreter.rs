@@ -81,10 +81,13 @@ fn copy_into_arena<'arena>(ast: &GrugAst<'_>, arena: &'arena Arena) -> GrugAst<'
 		});
 	}
 
+	let file_text = arena.copy_str_into_nt(ast.file_text.to_str());
+
 	GrugAst {
 		members: members.leak(),
 		on_functions: on_functions.leak(),
 		helper_functions: helper_functions.leak(),
+		file_text: file_text.as_ntstrptr(),
 	}
 }
 

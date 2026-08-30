@@ -1,7 +1,3 @@
-// TODO: Constraints on classes have to be verified for all functions that use
-// them.
-// TODO: Using the same name for a generic on a method as a generic on the
-// class should actually add new constraints to that generic
 // TODO: Methods on entities
 use std::collections::HashMap;
 use std::path::Path;
@@ -41,7 +37,9 @@ unsafe impl Sync for ModApi {}
 
 impl ModApi {
 	pub(crate) fn entities<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiEntity<'a>> {
-		&self.entities
+		// SAFETY: Invariance of the methods field requires this transmute
+		// This transmute brings it back to the actual lifetime
+		unsafe{std::mem::transmute::<&'a HashMap<&'static NTStr, ModApiEntity<'static>>, &'a HashMap<&'a NTStr, ModApiEntity<'a>>>(&self.entities)}
 	}
 
 	pub(crate) fn classes<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiClass<'a>> {
@@ -416,7 +414,9 @@ pub(crate) struct ModApiClass<'a> {
 pub(crate) struct ModApiEntity<'a> {
 	#[expect(dead_code)]
 	pub(crate) description: &'a str,
+	pub(crate) ty: Type<'a>,
 	pub(crate) export_fns: &'a [(&'a NTStr, ModApiExportFn<'a>)],
+	pub(crate) methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
 }
 
 impl<'a> ModApiEntity<'a> {
@@ -672,7 +672,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		Ok(used_generics.leak())
 	}
 
-	fn parse_host_fn<'b>(&mut self, host_fn_values: &'a JsonValue, parent_generics: &'_ [Generic<'b>], traits: &HashMap<&str, &'b Trait<'b>>, arena: &'b Arena) -> Result<ModApiHostFn<'b>> {
+	fn parse_host_fn<'b>(&mut self, host_fn_values: &'a JsonValue, parent_generics: &'b [Generic<'b>], traits: &HashMap<&str, &'b Trait<'b>>, arena: &'b Arena) -> Result<ModApiHostFn<'b>> {
 		let JsonValue::Object(host_fn_values) = host_fn_values else {
 			return Err(self.new_error("is not an object"));
 		};
@@ -681,14 +681,14 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 		self.pop_path();
 
 		// optional "used_generics" key
-		let mut used_generics = Vec::with_capacity_in(parent_generics.len(), arena);
-		used_generics.extend(parent_generics);
-		if let Some(generics) = host_fn_values.get("used_generics") {
+		let generics = if let Some(generics) = host_fn_values.get("used_generics") {
 			self.push_path(JsonPathComponent::ObjectKey("used_generics"));
-			used_generics.extend(self.parse_used_generics(generics, traits, arena)?);
+			let used_generics = self.parse_used_generics(generics, traits, arena)?;
 			self.pop_path();
-		}
-		let generics = used_generics.leak();
+			used_generics
+		} else {
+			parent_generics
+		};
 		
 		// optional "parameters" array 
 		let parameters = if let Some(parameters) = host_fn_values.get("parameters") {
@@ -1041,6 +1041,11 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			let description = arena.copy_str_into(context.get_str(entity_values, "description")?);
 			context.pop_path();
 
+			let ty = Type::Id {
+				name: entity_name.as_ntstrptr(),
+				generics: &[],
+			};
+
 			let export_fns = if let Some(export_fns) = entity_values.get("export_functions") {
 				context.push_path(JsonPathComponent::ObjectKey("export_functions"));
 				let JsonValue::Array(export_fns) = export_fns else {
@@ -1087,10 +1092,32 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			} else {
 				&mut []
 			};
+
+			// optional "methods" object
+			let methods = if let Some(methods) = entity_values.get("methods") {
+				context.push_path(JsonPathComponent::ObjectKey("methods"));
+				let JsonValue::Object(methods) = methods else {
+					return Err(context.new_error("is not an object"));
+				};
+				let mut temp = Vec::new_in(&arena);
+				for (method_name, method_values) in methods.iter() {
+					context.push_path(JsonPathComponent::ObjectKey(method_name));
+					let method_name = arena.copy_str_into_nt(method_name);
+					temp.push((method_name, context.parse_host_fn(method_values, &[], &traits, &arena)?));
+					context.pop_path();
+				}
+				context.pop_path();
+				temp.leak()
+			} else {
+				&mut []
+			};
+
 			context.pop_path();
 			Ok((entity_name, ModApiEntity{
 				description,
-				export_fns
+				ty,
+				export_fns,
+				methods,
 			}))
 		}).collect::<Result<HashMap<_, _>>>()?;
 		context.pop_path();

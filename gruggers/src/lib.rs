@@ -31,13 +31,10 @@ pub use gruggers_core::nt;
 
 const HAS_CONSTRAINTS: bool = true;
 
-// TODO: Check for duplicates in used_generics and combine their requirements
 // TODO: Add Debug info to backends and improve runtime errors
 // TODO: Specify grug's string lifetimes.
 // TODO: Outline Debugger implementation
-// TODO: rename "arguments" to "parameters" in mod_api
 // TODO: Replace custom errors in serde.rs with Error
-// TODO: (WIP) Add #[track_caller] to error functions for tracing
 // TODO: Standard Library
 // 		- Vec
 // 		- Box

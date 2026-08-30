@@ -798,6 +798,8 @@ pub struct GrugAst<'a> {
 	/// }
 	/// ```
 	pub helper_functions: &'a mut [HelperFunction<'a>],
+	/// A string that contains the entire file text. Used for Debug info.
+	pub file_text: NTStrPtr<'a>,
 }
 
 const _: () = const{
