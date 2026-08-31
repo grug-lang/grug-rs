@@ -236,6 +236,13 @@ mod test_bindings {
 		game_fn_error,
 	};
 
+	#[repr(C)]
+	pub struct GrugTestsOptions {
+		pub whitelisted_test: Option<NTStrPtr<'static>>,
+		pub continue_on_fail: bool,
+		pub results_json_path: Option<NTStrPtr<'static>>,
+	}
+
 	#[link(name="tests", kind="dylib")]
 	unsafe extern "C" {
 		pub fn grug_tests_runtime_error_handler<'a>(
@@ -249,7 +256,7 @@ mod test_bindings {
 			tests_dir_path_: NTStrPtr<'static>, 
 			mod_api_path: NTStrPtr<'static>, 
 			vtable: GrugStateVTable,
-			whitelisted_test_: Option<NTStrPtr<'static>>
+			options: GrugTestsOptions,
 		);
 	}
 }
@@ -430,14 +437,33 @@ use std::io::Write;
 fn grug_tests () {
 	let mut args = std::env::args().collect::<Vec<_>>();
 
+	// Only treat args[2] as the whitelisted test name if it isn't itself a
+	// flag; otherwise leave it in `args` so the loop below can pick it up.
 	let mut whitelisted_test = None;
-	if args.len() >= 3 {
+	if args.len() >= 3 && !args[2].starts_with("--") {
 		let mut test = args.remove(2);
-		if !test.starts_with("--") {
-			test.push('\0');
-			whitelisted_test = unsafe{Some(NTStr::from_str_unchecked(String::leak(test)).as_ntstrptr())};
+		test.push('\0');
+		whitelisted_test = unsafe{Some(NTStr::from_str_unchecked(String::leak(test)).as_ntstrptr())};
+	}
+
+	let mut continue_on_fail = false;
+	let mut results_json_path = None;
+	let mut i = 0;
+	while i < args.len() {
+		if args[i] == "--continue-on-fail" {
+			args.remove(i);
+			continue_on_fail = true;
+		} else if args[i] == "--results-json-path" {
+			args.remove(i);
+			if i < args.len() {
+				let mut path = args.remove(i);
+				path.push('\0');
+				results_json_path = unsafe{Some(NTStr::from_str_unchecked(String::leak(path)).as_ntstrptr())};
+			}
+		} else {
+			i += 1;
 		}
-	};
+	}
 
 	let grug_tests_path = nt!("src/grug-tests/tests");
 	let mod_api_path = nt!("src/grug-tests/mod_api.json");
@@ -453,7 +479,11 @@ fn grug_tests () {
 			grug_tests_path.as_ntstrptr(),
 			mod_api_path.as_ntstrptr(),
 			STATE_VTABLE,
-			whitelisted_test,
+			GrugTestsOptions {
+				whitelisted_test,
+				continue_on_fail,
+				results_json_path,
+			},
 		)
 	}
 	_ = std::panic::take_hook();
