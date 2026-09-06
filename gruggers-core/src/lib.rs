@@ -7,6 +7,7 @@ pub mod error;
 
 pub mod ntstring;
 pub mod runtime_error;
+mod utils;
 
 // MIT LICENSE
 // 

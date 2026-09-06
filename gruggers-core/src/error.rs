@@ -2,6 +2,7 @@ use allocator_api2::alloc::Allocator;
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
 use crate::ntstring::{NTStrPtr, NTStr, NTBytes, copy_box_nt_bytes_in};
+use crate::utils::{copy_str, copy_bytes_nt, copy_str_nt};
 use std::io::Write;
 use std::ffi::OsStr;
 
@@ -165,7 +166,7 @@ pub struct GrugError<'a> {
 	/// Path to the file with the error
 	pub file_path: NTBytes<'a>,
 	/// Source line that contains the error
-	pub source_line: &'static str,
+	pub source_line: &'a str,
 	/// Location of the error. This span may point to (0, 0) if the error is
 	/// not within a file
 	pub span: SourceSpan,
@@ -317,35 +318,14 @@ impl<'a> GrugError<'a> {
 	pub fn copy_into<'b, A: Allocator>(&self, alloc: &'b A) -> GrugError<'b> {
 		GrugError {
 			error_kind: self.error_kind,
-			// SAFETY: We never give out a `'static` pointer to this string from safe code
-			function_name: unsafe{Box::leak(NTStr::box_from_str_in(self.function_name.to_str(), alloc)).as_ntstrptr().detach_lifetime()},
+			function_name: copy_str_nt(self.function_name.to_ntstr(), alloc).as_ntstrptr(),
 
-			// SAFETY: We never give out a `'static` pointer to this string from safe code
-			file_path: unsafe{NTBytes::from_bytes_unchecked(Box::leak(copy_box_nt_bytes_in(self.file_path.to_bytes(), &alloc))).detach_lifetime()},
+			file_path: copy_bytes_nt(self.file_path, alloc),
 
-			// Copy source_line into an allocator and return a reference to the new string
-			// Equivalent to Box::leak(Box::from(str)) except the box is allocated in a custom allocator
-			// cannot use box_from_str_in because that doesn't allow null bytes
-			// within the string
-			source_line: {
-				let mut slice = Box::<[u8], _>::new_uninit_slice_in(self.source_line.len(), &alloc);
-				// SAFETY: `slice` was just allocated within `alloc` with length `souce_line.len()`
-				unsafe{slice.as_mut_ptr().cast::<u8>().copy_from(self.source_line.as_ptr(), self.source_line.len())};
-				// SAFETY: Slice is fully initialized in the above line
-				let slice = Box::leak(unsafe{slice.assume_init()});
-
-				// - SAFETY: [u8] to str is valid because the slice is guaranteed to
-				// be utf8 because it was copied from a str
-				//
-				// - SAFETY: lifetime transmute is safe because we never give out a
-				// `'static` pointer to this string from safe code
-				unsafe{std::mem::transmute::<&mut [u8], &'static str>(slice)}
-			},
+			source_line: copy_str(self.source_line, alloc),
 			span: self.span,
-			// SAFETY: We never give out a `'static` pointer to this string from safe code
-			error_message: unsafe{Box::leak(NTStr::box_from_str_in(self.error_message.to_str(), alloc)).as_ntstrptr().detach_lifetime()},
-			// SAFETY: We never give out a `'static` pointer to this string from safe code
-			error_string: unsafe{Box::leak(NTStr::box_from_str_in(self.error_string.to_str(), alloc)).as_ntstrptr().detach_lifetime()},
+			error_message: copy_str_nt(self.error_message.to_ntstr(), alloc).as_ntstrptr(),
+			error_string: copy_str_nt(self.error_string.to_ntstr(), alloc).as_ntstrptr(),
 		}
 	}
 }

@@ -4,9 +4,9 @@ use std::ffi::OsStr;
 use std::io::Write;
 use crate::error::SourceSpan;
 use crate::ntstring::{NTStrPtr, NTBytes, NTStr};
+use crate::utils::{copy_str, copy_bytes_nt, copy_str_nt};
 use allocator_api2::alloc::Allocator;
 use allocator_api2::vec::Vec;
-use allocator_api2::boxed::Box;
 /// Enum that represents all possible runtime errors
 #[derive(Debug, Clone, Copy)]
 #[repr(u32)]
@@ -53,6 +53,7 @@ impl<'a> std::fmt::Display for RuntimeError<'a> {
 }
 
 #[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeErrorKind {
 	TimeLimitExceeded,
 	StackOverflow,
@@ -78,29 +79,13 @@ pub struct RuntimeError2<'a> {
 	pub error_string: NTStrPtr<'a>,
 }
 
+
 impl<'a> RuntimeError2<'a> {
 	/// The call_stack must have already been allocated within `a`
 	#[track_caller]
 	pub fn new_error_in<A: Allocator>(kind: RuntimeErrorKind, call_stack: &'a [StackFrame<'a>], err_span: SourceSpan, source_text: &str, error_message: std::fmt::Arguments, a: &'a A) -> Self {
-		// Copy source_line into an allocator and return a reference to the new string
-		// Equivalent to Box::leak(Box::from(str)) except the box is allocated in a custom allocator
-		// cannot use box_from_str_in because that doesn't allow null bytes
-		// within the string
-		let source_line = {
-			let source_line = err_span.get_source_line(source_text);
-			let mut slice = Box::<[u8], _>::new_uninit_slice_in(source_line.len(), &a);
-			// SAFETY: `slice` was just allocated within `alloc` with length `souce_line.len()`
-			unsafe{slice.as_mut_ptr().cast::<u8>().copy_from(source_line.as_ptr(), source_line.len())};
-			// SAFETY: Slice is fully initialized in the above line
-			let slice = Box::leak(unsafe{slice.assume_init()});
+		let source_line = copy_str(err_span.get_source_line(source_text), a);
 
-			// - SAFETY: [u8] to str is valid because the slice is guaranteed to
-			// be utf8 because it was copied from a str
-			//
-			// - SAFETY: lifetime transmute is safe because we never give out a
-			// `'static` pointer to this string from safe code
-			unsafe{std::mem::transmute::<&mut [u8], &'static str>(slice)}
-		};
 		let error_message = {
 			let mut err_message_vec = Vec::new_in(a);
 			write!(err_message_vec, "{}\0", error_message).expect("Writing to a vec can never fail");
@@ -108,19 +93,19 @@ impl<'a> RuntimeError2<'a> {
 			// utf8
 			NTStr::try_from_str(unsafe{std::str::from_utf8_unchecked(err_message_vec.leak())})
 				.expect("null byte found in error message")
+				.as_ntstrptr()
 		};
 
 		let error_string = {
 			let mut error_string = Vec::new_in(a);
 			for stack_frame in call_stack {
 				match stack_frame {
-					StackFrame::GrugCall{ function_name, file_path, span, file_text } => {
+					StackFrame::GrugCall{ function_name, file_path, span } => {
 						write!(error_string, 
-							"    called from {} ({}:{}:{})\n", 
+							"    called from {} ({}:{})\n", 
 							function_name.to_str(), 
 							unsafe{OsStr::from_encoded_bytes_unchecked(file_path.to_bytes()).display()}, 
 							span.line, 
-							span.get_col(file_text.to_str()),
 						).expect("Writing into a Vec can never fail");
 					}
 					StackFrame::HostCall { function_name } => {
@@ -140,6 +125,7 @@ impl<'a> RuntimeError2<'a> {
 			// utf8
 			NTStr::try_from_str(unsafe{std::str::from_utf8_unchecked(error_string.leak())})
 				.expect("null byte found in error message")
+				.as_ntstrptr()
 		};
 		
 		Self {
@@ -147,8 +133,23 @@ impl<'a> RuntimeError2<'a> {
 			call_stack,
 			err_span,
 			source_line,
-			error_message: error_message.as_ntstrptr(),
-			error_string: error_string.as_ntstrptr(),
+			error_message,
+			error_string,
+		}
+	}
+
+	pub fn copy_into<'b, A: Allocator>(&self, alloc: &'b A) -> RuntimeError2<'b> {
+		let mut new_call_stack = Vec::with_capacity_in(self.call_stack.len(), alloc);
+		for stack_frame in self.call_stack {
+			new_call_stack.push(stack_frame.copy_into(alloc));
+		}
+		RuntimeError2 {
+			kind: self.kind,
+			call_stack: new_call_stack.leak(),
+			source_line: copy_str(self.source_line, alloc),
+			err_span: self.err_span,
+			error_message: copy_str_nt(self.error_message.to_ntstr(), alloc).as_ntstrptr(),
+			error_string: copy_str_nt(self.error_string.to_ntstr(), alloc).as_ntstrptr(),
 		}
 	}
 }
@@ -161,10 +162,28 @@ pub enum StackFrame<'a> {
 		function_name: NTStrPtr<'a>,
 		file_path: NTBytes<'a>,
 		span: SourceSpan,
-		file_text: NTStrPtr<'a>
 	},
 	/// The stack frame belongs to a host function
 	HostCall {
 		function_name: NTStrPtr<'a>,
+	}
+}
+
+impl<'a> StackFrame<'a> {
+	fn copy_into<'b>(&self, a: &'b impl Allocator) -> StackFrame<'b> {
+		match *self {
+			Self::GrugCall { function_name, file_path, span } => {
+				StackFrame::GrugCall {
+					function_name: copy_str_nt(function_name.to_ntstr(), a).as_ntstrptr(),
+					file_path: copy_bytes_nt(file_path, a),
+					span,
+				}
+			}
+			Self::HostCall { function_name } => {
+				StackFrame::HostCall {
+					function_name: copy_str_nt(function_name.to_ntstr(), a).as_ntstrptr()
+				}
+			}
+		}
 	}
 }

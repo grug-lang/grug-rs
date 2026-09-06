@@ -307,6 +307,7 @@ impl State for GrugState {
 		};
 		let current_on_fn_name = self.get_export_fn_name(current_export_fn_id).unwrap();
 		let message = format!("{}", error);
+
 		self.runtime_error_handler.handle_error(
 			error, 
 			&message,
