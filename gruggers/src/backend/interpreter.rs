@@ -3,7 +3,7 @@ use crate::ast::{
 	Parameter, Statement, Expr, ExprData, MemberVariable, OnFunction,
 	HelperFunction, UnaryOperator, BinaryOperator, Type, GrugAst,
 };
-use crate::xar::Xar;
+use crate::xar::{Xar, XarHandle};
 use crate::arena::Arena;
 use crate::backend::Backend;
 use crate::ntstring::{NTStrPtr};
@@ -11,8 +11,6 @@ use crate::ntstring::{NTStrPtr};
 use gruggers_core::runtime_error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
 use gruggers_core::state::State;
 
-use std::ptr::NonNull;
-use std::pin::Pin;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::time::{Instant, Duration};
@@ -270,7 +268,6 @@ impl GrugEntityData {
 
 struct CompiledFile {
 	file: GrugAst<'static>,
-	entities: RefCell<std::vec::Vec<NonNull<GrugEntity>>>,
 	data: Xar<GrugEntityData>,
 	_arena: Arena,
 }
@@ -281,7 +278,6 @@ impl CompiledFile {
 		let file = unsafe{std::mem::transmute::<GrugAst<'_>, GrugAst<'static>>(copy_into_arena(&file, &arena))};
 		Self {
 			file,
-			entities: RefCell::new(std::vec::Vec::new()),
 			data: Xar::new(),
 			_arena: arena,
 		}
@@ -646,23 +642,10 @@ impl Default for Interpreter {
 
 impl Backend for Interpreter {
 	#[inline]
-	fn insert_file<GrugState: State>(&self, state: &GrugState, id: FileId, file: GrugAst) {
-		let mut compiled_file = CompiledFile::new(file);
+	fn insert_file(&self, id: FileId, file: GrugAst) {
+		let compiled_file = CompiledFile::new(file);
 		let mut files = self.files.borrow_mut();
 		if let Some(old_file) = files.get_mut(id.0 as usize) {
-			let mut old_entities = std::mem::take(&mut *old_file.entities.borrow_mut());
-			old_entities.extract_if(.., |old_entity| {
-				let mut data = GrugEntityData {
-					global_variables: HashMap::from([("me", Cell::new(Value{id:unsafe{(*old_entity.as_ptr()).id}}))]),
-				};
-				if self.init_global_variables(state, &compiled_file, &mut data).is_none() {
-					return true;
-				}
-				let data = compiled_file.data.insert(data);
-				unsafe{(*old_entity.as_ptr()).members.set(data.as_ptr().cast())};
-				false
-			}).for_each(drop);
-			*compiled_file.entities.get_mut() = old_entities;
 			*old_file = compiled_file;
 		} else if files.len() == id.0 as usize {
 			files.push(compiled_file);
@@ -672,7 +655,7 @@ impl Backend for Interpreter {
 	}
 
 	#[inline]
-	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: Pin<&GrugEntity>) -> bool {
+	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity) -> bool {
 		let file = self.files.borrow();
 		let file = file.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
@@ -685,7 +668,6 @@ impl Backend for Interpreter {
 		}
 
 		let data = file.data.insert(data);
-		file.entities.borrow_mut().push(NonNull::from_ref(Pin::get_ref(entity)));
 		entity.members.set(data.as_ptr().cast());
 
 		true
@@ -694,17 +676,25 @@ impl Backend for Interpreter {
 	#[inline]
 	fn clear_entities(&mut self) {
 		self.files.borrow_mut().iter_mut().for_each(|file| {
-			file.entities.get_mut().clear();
 			file.data.clear();
 		});
 	}
 
 	#[inline]
-	fn destroy_entity_data(&self, entity: &GrugEntity) {
+	unsafe fn destroy_entity_data(&self, entity: &GrugEntity) {
 		let file = self.files.borrow();
 		let file = file.get(entity.file_id.0 as usize)
 			.expect("file compiled");
-		file.entities.borrow_mut().extract_if(.., |en| std::ptr::eq(en.as_ptr().cast_const(), entity)).for_each(|_| {});
+		// This pointer is guaranteed to point within file.data because we only ever set it to file.data.
+		// The only case were it may point to something else is if the entity
+		// is uninitialized. That is handled by the precondition (entity must be initialized)
+		// SAFETY: We only ever set the members field to a XarHandle<GrugEntityData>
+		let data_ptr = unsafe{XarHandle::from_ptr(entity.members.get().cast::<GrugEntityData>())};
+
+		// Sanity check. Should never fire and we don't want this overhead in release mode
+		debug_assert!(file.data.contains(data_ptr));
+		// SAFETY: data_ptr belongs to data_ptr
+		unsafe {file.data.delete(data_ptr)};
 	}
 
 	#[inline]

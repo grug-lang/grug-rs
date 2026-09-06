@@ -18,7 +18,6 @@ use gruggers_core::export_backend;
 
 use std::collections::HashMap;
 use std::ptr::NonNull;
-use std::pin::Pin;
 use std::cell::{Cell, RefCell};
 use std::alloc::Layout;
 use std::time::{Duration, Instant};
@@ -79,7 +78,6 @@ impl<'a> Compiler<'a> {
 		CompiledFile {
 			instructions,
 			globals_size,
-			entities: RefCell::new(Vec::new()),
 			data: ErasedXar::new(Layout::array::<Value>(globals_size)
 				 .expect("invalid layout")
 			),
@@ -472,7 +470,6 @@ impl<'a> Compiler<'a> {
 struct CompiledFile {
 	instructions: Instructions,
 	globals_size: usize,
-	entities: RefCell<Vec<NonNull<GrugEntity>>>,
 	data: ErasedXar,
 }
 
@@ -497,26 +494,10 @@ impl Default for BytecodeBackend {
 
 impl Backend for BytecodeBackend {
 	#[inline]
-	fn insert_file<GrugState: State>(&self, state: &GrugState, id: FileId, file: GrugAst) {
-		let mut compiled_file = Compiler::compile(file);
+	fn insert_file(&self, id: FileId, file: GrugAst) {
+		let compiled_file = Compiler::compile(file);
 		let mut files = self.files.borrow_mut();
 		if let Some(old_file) = files.get_mut(id.0 as usize) {
-			let mut old_entities = std::mem::take(&mut *old_file.entities.borrow_mut());
-			
-			old_entities.extract_if(.., |old_entity| {
-				debug_assert!(id == unsafe{(*old_entity.as_ptr()).file_id});
-				let globals = unsafe{&*compiled_file.data.get_slot().write_slice(compiled_file.globals_size, Cell::new(Value{void: ()}))};
-				let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
-
-				stack.stack.push(Value{id: unsafe{(*old_entity.as_ptr()).id}});
-				let ret_val = unsafe{stack.run(state, globals, &compiled_file.instructions, 1, 0)}.is_some();
-				unsafe{(*old_entity.as_ptr()).members.set(NonNull::from_ref(globals).cast::<()>())};
-
-				self.stacks.borrow_mut().push(stack);
-
-				!ret_val
-			}).for_each(drop);
-			*compiled_file.entities.get_mut() = old_entities;
 			*old_file = compiled_file;
 		} else if files.len() == id.0 as usize {
 			files.push(compiled_file);
@@ -525,7 +506,7 @@ impl Backend for BytecodeBackend {
 		}
 	}
 	#[inline]
-	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: Pin<&GrugEntity>) -> bool {
+	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity) -> bool {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
@@ -536,8 +517,6 @@ impl Backend for BytecodeBackend {
 		let ret_val = unsafe{stack.run(state, globals, &file.instructions, 1, 0)}.is_some();
 		entity.members.set(NonNull::from_ref(globals).cast::<()>());
 
-		file.entities.borrow_mut().push(NonNull::from_ref(Pin::get_ref(entity)));
-
 		stack = stack.reset();
 		self.stacks.borrow_mut().push(stack);
 		ret_val
@@ -546,17 +525,26 @@ impl Backend for BytecodeBackend {
 	fn clear_entities(&mut self) {
 		for file in self.files.get_mut().iter_mut() {
 			file.data.clear();
-			file.entities.borrow_mut().clear();
 		}
 	}
 	#[inline]
-	fn destroy_entity_data(&self, entity: &GrugEntity) {
+	unsafe fn destroy_entity_data(&self, entity: &GrugEntity) {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
 		unsafe{file.data.delete(ErasedPtr::from_ptr(entity.members.get()))};
-		file.entities.borrow_mut().extract_if(.., |en| std::ptr::eq(en.as_ptr().cast_const(), entity)).for_each(|_| {});
+		
+		// This pointer is guaranteed to point within file.data because we only ever set it to file.data.
+		// The only case were it may point to something else is if the entity
+		// is uninitialized. That is handled by the precondition (entity must be initialized)
+		let data_ptr = ErasedPtr::from_ptr(entity.members.get());
+
+		// Sanity check. Should never fire and we don't want this overhead in release mode
+		debug_assert!(file.data.contains(data_ptr));
+		// SAFETY: data_ptr belongs to data_ptr
+		unsafe {file.data.delete(data_ptr)};
 	}
+
 	#[inline]
 	unsafe fn call_on_function_raw<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const Value) -> bool {
 		let files = self.files.borrow();

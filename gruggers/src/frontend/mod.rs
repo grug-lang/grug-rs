@@ -182,7 +182,20 @@ impl GrugState {
 				if !self_resources.contains(*resource) {self_resources.insert(OsString::from(resource));}
 			}
 			let id = self.get_or_insert_script_id(path.as_ref());
-			self.backend.insert_file(self, id, file);
+			self.backend.insert_file(id, file);
+
+			let mut script_entities = self.script_entities.borrow_mut();
+			// Add entity tracking info to self.script_entities
+			if (id.to_inner() as usize) < script_entities.len() {
+				for entity in &script_entities[id.to_inner() as usize] {
+					self.backend.init_entity(self, unsafe{&*entity.as_ptr()});
+				}
+			} else if id.to_inner() as usize == script_entities.len() {
+				script_entities.push(std::vec::Vec::new());
+			} else {
+				unreachable!();
+			}
+
 			Ok(id)
 		})();
 		arena.clear();
@@ -262,7 +275,19 @@ impl GrugState {
 					Ok(ast) => {
 						let id = self.get_or_insert_script_id(path.as_ref());
 						// Send to backend
-						self.backend.insert_file(self, id, ast);
+						self.backend.insert_file(id, ast);
+
+						let mut script_entities = self.script_entities.borrow_mut();
+						// Add entity tracking info to self.script_entities
+						if (id.to_inner() as usize) < script_entities.len() {
+							for entity in &script_entities[id.to_inner() as usize] {
+								self.backend.init_entity(self, unsafe{&*entity.as_ptr()});
+							}
+						} else if id.to_inner() as usize == script_entities.len() {
+							script_entities.push(std::vec::Vec::new());
+						} else {
+							unreachable!();
+						}
 						Ok(id)
 					}
 					Err(err) => {
@@ -356,7 +381,20 @@ impl GrugState {
 					Ok(ast) => {
 						let id = self.get_or_insert_script_id(path.as_ref());
 						// Send to backend
-						self.backend.insert_file(self, id, ast);
+						self.backend.insert_file(id, ast);
+
+						let mut script_entities = self.script_entities.borrow_mut();
+						// Add entity tracking info to self.script_entities
+						// Script already exists, reload all files
+						if (id.to_inner() as usize) < script_entities.len() {
+							for entity in &script_entities[id.to_inner() as usize] {
+								self.backend.init_entity(self, unsafe{&*entity.as_ptr()});
+							}
+						} else if id.to_inner() as usize == script_entities.len() {
+							script_entities.push(std::vec::Vec::new());
+						} else {
+							unreachable!();
+						}
 						Ok(id)
 					}
 					Err(err) => {

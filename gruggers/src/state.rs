@@ -60,7 +60,6 @@ pub use gruggers_core::ast::GrugAst;
 use std::path::{Path, PathBuf};
 use std::marker::PhantomData;
 use std::ptr::NonNull;
-use std::pin::Pin;
 use std::cell::{Cell, RefCell, Ref};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -269,6 +268,7 @@ pub struct GrugState {
 	next_entity_id: AtomicU64,
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
+	pub(crate) script_entities: RefCell<Vec<Vec<NonNull<GrugEntity>>>>,
 	pub(crate) entities: Xar<GrugEntity>,
 	pub(crate) resources: RefCell<HashSet<OsString>>,
 	/// Send an arena and a slice of filepaths to compile (allocated within the arena)
@@ -387,6 +387,7 @@ impl GrugState {
 			next_entity_id: AtomicU64::new(0),
 			runtime_error_handler: handler,
 			resources: RefCell::new(HashSet::new()),
+			script_entities: RefCell::new(Vec::new()),
 			entities: Xar::new(),
 			compiler_senders,
 			compiler_receiver: rcv,
@@ -545,13 +546,15 @@ impl GrugState {
 
 		let entity = self.entities.insert(unsafe{GrugEntity::new_uninit(self.get_next_entity_id(), file_id)});
 		let entity = unsafe{GrugEntityHandle::new(entity)};
-		// SAFETY: Entity is created inside a Xar which does not move elements around. 
-		let success = self.backend.init_entity(self, unsafe{Pin::new_unchecked(&entity)});
+		let success = self.backend.init_entity(self, &entity);
 
 		self.current_script  .set(old_script);
 		self.current_export_fn_id.set(old_fn_id);
 
 		if success {
+			self.script_entities.borrow_mut().get_mut(file_id.to_inner() as usize)
+				.expect("script must already exist")
+				.push(NonNull::from_ref(&*entity));
 			Some(entity)
 		} else {
 			unsafe{self.entities.delete(entity.into_inner());}
@@ -560,17 +563,34 @@ impl GrugState {
 	}
 
 	/// Destroys the entity passed in _if_ the entity was allocated from self
-	pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) {
-		if self.entities.is_contained_within(entity.0) {
-			self.backend.destroy_entity_data(&entity);
-			// `self.entities.contained_within` returns true so this entity must exist within self
+	///
+	/// Returns true if the entity was allocated from this State, false
+	/// otherwise. This is mostly meant as a safety check. User code must
+	/// ensure entites are passed to the correct state
+	pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) -> bool {
+		if self.entities.contains(entity.0) {
+			// SAFETY: We take ownership of the entity so we cannot call this function on the same entity twice.
+			// Also we make sure new entities and reloaded entities are always initialized 
+			unsafe{self.backend.destroy_entity_data(&entity);}
+
+			self.script_entities.borrow_mut().get_mut(entity.file_id.to_inner() as usize)
+				.expect("script must already exist")
+				.extract_if(.., |item| {
+					*item == NonNull::from_ref(&*entity)
+				}).for_each(|_| {});
+
+			// SAFETY: entities.contains returned true
 			unsafe{self.entities.delete(entity.into_inner())};
+			true
+		} else {
+			false
 		}
 	}
 
 	/// Destroy all entities 
 	pub fn clear_entities(&mut self) {
 		self.backend.clear_entities();
+		self.script_entities.borrow_mut().clear();
 		self.entities.clear();
 	}
 

@@ -62,7 +62,7 @@ mod test_bindings {
 	}
 
 	extern "C" fn destroy_entity(state: &GrugState, handle: GrugEntityHandle<'_>) {
-		state.destroy_entity(handle)
+		state.destroy_entity(handle);
 	}
 
 	extern "C" fn call_entity_on_fn(state: &GrugState, entity: &GrugEntity, on_fn_id: ExportFnId, values: *const Value, values_len: usize) {

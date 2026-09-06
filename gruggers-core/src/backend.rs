@@ -6,7 +6,6 @@ use crate::runtime_error::RuntimeError;
 use crate::ntstring::{NTStrPtr, NTStr};
 
 use std::ptr::NonNull;
-use std::pin::Pin;
 
 /// Interface of backends
 pub trait Backend {
@@ -18,30 +17,35 @@ pub trait Backend {
 	/// If the same script id is returned again, then it means the old script
 	/// associated with the id should be destroyed and replaced with this one. 
 	///
-	/// The entity data of all entities created from the old script should be
-	/// regenerated
-	fn insert_file<GrugState: State>(&self, state: &GrugState, id: FileId, file: GrugAst<'_>);
-	/// Initialize the member data of the newly created entity. When this
+	/// The bindings are expected to call [`init_entity`] on all entities that
+	/// belongs to the old script. 
+	///
+	/// The entity member of all entities created from the old script should be
+	/// destroyed. This means that any entity that was created from this file
+	/// is temporarily invalid until the bindings call init_entity on them again.
+	fn insert_file(&self, id: FileId, file: GrugAst<'_>);
+	/// Initialize the member data of the entity. When this
 	/// function is called, the member field of `entity` points to garbage and
 	/// must not be deinitialized. The FileId to be used is obtained from
 	/// the file_id member of `entity`. 
 	///
-	/// `entity` is pinned until it is deinitialized by a call to
-	/// `destroy_entity_data` or `insert_file` with the same path as its
-	/// current FileId. The reference must be stored as a raw pointer
-	/// within self so that it can be used during `destroy_entity_data` to
-	/// check for pointer equality. 
-	/// It is safe to use that pointer as a &GrugEntity in the meantime.
-	///
 	/// Returns false if there was a runtime error during execution
 	#[must_use]
-	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: Pin<&GrugEntity>) -> bool;
+	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity) -> bool;
 	/// Deinitialize all the data associated with all entities. The pointers
 	/// stored during `init_entity` must be used to get access to the entity data.
 	/// The entities can only be accessed as a &GrugEntity even self is available with an exclusive reference
 	fn clear_entities(&mut self);
 	/// Deinitialize the data associated with `entity`. 
-	fn destroy_entity_data(&self, entity: &GrugEntity);
+	///
+	/// # Safety:
+	/// This function must not be called on an uninitialized entity. 
+	/// An entity is considered uninitialized if
+	/// 	- It has just been created and [`init_entity`] hasn't been called on it. 
+	/// 	- The file an entity belongs to has be reloaded and [`init_entity`]
+	/// 	hasn't been called on it.
+	/// 	- This function has been called on the entity
+	unsafe fn destroy_entity_data(&self, entity: &GrugEntity);
 
 	/// Run the on function at index `on_fn_index` of the script associated
 	/// with `entity`.
@@ -74,13 +78,13 @@ pub struct ErasedBackend<GrugState: State + 'static> {
 pub struct BackendVTable<GrugState: State> {
 	#[allow(improper_ctypes_definitions)]
 	/// See [`Backend::insert_file`]
-	pub(crate) insert_file         : extern "C" fn(data: NonNull<()>, state: &GrugState, id: FileId, file: GrugAst<'_>),
+	pub(crate) insert_file         : extern "C" fn(data: NonNull<()>, id: FileId, file: GrugAst<'_>),
 	/// See [`Backend::init_entity`]
-	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: Pin<&GrugEntity>) -> bool,
+	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
 	/// See [`Backend::clear_entities`]
 	pub(crate) clear_entities      : extern "C" fn(data: NonNull<()>),
 	/// See [`Backend::destroy_entity_data`]
-	pub(crate) destroy_entity_data : extern "C" fn(data: NonNull<()>, entity: &GrugEntity),
+	pub(crate) destroy_entity_data : unsafe extern "C" fn(data: NonNull<()>, entity: &GrugEntity),
 	/// See [`Backend::call_on_function_raw`]
 	///
 	/// SAFETY: `values` must point to a buffer of at least as many values as `on_fn_index` expects
@@ -94,12 +98,12 @@ pub struct BackendVTable<GrugState: State> {
 impl<GrugState: State> ErasedBackend<GrugState> {
 	/// See [`Backend::insert_file`]
 	#[inline]
-	pub fn insert_file(&self, state: &GrugState, id: FileId, file: GrugAst<'_>) {
-		(self.vtable.insert_file)(self.data, state, id, file)
+	pub fn insert_file(&self, id: FileId, file: GrugAst<'_>) {
+		(self.vtable.insert_file)(self.data, id, file)
 	}
 	/// See [`Backend::init_entity`]
 	#[inline]
-	pub fn init_entity(&self, state: &GrugState, entity: Pin<&GrugEntity>) -> bool {
+	pub fn init_entity(&self, state: &GrugState, entity: &GrugEntity) -> bool {
 		(self.vtable.init_entity)(self.data, state, entity)
 	}
 	/// See [`Backend::clear_entities`]
@@ -109,8 +113,8 @@ impl<GrugState: State> ErasedBackend<GrugState> {
 	}
 	/// See [`Backend::destroy_entity_data`]
 	#[inline]
-	pub fn destroy_entity_data(&self, entity: &GrugEntity) {
-		(self.vtable.destroy_entity_data)(self.data, entity)
+	pub unsafe fn destroy_entity_data(&self, entity: &GrugEntity) {
+		unsafe{(self.vtable.destroy_entity_data)(self.data, entity)}
 	}
 	/// See [`Backend::call_on_function_raw`]
 	///
@@ -136,16 +140,15 @@ impl<GrugState: State> Drop for ErasedBackend<GrugState> {
 impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 	fn from(other: T) -> Self {
 		#[allow(improper_ctypes_definitions)]
-		extern "C" fn insert_file<T: Backend, GrugState: State>(data: NonNull<()>, state: &GrugState, id: FileId, file: GrugAst<'_>) {
+		extern "C" fn insert_file<T: Backend>(data: NonNull<()>, id: FileId, file: GrugAst<'_>) {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
-				state, 
 				id,
 				file
 			)
 		}
 
-		extern "C" fn init_entity<T: Backend, GrugState: State>(data: NonNull<()>, state: &GrugState, entity: Pin<&GrugEntity>) -> bool {
+		extern "C" fn init_entity<T: Backend, GrugState: State>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool {
 			T::init_entity::<GrugState>(
 				unsafe{data.cast::<T>().as_ref()},
 				state, 
@@ -159,11 +162,11 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 			)
 		}
 
-		extern "C" fn destroy_entity_data<T: Backend>(data: NonNull<()>, entity: &GrugEntity) {
-			T::destroy_entity_data(
-				unsafe{data.cast::<T>().as_ref()},
+		unsafe extern "C" fn destroy_entity_data<T: Backend>(data: NonNull<()>, entity: &GrugEntity) {
+			unsafe{T::destroy_entity_data(
+				data.cast::<T>().as_ref(),
 				entity
-			)
+			)}
 		}
 		/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
 		unsafe extern "C" fn call_on_function_raw<T: Backend, GrugState: State>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const Value) -> bool {
@@ -192,7 +195,7 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 		Self {
 			data: unsafe{NonNull::new_unchecked(Box::into_raw(Box::new(other))).cast::<()>()},
 			vtable: &BackendVTable {
-				insert_file         : insert_file::<T, GrugState>,
+				insert_file         : insert_file::<T>,
 				init_entity         : init_entity::<T, GrugState>,
 				clear_entities      : clear_entities::<T>,
 				destroy_entity_data : destroy_entity_data::<T>,
@@ -258,16 +261,15 @@ pub struct CBackend<B: Backend> {
 impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 	fn from(other: CBackend<B>) -> Self {
 		#[allow(improper_ctypes_definitions)]
-		extern "C" fn insert_file<B: Backend>(data: NonNull<()>, state: &CState, id: FileId, file: GrugAst<'_>) {
+		extern "C" fn insert_file<B: Backend>(data: NonNull<()>, id: FileId, file: GrugAst<'_>) {
 			B::insert_file(
 				unsafe{&data.cast::<CBackend<B>>().as_ref().backend},
-				state, 
 				id,
 				file
 			)
 		}
 
-		extern "C" fn init_entity<B: Backend>(data: NonNull<()>, state: &CState, entity: Pin<&GrugEntity>) -> bool {
+		extern "C" fn init_entity<B: Backend>(data: NonNull<()>, state: &CState, entity: &GrugEntity) -> bool {
 			B::init_entity::<CStateWithHandler>(
 				unsafe{&data.cast::<CBackend<B>>().as_ref().backend},
 				&CStateWithHandler{
@@ -285,11 +287,11 @@ impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 			)
 		}
 
-		extern "C" fn destroy_entity_data<B: Backend>(data: NonNull<()>, entity: &GrugEntity) {
-			B::destroy_entity_data(
-				unsafe{&data.cast::<CBackend<B>>().as_ref().backend},
+		unsafe extern "C" fn destroy_entity_data<B: Backend>(data: NonNull<()>, entity: &GrugEntity) {
+			unsafe{B::destroy_entity_data(
+				&data.cast::<CBackend<B>>().as_ref().backend,
 				entity
-			)
+			)}
 		}
 		/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
 		unsafe extern "C" fn call_on_function_raw<B: Backend>(data: NonNull<()>, state: &CState, entity: &GrugEntity, on_fn_index: usize, values: *const Value) -> bool {

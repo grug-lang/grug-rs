@@ -114,7 +114,7 @@ pub extern "C" fn grug_create_entity(state: &CState, file_id: FileId) -> Option<
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_deinit_entity(state: &CState, handle: GrugEntityHandle<'_>) {
+pub extern "C" fn grug_deinit_entity(state: &CState, handle: GrugEntityHandle<'_>) -> bool {
 	state.0.destroy_entity(handle)
 }
 

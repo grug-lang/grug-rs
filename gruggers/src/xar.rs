@@ -116,7 +116,7 @@ mod typed_xar {
 		}
 
 		/// Checks if the handle is actually from within self
-		pub fn is_contained_within(&self, handle: XarHandle<T>) -> bool {
+		pub fn contains(&self, handle: XarHandle<T>) -> bool {
 			if size_of::<T>() == 0 {
 				return true;
 			}
@@ -360,6 +360,10 @@ mod erased_xar {
 			Self(ptr, PhantomData)
 		}
 
+		pub fn as_ptr(self) -> NonNull<()> {
+			self.0
+		}
+
 		#[allow(unused)]
 		pub unsafe fn as_ref<T>(self) -> &'a T {
 			unsafe{&*self.0.cast::<T>().as_ptr()}
@@ -499,6 +503,8 @@ mod erased_xar {
 				.expect("invalid layout")
 		}
 
+		/// Runs a destructor on the pointer and adds its memory to the free list
+		///
 		/// # SAFETY
 		/// handle must be from the current Xar
 		pub unsafe fn delete_with<F: FnOnce(ErasedPtr)>(&self, handle: ErasedPtr, f: F) {
@@ -512,10 +518,29 @@ mod erased_xar {
 			unsafe{free_list.set(Some(handle.detach_lifetime()))};
 		}
 
+		/// Adds the pointer to the free list
+		///
 		/// # SAFETY
 		/// handle must be from the current Xar
 		pub unsafe fn delete(&self, handle: ErasedPtr) {
 			unsafe{self.delete_with(handle, |_| {})}
+		}
+
+		/// Checks if the handle is actually from within self
+		pub fn contains(&self, handle: ErasedPtr) -> bool {
+			if self.item_size() == 0 {
+				return true;
+			}
+			let inner = unsafe{&*self.inner.as_ptr()};
+			let mut current_bucket_size = self.first_chunk_size();
+			for bucket in &inner.chunks {
+				let Some(bucket) = bucket.get() else {return false};
+				if (handle.0.as_ptr().addr()).wrapping_sub(bucket.as_ptr().as_ptr().addr()) < current_bucket_size {
+					return true;
+				}
+				current_bucket_size *= 2;
+			}
+			false
 		}
 
 		fn calc_location(&self, idx: usize) -> (usize, usize) {
