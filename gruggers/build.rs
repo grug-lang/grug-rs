@@ -16,6 +16,9 @@ fn build_tests() {
 
 	println!("cargo::rustc-link-search={}", out_dir.display());
 
+	println!("cargo::rerun-if-changed={}", test_source_path);
+	println!("cargo::rerun-if-changed={}", bench_source_path);
+
 	#[cfg(target_os = "linux")]
 	{
 		if let Ok(true) = std::fs::exists(&test_source_path) {

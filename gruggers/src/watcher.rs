@@ -2,7 +2,7 @@ pub use inner::*;
 use std::ffi::{OsStr, OsString};
 
 #[allow(unused)]
-pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error>{
+pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, poll_interval: std::time::Duration, mut f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error>{
 	use std::collections::HashMap;
 	let mods_dir = OsString::from(mods_dir.as_ref());
 	let mods_dir_len = if mods_dir.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {mods_dir.len() + 1} else {mods_dir.len()};
@@ -34,7 +34,8 @@ pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<
 						let entry_path = entry.path();
 						let metadata = entry.metadata()?;
 						let m_time = metadata.modified()?;
-						if metadata.file_type().is_dir() {dirs_to_check.push(entry_path.clone().into_os_string());}
+						let is_dir = metadata.file_type().is_dir();
+						if is_dir {dirs_to_check.push(entry_path.clone().into_os_string());}
 						
 						match files.get_mut(&entry_path) {
 							Some(old_m_time) if is_newer_than(m_time, *old_m_time) => {
@@ -44,6 +45,22 @@ pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<
 								*old_m_time = m_time;
 							}
 							None => {
+								// A brand new file that appears while we're
+								// already watching is reported directly,
+								// since this is the only way the host can
+								// discover it exists at all: unlike a
+								// modification, there's no prior baseline
+								// to compare against. Directories are
+								// exempt, since their new leaf descendants
+								// are already individually reported by this
+								// same recursive walk; reporting the
+								// directory too would just be redundant
+								// noise on top of that.
+								if !is_dir {
+									let rel_path = &entry_path.as_os_str().as_encoded_bytes()[mods_dir_len..];
+									let rel_path = unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)};
+									if !f(Ok(OsString::from(rel_path))) {return Ok(())};
+								}
 								files.insert(entry_path, m_time);
 							}
 							_ => (),
@@ -57,7 +74,7 @@ pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, mut f: impl FnMut(Result<
 				Err(err) => if !f(Err(err)) {return;},
 			}
 			
-			std::thread::sleep(std::time::Duration::from_millis(10));
+			std::thread::sleep(poll_interval);
 		}
 	});
 	Ok(())
@@ -246,7 +263,11 @@ mod inner {
 		}
 	}
 
-	pub fn watch_changes(path: impl AsRef<OsStr>, mut f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error>{
+	pub fn watch_changes(path: impl AsRef<OsStr>, poll_interval: std::time::Duration, mut f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error>{
+		// Windows uses ReadDirectoryChangesW, a native OS-level change
+		// notification API, instead of polling, so there's no interval to
+		// configure here.
+		let _ = poll_interval;
 		let mut path = Vec::from(path.as_ref().as_encoded_bytes());
 		path.push(b'\0');
 		let handle = unsafe{open_dir(&path)?};
@@ -269,7 +290,7 @@ mod inner {
 #[cfg(target_os="linux")]
 mod inner {
 	use std::ffi::{OsStr, OsString};
-	pub fn watch_changes(mods_dir: impl AsRef<OsStr>, f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error> {
-		super::poll_watch_changes(mods_dir, f)
+	pub fn watch_changes(mods_dir: impl AsRef<OsStr>, poll_interval: std::time::Duration, f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error> {
+		super::poll_watch_changes(mods_dir, poll_interval, f)
 	}
 }

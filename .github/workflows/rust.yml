@@ -18,13 +18,21 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-    - uses: actions/checkout@v4
-    - run: git submodule update --init --force
-    - run: cmake -S gruggers/src/grug-tests/ -B ./gruggers/src/grug-tests/build/ -G Ninja -DCMAKE_BUILD_TYPE=Release
-    - run: cmake --build ./gruggers/src/grug-tests/build
-    - run: cmake -S gruggers/src/grug-bench/ -B ./gruggers/src/grug-bench/build/ -DCMAKE_BUILD_TYPE=Release
-    - run: cmake --build ./gruggers/src/grug-bench/build
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@v4
+      - run: git submodule update --init --force
+      - run: cmake -S gruggers/src/grug-tests/ -B ./gruggers/src/grug-tests/build/ -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build ./gruggers/src/grug-tests/build
+      - run: cmake -S gruggers/src/grug-bench/ -B ./gruggers/src/grug-bench/build/ -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build ./gruggers/src/grug-bench/build
+      
+      - name: Build
+        run: cargo build --verbose
+        
+      - name: Run standard tests
+        run: cargo test --verbose --lib --bins --doc
+        
+      - name: Run grug_bench
+        run: cargo test --verbose --test grug_bench
+        
+      - name: Run grug_tests integration suite
+        run: cargo test --verbose --test grug_tests -- --continue-on-fail

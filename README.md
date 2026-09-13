@@ -23,7 +23,7 @@ Trying to run the tests without building the test and bench will result in a lin
 The tests are located in `./gruggers/src/grug_tests`, and the benchmarks are
 located in `./gruggers/src/grug_bench`.
 
-Run `cargo test -- grug_tests` to run the test suite
+Run `cargo test --test grug_tests` to run the test suite
 Run `cargo test -- grug_bench` to run the benchmarks
 
 adding `--release` between `test` and `--` will compile gruggers in release mode.
