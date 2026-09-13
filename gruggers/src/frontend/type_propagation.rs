@@ -1144,7 +1144,18 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 		self.global_variables.get(var_name).cloned()
 	}
 
+	fn validate_variable_name(&self, name: &str, span: SourceSpan) -> Result<(), Error> {
+		if let Some(c) = name.chars().find(|c| !c.is_ascii_lowercase() && !c.is_ascii_digit() && *c != '_') {
+			return Err(self.new_error(
+				span,
+				format_args!("The variable '{}' contains the invalid character '{}', since variable names must be lowercase", name, c),
+			));
+		}
+		Ok(())
+	}
+
 	fn add_local_variable(&mut self, name: &'arena str, ty: Type<'arena>, name_span: SourceSpan) -> Result<(), Error> {
+		self.validate_variable_name(name, name_span)?;
 		if self.get_global_variable_type(name).is_some() {
 			return Err(self.new_error(
 				name_span,
@@ -1163,6 +1174,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 	}
 
 	fn add_global_variable(&mut self, name: &'arena str, ty: Type<'arena>, name_span: SourceSpan) -> Result<(), Error> {
+		self.validate_variable_name(name, name_span)?;
 		match self.global_variables.entry(name) {
 			Entry::Occupied(_) => return Err(self.new_error(
 				name_span,
