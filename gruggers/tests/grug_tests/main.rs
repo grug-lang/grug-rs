@@ -4,9 +4,8 @@ use gruggers::ntstring::NTStr;
 use gruggers::nt;
 
 mod test_bindings {
-	use gruggers::state::{GrugInitSettings, GrugState, State, GrugEntityHandle};
+	use gruggers::state::{GrugInitSettings, GrugState, GrugEntityHandle};
 	use gruggers::backend::{BytecodeBackend, StubBackend};
-	use gruggers_core::runtime_error::RuntimeError;
 	use gruggers::types::{Value, FileId};
 	use gruggers::ntstring::{NTStrPtr, NTBytes, NTStr};
 	use gruggers::serde;
@@ -38,20 +37,15 @@ mod test_bindings {
 		let mut state = GrugInitSettings::new()
 			.set_mod_api_path(unsafe{OsStr::from_encoded_bytes_unchecked(mod_api_path.to_bytes())})
 			.set_mods_dir(unsafe{OsStr::from_encoded_bytes_unchecked(mods_dir_path.to_bytes())})
-			.set_runtime_error_handler(|kind, msg, fn_name, script_path| {
-				let mut msg = String::from(msg);
-				msg.push('\0');
-				let mut fn_name = String::from(fn_name);
-				fn_name.push('\0');
-				let mut script_path = String::from(script_path);
-				script_path.push('\0');
+			.set_runtime_error_handler(|error| {
 				unsafe{
 					grug_tests_runtime_error_handler (
-					NTStrPtr::from_str_unchecked(&msg),
-					kind as i32,
-					NTStrPtr::from_str_unchecked(&fn_name),
-					NTStrPtr::from_str_unchecked(&script_path),
-				)};
+						error.error_message,
+						error.kind as u32 as i32,
+						error.export_fn_name,
+						error.script_path,
+					)
+				};
 			})
 			.set_backend(BytecodeBackend::new())
 			.build_state().map_err(|err| {println!("{}", err); err}).ok()?;
@@ -175,7 +169,7 @@ mod test_bindings {
 	}
 
 	pub extern "C" fn game_fn_error ((state, _): &CState, msg: NTStrPtr<'static>) {
-		state.set_runtime_error(RuntimeError::GameFunctionError{message: msg.to_str()});
+		state.set_host_fn_error(msg.to_str());
 	}
 
 	#[allow(non_camel_case_types)]
@@ -242,7 +236,7 @@ mod test_bindings {
 			reason: NTStrPtr<'a>,
 			ty: i32,
 			on_fn_name: NTStrPtr<'a>,
-			on_fn_path: NTStrPtr<'a>,
+			on_fn_path: NTBytes<'a>,
 		);
 		#[allow(improper_ctypes)]
 		pub fn grug_tests_run(

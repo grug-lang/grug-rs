@@ -67,20 +67,14 @@ use std::ffi::{OsString, OsStr};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::Arc;
 
-// /// Called by the 
+/// Called by the 
 #[repr(C)]
 pub struct RuntimeErrorHandler {
 	data: NonNull<()>,
 	drop: Option<extern "C" fn(data: Option<NonNull<()>>)>,
-	func: Option<for<'b> extern "C" fn(
+	func: Option<for <'a> extern "C" fn(
 		data: NonNull<()>, 
-		err_kind: u32, 
-		reason: NonNull<u8>,
-		reason_len: usize, 
-		on_fn_name: NonNull<u8>, 
-		on_fn_name_len: usize,
-		script_path: NonNull<u8>,
-		script_path_len: usize,
+		error: &'a RuntimeError<'a>,
 	)>,
 }
 
@@ -89,7 +83,6 @@ const _: () = const {
 };
 
 impl RuntimeErrorHandler {
-	/// 
 	pub const fn new_default () -> Self {
 		Self {
 			data: NonNull::dangling(),
@@ -98,17 +91,11 @@ impl RuntimeErrorHandler {
 		}
 	}
 
-	fn handle_error(&self, kind: RuntimeError, message: &str, on_fn_name: &str, script_path: &OsStr) {
+	fn handle_error(&self, error: &RuntimeError) {
 		if let Some(func) = self.func {
 			func(
 				self.data,
-				kind.code(),
-				NonNull::from_ref(message).cast::<u8>(),
-				message.len(),
-				NonNull::from_ref(on_fn_name).cast::<u8>(),
-				on_fn_name.len(),
-				NonNull::from_ref(script_path).cast::<u8>(),
-				script_path.len(),
+				error
 			)
 		} 
 	}
@@ -120,24 +107,15 @@ impl Default for RuntimeErrorHandler {
 	}
 }
 
-impl<F: for<'b> Fn(u32, &'b str, &'b str, &'b str)> From<F> for RuntimeErrorHandler {
+impl<F: for<'b> Fn(&RuntimeError)> From<F> for RuntimeErrorHandler {
 	fn from(f: F) -> Self {
 		let f = unsafe{NonNull::new_unchecked(Box::into_raw(Box::new(f)))}.cast::<()>();
-		extern "C" fn handler<F: for<'a> Fn(u32, &'a str, &'a str, &'a str)> (
+		extern "C" fn handler<F: Fn(&RuntimeError)> (
 			data: NonNull<()>, 
-			err_kind: u32, 
-			reason: NonNull<u8>,
-			reason_len: usize, 
-			on_fn_name: NonNull<u8>, 
-			on_fn_name_len: usize,
-			script_path: NonNull<u8>,
-			script_path_len: usize,
+			error: &RuntimeError,
 		) {
 			unsafe{(data.cast::<F>().as_ref())(
-				err_kind,
-				std::str::from_utf8_unchecked(std::slice::from_raw_parts(reason.as_ptr(), reason_len)),
-				std::str::from_utf8_unchecked(std::slice::from_raw_parts(on_fn_name.as_ptr(), on_fn_name_len)),
-				std::str::from_utf8_unchecked(std::slice::from_raw_parts(script_path.as_ptr(), script_path_len)),
+				error
 			)};
 		}
 		extern "C" fn drop<F>(data: Option<NonNull<()>>) {
@@ -146,7 +124,7 @@ impl<F: for<'b> Fn(u32, &'b str, &'b str, &'b str)> From<F> for RuntimeErrorHand
 		Self {
 			data: f,
 			drop: Some(drop::<F> as extern "C" fn(_)),
-			func: Some(handler::<F> as extern "C" fn (_, _, _, _, _, _, _, _)),
+			func: Some(handler::<F> as for <'a> extern "C" fn(NonNull<()>, &'a RuntimeError<'a>)),
 		}
 	}
 }
@@ -209,7 +187,7 @@ impl<'a> GrugInitSettings<'a> {
 		self
 	}
 
-	pub fn set_runtime_error_handler<F: for<'b> Fn(u32, &'b str, &'b str, &'b str)> (mut self, f: F) -> Self {
+	pub fn set_runtime_error_handler<F: for<'b> Fn(&RuntimeError)> (mut self, f: F) -> Self {
 		self.runtime_error_handler = Some(f.into());
 		self
 	}
@@ -297,27 +275,11 @@ pub struct GrugState {
 }
 
 impl State for GrugState {
-	fn set_runtime_error(&self, error: RuntimeError) {
+	fn handle_runtime_error(&self, error: &RuntimeError) {
 		self.is_errorring.set(true);
-		let Some(current_script) = self.current_script.get() else {
-			return
-		};
-		let Some(current_export_fn_id) = self.current_export_fn_id.get() else {
-			return
-		};
-		let current_on_fn_name = self.get_export_fn_name(current_export_fn_id).unwrap();
-		let message = format!("{}", error);
-
 		self.runtime_error_handler.handle_error(
 			error, 
-			&message,
-			current_on_fn_name,
-			self.get_script_path_rel(current_script).unwrap(),
 		);
-	}
-
-	fn is_errorring(&self) -> bool {
-		self.is_errorring.get()
 	}
 }
 
@@ -602,6 +564,10 @@ impl GrugState {
 	/// get the index of the export function within its entity
 	fn get_export_fn_index(&self, id: ExportFnId) -> usize {
 		self.export_functions[id.0 as usize].index
+	}
+
+	pub fn set_host_fn_error(&self, message: &str) {
+		self.backend.raise_runtime_error(self, message);
 	}
 }
 

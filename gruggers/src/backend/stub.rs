@@ -23,4 +23,7 @@ impl Backend for StubBackend {
 	fn call_on_function<GrugState: State>(&self, _state: &GrugState, _entity: &GrugEntity, _on_fn_index: usize, _values: &[Value]) -> bool {
 		panic!("Tried to call export function with stub backend");
 	}	
+	fn raise_runtime_error<GrugState: State>(&self, _state: &GrugState, _message: &str) {
+		panic!();
+	}
 }

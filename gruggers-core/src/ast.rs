@@ -9,7 +9,7 @@
 //! allocated in. The gruggers crate allocates these in an arena and
 //! deallocates them automatically after the call to [`Backend::insert_file`](crate::backend::Backend::insert_file).
 //! This may be changed in a later release
-use crate::ntstring::{NTStrPtr, NTStr};
+use crate::ntstring::{NTStrPtr, NTStr, NTBytes};
 use crate::types::HostFn;
 use crate::error::SourceSpan;
 
@@ -800,6 +800,8 @@ pub struct GrugAst<'a> {
 	pub helper_functions: &'a mut [HelperFunction<'a>],
 	/// A string that contains the entire file text. Used for Debug info.
 	pub file_text: NTStrPtr<'a>,
+	/// Path to the file relative to the mods directory
+	pub file_path: NTBytes<'a>,
 }
 
 const _: () = const{

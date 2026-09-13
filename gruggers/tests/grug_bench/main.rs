@@ -1,7 +1,7 @@
 // #![deny(warnings)]
 #![allow(improper_ctypes)]
 mod test_bindings {
-	use gruggers::ntstring::{NTStrPtr, NTStr};
+	use gruggers::ntstring::{NTStrPtr, NTStr, NTBytes};
 	use gruggers::state::{GrugState, GrugInitSettings, GrugEntityHandle};
 	use gruggers::backend::BytecodeBackend as Backend;
 	use gruggers::types::{GrugEntity, FileId, ExportFnId, Value};
@@ -25,18 +25,15 @@ mod test_bindings {
 			.set_mods_dir(mods_dir_path.to_str())
 			.set_mod_api_path(mod_api_path.to_str())
 			.set_backend(Backend::new())
-			.set_runtime_error_handler(|code, reason, fn_name, script_path| {
-				let reason      = NTStr::arc_from_str(reason);
-				let fn_name     = NTStr::arc_from_str(fn_name);
-				let script_path = NTStr::arc_from_str(script_path);
-				unsafe {
+			.set_runtime_error_handler(|error| {
+				unsafe{
 					runtime_error_handler(
-						reason.as_ntstrptr(),
-						code,
-						fn_name.as_ntstrptr(),
-						script_path.as_ntstrptr(),
-					);
-				}
+						error.error_message,
+						error.kind as u32,
+						error.export_fn_name,
+						error.script_path,
+					)
+				};
 			})
 			.build_state()
 			.map_err(|err| {println!("{}", err); err})
@@ -92,7 +89,7 @@ mod test_bindings {
 			reason: NTStrPtr<'a>,
 			error_kind: u32,
 			on_fn_name: NTStrPtr<'a>,
-			script_path: NTStrPtr<'a>,
+			script_path: NTBytes<'a>,
 		);
 
 		pub fn grug_bench_run<'a>(

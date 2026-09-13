@@ -4,34 +4,9 @@ use std::ffi::OsStr;
 use std::io::Write;
 use crate::error::SourceSpan;
 use crate::ntstring::{NTStrPtr, NTBytes, NTStr};
-use crate::utils::{copy_str, copy_bytes_nt, copy_str_nt};
+use crate::utils::{copy_str, copy_bytes_nt, copy_str_nt, copy_str_as_ntstr, copy_bytes_as_nt};
 use allocator_api2::alloc::Allocator;
 use allocator_api2::vec::Vec;
-/// Enum that represents all possible runtime errors
-#[derive(Debug, Clone, Copy)]
-#[repr(u32)]
-pub enum RuntimeError<'a> {
-	/// Execution of a grug_script takes longer than allowed.
-	ExceededTimeLimit = 0,
-	/// Indicates potentially unbounded recursion
-	StackOverflow,
-	/// A game function called the `set_runtime_error` function on the state
-	/// with the given `message`
-	GameFunctionError{
-		message: &'a str,
-	},
-}
-
-impl<'a> RuntimeError<'a> {
-	/// Return the code defined by grug.h for a runtime error kind
-	pub fn code(self) -> u32 {
-		match self {
-			Self::StackOverflow         => 0,
-			Self::ExceededTimeLimit     => 1,
-			Self::GameFunctionError{..} => 2,
-		}
-	}
-}
 
 /// This is the maximum time allowed to execute an on function.
 /// Backends are allowed to take longer than this time to throw an error.
@@ -42,32 +17,27 @@ pub const ON_FN_TIME_LIMIT: u64 = 100; // ms
 /// Backends are allowed to go further than this limit because of optimizations.
 pub const MAX_RECURSION_LIMIT: usize = 100;
 
-impl<'a> std::fmt::Display for RuntimeError<'a> {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		match self {
-			Self::ExceededTimeLimit => write!(f, "Took longer than {} milliseconds to run", ON_FN_TIME_LIMIT),
-			Self::StackOverflow => write!(f, "Stack overflow, so check for accidental infinite recursion"),
-			Self::GameFunctionError{message} => write!(f, "{}", message),
-		}
-	}
-}
-
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeErrorKind {
-	TimeLimitExceeded,
 	StackOverflow,
+	TimeLimitExceeded,
 	HostFnError,
 }
 
 #[repr(C)]
-pub struct RuntimeError2<'a> {
+pub struct RuntimeError<'a> {
 	/// The kind of runtime error 
 	pub kind: RuntimeErrorKind,
 	/// The state of the callstack when the error occurred
 	/// This is a best effort guess at the state which may or may not be
 	/// deformed due to optimizations
-	pub call_stack: &'a [StackFrame<'a>],
+	pub call_stack: &'a [&'a StackFrame<'a>],
+	/// The last export function that was called before the error occurred
+	pub export_fn_name: NTStrPtr<'a>,
+	/// The script path of the last export function that was called.
+	/// Must be valid to convert to an OsStr.
+	pub script_path: NTBytes<'a>,
 	/// The location the error occurred at
 	pub err_span: SourceSpan,
 	/// The source line where the error occurred
@@ -80,10 +50,19 @@ pub struct RuntimeError2<'a> {
 }
 
 
-impl<'a> RuntimeError2<'a> {
+impl<'a> RuntimeError<'a> {
 	/// The call_stack must have already been allocated within `a`
 	#[track_caller]
-	pub fn new_error_in<A: Allocator>(kind: RuntimeErrorKind, call_stack: &'a [StackFrame<'a>], err_span: SourceSpan, source_text: &str, error_message: std::fmt::Arguments, a: &'a A) -> Self {
+	pub fn new_error_in<A: Allocator>(
+		kind: RuntimeErrorKind, 
+		call_stack: &'a [&'a StackFrame<'a>], 
+		export_fn_name: &str,
+		script_path: &OsStr,
+		err_span: SourceSpan, 
+		source_text: &str, 
+		error_message: &str, 
+		a: &'a A
+	) -> Self {
 		let source_line = copy_str(err_span.get_source_line(source_text), a);
 
 		let error_message = {
@@ -127,10 +106,15 @@ impl<'a> RuntimeError2<'a> {
 				.expect("null byte found in error message")
 				.as_ntstrptr()
 		};
+
+		let export_fn_name = copy_str_as_ntstr(export_fn_name, a).as_ntstrptr();
+		let script_path = copy_bytes_as_nt(script_path.as_encoded_bytes(), a);
 		
 		Self {
 			kind,
 			call_stack,
+			export_fn_name,
+			script_path,
 			err_span,
 			source_line,
 			error_message,
@@ -138,19 +122,36 @@ impl<'a> RuntimeError2<'a> {
 		}
 	}
 
-	pub fn copy_into<'b, A: Allocator>(&self, alloc: &'b A) -> RuntimeError2<'b> {
-		let mut new_call_stack = Vec::with_capacity_in(self.call_stack.len(), alloc);
+	pub fn copy_into<'b, A: Allocator>(&self, alloc: &'b A) -> RuntimeError<'b> {
+		// call stack is a slice of references. So we first have to copy the
+		// values into an array, then create a new array of references to the
+		// first array
+		let mut new_call_stack_storage = Vec::with_capacity_in(self.call_stack.len(), alloc);
 		for stack_frame in self.call_stack {
-			new_call_stack.push(stack_frame.copy_into(alloc));
+			new_call_stack_storage.push(stack_frame.copy_into(alloc));
 		}
-		RuntimeError2 {
+		let new_call_stack_storage = &*new_call_stack_storage.leak();
+
+		let mut new_call_stack = Vec::with_capacity_in(self.call_stack.len(), alloc);
+		for stack_frame in new_call_stack_storage {
+			new_call_stack.push(stack_frame);
+		}
+
+		RuntimeError {
 			kind: self.kind,
 			call_stack: new_call_stack.leak(),
+			export_fn_name: copy_str_nt(self.export_fn_name.to_ntstr(), alloc).as_ntstrptr(),
+			script_path: copy_bytes_nt(self.script_path, alloc),
 			source_line: copy_str(self.source_line, alloc),
 			err_span: self.err_span,
 			error_message: copy_str_nt(self.error_message.to_ntstr(), alloc).as_ntstrptr(),
 			error_string: copy_str_nt(self.error_string.to_ntstr(), alloc).as_ntstrptr(),
 		}
+	}
+
+	pub fn script_path_as_osstr(&self) -> &'a OsStr {
+		// SAFETY: self.script_path is valid to convert to an OsStr
+		unsafe{OsStr::from_encoded_bytes_unchecked(self.script_path.to_bytes())}
 	}
 }
 

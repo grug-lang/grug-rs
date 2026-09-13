@@ -2,7 +2,7 @@ use crate::state::{GrugState, Files, FileInfo};
 use crate::arena::Arena;
 use crate::types::FileId;
 use crate::ast::*;
-use crate::ntstring::{NTStrPtr, NTStr};
+use crate::ntstring::{NTStrPtr, NTStr, NTBytes};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::mod_api::ModApi;
 use crate::own_ptr::OwnPtr;
@@ -510,11 +510,15 @@ impl GrugState {
 			}
 		});
 
+		// SAFETY: copy_bytes_into_nt ensures the slice has a single null byte
+		// at the end of the string
+		let file_path = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(path.as_encoded_bytes()))};
 		let file = GrugAst{
 			members: member_variables.leak(),
 			on_functions: on_functions.leak(),
 			helper_functions: helper_functions.leak(),
 			file_text: file_text.as_ntstrptr(),
+			file_path
 		};
 		Ok((file, resources))
 	}

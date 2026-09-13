@@ -3,11 +3,14 @@ use crate::types::{FileId, GrugEntity, Value};
 use crate::ast::GrugAst;
 use crate::state::State;
 use crate::runtime_error::RuntimeError;
-use crate::ntstring::{NTStrPtr, NTStr};
+use crate::ntstring::NTStrPtr;
 
 use std::ptr::NonNull;
 
 /// Interface of backends
+///
+/// An implementor of the backend is expected to store the state's runtime error
+/// handler function in its constructor. That function should be called when a runtime error is required
 pub trait Backend {
 	/// The AST of a typechecked grug file is provided to let the backend do
 	/// further transforms and lower to bytecode or even machine code
@@ -29,7 +32,8 @@ pub trait Backend {
 	/// must not be deinitialized. The FileId to be used is obtained from
 	/// the file_id member of `entity`. 
 	///
-	/// Returns false if there was a runtime error during execution
+	/// Returns `Some` if there was a runtime error during execution
+	///
 	#[must_use]
 	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity) -> bool;
 	/// Deinitialize all the data associated with all entities. The pointers
@@ -46,9 +50,10 @@ pub trait Backend {
 	/// 	hasn't been called on it.
 	/// 	- This function has been called on the entity
 	unsafe fn destroy_entity_data(&self, entity: &GrugEntity);
-
 	/// Run the on function at index `on_fn_index` of the script associated
 	/// with `entity`.
+	///
+	/// See [`get_last_error`] for details about the returned value
 	///
 	/// # SAFETY
 	/// `values` must point to an array of GrugValues of at least as
@@ -60,10 +65,21 @@ pub trait Backend {
 	/// Run the on function at index `on_fn_index` of the script associated
 	/// with `entity`.
 	///
+	/// See [`get_last_error`] for details about the returned value;
+	///
 	/// # Panics: The length of `values` must exactly match the number of
 	/// expected arguments to the on_ function
 	#[must_use]
 	fn call_on_function<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[Value]) -> bool;
+	/// Calls the state's runtime error handler with the error information from
+	/// the current grug script execution. 
+	///
+	/// Once this function is called, all currently execution grug scripts must
+	/// unwind as soon as control is returned to them.  This unwinding state
+	/// should persist until the next call to  [`init_entity`],
+	/// [`call_on_function_raw`], or [`call_on_function`]. The backend is
+	/// responsible for maintaining this unwinding state.
+	fn raise_runtime_error<GrugState: State>(&self, state: &GrugState, message: &str);
 }
 
 /// C-api compatible version of `&dyn [Backend]`
@@ -91,6 +107,7 @@ pub struct BackendVTable<GrugState: State> {
 	pub(crate) call_on_function_raw: for<'a> unsafe extern "C" fn(data: NonNull<()>, state: &'a GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const Value) -> bool,
 	/// See [`Backend::call_on_function`]
 	pub(crate) call_on_function    : for<'a> fn(data: NonNull<()>, state: &'a GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[Value]) -> bool,
+	pub(crate) raise_runtime_error : for<'a> extern "C" fn(data: NonNull<()>, state: &'a GrugState, message: NonNull<u8>, message_len: usize),
 	/// destroys the resources owned by the backend
 	pub(crate) drop                : extern "C" fn(data: NonNull<()>),
 }
@@ -128,6 +145,11 @@ impl<GrugState: State> ErasedBackend<GrugState> {
 	#[inline]
 	pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[Value]) -> bool {
 		(self.vtable.call_on_function)(self.data, state, entity, on_fn_index, values)
+	}
+	/// See [`Backend::raise_runtime_error`]
+	#[inline]
+	pub fn raise_runtime_error(&self, state: &GrugState, message: &str) {
+		(self.vtable.raise_runtime_error)(self.data, state, NonNull::from_ref(message).cast(), message.len())
 	}
 }
 
@@ -187,8 +209,20 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 				values
 			)
 		}
+		extern "C" fn raise_runtime_error<T: Backend, GrugState: State>(data: NonNull<()>, state: &GrugState, message: NonNull<u8>, message_len: usize) {
+			let message = if message_len == 0 {
+				unsafe{std::str::from_utf8_unchecked(std::slice::from_raw_parts(message.as_ptr().cast_const(), message_len))}
+			} else {
+				unsafe{NTStrPtr::from_ptr(message.cast()).to_str()}
+			};
+			T::raise_runtime_error::<GrugState>(
+				unsafe{data.cast::<T>().as_ref()},
+				state, 
+				message,
+			)
+		}
 		// destroys the resources owned by the backend
-		extern "C" fn drop<T: Backend>(data: NonNull<()>) {
+		extern "C" fn drop<T>(data: NonNull<()>) {
 			_ = unsafe{Box::from_raw(data.cast::<T>().as_ptr())};
 		}
 
@@ -201,6 +235,7 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 				destroy_entity_data : destroy_entity_data::<T>,
 				call_on_function_raw: call_on_function_raw::<T, GrugState>,
 				call_on_function    : call_on_function::<T, GrugState>,
+				raise_runtime_error : raise_runtime_error::<T, GrugState>,
 				drop                : drop::<T>,
 			}
 		}
@@ -212,39 +247,19 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 #[repr(transparent)]
 pub struct CState(());
 impl State for CState {
-	fn set_runtime_error(&self, _error: RuntimeError) {
-		panic!("This is an error within gruggers_core");
-	}
-	fn is_errorring(&self) -> bool {
+	fn handle_runtime_error(&self, _error: &RuntimeError) {
 		panic!("This is an error within gruggers_core");
 	}
 }
 
 struct CStateWithHandler {
 	state: NonNull<CState>,
-	set_runtime_error: for<'a> extern "C" fn (NonNull<CState>, u32, Option<NTStrPtr<'a>>),
-	is_errorring: extern "C" fn (NonNull<CState>) -> bool,
+	handle_runtime_error: for<'a> extern "C" fn (NonNull<CState>, &RuntimeError),
 }
 
 impl State for CStateWithHandler {
-	fn set_runtime_error(&self, error: RuntimeError) {
-		match error {
-			RuntimeError::StackOverflow |
-			RuntimeError::ExceededTimeLimit => (self.set_runtime_error)(self.state, error.code(), None),
-			RuntimeError::GameFunctionError{message} => {
-				let string;
-				let message = if let Ok(message) = NTStr::try_from_str(message) {
-					message
-				} else {
-					string = format!("{}\n", message);
-					NTStr::try_from_str(&string).unwrap()
-				};
-				(self.set_runtime_error)(self.state, error.code(), Some(message.as_ntstrptr()));
-			}
-		}
-	}
-	fn is_errorring(&self) -> bool {
-		(self.is_errorring)(self.state)
+	fn handle_runtime_error(&self, error: &RuntimeError) {
+		(self.handle_runtime_error)(self.state, error)
 	}
 }
 
@@ -253,8 +268,7 @@ impl State for CStateWithHandler {
 /// compatible with the ones expected by [`State`], so these functions have to be
 /// adapted for use by rust backends
 pub struct CBackend<B: Backend> {
-	set_runtime_error: for<'a> extern "C" fn (NonNull<CState>, u32, Option<NTStrPtr<'a>>),
-	is_errorring: extern "C" fn (NonNull<CState>) -> bool,
+	handle_runtime_error: for<'a> extern "C" fn (NonNull<CState>, &RuntimeError),
 	backend: B,
 }
 
@@ -274,8 +288,7 @@ impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 				unsafe{&data.cast::<CBackend<B>>().as_ref().backend},
 				&CStateWithHandler{
 					state: NonNull::from_ref(state), 
-					set_runtime_error: unsafe{data.cast::<CBackend<B>>().as_ref().set_runtime_error},
-					is_errorring: unsafe{data.cast::<CBackend<B>>().as_ref().is_errorring},
+					handle_runtime_error: unsafe{data.cast::<CBackend<B>>().as_ref().handle_runtime_error},
 				}, 
 				entity
 			)
@@ -299,8 +312,7 @@ impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 				&data.cast::<CBackend<B>>().as_ref().backend,
 				&CStateWithHandler{
 					state: NonNull::from_ref(state), 
-					set_runtime_error: data.cast::<CBackend<B>>().as_ref().set_runtime_error,
-					is_errorring: data.cast::<CBackend<B>>().as_ref().is_errorring,
+					handle_runtime_error: data.cast::<CBackend<B>>().as_ref().handle_runtime_error,
 				}, 
 				entity,
 				on_fn_index,
@@ -312,12 +324,26 @@ impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 				unsafe{&data.cast::<CBackend<B>>().as_ref().backend},
 				&CStateWithHandler{
 					state: NonNull::from_ref(state), 
-					set_runtime_error: unsafe{data.cast::<CBackend<B>>().as_ref().set_runtime_error},
-					is_errorring: unsafe{data.cast::<CBackend<B>>().as_ref().is_errorring},
+					handle_runtime_error: unsafe{data.cast::<CBackend<B>>().as_ref().handle_runtime_error},
 				}, 
 				entity,
 				on_fn_index,
 				values
+			)
+		}
+		extern "C" fn raise_runtime_error<B: Backend>(data: NonNull<()>, state: &CState, message: NonNull<u8>, message_len: usize) {
+			let message = if message_len == 0 {
+				unsafe{std::str::from_utf8_unchecked(std::slice::from_raw_parts(message.as_ptr().cast_const(), message_len))}
+			} else {
+				unsafe{NTStrPtr::from_ptr(message.cast()).to_str()}
+			};
+			B::raise_runtime_error::<CStateWithHandler>(
+				unsafe{data.cast::<B>().as_ref()},
+				&CStateWithHandler{
+					state: NonNull::from_ref(state), 
+					handle_runtime_error: unsafe{data.cast::<CBackend<B>>().as_ref().handle_runtime_error},
+				}, 
+				message,
 			)
 		}
 		// destroys the resources owned by the backend
@@ -334,6 +360,7 @@ impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 				destroy_entity_data : destroy_entity_data::<B>,
 				call_on_function_raw: call_on_function_raw::<B>,
 				call_on_function    : call_on_function::<B>,
+				raise_runtime_error : raise_runtime_error::<B>,
 				drop                : drop::<B>,
 			}
 		}
@@ -344,13 +371,11 @@ impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 /// This function is intended to be used in an exported `create_backend` function.
 pub fn erased_c_backend<B: Backend>(
 	backend: B, 
-	set_runtime_error: extern "C" fn (NonNull<CState>, u32, Option<NTStrPtr<'_>>),
-	is_errorring: extern "C" fn (NonNull<CState>) -> bool,
+	handle_runtime_error: extern "C" fn (NonNull<CState>, &RuntimeError),
 ) -> ErasedBackend<CState> {
 	ErasedBackend::from(CBackend{
 		backend,
-		set_runtime_error,
-		is_errorring,
+		handle_runtime_error,
 	})
 }
 
@@ -362,10 +387,9 @@ macro_rules! export_backend {
 	($backend: expr) => {
 		#[unsafe(no_mangle)]
 		pub extern "C" fn create_backend(
-			set_runtime_error: extern "C" fn (::core::ptr::NonNull<$crate::backend::CState>, ::core::primitive::u32, ::core::option::Option<$crate::ntstring::NTStrPtr<'_>>),
-			is_errorring: extern "C" fn (::core::ptr::NonNull<$crate::backend::CState>) -> ::core::primitive::bool,
+			handle_runtime_error: extern "C" fn (::core::ptr::NonNull<$crate::backend::CState>, &$crate::runtime_error::RuntimeError<'_>),
 		) -> $crate::backend::ErasedBackend<$crate::backend::CState> {
-			$crate::backend::erased_c_backend($backend, set_runtime_error, is_errorring)
+			$crate::backend::erased_c_backend($backend, handle_runtime_error)
 		}
 	}
 }

@@ -6,16 +6,19 @@ use crate::ast::{
 	Expr, ExprData, OnFunction, Statement,
 	BinaryOperator, Type, HelperFunction, UnaryOperator
 };
+use crate::error::SourceSpan;
+use crate::shared_vec::SharedVec;
 use crate::ntstring::{NTStrPtr, NTStr};
 use crate::arena::Arena;
 use crate::xar::{ErasedXar, ErasedPtr};
 use crate::backend::Backend;
 use crate::frontend::type_propagation::TypeListDisplay;
 
-use gruggers_core::runtime_error::{RuntimeError, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT};
+use gruggers_core::runtime_error::{RuntimeError, RuntimeErrorKind, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT, StackFrame};
 use gruggers_core::state::State;
 use gruggers_core::export_backend;
 
+use std::ffi::OsStr;
 use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::cell::{Cell, RefCell};
@@ -51,7 +54,7 @@ impl<'a> Compiler<'a> {
 
 		let globals_size = ast.members.len() + 1;
 
-		instructions.insert_on_fn("init_globals", 0, 0, 1, 0);
+		instructions.insert_on_fn("init_globals", 0, GrugFnData{location: 0, args: 1, locals_size: 0});
 		let me_location = compiler.insert_global_variable("me");
 		instructions.stream.push(Op::StoreGlobal{index: me_location});
 		for global in ast.members.iter() {
@@ -118,7 +121,7 @@ impl<'a> Compiler<'a> {
 			self.compile_statement(instructions, statement);
 		}
 		instructions.stream.push(Op::ReturnVoid);
-		instructions.insert_on_fn(on_function.name.to_str(), index, begin_location, param_count, self.locals_size_max);
+		instructions.insert_on_fn(on_function.name.to_str(), index, GrugFnData{location: begin_location, args: param_count as u32, locals_size: self.locals_size_max});
 		self.locals_size_max = 0;
 		self.pop_scope();
 	}
@@ -476,6 +479,13 @@ struct CompiledFile {
 pub struct BytecodeBackend {
 	files: RefCell<Vec<CompiledFile>>,
 	stacks: RefCell<Vec<Stack>>,
+	// Safety: The strings in the stack frames are stored within self.files, so
+	// their actual lifetime is not `'static`
+	call_stack: SharedVec<&'static StackFrame<'static>>,
+	current_fn_name: Option<&'static str>,
+	current_script_path: Option<&'static OsStr>,
+	error_arena: RefCell<Arena>,
+	is_errorring: Cell<bool>,
 }
 
 impl BytecodeBackend {
@@ -483,9 +493,206 @@ impl BytecodeBackend {
 		Self {
 			files: RefCell::new(Vec::new()),
 			stacks: RefCell::new(Vec::new()),
+			call_stack: SharedVec::new(),
+			current_fn_name: None,
+			current_script_path: None,
+			error_arena: RefCell::new(Arena::new()),
+			is_errorring: Cell::new(false),
 		}
 	}
+
+	unsafe fn run<GrugState: State>(
+		&self, 
+		stack: &mut Stack,
+		state: &GrugState, 
+		globals: &[Cell<Value>], 
+		instructions: &Instructions, 
+		locals_size: u32, 
+		start_loc: usize
+	) -> Option<Value> {
+		let mut stream = &instructions.stream[start_loc..];
+		let start_time = Instant::now();
+		stack.values.resize(stack.rbp + locals_size as usize, Value{void: ()});
+		let mut i_count: usize = 1;
+		loop {
+			let (ins, next) = unsafe{stream.split_first().unwrap_unchecked()};
+			stream = next;
+			match *ins {
+				Op::ReturnVoid           => {
+					stack.values.truncate(stack.rbp);
+					if let Some((rbp, ip)) = stack.stack_frames.pop() {
+						stack.rbp = rbp;
+						stream = unsafe{instructions.stream.get(ip..).unwrap_unchecked()};
+					} else {
+						return Some(Value{void: ()});
+					}
+				}
+				Op::ReturnValue          => {
+					let ret_val = unsafe{stack.values.pop().unwrap_unchecked()};
+					stack.values.truncate(stack.rbp);
+					if let Some((rbp, ip)) = stack.stack_frames.pop() {
+						stack.values.push(ret_val);
+						stack.rbp = rbp;
+						stream = unsafe{instructions.stream.get(ip..).unwrap_unchecked()};
+					} else {
+						return Some(ret_val);
+					}
+				}
+				Op::LoadNumber{data_loc} => unsafe{stack.values.push(Value{number: instructions.constants.get_unchecked(data_loc as usize).number})},
+				Op::LoadStr{data_loc}    => unsafe{stack.values.push(Value{string: instructions.constants.get_unchecked(data_loc as usize).string})},
+				Op::LoadFalse            => stack.values.push(Value{bool: 0}),
+				Op::LoadTrue             => stack.values.push(Value{bool: 1}),
+				Op::Dup{index}           => {
+					unsafe{stack.values.push(*stack.values.get(stack.values.len() - 1 - index as usize).unwrap_unchecked())}
+				}
+				Op::Add                  |
+				Op::Sub                  |
+				Op::Mul                  |
+				Op::Div                  => {
+					let second = unsafe{stack.values.pop().unwrap_unchecked().number};
+					let first = unsafe{stack.values.pop().unwrap_unchecked().number};
+					let value = match ins {
+						Op::Add => first + second,
+						Op::Sub => first - second,
+						Op::Mul => first * second,
+						Op::Div => first / second,
+						_ => unreachable!(),
+					};
+					stack.values.push(Value{number: value});
+				}
+				Op::Not                  => {
+					let value = unsafe{stack.values.pop().unwrap_unchecked().bool};
+					stack.values.push(Value{bool: (value == 0) as u8});
+				}
+				Op::CmpEq | Op::CmpNeq   => {
+					let second = unsafe{stack.values.pop().unwrap_unchecked().bytes};
+					let first = unsafe{stack.values.pop().unwrap_unchecked().bytes};
+					let value = match ins {
+						Op::CmpEq  => first == second,
+						Op::CmpNeq => first != second,
+						_ => unreachable!(),
+					};
+					stack.values.push(Value{bool: value as u8});
+				}
+				Op::StrEq                => {
+					let second = unsafe{stack.values.pop().unwrap_unchecked().string};
+					let first = unsafe{stack.values.pop().unwrap_unchecked().string};
+					stack.values.push(Value{bool: (first == second) as u8});
+				}
+				Op::CmpG  | Op::CmpGe    |
+				Op::CmpL  | Op::CmpLe    => {
+					let second = unsafe{stack.values.pop().unwrap_unchecked().number};
+					let first = unsafe{stack.values.pop().unwrap_unchecked().number};
+					let value = match ins {
+						Op::CmpG  => first >  second,
+						Op::CmpGe => first >= second,
+						Op::CmpL  => first <  second,
+						Op::CmpLe => first <= second,
+						_ => unreachable!(),
+					};
+					stack.values.push(Value{bool: value as u8});
+				}
+				Op::LoadGlobal{index}    => {
+					stack.values.push(unsafe{globals.get_unchecked(index as usize)}.get());
+				}
+				Op::StoreGlobal{index}   => {
+					unsafe{globals.get_unchecked(index as usize).set(stack.values.pop().unwrap_unchecked())};
+				}
+				Op::Jmp{offset}          => {
+					stream = unsafe{
+						std::slice::from_raw_parts(
+							instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
+							(stream.len() as isize - offset as isize) as usize
+						)
+					}
+				}
+				Op::JmpIf{offset}        => {
+					if unsafe{stack.values.pop().unwrap_unchecked().bool} != 0 {
+						stream = unsafe{
+							std::slice::from_raw_parts(
+								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
+								(stream.len() as isize - offset as isize) as usize
+							)
+						}
+					}
+				}
+				Op::JmpIfNot{offset}     => {
+					if unsafe{stack.values.pop().unwrap_unchecked().bool} == 0 {
+						stream = unsafe{
+							std::slice::from_raw_parts(
+								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
+								(stream.len() as isize - offset as isize) as usize
+							)
+						}
+					}
+				}
+				Op::LoadLocal{index}     => {
+					 let value = unsafe{*stack.values.get(stack.rbp + index as usize).unwrap_unchecked()};
+					 stack.values.push(value);
+				}
+				Op::StoreLocal{index}    => {
+					let value = unsafe{stack.values.pop().unwrap_unchecked()};
+					*unsafe{stack.values.get_mut(stack.rbp + index as usize).unwrap_unchecked()} = value;
+				}
+				Op::CallHelperFunction {
+					data_loc,
+				} => {
+					let GrugFnData {args, locals_size, location} = unsafe{instructions.constants[data_loc as usize].local_fn_data};
+					stack.stack_frames.push((
+						stack.rbp,
+						unsafe{stream.as_ptr().offset_from(instructions.stream.as_ptr()) as usize},
+					));
+					stack.rbp = stack.values.len() - args as usize;
+					stack.values.resize(stack.rbp + locals_size as usize, Value{void: ()});
+					stream = unsafe{instructions.stream.get(location..).unwrap_unchecked()};
+				}
+				Op::CallGameFunction {
+					has_return,
+					data_loc,
+				} => {
+					let HostFnData{args, generics, ptr} = unsafe{instructions.constants[data_loc as usize].host_fn_data};
+					let value = unsafe{(ptr)(state as *const _ as _, stack.values.as_ptr().add(stack.values.len() - args as usize), generics as *const _ as _)};
+					stack.values.truncate(stack.values.len() - args as usize);
+					if has_return {
+						stack.values.push(value);
+					}
+					if self.is_errorring.get() {
+						return None
+					}
+				}
+			}
+			if i_count & 0xFFFFF == 0 && start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
+				self.raise_runtime_error_inner(state, RuntimeErrorKind::TimeLimitExceeded, "Time limit exceeded");
+				return None;
+			}
+			i_count += 1;
+			if stack.stack_frames.len() >= MAX_RECURSION_LIMIT {
+				self.raise_runtime_error_inner(state, RuntimeErrorKind::StackOverflow, "Stack overflow, so check for accidental infinite recursion");
+				return None;
+			}
+		}
+	}
+
+	fn raise_runtime_error_inner<GrugState: State>(&self, state: &GrugState, kind: RuntimeErrorKind, message: &str) {
+		self.is_errorring.set(true);
+		let arena = &mut *self.error_arena.borrow_mut();
+		arena.clear();
+		let call_stack = unsafe{self.call_stack.as_slice_unsafe()};
+		let error = RuntimeError::new_error_in(
+			kind, 
+			call_stack, 
+			// TODO, Like, figure out how to get the actual function names
+			"Some function name",
+			"Some path".as_ref(),
+			SourceSpan{line: 1, offset: 0}, 
+			"", 
+			message, 
+			arena
+		);
+		state.handle_runtime_error(&error);
+	}
 }
+
 impl Default for BytecodeBackend {
 	fn default () -> Self {
 		Self::new()
@@ -505,6 +712,7 @@ impl Backend for BytecodeBackend {
 			unreachable!("GrugScriptIds must be contigious, Expected {}, got {}", files.len(), id.0);
 		}
 	}
+
 	#[inline]
 	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity) -> bool {
 		let files = self.files.borrow();
@@ -513,20 +721,22 @@ impl Backend for BytecodeBackend {
 		
 		let globals = unsafe{&*file.data.get_slot().write_slice(file.globals_size, Cell::new(Value{void: ()}))};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
-		stack.stack.push(Value{id: entity.id});
-		let ret_val = unsafe{stack.run(state, globals, &file.instructions, 1, 0)}.is_some();
+		stack.values.push(Value{id: entity.id});
+		let ret_val = unsafe{self.run(&mut stack, state, globals, &file.instructions, 1, 0)}.is_some();
 		entity.members.set(NonNull::from_ref(globals).cast::<()>());
 
 		stack = stack.reset();
 		self.stacks.borrow_mut().push(stack);
 		ret_val
 	}
+
 	#[inline]
 	fn clear_entities(&mut self) {
 		for file in self.files.get_mut().iter_mut() {
 			file.data.clear();
 		}
 	}
+
 	#[inline]
 	unsafe fn destroy_entity_data(&self, entity: &GrugEntity) {
 		let files = self.files.borrow();
@@ -553,18 +763,19 @@ impl Backend for BytecodeBackend {
 
 		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<Value>>().as_ptr(), file.globals_size)};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
-		let Some((start_loc, argument_count, locals_size)) = file.instructions.on_fn_locations[on_fn_index + 1] else {
+		let Some(export_fn_info) = file.instructions.on_fn_locations[on_fn_index + 1] else {
 			return false;
 		};
-		for i in 0..argument_count {
-			unsafe{stack.stack.push(*values.add(i))}
+		for i in 0..(export_fn_info.args as usize){
+			unsafe{stack.values.push(*values.add(i))}
 		}
-		let ret_val = unsafe{stack.run(state, globals, &file.instructions, locals_size, start_loc)}.is_some();
+		let ret_val = unsafe{self.run(&mut stack, state, globals, &file.instructions, export_fn_info.locals_size, export_fn_info.location)}.is_some();
 
 		stack = stack.reset();
 		self.stacks.borrow_mut().push(stack);
 		ret_val
 	}
+
 	#[inline]
 	fn call_on_function<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[Value]) -> bool {
 		let files = self.files.borrow();
@@ -573,18 +784,22 @@ impl Backend for BytecodeBackend {
 
 		let globals = unsafe{std::slice::from_raw_parts(entity.members.get().cast::<Cell<Value>>().as_ptr(), file.globals_size)};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
-		let Some(&Some((start_loc, argument_count, locals_size))) = file.instructions.on_fn_locations.get(on_fn_index + 1) else {
+		let Some(Some(export_fn_info)) = file.instructions.on_fn_locations.get(on_fn_index + 1) else {
 			return false;
 		};
-		if values.len() != argument_count {return false;}
+		if values.len() != export_fn_info.args as usize {return false;}
 		for value in values {
-			stack.stack.push(*value)
+			stack.values.push(*value)
 		}
-		let ret_val = unsafe{stack.run(state, globals, &file.instructions, locals_size, start_loc)}.is_some();
+		let ret_val = unsafe{self.run(&mut stack, state, globals, &file.instructions, export_fn_info.locals_size, export_fn_info.location)}.is_some();
 
 		stack = stack.reset();
 		self.stacks.borrow_mut().push(stack);
 		ret_val
+	}
+
+	fn raise_runtime_error<GrugState: State>(&self, state: &GrugState, message: &str) {
+		self.raise_runtime_error_inner(state, RuntimeErrorKind::HostFnError, message);
 	}
 }
 
@@ -661,29 +876,38 @@ impl Op {
 	}
 }
 
-pub union ConstantData {
+#[derive(Copy, Clone)]
+struct GrugFnData {
+	args: u32,
+	locals_size: u32,
+	location: usize,
+}
+
+#[derive(Copy, Clone)]
+struct HostFnData {
+	args: u32,
+	generics: &'static [Type<'static>],
+	ptr: HostFn,
+}
+
+union ConstantData {
 	number: f64,
 	string: NTStrPtr<'static>,
-	helper_fn_data: (/* args: */ u32, /* locals_size: */ u32, /* location: */ usize),
-	game_fn_data: (/* args: */ u32, /* generics */ &'static [Type<'static>], /* ptr: */ HostFn),
+	local_fn_data: GrugFnData,
+	host_fn_data: HostFnData,
 }
 
 struct Instructions{
 	stream: Vec<Op>,
 	on_fn_locations: Vec<
-		Option<(
-			/* start location in instruction stream */ 
-			usize, 
-			/* number of arguments */
-			usize, 
-			/* number of locals */ 
-			u32,
-		)>
+		Option<GrugFnData>
 	>,
 	constants: Vec<ConstantData>,
 	helper_fn_locations: HashMap<&'static str, /* constant location */ u32>,
 	game_fn_locations: HashMap</* HostFn as usize */ HostFn, /* constant location */ u32>,
+	// SAFETY: Strings are not 'static allocated within self._arena
 	fn_labels: HashMap<usize, &'static str>,
+	// SAFETY: Strings are not 'static allocated within self._arena
 	strings: HashMap<&'static NTStr, u32>,
 	_arena: Arena,
 }
@@ -761,14 +985,14 @@ impl Instructions {
 		jumps
 	}
 
-	pub fn insert_on_fn(&mut self, name: &str, index: usize, location: usize, argument_count: usize, locals_size: u32) {
+	pub fn insert_on_fn(&mut self, name: &str, index: usize, info: GrugFnData) {
 		// SAFETY: we never give out a static str
 		let name = unsafe{std::mem::transmute::<&str, &'static str>(self._arena.copy_str_into(name))};
 		if self.on_fn_locations.len() <= index {
 			self.on_fn_locations.resize(index + 1, None);
 		}
-		self.on_fn_locations[index] = Some((location, argument_count, locals_size));
-		self.fn_labels.insert(location, name);
+		self.on_fn_locations[index] = Some(info);
+		self.fn_labels.insert(info.location, name);
 	}
 
 	pub fn get_helper_fn_info(&mut self, name: &str) -> Option<u32> {
@@ -780,7 +1004,7 @@ impl Instructions {
 		let name = unsafe{std::mem::transmute::<&str, &'static str>(self._arena.copy_str_into(name))};
 		let const_location = self.constants.len();
 		assert!(const_location < u32::MAX as usize);
-		self.constants.push(ConstantData{helper_fn_data: (args, locals_size, location)});
+		self.constants.push(ConstantData{local_fn_data: GrugFnData{args, locals_size, location}});
 		self.helper_fn_locations.insert(name, const_location as u32);
 		self.fn_labels.insert(location, name);
 	}
@@ -788,7 +1012,7 @@ impl Instructions {
 	pub fn insert_game_fn_data(&mut self, args: u32, generics: &'static [Type<'static>], ptr: HostFn) -> u32 {
 		*self.game_fn_locations.entry(ptr).or_insert_with(|| {
 			let ret_val = self.constants.len();
-			self.constants.push(ConstantData{game_fn_data: (args, generics, ptr)});
+			self.constants.push(ConstantData{host_fn_data: HostFnData{args, generics, ptr}});
 			assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
 			ret_val as u32
 		})
@@ -896,14 +1120,14 @@ impl std::fmt::Display for Instructions {
 				Op::CallHelperFunction {
 					data_loc,
 				} => {
-					let (args, locals_size, location) = unsafe{self.constants[*data_loc as usize].helper_fn_data};
+					let GrugFnData{args, locals_size, location} = unsafe{self.constants[*data_loc as usize].local_fn_data};
 					write!(f, "CallHelperFunction {} {} {}", args, locals_size, self.fn_labels.get(&location).unwrap())
 				}
 				Op::CallGameFunction {
 					has_return,
 					data_loc,
 				} => {
-					let (args, generics, ptr) = unsafe{self.constants[*data_loc as usize].game_fn_data};
+					let HostFnData{args, generics, ptr} = unsafe{self.constants[*data_loc as usize].host_fn_data};
 					write!(f, "CallGameFunction {} {} 0x{:016x} generics: {}", has_return, args, &unsafe{std::mem::transmute::<HostFn, *const ()>(ptr).addr()}, TypeListDisplay(generics))
 				}
 			}?;
@@ -915,7 +1139,7 @@ impl std::fmt::Display for Instructions {
 }
 
 pub struct Stack {
-	stack: Vec<Value>,
+	values: Vec<Value>,
 	stack_frames: Vec<(/* rbp */ usize, /* ip */ usize)>,
 	rbp: usize,
 }
@@ -923,206 +1147,17 @@ pub struct Stack {
 impl Stack {
 	pub fn new() -> Self {
 		Self {
-			stack: Vec::with_capacity(1024),
+			values: Vec::with_capacity(1024),
 			stack_frames: Vec::with_capacity(64),
 			rbp: 0,
 		}
 	}
 
 	pub fn reset(mut self) -> Self {
-		self.stack.clear();
+		self.values.clear();
 		self.stack_frames.clear();
 		self.rbp = 0;
 		self
-	}
-
-	unsafe fn run<GrugState: State>(&mut self, state: &GrugState, globals: &[Cell<Value>], instructions: &Instructions, locals_size: u32, start_loc: usize) -> Option<Value> {
-		let mut stream = &instructions.stream[start_loc..];
-		let start_time = Instant::now();
-		self.stack.resize(self.rbp + locals_size as usize, Value{void: ()});
-		let mut i_count: usize = 1;
-		loop {
-			let (ins, next) = unsafe{stream.split_first().unwrap_unchecked()};
-			stream = next;
-			match *ins {
-				Op::ReturnVoid           => {
-					self.stack.truncate(self.rbp);
-					if let Some((rbp, ip)) = self.stack_frames.pop() {
-						self.rbp = rbp;
-						stream = unsafe{instructions.stream.get(ip..).unwrap_unchecked()};
-					} else {
-						return Some(Value{void: ()});
-					}
-				}
-				Op::ReturnValue          => {
-					let ret_val = unsafe{self.stack.pop().unwrap_unchecked()};
-					self.stack.truncate(self.rbp);
-					if let Some((rbp, ip)) = self.stack_frames.pop() {
-						self.stack.push(ret_val);
-						self.rbp = rbp;
-						stream = unsafe{instructions.stream.get(ip..).unwrap_unchecked()};
-					} else {
-						return Some(ret_val);
-					}
-				}
-				Op::LoadNumber{data_loc} => unsafe{self.stack.push(Value{number: instructions.constants.get_unchecked(data_loc as usize).number})},
-				Op::LoadStr{data_loc}    => unsafe{self.stack.push(Value{string: instructions.constants.get_unchecked(data_loc as usize).string})},
-				Op::LoadFalse            => self.stack.push(Value{bool: 0}),
-				Op::LoadTrue             => self.stack.push(Value{bool: 1}),
-				Op::Dup{index}           => {
-					unsafe{self.stack.push(*self.stack.get(self.stack.len() - 1 - index as usize).unwrap_unchecked())}
-				}
-				// Op::Pop                => {unsafe{self.stack.pop().unwrap_unchecked()};}
-				Op::Add                  |
-				Op::Sub                  |
-				Op::Mul                  |
-				Op::Div                  => {
-					let second = unsafe{self.stack.pop().unwrap_unchecked().number};
-					let first = unsafe{self.stack.pop().unwrap_unchecked().number};
-					let value = match ins {
-						Op::Add => first + second,
-						Op::Sub => first - second,
-						Op::Mul => first * second,
-						Op::Div => first / second,
-						_ => unreachable!(),
-					};
-					self.stack.push(Value{number: value});
-				}
-				// Op::And                  |
-				// Op::Or                   => {
-				// 	let second = unsafe{self.stack.pop().unwrap_unchecked()}.bool};
-				// 	let first = unsafe{self.stack.pop().unwrap_unchecked()}.bool};
-				// 	let value = match ins {
-				// 		Op::And => (first != 0) && (second != 0),
-				// 		Op::Or  => (first != 0) || (second != 0),
-				// 		_ => unreachable!(),
-				// 	} as u8;
-				// 	self.stack.push(Value{bool: value});
-				// }
-				Op::Not                  => {
-					let value = unsafe{self.stack.pop().unwrap_unchecked().bool};
-					self.stack.push(Value{bool: (value == 0) as u8});
-				}
-				Op::CmpEq | Op::CmpNeq   => {
-					let second = unsafe{self.stack.pop().unwrap_unchecked().bytes};
-					let first = unsafe{self.stack.pop().unwrap_unchecked().bytes};
-					let value = match ins {
-						Op::CmpEq  => first == second,
-						Op::CmpNeq => first != second,
-						_ => unreachable!(),
-					};
-					self.stack.push(Value{bool: value as u8});
-				}
-				Op::StrEq                => {
-					let second = unsafe{self.stack.pop().unwrap_unchecked().string};
-					let first = unsafe{self.stack.pop().unwrap_unchecked().string};
-					self.stack.push(Value{bool: (first == second) as u8});
-				}
-				Op::CmpG  | Op::CmpGe    |
-				Op::CmpL  | Op::CmpLe    => {
-					let second = unsafe{self.stack.pop().unwrap_unchecked().number};
-					let first = unsafe{self.stack.pop().unwrap_unchecked().number};
-					let value = match ins {
-						Op::CmpG  => first >  second,
-						Op::CmpGe => first >= second,
-						Op::CmpL  => first <  second,
-						Op::CmpLe => first <= second,
-						_ => unreachable!(),
-					};
-					self.stack.push(Value{bool: value as u8});
-				}
-				// Op::PrintStr             => {
-				// 	use std::ptr::NonNull;
-				// 	let str = unsafe{
-				// 		NTStrPtr::from_ptr(
-				// 			NonNull::new_unchecked(
-				// 				std::ptr::with_exposed_provenance_mut(
-				// 					unsafe{usize::from_ne_bytes(self.stack.pop().unwrap_unchecked()}.as_bytes())
-				// 				)
-				// 			)
-				// 		).to_str()
-				// 	};
-				// 	println!("{}", str);
-				// }
-				Op::LoadGlobal{index}    => {
-					self.stack.push(unsafe{globals.get_unchecked(index as usize)}.get());
-				}
-				Op::StoreGlobal{index}   => {
-					unsafe{globals.get_unchecked(index as usize).set(self.stack.pop().unwrap_unchecked())};
-				}
-				Op::Jmp{offset}          => {
-					stream = unsafe{
-						std::slice::from_raw_parts(
-							instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
-							(stream.len() as isize - offset as isize) as usize
-						)
-					}
-				}
-				Op::JmpIf{offset}        => {
-					if unsafe{self.stack.pop().unwrap_unchecked().bool} != 0 {
-						stream = unsafe{
-							std::slice::from_raw_parts(
-								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
-								(stream.len() as isize - offset as isize) as usize
-							)
-						}
-					}
-				}
-				Op::JmpIfNot{offset}     => {
-					if unsafe{self.stack.pop().unwrap_unchecked().bool} == 0 {
-						stream = unsafe{
-							std::slice::from_raw_parts(
-								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
-								(stream.len() as isize - offset as isize) as usize
-							)
-						}
-					}
-				}
-				Op::LoadLocal{index}     => {
-					 let value = unsafe{*self.stack.get(self.rbp + index as usize).unwrap_unchecked()};
-					 self.stack.push(value);
-				}
-				Op::StoreLocal{index}    => {
-					let value = unsafe{self.stack.pop().unwrap_unchecked()};
-					*unsafe{self.stack.get_mut(self.rbp + index as usize).unwrap_unchecked()} = value;
-				}
-				Op::CallHelperFunction {
-					data_loc,
-				} => {
-					let (args, locals_size, location) = unsafe{instructions.constants[data_loc as usize].helper_fn_data};
-					self.stack_frames.push((
-						self.rbp,
-						unsafe{stream.as_ptr().offset_from(instructions.stream.as_ptr()) as usize},
-					));
-					self.rbp = self.stack.len() - args as usize;
-					self.stack.resize(self.rbp + locals_size as usize, Value{void: ()});
-					stream = unsafe{instructions.stream.get(location..).unwrap_unchecked()};
-				}
-				Op::CallGameFunction {
-					has_return,
-					data_loc,
-				} => {
-					let (args, generics, ptr) = unsafe{instructions.constants[data_loc as usize].game_fn_data};
-					let value = unsafe{(ptr)(state as *const _ as _, self.stack.as_ptr().add(self.stack.len() - args as usize), generics as *const _ as _)};
-					self.stack.truncate(self.stack.len() - args as usize);
-					if has_return {
-						self.stack.push(value);
-					}
-					if state.is_errorring() {
-						return None
-					}
-				}
-			}
-			if i_count & 0xFFFFF == 0 && start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
-				state.set_runtime_error(RuntimeError::ExceededTimeLimit);
-				return None;
-			}
-			i_count += 1;
-			if self.stack_frames.len() >= MAX_RECURSION_LIMIT {
-				state.set_runtime_error(RuntimeError::StackOverflow);
-				return None;
-			}
-		}
 	}
 }
 

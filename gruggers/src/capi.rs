@@ -3,12 +3,10 @@
 //! These functions have the same safety requirements as the equivalent
 //! functions in state.rs
 #![allow(improper_ctypes_definitions)]
-use crate::state::{ExportFnEntry, GrugEntityHandle, GrugInitSettings, GrugState, Files, FileInfo, State};
+use crate::state::{ExportFnEntry, GrugEntityHandle, GrugInitSettings, GrugState, Files, FileInfo};
 use crate::ntstring::NTStrPtr;
 use crate::types::{FileId, ExportFnId, GrugEntity, Value, HostFnWithState, HostFnRegErased, INVALID_GRUG_FILE_ID};
 use crate::error::{Error, GrugError};
-
-use gruggers_core::runtime_error::RuntimeError;
 
 use std::ffi::OsString;
 use std::cell::UnsafeCell;
@@ -146,7 +144,7 @@ pub unsafe extern "C" fn grug_call_export_fn(state: &CState, entity: &GrugEntity
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn grug_set_runtime_error(state: &CState, message: NTStrPtr) {
-	state.0.set_runtime_error(RuntimeError::GameFunctionError{message: message.to_str()});
+	state.0.set_host_fn_error(message.to_str());
 }
 
 #[unsafe(no_mangle)]

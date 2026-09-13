@@ -355,7 +355,7 @@ impl Interpreter {
 	#[expect(clippy::too_many_arguments)]
 	fn run_function<GrugState: State>(&self, call_stack: &mut CallStack, state: &GrugState, file: &CompiledFile, entity: &GrugEntityData, arguments: &'static [Parameter], values: &[Value], statements: &[Statement]) -> Option<Value> {
 		if call_stack.local_variables.len() > MAX_RECURSION_LIMIT {
-			state.set_runtime_error(RuntimeError::StackOverflow);
+			state.handle_runtime_error(RuntimeError::StackOverflow);
 			return None
 		}
 		if arguments.len() != values.len() {
@@ -743,5 +743,10 @@ impl Backend for Interpreter {
 			values,
 			on_function.body_statements
 		).is_some()
+	}
+
+	#[inline]
+	fn raise_runtime_error<GrugState: State>(&self, state: &GrugState, message: &str) {
+		todo!();
 	}
 }
