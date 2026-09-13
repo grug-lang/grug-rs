@@ -42,7 +42,9 @@ fn main () {
 
 	loop {
 		let (resources, files) = state.update_files();
-		for resource in resources {print!("{}, ", resource.display())};
+		for resource in resources.paths() {
+			print!("{}, ", std::str::from_utf8(resource.to_bytes()).unwrap_or_default());
+		}
 		println!("");
 		for file in files.files() {if let Err(err) = file.result() {println!("{}, ", err)}};
 		println!("{:?}", state.update_files());

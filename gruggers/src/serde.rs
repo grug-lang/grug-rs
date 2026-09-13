@@ -43,7 +43,7 @@ mod ser {
 				span: _
 			}) => {
 				object! {
-					"type": "GLOBAL_VARIABLE",
+					"type": "VARIABLE_STATEMENT",
 					"name": name.to_str(), 
 					"variable_type": serialize_type(ty),
 					"assignment": serialize_expr(assignment_expr),
@@ -56,7 +56,7 @@ mod ser {
 				span: _
 			}) => {
 				let mut object = object! {
-					"type": "GLOBAL_ON_FN",
+					"type": "EXPORT_FN",
 					"name": name.to_str(),
 					"statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				};
@@ -74,7 +74,7 @@ mod ser {
 				span: _
 			}) => {
 				let mut object = object! {
-					"type": "GLOBAL_HELPER_FN",
+					"type": "LOCAL_FN",
 					"name": name.to_str(),
 					"statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				};
@@ -91,13 +91,13 @@ mod ser {
 				value,
 			} => {
 				object! {
-					"type": "GLOBAL_COMMENT",
+					"type": "COMMENT_STATEMENT",
 					"comment": value.to_str(),
 				}
 			},
 			GlobalStatement::EmptyLine => {
 				object! {
-					"type": "GLOBAL_EMPTY_LINE",
+					"type": "EMPTY_LINE_STATEMENT",
 				}
 			},
 		}).collect::<Vec<_>>().into()
@@ -393,70 +393,70 @@ mod de {
 				return Err(JsonDeserializeError::GlobalStatementKindNotString)
 			};
 			match kind {
-				"GLOBAL_VARIABLE" => {
-					let Some(name) = get_object_field(global_statement, "name", "GLOBAL_VARIABLE")?.as_str() else {
+				"VARIABLE_STATEMENT" => {
+					let Some(name) = get_object_field(global_statement, "name", "VARIABLE_STATEMENT")?.as_str() else {
 						return Err(JsonDeserializeError::GlobalVariableNameNotString)
 					};
 
 					output.push_str(name);
 					output.push_str(": ");
 
-					let ty = get_object_field(global_statement, "variable_type", "GLOBAL_VARIABLE")?;
+					let ty = get_object_field(global_statement, "variable_type", "VARIABLE_STATEMENT")?;
 
 					apply_type(ty, output)?;
 					output.push_str(" = ");
 
-					let assignment_expr = get_object_field(global_statement, "assignment", "GLOBAL_VARIABLE")?;
+					let assignment_expr = get_object_field(global_statement, "assignment", "VARIABLE_STATEMENT")?;
 					apply_expr(assignment_expr, output)?;
 					Ok(())
 				}
-				"GLOBAL_ON_FN" => {
-					let Some(name) = get_object_field(global_statement, "name", "GLOBAL_ON_FN")?.as_str() else {
+				"EXPORT_FN" => {
+					let Some(name) = get_object_field(global_statement, "name", "EXPORT_FN")?.as_str() else {
 						return Err(JsonDeserializeError::OnFunctionNameNotString)
 					};
 					output.push_str("export ");
 					output.push_str(name);
 					output.push_str("(");
-					if let Ok(parameters) = get_object_field(global_statement, "parameters", "GLOBAL_ON_FN") {
+					if let Ok(parameters) = get_object_field(global_statement, "parameters", "EXPORT_FN") {
 						apply_parameters(parameters, output)?;
 					}
 					output.push_str(") ");
 
-					let body_statements = get_object_field(global_statement, "statements", "GLOBAL_ON_FN")?;
+					let body_statements = get_object_field(global_statement, "statements", "EXPORT_FN")?;
 					apply_statements(body_statements, indentation + 1, output)?;
 					Ok(())
 				}
-				"GLOBAL_HELPER_FN" => {
-					let Some(name) = get_object_field(global_statement, "name", "GLOBAL_HELPER_FN")?.as_str() else {
+				"LOCAL_FN" => {
+					let Some(name) = get_object_field(global_statement, "name", "LOCAL_FN")?.as_str() else {
 						return Err(JsonDeserializeError::HelperFunctionNameNotString)
 					};
 					output.push_str("local ");
 					output.push_str(name);
 					output.push_str("(");
-					if let Ok(parameters) = get_object_field(global_statement, "parameters", "GLOBAL_HELPER_FN") {
+					if let Ok(parameters) = get_object_field(global_statement, "parameters", "LOCAL_FN") {
 						apply_parameters(parameters, output)?;
 					}
 					output.push_str(") ");
 
-					if let Ok(ty) = get_object_field(global_statement, "return_type", "GLOBAL_HELPER_FN") {
+					if let Ok(ty) = get_object_field(global_statement, "return_type", "LOCAL_FN") {
 						apply_type(ty, output)?;
 						
 						output.push_str(" ");
 					}
-					let body_statements = get_object_field(global_statement, "statements", "GLOBAL_HELPER_FN")?;
+					let body_statements = get_object_field(global_statement, "statements", "LOCAL_FN")?;
 					
 					apply_statements(body_statements, indentation + 1, output)?;
 					Ok(())
 				}
-				"GLOBAL_COMMENT" => {
-					let Some(value) = get_object_field(global_statement, "comment", "GLOBAL_COMMENT")?.as_str() else {
+				"COMMENT_STATEMENT" => {
+					let Some(value) = get_object_field(global_statement, "comment", "COMMENT_STATEMENT")?.as_str() else {
 						return Err(JsonDeserializeError::CommentValueNotString);
 					};
 					output.push_str("# ");
 					output.push_str(value);
 					Ok(())
 				}
-				"GLOBAL_EMPTY_LINE" => {
+				"EMPTY_LINE_STATEMENT" => {
 					Ok(())
 				}
 				_ => Err(JsonDeserializeError::InvalidGlobalStatementType)

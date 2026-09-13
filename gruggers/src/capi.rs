@@ -3,38 +3,18 @@
 //! These functions have the same safety requirements as the equivalent
 //! functions in state.rs
 #![allow(improper_ctypes_definitions)]
-use crate::state::{ExportFnEntry, GrugEntityHandle, GrugInitSettings, GrugState, Files, FileInfo, State};
+use crate::state::{ExportFnEntry, GrugEntityHandle, GrugInitSettings, GrugState, Files, FileInfo, ResourcePaths, State};
 use crate::ntstring::{NTBytes, NTStrPtr};
 use crate::types::{FileId, ExportFnId, GrugEntity, Value, HostFnWithState, HostFnRegErased, INVALID_GRUG_FILE_ID};
 use crate::error::{Error, GrugError};
-use crate::own_ptr::OwnPtr;
-use crate::arena::Arena;
 
 use gruggers_core::runtime_error::RuntimeError;
 
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 
-pub struct Resources {
-	inner: OwnPtr<'static, [NTBytes<'static>]>,
-	_arena: Arena,
-}
-
-impl Resources {
-	pub fn empty() -> Self {
-		Self {
-			inner: (Box::new([]) as Box<[_]>).into(),
-			_arena: Arena::new(),
-		}
-	}
-
-	pub fn paths<'a>(&'a self) -> &'a [NTBytes<'a>] {
-		&*self.inner
-	}
-}
-
 // TODO: Create an actual struct for these
-type CState = (GrugState, /* last error */ UnsafeCell<Option<Error>>, /* info from last compile */ UnsafeCell<Files>, /* resources from last compile */ UnsafeCell<Resources>);
+type CState = (GrugState, /* last error */ UnsafeCell<Option<Error>>, /* info from last compile */ UnsafeCell<Files>, /* resources from last update */ UnsafeCell<ResourcePaths>);
 
 #[repr(C)]
 pub struct CGrugRuntimeErrorHandler {
@@ -137,7 +117,7 @@ pub extern "C" fn grug_init(
             state,
             UnsafeCell::new(None),
             UnsafeCell::new(Files::empty()),
-            UnsafeCell::new(Resources::empty()),
+            UnsafeCell::new(ResourcePaths::empty()),
         ))),
         Err(err) => {
             unsafe { out_err.as_mut_ptr().write(err.leak()) };
@@ -209,26 +189,19 @@ pub extern "C" fn grug_update(state: &CState) -> &[FileInfo<'_>] {
 	state.0.clear_error();
 	let files = unsafe{&mut *state.2.get()};
 	let resources = unsafe{&mut *state.3.get()};
-
-	let (updated_resource_paths, updated_files) = state.0.update_files();
-	*files = updated_files;
-
-	let arena = Arena::new();
-	let paths: Box<[NTBytes<'_>]> = updated_resource_paths.iter()
-		.map(|path| unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(path.as_encoded_bytes()))})
-		.collect();
-	// SAFETY: `paths` borrows from `arena`, which we move into `Resources`
-	// right alongside it, so the borrowed data stays valid for as long as
-	// `paths` is reachable. Same pattern as `Files`/`FileInfo`.
-	let paths: OwnPtr<'static, [NTBytes<'static>]> = unsafe{std::mem::transmute::<
-		OwnPtr<'_, [NTBytes<'_>]>,
-		OwnPtr<'static, [NTBytes<'static>]>
-	>(paths.into())};
-	*resources = Resources { inner: paths, _arena: arena };
-
+	(*resources, *files) = state.0.update_files();
 	files.files()
 }
 
+/// Get the paths (relative to the mods directory) of every non-`.grug` file
+/// that was detected as changed by the most recent call to [`grug_update`].
+/// This includes files that are never referenced by a `resource` string
+/// inside any `.grug` script (such an auto-discovered texture, `.lang`
+/// file, or JSON data), since resource strings no longer register a file
+/// watch; they are only used to validate that a resource exists at compile
+/// time.
+///
+/// The returned slice is only valid until the next call to [`grug_update`].
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_get_updated_resources(state: &CState) -> &[NTBytes<'_>] {
 	unsafe{&*state.3.get()}.paths()

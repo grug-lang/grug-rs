@@ -38,19 +38,23 @@
 //! At this point, the state will begin automatically monitoring for changes to
 //! the mods directory. To handle the changes, call [`GrugState::update_files`]
 //! once at the top of the game loop or message loop. This returns all the
-//! scripts that were recompiled and any resources that need to be reloaded.
+//! scripts that were recompiled, as well as the paths of every other
+//! (non-`.grug`) file within the mods directory that changed, regardless of
+//! whether a `resource` string inside a `.grug` script actually refers to it.
+//! Hot reloading whatever lives at those paths (a texture, a `.lang` file,
+//! some JSON data, etc) is left up to the host.
 
 use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{Value, Id, HostFn, HostFnWithState, HostFnReg, HostFnRegErased, ExportFnId, FileId, GrugEntity, INVALID_GRUG_FILE_ID};
+use crate::types::{Value, Id, HostFnWithState, HostFnReg, HostFnRegErased, ExportFnId, FileId, GrugEntity, INVALID_GRUG_FILE_ID, HostFn};
 use crate::xar::Xar;
 use crate::ntstring::{NTStrPtr};
 use crate::arena::Arena;
 use crate::own_ptr::OwnPtr;
 use crate::nt;
-use crate::watcher::{watch_changes};
+use crate::watcher::watch_changes;
 
 use gruggers_core::runtime_error::RuntimeError;
 pub use gruggers_core::state::State;
@@ -61,7 +65,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::pin::Pin;
 use std::cell::{Cell, RefCell, Ref};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::ffi::{OsString, OsStr};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -159,6 +163,14 @@ pub struct GrugInitSettings<'a> {
 	mods_dir_path: Option<NonNull<u8>>,
 	mods_dir_path_len: usize,
 	runtime_error_handler: Option<RuntimeErrorHandler>,
+	/// How often the background file watcher rescans the mods directory
+	/// for changes, on platforms that don't have a native change
+	/// notification API to fall back to (see [`crate::watcher`]). Defaults
+	/// to 1 second. Most hosts have no reason to change this; it's mainly
+	/// useful for shrinking well below the default in automated tests, so
+	/// they don't have to wait out someone else's timer to observe a
+	/// change.
+	poll_interval: Option<std::time::Duration>,
 
 	backend: Option<ErasedBackend<GrugState>>,
 }
@@ -176,6 +188,7 @@ impl<'a> GrugInitSettings<'a> {
 			mods_dir_path: None,
 			mods_dir_path_len: 0,
 			runtime_error_handler: None,
+			poll_interval: None,
 			backend: None,
 		}
 	}
@@ -214,6 +227,14 @@ impl<'a> GrugInitSettings<'a> {
 		self
 	}
 
+	/// How often the background file watcher rescans the mods directory
+	/// for changes, on platforms without a native change notification API
+	/// to fall back to. Defaults to 1 second if never called.
+	pub fn set_poll_interval(mut self, interval: std::time::Duration) -> Self {
+		self.poll_interval = Some(interval);
+		self
+	}
+
 	pub fn build_state(self) -> Result<GrugState, Error> {
 		let mod_api_path = unsafe{Self::maybe_nt_or_length(self.mod_api_path, self.mod_api_path_len)}
 			.unwrap_or("./mod_api.json");
@@ -224,6 +245,7 @@ impl<'a> GrugInitSettings<'a> {
 			mod_api_path,
 			mods_dir_path,
 			self.runtime_error_handler.unwrap_or_else(RuntimeErrorHandler::new_default), 
+			self.poll_interval.unwrap_or(std::time::Duration::from_secs(1)),
 			self.backend.unwrap_or_else(|| BytecodeBackend::new().into())
 		)
 	}
@@ -268,7 +290,6 @@ pub struct GrugState {
 	pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
 	pub(crate) entities: Xar<GrugEntity>,
-	pub(crate) resources: RefCell<HashSet<OsString>>,
 	/// Send an arena and a slice of filepaths to compile (allocated within the arena)
 	pub(crate) compiler_senders: Vec<Sender<(Arena, &'static [&'static OsStr])>>,
 	/// Receive the arena and a slice of ASTs and the corresponding filepaths,
@@ -320,17 +341,17 @@ impl State for GrugState {
 
 // Miscellaneous functions
 impl GrugState {
-	fn new (mod_api_path: impl AsRef<OsStr>, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, Error> {
+	fn new (mod_api_path: impl AsRef<OsStr>, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, poll_interval: std::time::Duration, backend: ErasedBackend<Self>) -> Result<Self, Error> {
 		let mod_api = get_mod_api(mod_api_path.as_ref())?;
-		Self::new_inner(mod_api, mods_dir_path, handler, backend)
+		Self::new_inner(mod_api, mods_dir_path, handler, poll_interval, backend)
 	}
 
-	pub fn new_from_text (mod_api_text: &str, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, Error> {
+	pub fn new_from_text (mod_api_text: &str, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, poll_interval: std::time::Duration, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, Error> {
 		let mod_api = get_mod_api_from_text("<Mod API Source>", mod_api_text)?;
-		Self::new_inner(mod_api, mods_dir_path, handler, backend.into())
+		Self::new_inner(mod_api, mods_dir_path, handler, poll_interval, backend.into())
 	}
 
-	fn new_inner (mod_api: ModApi, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, backend: ErasedBackend<Self>) -> Result<Self, Error> {
+	fn new_inner (mod_api: ModApi, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, poll_interval: std::time::Duration, backend: ErasedBackend<Self>) -> Result<Self, Error> {
 		let mut on_fns = Vec::new();
 		let init_globals = nt!("init_globals");
 		let mods_dir_path = PathBuf::from(mods_dir_path.as_ref());
@@ -359,7 +380,7 @@ impl GrugState {
 		let mod_api = Arc::new(mod_api);
 
 		let (sender, reciever) = channel();
-		watch_changes(&mods_dir_path, move |changes| sender.send(changes).is_ok()).unwrap();
+		watch_changes(&mods_dir_path, poll_interval, move |changes| sender.send(changes).is_ok()).unwrap();
 		let num_threads = {
 			let available_threads = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(1);
 			if available_threads <= 2 {1} else {available_threads - 2}
@@ -382,7 +403,6 @@ impl GrugState {
 			mods_dir_path: mods_dir_path.into(),
 			next_entity_id: AtomicU64::new(0),
 			runtime_error_handler: handler,
-			resources: RefCell::new(HashSet::new()),
 			entities: Xar::new(),
 			compiler_senders,
 			compiler_receiver: rcv,
@@ -487,55 +507,29 @@ impl GrugState {
 	pub fn all_host_fns_registered(&self) -> Result<(), Error> {
 		// Check all normal host functions
 		for (host_fn_name, host_fn) in self.mod_api.host_fns() {
-			if host_fn.generics.is_empty() {
-				if let None = host_fn.fn_ptr {
-					return Err(Error::new(
-						ErrorKind::INIT_ERROR,
-						"",
-						"".as_ref(),
-						"",
-						SourceSpan{offset: 0, line: 0},
-						format_args!("host function '{host_fn_name}' has not been registered"),
-					));
-				}
-			} else {
-				if let None = host_fn.registerer {
-					return Err(Error::new(
-						ErrorKind::INIT_ERROR,
-						"",
-						"".as_ref(),
-						"",
-						SourceSpan{offset: 0, line: 0},
-						format_args!("generic host function '{host_fn_name}' has not been registered"),
-					));
-				}
+			if let None = host_fn.fn_ptr && let None = host_fn.registerer {
+				return Err(Error::new(
+					ErrorKind::INIT_ERROR,
+					"",
+					"".as_ref(),
+					"",
+					SourceSpan{offset: 0, line: 0},
+					format_args!("host function '{host_fn_name}' has not been registered"),
+				));
 			}
 		}
 		// check all methods
 		for (class_name, class) in self.mod_api.classes() {
 			for (method_name, method) in &*class.methods {
-				if method.generics.is_empty() {
-					if let None = method.fn_ptr {
-						return Err(Error::new(
-							ErrorKind::INIT_ERROR,
-							"",
-							"".as_ref(),
-							"",
-							SourceSpan{offset: 0, line: 0},
-							format_args!("method '{method_name}' in class '{class_name}' has not been registered"),
-						));
-					}
-				} else {
-					if let None = method.registerer {
-						return Err(Error::new(
-							ErrorKind::INIT_ERROR,
-							"",
-							"".as_ref(),
-							"",
-							SourceSpan{offset: 0, line: 0},
-							format_args!("generic method '{method_name}' in class '{class_name}' has not been registered"),
-						));
-					}
+				if let None = method.fn_ptr && let None = method.registerer {
+					return Err(Error::new(
+						ErrorKind::INIT_ERROR,
+						"",
+						"".as_ref(),
+						"",
+						SourceSpan{offset: 0, line: 0},
+						format_args!("method '{method_name}' in class '{class_name}' has not been registered"),
+					));
 				}
 			}
 		}
@@ -954,6 +948,43 @@ mod files {
 		pub fn result (&self) -> Result<FileId, GrugError<'_>> {
 			if self.file_id == INVALID_GRUG_FILE_ID {unsafe{Err(*self.error.assume_init_ref())}}
 			else {Ok(self.file_id)}
+		}
+	}
+
+	/// The paths (relative to the mods directory) of every non-`.grug` file
+	/// within the mods directory that was detected as changed by the most
+	/// recent call to [`super::GrugState::update_files`].
+	///
+	/// Unlike `.grug` scripts, grug does not know how to reload whatever
+	/// lives at these paths itself; the host is expected to do so (e.g. by
+	/// reloading a texture, a `.lang` file, or some JSON data).
+	///
+	/// A path appears here regardless of whether any `.grug` script actually
+	/// refers to it with a `resource` string: `resource` strings are only
+	/// used to validate that a resource exists at compile time, they no
+	/// longer register a file watch.
+	pub struct ResourcePaths {
+		pub(crate) inner: OwnPtr<'static, [NTBytes<'static>]>,
+		pub(crate) _arena: Arena,
+	}
+
+	impl std::fmt::Debug for ResourcePaths {
+		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+			self.paths().fmt(f)
+		}
+	}
+
+	impl ResourcePaths {
+		pub fn empty() -> Self {
+			Self {
+				inner: (Box::new([]) as Box<[_]>).into(),
+				_arena: Arena::new(),
+			}
+		}
+
+		/// Get the paths of every updated resource
+		pub fn paths<'a>(&'a self) -> &'a [NTBytes<'a>] {
+			&*self.inner
 		}
 	}
 
