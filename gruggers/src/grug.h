@@ -135,6 +135,14 @@ struct grug_files {
 	size_t count;
 }
 
+// The paths (relative to the mods directory) of every non-.grug file within
+// the mods directory that was detected as changed by the most recent call
+// to grug_update()
+struct grug_resource_paths {
+	char** paths;
+	size_t count;
+}
+
 struct grug_runtime_error_handler {
 	void* user_data;
 	void (*drop_fn)(void*);
@@ -303,9 +311,15 @@ struct grug_files grug_compile_all_files(struct grug_state* gst, const char* pat
 // the returned grug_files only exists until the next call to grug_update
 struct grug_files grug_update(struct grug_state* gst);
 
-// returns a list of resource paths that have been updated
-// Only considers resources that are actually used by grug files
-void grug_get_updated_resources_TODO(struct grug_state* gst);
+// Returns the paths (relative to the mods directory) of every non-.grug
+// file within the mods directory that changed since the last call to
+// grug_update(). This includes files that are never referenced by a
+// `resource` string inside any .grug script (e.g. an auto-discovered
+// texture, .lang file, or JSON file): resource strings no longer register
+// a file watch, they are only used to validate that a resource exists at
+// compile time.
+// the returned grug_resource_paths only exists until the next call to grug_update
+struct grug_resource_paths grug_get_updated_resources(struct grug_state* gst);
 
 // Compile a file from a string. Useful for prototypeing or for built in scripts
 // If it overlaps with a path on the actual filesystem, it is given the same id as that path
