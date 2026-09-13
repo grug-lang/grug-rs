@@ -4,7 +4,7 @@ mod test_bindings {
 	use gruggers::ntstring::{NTStrPtr, NTStr};
 	use gruggers::state::{GrugState, GrugInitSettings, GrugEntityHandle};
 	use gruggers::backend::BytecodeBackend as Backend;
-	use gruggers::types::{GrugEntity, GrugFileId, GrugOnFnId, GrugValue};
+	use gruggers::types::{GrugEntity, FileId, ExportFnId, Value};
 
 	use super::game_functions::*;
 	
@@ -13,10 +13,10 @@ mod test_bindings {
 		create_grug_state: extern "C" fn(NTStrPtr<'_>, NTStrPtr<'_>) -> Box<GrugState>,
 		destroy_grug_state: extern "C" fn(Box<GrugState>),
 
-		compile_grug_file: extern "C" fn(&GrugState, NTStrPtr<'_>) -> GrugFileId,
-		create_entity: for<'a> extern "C" fn(&'a GrugState, GrugFileId) -> GrugEntityHandle<'a>,
-		get_on_fn_id: extern "C" fn(&GrugState, NTStrPtr<'_>, NTStrPtr<'_>) -> GrugOnFnId,
-		call_entity_on_fn: extern "C" fn(&GrugState, &GrugEntity, GrugOnFnId, *const GrugValue, usize),
+		compile_grug_file: extern "C" fn(&GrugState, NTStrPtr<'_>) -> FileId,
+		create_entity: for<'a> extern "C" fn(&'a GrugState, FileId) -> GrugEntityHandle<'a>,
+		get_on_fn_id: extern "C" fn(&GrugState, NTStrPtr<'_>, NTStrPtr<'_>) -> ExportFnId,
+		call_entity_on_fn: extern "C" fn(&GrugState, &GrugEntity, ExportFnId, *const Value, usize),
 		destroy_entity: for<'a> extern "C" fn(&'a GrugState, GrugEntityHandle<'a>),
 	}
 
@@ -39,7 +39,7 @@ mod test_bindings {
 				}
 			})
 			.build_state()
-			.map_err(|err| println!("{}", err))
+			.map_err(|err| {println!("{}", err); err})
 			.unwrap();
 		register_game_functions(&mut state);
 		state.all_host_fns_registered().unwrap();
@@ -48,16 +48,16 @@ mod test_bindings {
 
 	extern "C" fn destroy_grug_state(_: Box<GrugState>) {}
 
-	extern "C" fn compile_grug_file(state: &GrugState, script_path: NTStrPtr<'_>) -> GrugFileId {
+	extern "C" fn compile_grug_file(state: &GrugState, script_path: NTStrPtr<'_>) -> FileId {
 		state.compile_grug_file(script_path.to_str()).unwrap()
 	}
 
-	extern "C" fn get_on_fn_id(state: &GrugState, entity_name: NTStrPtr<'_>, on_fn_name: NTStrPtr<'_>) -> GrugOnFnId {
+	extern "C" fn get_on_fn_id(state: &GrugState, entity_name: NTStrPtr<'_>, on_fn_name: NTStrPtr<'_>) -> ExportFnId {
 		state.get_export_fn_id(entity_name.to_str(), on_fn_name.to_str())
 			.unwrap()
 	}
 
-	extern "C" fn create_entity(state: &GrugState, script_id: GrugFileId) -> GrugEntityHandle<'_> {
+	extern "C" fn create_entity(state: &GrugState, script_id: FileId) -> GrugEntityHandle<'_> {
 		state.create_entity(script_id).unwrap()
 	}
 
@@ -65,7 +65,7 @@ mod test_bindings {
 		state.destroy_entity(handle)
 	}
 
-	extern "C" fn call_entity_on_fn(state: &GrugState, entity: &GrugEntity, on_fn_id: GrugOnFnId, values: *const GrugValue, values_len: usize) {
+	extern "C" fn call_entity_on_fn(state: &GrugState, entity: &GrugEntity, on_fn_id: ExportFnId, values: *const Value, values_len: usize) {
 		let values = unsafe{if values.is_null() {&[]} else {std::slice::from_raw_parts(values, values_len)}};
 		assert!(state.call_export_fn(
 			entity, 
@@ -107,20 +107,20 @@ use test_bindings::*;
 
 mod game_functions {
 	use gruggers::state::GrugState;
-	use gruggers::types::GrugValue;
+	use gruggers::types::Value;
 
 	#[link(name = "bench", kind="dylib")]
 	unsafe extern "C" {
-		safe fn game_fn_print_number<'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_print_bool  <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_get_1       <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_get_mass    <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_get_number  <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_x           <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_y           <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_sqrt        <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_set_acc     <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
-		safe fn game_fn_fmod        <'a>(state: &'a GrugState, arguments: *const GrugValue) -> GrugValue;
+		safe fn game_fn_print_number<'a>(state: &'a GrugState, arguments: *const Value) -> Value;
+		safe fn game_fn_print_bool  <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
+		safe fn game_fn_get_1       <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
+		safe fn game_fn_get_mass    <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
+		safe fn game_fn_get_number  <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
+		safe fn game_fn_x           <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
+		safe fn game_fn_y           <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
+		safe fn game_fn_sqrt        <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
+		safe fn game_fn_set_acc     <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
+		safe fn game_fn_fmod        <'a>(state: &'a GrugState, arguments: *const Value) -> Value;
 	}
 
 	pub fn register_game_functions(state: &mut GrugState) { unsafe {

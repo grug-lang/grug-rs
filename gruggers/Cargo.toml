@@ -1,6 +1,6 @@
 [package]
 name = "gruggers"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 authors = ["Nikhil Nathanael Ilango"]
 description = "rust implementation of the grug language"
@@ -8,7 +8,7 @@ repository = "https://github.com/grug-lang/grug-rs"
 license = "MIT"
 default-run = "grugc"
 
-[lib] 
+[lib]
 crate-type = ["lib", "staticlib"]
 
 [[bin]]
@@ -18,7 +18,11 @@ path = "src/main.rs"
 [dependencies]
 json = "0.12.4"
 allocator-api2 = "0.4.0"
-gruggers-core = {version = "0.7", path = "../gruggers-core"}
+gruggers-core = { version = "0.8", path = "../gruggers-core" }
 
 [features]
 generics = ["gruggers-core/generics"]
+
+[[test]]
+name = "grug_tests"
+harness = false

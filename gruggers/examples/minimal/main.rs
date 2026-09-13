@@ -1,18 +1,18 @@
 #![deny(warnings)]
 use gruggers::state::{GrugInitSettings, GrugState};
-use gruggers::types::GrugValue;
+use gruggers::types::Value;
 use gruggers::nt;
 
 use std::time::Duration;
 
 mod game_fns {
 	use super::*;
-	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const GrugValue) -> GrugValue {
+	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const Value) -> Value {
 		unsafe {
 			let string = (*arguments).string.to_str();
 			println!("{}", string);
 		}
-		GrugValue{void: ()}
+		Value{void: ()}
 	}
 }
 use game_fns::*;
@@ -32,8 +32,8 @@ fn main () {
 
 	loop {
 		_ = state.update_files();
-		if !state.call_export_fn(&*dog, on_bark_id, &[GrugValue{string: nt!("woof").as_ntstrptr()}]) {panic!()};
-		if !state.call_export_fn(&*dog, on_bark_id, &[GrugValue{string: nt!("arf").as_ntstrptr()}]) {panic!()};
+		if !state.call_export_fn(&*dog, on_bark_id, &[Value{string: nt!("woof").as_ntstrptr()}]) {panic!()};
+		if !state.call_export_fn(&*dog, on_bark_id, &[Value{string: nt!("arf").as_ntstrptr()}]) {panic!()};
 		std::thread::sleep(Duration::from_secs(1));
 	}
 }

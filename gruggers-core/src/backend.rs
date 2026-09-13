@@ -1,5 +1,5 @@
 //! Defines traits and types for working with backends from a state
-use crate::types::{GrugFileId, GrugEntity, GrugValue};
+use crate::types::{FileId, GrugEntity, Value};
 use crate::ast::GrugAst;
 use crate::state::State;
 use crate::runtime_error::RuntimeError;
@@ -20,15 +20,15 @@ pub trait Backend {
 	///
 	/// The entity data of all entities created from the old script should be
 	/// regenerated
-	fn insert_file<GrugState: State>(&self, state: &GrugState, id: GrugFileId, file: GrugAst<'_>);
+	fn insert_file<GrugState: State>(&self, state: &GrugState, id: FileId, file: GrugAst<'_>);
 	/// Initialize the member data of the newly created entity. When this
 	/// function is called, the member field of `entity` points to garbage and
-	/// must not be deinitialized. The GrugFileId to be used is obtained from
+	/// must not be deinitialized. The FileId to be used is obtained from
 	/// the file_id member of `entity`. 
 	///
 	/// `entity` is pinned until it is deinitialized by a call to
 	/// `destroy_entity_data` or `insert_file` with the same path as its
-	/// current GrugFileId. The reference must be stored as a raw pointer
+	/// current FileId. The reference must be stored as a raw pointer
 	/// within self so that it can be used during `destroy_entity_data` to
 	/// check for pointer equality. 
 	/// It is safe to use that pointer as a &GrugEntity in the meantime.
@@ -52,14 +52,14 @@ pub trait Backend {
 	///
 	/// If the number of arguments is 0, then `values` is allowed to be null
 	#[must_use]
-	unsafe fn call_on_function_raw<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool;
+	unsafe fn call_on_function_raw<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const Value) -> bool;
 	/// Run the on function at index `on_fn_index` of the script associated
 	/// with `entity`.
 	///
 	/// # Panics: The length of `values` must exactly match the number of
 	/// expected arguments to the on_ function
 	#[must_use]
-	fn call_on_function<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool;
+	fn call_on_function<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[Value]) -> bool;
 }
 
 /// C-api compatible version of `&dyn [Backend]`
@@ -74,7 +74,7 @@ pub struct ErasedBackend<GrugState: State + 'static> {
 pub struct BackendVTable<GrugState: State> {
 	#[allow(improper_ctypes_definitions)]
 	/// See [`Backend::insert_file`]
-	pub(crate) insert_file         : extern "C" fn(data: NonNull<()>, state: &GrugState, id: GrugFileId, file: GrugAst<'_>),
+	pub(crate) insert_file         : extern "C" fn(data: NonNull<()>, state: &GrugState, id: FileId, file: GrugAst<'_>),
 	/// See [`Backend::init_entity`]
 	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: Pin<&GrugEntity>) -> bool,
 	/// See [`Backend::clear_entities`]
@@ -84,9 +84,9 @@ pub struct BackendVTable<GrugState: State> {
 	/// See [`Backend::call_on_function_raw`]
 	///
 	/// SAFETY: `values` must point to a buffer of at least as many values as `on_fn_index` expects
-	pub(crate) call_on_function_raw: for<'a> unsafe extern "C" fn(data: NonNull<()>, state: &'a GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool,
+	pub(crate) call_on_function_raw: for<'a> unsafe extern "C" fn(data: NonNull<()>, state: &'a GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const Value) -> bool,
 	/// See [`Backend::call_on_function`]
-	pub(crate) call_on_function    : for<'a> fn(data: NonNull<()>, state: &'a GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool,
+	pub(crate) call_on_function    : for<'a> fn(data: NonNull<()>, state: &'a GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[Value]) -> bool,
 	/// destroys the resources owned by the backend
 	pub(crate) drop                : extern "C" fn(data: NonNull<()>),
 }
@@ -94,7 +94,7 @@ pub struct BackendVTable<GrugState: State> {
 impl<GrugState: State> ErasedBackend<GrugState> {
 	/// See [`Backend::insert_file`]
 	#[inline]
-	pub fn insert_file(&self, state: &GrugState, id: GrugFileId, file: GrugAst<'_>) {
+	pub fn insert_file(&self, state: &GrugState, id: FileId, file: GrugAst<'_>) {
 		(self.vtable.insert_file)(self.data, state, id, file)
 	}
 	/// See [`Backend::init_entity`]
@@ -117,12 +117,12 @@ impl<GrugState: State> ErasedBackend<GrugState> {
 	/// # SAFETY
 	/// `values` must point to a buffer of at least as many values as `on_fn_index` expects
 	#[inline]
-	pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
+	pub unsafe fn call_on_function_raw(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const Value) -> bool {
 		unsafe{(self.vtable.call_on_function_raw)(self.data, state, entity, on_fn_index, values)}
 	}
 	/// See [`Backend::call_on_function`]
 	#[inline]
-	pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
+	pub fn call_on_function(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[Value]) -> bool {
 		(self.vtable.call_on_function)(self.data, state, entity, on_fn_index, values)
 	}
 }
@@ -136,7 +136,7 @@ impl<GrugState: State> Drop for ErasedBackend<GrugState> {
 impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 	fn from(other: T) -> Self {
 		#[allow(improper_ctypes_definitions)]
-		extern "C" fn insert_file<T: Backend, GrugState: State>(data: NonNull<()>, state: &GrugState, id: GrugFileId, file: GrugAst<'_>) {
+		extern "C" fn insert_file<T: Backend, GrugState: State>(data: NonNull<()>, state: &GrugState, id: FileId, file: GrugAst<'_>) {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
 				state, 
@@ -166,7 +166,7 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 			)
 		}
 		/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
-		unsafe extern "C" fn call_on_function_raw<T: Backend, GrugState: State>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
+		unsafe extern "C" fn call_on_function_raw<T: Backend, GrugState: State>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const Value) -> bool {
 			unsafe{T::call_on_function_raw::<GrugState>(
 				data.cast::<T>().as_ref(),
 				state, 
@@ -175,7 +175,7 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 				values
 			)}
 		}
-		fn call_on_function<T: Backend, GrugState: State>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
+		fn call_on_function<T: Backend, GrugState: State>(data: NonNull<()>, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[Value]) -> bool {
 			T::call_on_function::<GrugState>(
 				unsafe{data.cast::<T>().as_ref()},
 				state, 
@@ -225,18 +225,19 @@ struct CStateWithHandler {
 
 impl State for CStateWithHandler {
 	fn set_runtime_error(&self, error: RuntimeError) {
+		let code = error.code();
 		match error {
 			RuntimeError::StackOverflow |
-			RuntimeError::ExceededTimeLimit => (self.set_runtime_error)(self.state, error.code(), None),
+			RuntimeError::ExceededTimeLimit => (self.set_runtime_error)(self.state, code, None),
 			RuntimeError::GameFunctionError{message} => {
 				let string;
-				let message = if let Some(message) = NTStr::try_from_str(message) {
-					message
+				let message_nt = if let Some(nt) = NTStr::try_from_str(&message) {
+					nt
 				} else {
 					string = format!("{}\n", message);
 					NTStr::try_from_str(&string).unwrap()
 				};
-				(self.set_runtime_error)(self.state, error.code(), Some(message.as_ntstrptr()));
+				(self.set_runtime_error)(self.state, code, Some(message_nt.as_ntstrptr()));
 			}
 		}
 	}
@@ -258,7 +259,7 @@ pub struct CBackend<B: Backend> {
 impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 	fn from(other: CBackend<B>) -> Self {
 		#[allow(improper_ctypes_definitions)]
-		extern "C" fn insert_file<B: Backend>(data: NonNull<()>, state: &CState, id: GrugFileId, file: GrugAst<'_>) {
+		extern "C" fn insert_file<B: Backend>(data: NonNull<()>, state: &CState, id: FileId, file: GrugAst<'_>) {
 			B::insert_file(
 				unsafe{&data.cast::<CBackend<B>>().as_ref().backend},
 				state, 
@@ -292,7 +293,7 @@ impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 			)
 		}
 		/// SAFETY: `values` must point to a buffer of at least as many values as on_fn_id expects
-		unsafe extern "C" fn call_on_function_raw<B: Backend>(data: NonNull<()>, state: &CState, entity: &GrugEntity, on_fn_index: usize, values: *const GrugValue) -> bool {
+		unsafe extern "C" fn call_on_function_raw<B: Backend>(data: NonNull<()>, state: &CState, entity: &GrugEntity, on_fn_index: usize, values: *const Value) -> bool {
 			unsafe{B::call_on_function_raw::<CStateWithHandler>(
 				&data.cast::<CBackend<B>>().as_ref().backend,
 				&CStateWithHandler{
@@ -305,7 +306,7 @@ impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 				values
 			)}
 		}
-		fn call_on_function<B: Backend>(data: NonNull<()>, state: &CState, entity: &GrugEntity, on_fn_index: usize, values: &[GrugValue]) -> bool {
+		fn call_on_function<B: Backend>(data: NonNull<()>, state: &CState, entity: &GrugEntity, on_fn_index: usize, values: &[Value]) -> bool {
 			B::call_on_function::<CStateWithHandler>(
 				unsafe{&data.cast::<CBackend<B>>().as_ref().backend},
 				&CStateWithHandler{

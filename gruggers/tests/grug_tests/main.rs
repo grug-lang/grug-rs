@@ -5,10 +5,10 @@ use gruggers::nt;
 
 mod test_bindings {
 	use gruggers::state::{GrugInitSettings, GrugState, State, GrugEntityHandle};
-	use gruggers::backend::BytecodeBackend;
+	use gruggers::backend::{BytecodeBackend, StubBackend};
 	use gruggers_core::runtime_error::RuntimeError;
-	use gruggers::types::{GrugValue, GrugFileId};
-	use gruggers::ntstring::{NTStrPtr, NTBytes};
+	use gruggers::types::{Value, FileId};
+	use gruggers::ntstring::{NTStrPtr, NTBytes, NTStr};
 	use gruggers::serde;
 	use gruggers::nt;
 	use gruggers::arena::Arena;
@@ -18,10 +18,27 @@ mod test_bindings {
 
 	type CState = (GrugState, Arena);
 
+	pub extern "C" fn parse_mod_api(mod_api_path: NTBytes) -> Option<NTBytes<'static>>{
+		let state = GrugInitSettings::new()
+			.set_mod_api_path(unsafe{OsStr::from_encoded_bytes_unchecked(mod_api_path.to_bytes())})
+			.set_mods_dir(unsafe{OsStr::from_encoded_bytes_unchecked(b".")})
+			.set_backend(StubBackend)
+			.build_state();
+		match state {
+			Ok(_) => None,
+			Err(err) => {
+				let return_str: &NTStr = (&*format!("{}\0", err).leak()).try_into().unwrap();
+				
+				Some(return_str.into())
+			}
+		}
+	}
+
 	pub extern "C" fn create_grug_state<'a>(mod_api_path: NTBytes<'a>, mods_dir_path: NTBytes<'a>, _unsafe_mode: bool) -> Option<Box<CState>> {
 		let mut state = GrugInitSettings::new()
 			.set_mod_api_path(unsafe{OsStr::from_encoded_bytes_unchecked(mod_api_path.to_bytes())})
 			.set_mods_dir(unsafe{OsStr::from_encoded_bytes_unchecked(mods_dir_path.to_bytes())})
+			.set_poll_interval(std::time::Duration::from_millis(20))
 			.set_runtime_error_handler(|kind, msg, fn_name, script_path| {
 				let mut msg = String::from(msg);
 				msg.push('\0');
@@ -46,7 +63,7 @@ mod test_bindings {
 
 	pub extern "C" fn destroy_grug_state<'a>(_state: Box<CState>) { }
 
-	pub extern "C" fn compile_grug_file<'a>(cstate: &'a CState, path: NTBytes<'_>, err_out: &'_ mut Option<NTStrPtr<'a>>) -> GrugFileId {
+	pub extern "C" fn compile_grug_file<'a>(cstate: &'a CState, path: NTBytes<'_>, err_out: &'_ mut Option<NTStrPtr<'a>>) -> FileId {
 		let path = path.to_bytes();
 		let (state, arena) = cstate;
 		
@@ -58,15 +75,15 @@ mod test_bindings {
 			}
 			Err(err) => {
 				*err_out = Some(arena.copy_str_into_nt(err.inner().error_string.to_str()).as_ntstrptr());
-				return GrugFileId::new(u64::MAX);
+				return FileId::new(u64::MAX);
 			}
 		}
 	}
 
 	// This is actually a noop
-	pub extern "C" fn destroy_grug_file(_: &CState, _file_id: GrugFileId) {}
+	pub extern "C" fn destroy_grug_file(_: &CState, _file_id: FileId) {}
 
-	pub extern "C" fn create_entity<'a>((state, _): &'a CState, file_id: GrugFileId, err_out: &'_ mut Option<NTStrPtr<'a>>) -> Option<GrugEntityHandle<'a>> {
+	pub extern "C" fn create_entity<'a>((state, _): &'a CState, file_id: FileId, err_out: &'_ mut Option<NTStrPtr<'a>>) -> Option<GrugEntityHandle<'a>> {
 		unsafe{state.set_next_entity_id(42)};
 		match state.create_entity(file_id) {
 			Some(entity) => {*err_out = None; Some(entity)},
@@ -81,10 +98,25 @@ mod test_bindings {
 		state.destroy_entity(handle);
 	}
 
+	// Holds the resource paths reported by the most recent call to
+	// `update`, so that `get_updated_resources` can hand them back to
+	// tests.c afterwards. Test-only plumbing, mirroring the statics tests.c
+	// itself uses to capture call data.
+	static mut LAST_UPDATED_RESOURCES: Option<gruggers::state::ResourcePaths> = None;
+
 	pub extern "C" fn update<'a>((state, arena): &'a CState, err_out: &mut Option<NTStrPtr<'a>>) {
-		std::thread::sleep(std::time::Duration::from_micros(1));
+		// create_grug_state() above configures a 20ms poll interval for
+		// this test binary (instead of the 1 second production default).
+		// Sleeping here for comfortably longer than that guarantees at
+		// least one full scan has happened since the previous call to
+		// update(), instead of racing that background thread's own
+		// schedule. This is test-only: real hosts call update() once per
+		// frame and don't want any of this delay.
+		std::thread::sleep(std::time::Duration::from_millis(100));
 		match state.update_files() {
-			(_, updated_files) => {
+			(resources, updated_files) => {
+				// SAFETY: single threaded test harness
+				unsafe{LAST_UPDATED_RESOURCES = Some(resources)};
 				// for each file in the `updated_files`, find it in `files`,
 				// copy its contents over to the `files`'s arena and replace it
 				for updated_file in updated_files.files() {
@@ -98,8 +130,27 @@ mod test_bindings {
 		*err_out = None;
 	}
 
+	pub extern "C" fn get_updated_resources(_state: &CState, count_out: &mut usize) -> *const *const std::ffi::c_char {
+		// SAFETY: single threaded test harness
+		let resources = unsafe{&LAST_UPDATED_RESOURCES};
+		match resources {
+			Some(resources) => {
+				let paths = resources.paths();
+				*count_out = paths.len();
+				// SAFETY: `NTBytes` is `#[repr(transparent)]` over
+				// `NonNull<c_char>`, so `&[NTBytes]` has the same layout
+				// as `&[*const c_char]`
+				paths.as_ptr().cast::<*const std::ffi::c_char>()
+			}
+			None => {
+				*count_out = 0;
+				std::ptr::null()
+			}
+		}
+	}
+
 	#[allow(unused_variables)]
-	pub extern "C" fn call_export_fn<'a> ((state, _): &CState, entity: GrugEntityHandle<'a>, fn_name: NTStrPtr<'a>, args: *const GrugValue, args_count: usize) {
+	pub extern "C" fn call_export_fn<'a> ((state, _): &CState, entity: GrugEntityHandle<'a>, fn_name: NTStrPtr<'a>, args: *const Value, args_count: usize) {
 		state.clear_error();
 		unsafe{state.set_next_entity_id(42)};
 
@@ -159,27 +210,31 @@ mod test_bindings {
 	}
 
 	pub extern "C" fn game_fn_error ((state, _): &CState, msg: NTStrPtr<'static>) {
-		state.set_runtime_error(RuntimeError::GameFunctionError{message: msg.to_str()});
+		state.set_runtime_error(RuntimeError::GameFunctionError{message: msg.to_str().to_string()});
 	}
 
 	#[allow(non_camel_case_types)]
 	// pub type c_size_t = u64;
 	#[allow(non_camel_case_types)]
+	pub type parse_mod_api_t = for<'a> extern "C" fn(NTBytes<'a>) -> Option<NTBytes<'static>>;
+	#[allow(non_camel_case_types)]
 	pub type create_grug_state_t = for<'a> extern "C" fn(NTBytes<'a>, NTBytes<'a>, bool) -> Option<Box<CState>>;
 	#[allow(non_camel_case_types)]
 	pub type destroy_grug_state_t = extern "C" fn(Box<CState>);
 	#[allow(non_camel_case_types)]
-	pub type compile_grug_file_t = for<'a> extern "C" fn(&'a CState, NTBytes<'_>, &mut Option<NTStrPtr<'a>>) -> GrugFileId;
+	pub type compile_grug_file_t = for<'a> extern "C" fn(&'a CState, NTBytes<'_>, &mut Option<NTStrPtr<'a>>) -> FileId;
 	#[allow(non_camel_case_types)]
-	pub type destroy_grug_file_t = extern "C" fn(&'_ CState, GrugFileId);
+	pub type destroy_grug_file_t = extern "C" fn(&'_ CState, FileId);
 	#[allow(non_camel_case_types)]
-	pub type create_entity_t = for<'a> extern "C" fn(&'a CState, GrugFileId, &mut Option<NTStrPtr<'a>>) -> Option<GrugEntityHandle<'a>>;
+	pub type create_entity_t = for<'a> extern "C" fn(&'a CState, FileId, &mut Option<NTStrPtr<'a>>) -> Option<GrugEntityHandle<'a>>;
 	#[allow(non_camel_case_types)]
 	pub type destroy_entity_t = for<'a> extern "C" fn(&'a CState, GrugEntityHandle<'a>);
 	#[allow(non_camel_case_types)]
 	pub type update_t = for<'a> extern "C" fn (&'a CState, &mut Option<NTStrPtr<'a>>);
 	#[allow(non_camel_case_types)]
-	pub type call_export_fn_t = for<'a> extern "C" fn (&'a CState, GrugEntityHandle<'a>, NTStrPtr<'_>, *const GrugValue, usize);
+	pub type get_updated_resources_t = extern "C" fn (&CState, &mut usize) -> *const *const std::ffi::c_char;
+	#[allow(non_camel_case_types)]
+	pub type call_export_fn_t = for<'a> extern "C" fn (&'a CState, GrugEntityHandle<'a>, NTStrPtr<'_>, *const Value, usize);
 	#[allow(non_camel_case_types)]
 	pub type dump_file_to_json_t = extern "C" fn (&CState, NTStrPtr<'_>, *mut u8, usize) -> i32;
 	#[allow(non_camel_case_types)]
@@ -189,6 +244,7 @@ mod test_bindings {
 
 	#[repr(C)]
 	pub struct GrugStateVTable {
+		parse_mod_api: parse_mod_api_t,
 		create_grug_state: create_grug_state_t,
 		destroy_grug_state: destroy_grug_state_t,
 		compile_grug_file: compile_grug_file_t,
@@ -196,6 +252,7 @@ mod test_bindings {
 		create_entity: create_entity_t,
 		destroy_entity: destroy_entity_t,
 		update: update_t,
+		get_updated_resources: get_updated_resources_t,
 		call_export_fn: call_export_fn_t,
 		dump_file_to_json: dump_file_to_json_t,
 		generate_file_from_json: generate_file_from_json_t,
@@ -203,6 +260,7 @@ mod test_bindings {
 	}
 
 	pub const STATE_VTABLE: GrugStateVTable = GrugStateVTable {
+		parse_mod_api,
 		create_grug_state,
 		destroy_grug_state,
 		compile_grug_file,
@@ -210,11 +268,19 @@ mod test_bindings {
 		create_entity,
 		destroy_entity,
 		update,
+		get_updated_resources,
 		call_export_fn,
 		dump_file_to_json,
 		generate_file_from_json,
 		game_fn_error,
 	};
+
+	#[repr(C)]
+	pub struct GrugTestsOptions {
+		pub whitelisted_test: Option<NTStrPtr<'static>>,
+		pub continue_on_fail: bool,
+		pub results_json_path: Option<NTStrPtr<'static>>,
+	}
 
 	#[link(name="tests", kind="dylib")]
 	unsafe extern "C" {
@@ -229,63 +295,88 @@ mod test_bindings {
 			tests_dir_path_: NTStrPtr<'static>, 
 			mod_api_path: NTStrPtr<'static>, 
 			vtable: GrugStateVTable,
-			whitelisted_test_: Option<NTStrPtr<'static>>
+			options: GrugTestsOptions,
 		);
 	}
 }
 use test_bindings::*;
 
 mod game_fn_bindings {
-	use gruggers::types::GrugValue;
+	use gruggers::types::{Value, HostFnWithState};
+	use gruggers::ast::Type;
 	use gruggers::state::GrugState;
 	use gruggers::error::Error;
 	#[link(name = "tests", kind="dylib")]
 	#[allow(improper_ctypes)]
 	unsafe extern "C" {
-		safe fn game_fn_nothing                 <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_magic                   <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_initialize              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_initialize_bool         <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_identity                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_max                     <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_say                     <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_sin                     <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-		safe fn game_fn_cos                     <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_mega                    <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_get_false               <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_set_is_happy            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_mega_f32                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_mega_i32                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_draw                    <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_assert_state_is_not_null<'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_blocked_alrm            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_spawn                   <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_spawn_d                 <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_has_resource            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_has_entity              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_has_string              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_get_opponent            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_set_d                   <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_get_os                  <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_set_opponent            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_motherload              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_motherload_subless      <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_offset_32_bit_f32       <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_offset_32_bit_i32       <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_offset_32_bit_string    <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_talk                    <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_get_position            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_set_position            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_cause_game_fn_error     <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_call_on_b_fn            <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_store                   <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_retrieve                <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_box_number              <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_print_csv               <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_vec_number_new          <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_vec_number_push         <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_vec_number_pop          <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
-        safe fn game_fn_vec_number_insert       <'a>(state: &'a GrugState, values: *const GrugValue) -> GrugValue;
+		safe fn game_fn_nothing                       <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_magic                         <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_initialize                    <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_initialize_bool               <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_identity                      <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_max                           <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_say                           <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_sin                           <'a>(state: &'a GrugState, values: *const Value) -> Value;
+		safe fn game_fn_cos                           <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_mega                          <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_eval_order_1                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_eval_order_2                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_get_false                     <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_set_is_happy                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_draw                          <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_assert_state_is_not_null      <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_blocked_alrm                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_spawn                         <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_spawn_d                       <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_has_resource                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_has_entity                    <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_has_string                    <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_get_opponent                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_set_d                         <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_get_os                        <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_set_opponent                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_motherload                    <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_motherload_subless            <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_offset_32_bit_f32             <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_offset_32_bit_i32             <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_offset_32_bit_string          <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_talk                          <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_get_position                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_set_position                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_cause_game_fn_error           <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_call_on_b_fn                  <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_call_on_b_fn_number           <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_box_number                    <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_print_csv                     <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_vec_number_new                <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_vec_number_push               <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_vec_number_pop                <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_vec_number_insert             <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_utils                         <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_Utils_assert_state_is_not_null<'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_Utils_cause_game_fn_error     <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_Utils_call_on_b_fn            <'a>(state: &'a GrugState, values: *const Value) -> Value;
+
+		safe fn reg_game_fn_vec_new                           (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_vec_push                          (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_vec_pop                           (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_vec_insert                        (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+
+		safe fn reg_game_fn_box                               (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_box_get                           (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		
+		safe fn reg_game_fn_default                           (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+
+		safe fn reg_game_fn_dict                              (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_dict_from_vec                     (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_dict_put                          (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+
+		safe fn reg_game_fn_cause_game_fn_error_generic       (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_Utils_cause_game_fn_error_generic (types: &[Type;1]) -> Option<HostFnWithState<GrugState>>;
+
+		safe fn reg_game_fn_make_pair                         (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_pair_first                        (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
+		safe fn reg_game_fn_pair_second                       (types: &[Type;2]) -> Option<HostFnWithState<GrugState>>;
 	}
 	pub fn register_game_functions(state: &mut GrugState) -> Result<(), Error> { unsafe {
 		state.register_host_fn("nothing",                  game_fn_nothing             )?; 
@@ -298,10 +389,10 @@ mod game_fn_bindings {
 		state.register_host_fn("sin",                      game_fn_sin                 )?; 
 		state.register_host_fn("cos",                      game_fn_cos                 )?; 
 		state.register_host_fn("mega",                     game_fn_mega                )?; 
+		state.register_host_fn("eval_order_1",             game_fn_eval_order_1        )?; 
+		state.register_host_fn("eval_order_2",             game_fn_eval_order_2        )?; 
 		state.register_host_fn("get_false",                game_fn_get_false           )?; 
 		state.register_host_fn("set_is_happy",             game_fn_set_is_happy        )?; 
-		state.register_host_fn("mega_f32",                 game_fn_mega_f32            )?; 
-		state.register_host_fn("mega_i32",                 game_fn_mega_i32            )?; 
 		state.register_host_fn("draw",                     game_fn_draw                )?; 
 		state.register_host_fn("assert_state_is_not_null", game_fn_assert_state_is_not_null)?; 
 		state.register_host_fn("blocked_alrm",             game_fn_blocked_alrm        )?; 
@@ -324,48 +415,96 @@ mod game_fn_bindings {
 		state.register_host_fn("set_position",             game_fn_set_position        )?; 
 		state.register_host_fn("cause_game_fn_error",      game_fn_cause_game_fn_error )?; 
 		state.register_host_fn("call_on_b_fn",             game_fn_call_on_b_fn        )?; 
-		state.register_host_fn("store",                    game_fn_store               )?; 
-		state.register_host_fn("retrieve",                 game_fn_retrieve            )?; 
+		state.register_host_fn("call_on_b_fn_number",      game_fn_call_on_b_fn_number )?; 
 		state.register_host_fn("box_number",               game_fn_box_number          )?; 
 		state.register_host_fn("print_csv",                game_fn_print_csv           )?; 
 		state.register_host_fn("vec_number_new",           game_fn_vec_number_new      )?; 
-		state.register_method_fn("VecNumber", "push",   game_fn_vec_number_push     )?; 
-		state.register_method_fn("VecNumber", "pop",    game_fn_vec_number_pop      )?; 
-		state.register_method_fn("VecNumber", "insert", game_fn_vec_number_insert   )?; 
+		state.register_host_fn("utils",                    game_fn_utils               )?; 
+		state.register_method("VecNumber", "push",   game_fn_vec_number_push     )?; 
+		state.register_method("VecNumber", "pop",    game_fn_vec_number_pop      )?; 
+		state.register_method("VecNumber", "insert", game_fn_vec_number_insert   )?; 
+
+		state.register_method("Utils", "assert_state_is_not_null", game_fn_Utils_assert_state_is_not_null)?; 
+		state.register_method("Utils", "cause_game_fn_error",      game_fn_Utils_cause_game_fn_error     )?; 
+		state.register_method("Utils", "call_on_b_fn",             game_fn_Utils_call_on_b_fn           )?; 
+		state.register_generic_method("Utils", "cause_game_fn_error_generic", reg_game_fn_Utils_cause_game_fn_error_generic)?; 
+
+		state.register_generic_fn("vec", reg_game_fn_vec_new)?;
+		state.register_generic_method("Vec", "push"  , reg_game_fn_vec_push  )?; 
+		state.register_generic_method("Vec", "pop"   , reg_game_fn_vec_pop   )?; 
+		state.register_generic_method("Vec", "insert", reg_game_fn_vec_insert)?; 
+
+		state.register_generic_fn("box", reg_game_fn_box)?;
+		state.register_generic_method("Box", "get"   , reg_game_fn_box_get   )?; 
+
+		state.register_generic_fn("make_pair",                   reg_game_fn_make_pair)?; 
+		state.register_generic_method("Pair", "first" ,          reg_game_fn_pair_first)?; 
+		state.register_generic_method("Pair", "second",          reg_game_fn_pair_second)?; 
+
+		state.register_generic_fn("dict",                        reg_game_fn_dict)?; 
+		state.register_generic_fn("dict_from_vec",               reg_game_fn_dict_from_vec)?; 
+		state.register_generic_method("Dict", "put"   , reg_game_fn_dict_put)?; 
+
+		state.register_generic_fn("default", reg_game_fn_default)?; 
+		state.register_generic_fn("cause_game_fn_error_generic", reg_game_fn_cause_game_fn_error_generic)?; 
+
 		Ok(())
 	}}
 }
 use std::io::Write;
 
-#[test]
-fn grug_tests () {
-	let mut args = std::env::args().collect::<Vec<_>>();
+pub fn main() {
+    let mut args = std::env::args().collect::<Vec<_>>();
 
-	let mut whitelisted_test = None;
-	if args.len() >= 3 {
-		let mut test = args.remove(2);
-		if !test.starts_with("--") {
-			test.push('\0');
-			whitelisted_test = unsafe{Some(NTStr::from_str_unchecked(String::leak(test)).as_ntstrptr())};
-		}
-	};
+    // args[0] is the executable path.
+    // Only treat args[1] as the whitelisted test name if it isn't itself a
+    // flag; otherwise leave it in `args` so the loop below can pick it up.
+    let mut whitelisted_test = None;
+    if args.len() >= 2 && !args[1].starts_with("--") {
+        let mut test = args.remove(1);
+        test.push('\0');
+        whitelisted_test = unsafe { Some(NTStr::from_str_unchecked(String::leak(test)).as_ntstrptr()) };
+    }
 
-	let grug_tests_path = nt!("src/grug-tests/tests");
-	let mod_api_path = nt!("src/grug-tests/mod_api.json");
+    let mut continue_on_fail = false;
+    let mut results_json_path = None;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--continue-on-fail" {
+            args.remove(i);
+            continue_on_fail = true;
+        } else if args[i] == "--results-json-path" {
+            args.remove(i);
+            if i < args.len() {
+                let mut path = args.remove(i);
+                path.push('\0');
+                results_json_path = unsafe { Some(NTStr::from_str_unchecked(String::leak(path)).as_ntstrptr()) };
+            }
+        } else {
+            i += 1;
+        }
+    }
 
-	std::panic::set_hook(Box::new(|info| {
-		_ = std::io::stdout().write_fmt(
-			format_args!("{}: {}\n", info.location().unwrap(), info.payload_as_str().unwrap_or("No info"))
-		);
-		std::process::exit(2);
-	}));
-	unsafe {
-		grug_tests_run(
-			grug_tests_path.as_ntstrptr(),
-			mod_api_path.as_ntstrptr(),
-			STATE_VTABLE,
-			whitelisted_test,
-		)
-	}
-	_ = std::panic::take_hook();
+    let grug_tests_path = nt!("src/grug-tests/tests");
+    let mod_api_path = nt!("src/grug-tests/mod_api.json");
+
+    std::panic::set_hook(Box::new(|info| {
+        _ = std::io::stdout().write_fmt(
+            format_args!("{}: {}\n", info.location().unwrap(), info.payload_as_str().unwrap_or("No info"))
+        );
+        std::process::exit(2);
+    }));
+    unsafe {
+        grug_tests_run(
+            grug_tests_path.as_ntstrptr(),
+            mod_api_path.as_ntstrptr(),
+            STATE_VTABLE,
+            GrugTestsOptions {
+                whitelisted_test,
+                continue_on_fail,
+                results_json_path,
+            },
+        )
+    }
+    _ = std::panic::take_hook();
 }

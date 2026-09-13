@@ -38,11 +38,12 @@ mod ser {
 			GlobalStatement::Variable(MemberVariable{
 				name,
 				ty,
+				type_span: _,
 				assignment_expr,
 				span: _
 			}) => {
 				object! {
-					"type": "GLOBAL_VARIABLE",
+					"type": "VARIABLE_STATEMENT",
 					"name": name.to_str(), 
 					"variable_type": serialize_type(ty),
 					"assignment": serialize_expr(assignment_expr),
@@ -55,13 +56,12 @@ mod ser {
 				span: _
 			}) => {
 				let mut object = object! {
-					"type": "GLOBAL_ON_FN",
+					"type": "EXPORT_FN",
 					"name": name.to_str(),
 					"statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				};
 				if !parameters.is_empty() {
-					// TODO: rename this to "parameters"
-					object["arguments"] = parameters.iter().map(serialize_parameter).collect::<Vec<_>>().into();
+					object["parameters"] = parameters.iter().map(serialize_parameter).collect::<Vec<_>>().into();
 				}
 				object
 			},
@@ -70,18 +70,18 @@ mod ser {
 				parameters,
 				body_statements,
 				return_type,
+				return_type_span: _,
 				span: _
 			}) => {
 				let mut object = object! {
-					"type": "GLOBAL_HELPER_FN",
+					"type": "LOCAL_FN",
 					"name": name.to_str(),
 					"statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				};
 				if !parameters.is_empty() {
-					// TODO: rename this to "parameters"
-					object["arguments"] = parameters.iter().map(serialize_parameter).collect::<Vec<_>>().into();
+					object["parameters"] = parameters.iter().map(serialize_parameter).collect::<Vec<_>>().into();
 				}
-				if *return_type != GrugType::Void {
+				if *return_type != Type::Void {
 					// TODO: rename this to "parameters"
 					object["return_type"] = serialize_type(return_type);
 				}
@@ -91,36 +91,47 @@ mod ser {
 				value,
 			} => {
 				object! {
-					"type": "GLOBAL_COMMENT",
+					"type": "COMMENT_STATEMENT",
 					"comment": value.to_str(),
 				}
 			},
 			GlobalStatement::EmptyLine => {
 				object! {
-					"type": "GLOBAL_EMPTY_LINE",
+					"type": "EMPTY_LINE_STATEMENT",
 				}
 			},
 		}).collect::<Vec<_>>().into()
 	}
 
-	fn serialize_type(ty: &GrugType) -> JsonValue {
+	fn serialize_type(ty: &Type) -> JsonValue {
 		match ty {
-			GrugType::Void => "void".into(),
-			GrugType::Bool => "bool".into(),
-			GrugType::Number => "number".into(),
-			GrugType::String => "string".into(),
-			GrugType::Id {
-				custom_name: None
-			} => "id".into(),
-			GrugType::Id{
-				custom_name: Some(name),
-			} => name.to_str().into(),
-			GrugType::Resource {
-				..
-			} => unreachable!(),
-			GrugType::Entity {
-				..
-			} => unreachable!(),
+			Type::Void => object!{
+				"name": "void"
+			},
+			Type::Bool => object!{
+				"name": "bool",
+			},
+			Type::Number => object! {
+				"name": "number",
+			},
+			Type::String => object! {
+				"name": "string",
+			},
+			Type::Id{
+				name,
+				generics,
+			} => {
+				let mut object = object! {
+					"name": name.to_str(),
+				};
+				if !generics.is_empty() {
+					object["generics"] = generics.into_iter().map(|generic| serialize_type(generic)).collect::<Vec<_>>().into();
+				}
+				object
+			}
+			Type::Resource   {..} => unreachable!(),
+			Type::Entity     {..} => unreachable!(),
+			Type::Existential{..} => unreachable!(),
 		}
 	}
 
@@ -241,6 +252,7 @@ mod ser {
 			Statement::Variable{
 				name,
 				ty,
+				type_span: _,
 				assignment_expr,
 				name_span: _,
 			} => {
@@ -336,7 +348,6 @@ mod de {
 		GlobalStatementNotObject,
 		GlobalStatementKindNotString,
 		GlobalVariableNameNotString,
-		GlobalVariableTypeNotString,
 		ExpressionNotObject,
 		ExpressionKindNotString,
 		LiteralExpressionValueNotString,
@@ -349,18 +360,18 @@ mod de {
 		ParametersNotArray,
 		ParameterNotObject,
 		ParameterNameNotString,
-		ParameterTypeNotString,
 		StatementsNotArray,
 		StatementNotObject,
 		StatementKindNotString,
 		LocalVariableNameNotString,
-		LocalVariableTypeNotString,
 		ElseBlockNotArray,
 		CommentValueNotString,
 		HelperFunctionNameNotString,
-		HelperFunctionReturnTypeNotString,
 		InvalidGlobalStatementType,
 		UnrecognizedOperator,
+		TypeNotObject,
+		TypeNameNotString,
+		GenericsNotArray,
 	}
 
 	pub fn json_to_text(input: &JsonValue) -> Result<String, JsonDeserializeError> {
@@ -382,74 +393,70 @@ mod de {
 				return Err(JsonDeserializeError::GlobalStatementKindNotString)
 			};
 			match kind {
-				"GLOBAL_VARIABLE" => {
-					let Some(name) = get_object_field(global_statement, "name", "GLOBAL_VARIABLE")?.as_str() else {
+				"VARIABLE_STATEMENT" => {
+					let Some(name) = get_object_field(global_statement, "name", "VARIABLE_STATEMENT")?.as_str() else {
 						return Err(JsonDeserializeError::GlobalVariableNameNotString)
 					};
 
 					output.push_str(name);
 					output.push_str(": ");
 
-					let Some(ty) = get_object_field(global_statement, "variable_type", "GLOBAL_VARIABLE")?.as_str() else {
-						return Err(JsonDeserializeError::GlobalVariableTypeNotString)
-					};
+					let ty = get_object_field(global_statement, "variable_type", "VARIABLE_STATEMENT")?;
 
-					output.push_str(ty);
+					apply_type(ty, output)?;
 					output.push_str(" = ");
 
-					let assignment_expr = get_object_field(global_statement, "assignment", "GLOBAL_VARIABLE")?;
+					let assignment_expr = get_object_field(global_statement, "assignment", "VARIABLE_STATEMENT")?;
 					apply_expr(assignment_expr, output)?;
 					Ok(())
 				}
-				"GLOBAL_ON_FN" => {
-					let Some(name) = get_object_field(global_statement, "name", "GLOBAL_ON_FN")?.as_str() else {
+				"EXPORT_FN" => {
+					let Some(name) = get_object_field(global_statement, "name", "EXPORT_FN")?.as_str() else {
 						return Err(JsonDeserializeError::OnFunctionNameNotString)
 					};
 					output.push_str("export ");
 					output.push_str(name);
 					output.push_str("(");
-					if let Ok(parameters) = get_object_field(global_statement, "arguments", "GLOBAL_ON_FN") {
+					if let Ok(parameters) = get_object_field(global_statement, "parameters", "EXPORT_FN") {
 						apply_parameters(parameters, output)?;
 					}
 					output.push_str(") ");
 
-					let body_statements = get_object_field(global_statement, "statements", "GLOBAL_ON_FN")?;
+					let body_statements = get_object_field(global_statement, "statements", "EXPORT_FN")?;
 					apply_statements(body_statements, indentation + 1, output)?;
 					Ok(())
 				}
-				"GLOBAL_HELPER_FN" => {
-					let Some(name) = get_object_field(global_statement, "name", "GLOBAL_HELPER_FN")?.as_str() else {
+				"LOCAL_FN" => {
+					let Some(name) = get_object_field(global_statement, "name", "LOCAL_FN")?.as_str() else {
 						return Err(JsonDeserializeError::HelperFunctionNameNotString)
 					};
 					output.push_str("local ");
 					output.push_str(name);
 					output.push_str("(");
-					if let Ok(parameters) = get_object_field(global_statement, "arguments", "GLOBAL_HELPER_FN") {
+					if let Ok(parameters) = get_object_field(global_statement, "parameters", "LOCAL_FN") {
 						apply_parameters(parameters, output)?;
 					}
 					output.push_str(") ");
 
-					if let Ok(ty) = get_object_field(global_statement, "return_type", "GLOBAL_HELPER_FN") {
-						let Some(ty) = ty.as_str() else {
-							return Err(JsonDeserializeError::HelperFunctionReturnTypeNotString);
-						};
-						output.push_str(ty);
+					if let Ok(ty) = get_object_field(global_statement, "return_type", "LOCAL_FN") {
+						apply_type(ty, output)?;
+						
 						output.push_str(" ");
 					}
-					let body_statements = get_object_field(global_statement, "statements", "GLOBAL_HELPER_FN")?;
+					let body_statements = get_object_field(global_statement, "statements", "LOCAL_FN")?;
 					
 					apply_statements(body_statements, indentation + 1, output)?;
 					Ok(())
 				}
-				"GLOBAL_COMMENT" => {
-					let Some(value) = get_object_field(global_statement, "comment", "GLOBAL_COMMENT")?.as_str() else {
+				"COMMENT_STATEMENT" => {
+					let Some(value) = get_object_field(global_statement, "comment", "COMMENT_STATEMENT")?.as_str() else {
 						return Err(JsonDeserializeError::CommentValueNotString);
 					};
 					output.push_str("# ");
 					output.push_str(value);
 					Ok(())
 				}
-				"GLOBAL_EMPTY_LINE" => {
+				"EMPTY_LINE_STATEMENT" => {
 					Ok(())
 				}
 				_ => Err(JsonDeserializeError::InvalidGlobalStatementType)
@@ -470,12 +477,10 @@ mod de {
 			let Some(name) = get_object_field(parameter, "name", "argument")?.as_str() else {
 				return Err(JsonDeserializeError::ParameterNameNotString)
 			};
-			let Some(ty) = get_object_field(parameter, "type", "argument")?.as_str() else {
-				return Err(JsonDeserializeError::ParameterTypeNotString)
-			};
+			let ty = get_object_field(parameter, "type", "argument")?;
 			output.push_str(name);
 			output.push_str(": ");
-			output.push_str(ty);
+			apply_type(ty, output)?;
 			if i < parameters.len() - 1 {
 				output.push_str(", ");
 			}
@@ -505,11 +510,8 @@ mod de {
 					output.push_str(name);
 
 					if let Ok(ty) = get_object_field(statement, "variable_type", "VARIABLE_STATEMENT") {
-						let Some(ty) = ty.as_str() else {
-							return Err(JsonDeserializeError::LocalVariableTypeNotString);
-						};
 						output.push_str(": ");
-						output.push_str(ty);
+						apply_type(ty, output)?;
 					}
 
 					output.push_str(" = ");
@@ -618,6 +620,30 @@ mod de {
 		}
 		apply_indentation(indentation - 1, output);
 		output.push_str("}");
+		Ok(())
+	}
+
+	fn apply_type(ty: &JsonValue, output: &mut String) -> Result<(), JsonDeserializeError> {
+		let JsonValue::Object(ty) = ty else {
+			return Err(JsonDeserializeError::TypeNotObject)
+		};
+		let Some(name) = get_object_field(ty, "name", "type")?.as_str() else {
+			return Err(JsonDeserializeError::TypeNameNotString);
+		};
+		output.push_str(name);
+		if let Ok(generics) = get_object_field(ty, "generics", "type") {
+			output.push_str("[");
+			let JsonValue::Array(generics) = generics else {
+				return Err(JsonDeserializeError::GenericsNotArray);
+			};
+			for (i, generic) in generics.iter().enumerate() {
+				apply_type(generic, output)?;
+				if i != generics.len() - 1 {
+					output.push_str(", ");
+				}
+			}
+			output.push_str("]");
+		}
 		Ok(())
 	}
 
