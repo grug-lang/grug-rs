@@ -28,8 +28,11 @@ jobs:
       - name: Build
         run: cargo build --verbose
         
-      - name: Run standard tests
-        run: cargo test --verbose --lib --bins --doc
+      - name: Run unit tests
+        run: cargo test --verbose --lib --bins
+        
+      - name: Run doc tests
+        run: cargo test --verbose --doc
         
       - name: Run grug_bench
         run: cargo test --verbose --test grug_bench
