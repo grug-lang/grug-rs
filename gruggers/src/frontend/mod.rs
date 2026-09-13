@@ -1,4 +1,4 @@
-use crate::state::{GrugState, Files, FileInfo};
+use crate::state::{GrugState, Files, FileInfo, ResourcePaths};
 use crate::arena::Arena;
 use crate::types::FileId;
 use crate::ast::*;
@@ -11,7 +11,7 @@ use crate::type_storage::TypeStorage;
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box as Box2;
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::path::Path;
 use std::sync::Arc;
@@ -159,7 +159,6 @@ impl GrugState {
 	/// If a file has already been compiled with the same path, the script will
 	/// be hot reloaded.
 	pub fn compile_grug_file_from_str(&self, path: impl AsRef<OsStr>, file_text: &str) -> Result<FileId, Error> {
-		use super::frontend::*;
 		use crate::async_fs::{verify_file_data};
 		let path = path.as_ref();
 
@@ -168,7 +167,7 @@ impl GrugState {
 		let file_text = verify_file_data(file_text, path)?;
 		// immediately invoked closure so we get try {} finally {}
 		let id = (|| {
-			let (file, resources) = Self::compile_inner(
+			let (file, _resources) = Self::compile_inner(
 				path, 
 				file_text, 
 				&self.mods_dir_path, 
@@ -177,10 +176,6 @@ impl GrugState {
 				&arena,
 				&mut *self.type_storage.borrow_mut(),
 			)?;
-			let mut self_resources = self.resources.borrow_mut();
-			for resource in resources {
-				if !self_resources.contains(*resource) {self_resources.insert(OsString::from(resource));}
-			}
 			let id = self.get_or_insert_script_id(path.as_ref());
 			self.backend.insert_file(id, &file);
 
@@ -266,7 +261,7 @@ impl GrugState {
 
 		// Send to backend while recieving
 		while recv_count < sent_count {
-			let (mut current_arena, results, resources) = self.compiler_receiver.recv().unwrap(); 
+			let (mut current_arena, results, _resources) = self.compiler_receiver.recv().unwrap(); 
 			recv_count += results.len();
 
 			for (result, path) in results {
@@ -315,12 +310,6 @@ impl GrugState {
 				);
 				files.push(info);
 			}
-			let mut self_resources = self.resources.borrow_mut();
-			for resource in resources {
-				if !self_resources.contains(*resource) {
-					self_resources.insert(OsString::from(resource));
-				}
-			}
 			// `results` and `resources` are allocated within current_arena, so it
 			// is only safe to clear the current_arena now.
 			current_arena.clear();
@@ -333,9 +322,15 @@ impl GrugState {
 		}
 	}
 
-	/// Check if there are any files in the mods directory that need to be hot reloaded. 
-	/// Also returns any resources that need to be reloaded
-	pub fn update_files(&self) -> (std::vec::Vec<OsString>, Files) {
+	/// Check if there are any files in the mods directory that need to be hot reloaded.
+	///
+	/// Also returns the paths of every other (non-`.grug`) file within the
+	/// mods directory that changed. The entire mods directory tree is
+	/// watched recursively, so a path is reported here regardless of
+	/// whether it's referenced by a `resource` string inside a `.grug`
+	/// script: those strings are only used to validate that a resource
+	/// exists at compile time, they no longer register a file watch.
+	pub fn update_files(&self) -> (ResourcePaths, Files) {
 		let arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
 		let mut file_paths = Vec::new_in(&arena);
 		let mut updated_resources = std::vec::Vec::new();
@@ -348,11 +343,8 @@ impl GrugState {
 					let rel_name = arena.copy_osstr_into(file_name.as_ref());
 					file_paths.push(rel_name);
 				}
-			}
-			if self.resources.borrow().contains(&file_name) {
-				if !updated_resources.contains(&file_name) {
-					updated_resources.push(file_name);
-				}
+			} else if !updated_resources.contains(&file_name) {
+				updated_resources.push(file_name);
 			}
 		}
 
@@ -378,7 +370,7 @@ impl GrugState {
 
 		// Send to backend while recieving
 		while recv_count < sent_count {
-			let (mut current_arena, results, resources) = self.compiler_receiver.recv().unwrap(); 
+			let (mut current_arena, results, _resources) = self.compiler_receiver.recv().unwrap(); 
 			recv_count += results.len();
 
 			for (result, path) in results {
@@ -428,12 +420,6 @@ impl GrugState {
 				);
 				grug_files.push(info);
 			}
-			let mut self_resources = self.resources.borrow_mut();
-			for resource in resources {
-				if !self_resources.contains(*resource) {
-					self_resources.insert(OsString::from(resource));
-				}
-			}
 			// `results` and `resources` are allocated within arena, so it
 			// is only safe to clear the arena now.
 			current_arena.clear();
@@ -444,7 +430,20 @@ impl GrugState {
 			inner: unsafe{std::mem::transmute::<OwnPtr<[FileInfo]>, OwnPtr<'static, [FileInfo]>>(grug_files.into_boxed_slice().into())},
 			_arena: arena,
 		};
-		(updated_resources, grug_files)
+
+		// Resource paths are allocated into their own arena, since they
+		// don't need to live as long as (and aren't related to) the
+		// arena backing `grug_files` above.
+		let resource_arena = Arena::new();
+		let resource_paths: std::vec::Vec<NTBytes<'_>> = updated_resources.iter()
+			.map(|path| unsafe{NTBytes::from_bytes_unchecked(resource_arena.copy_bytes_into_nt(path.as_encoded_bytes()))})
+			.collect();
+		let resource_paths = ResourcePaths {
+			inner: unsafe{std::mem::transmute::<OwnPtr<[NTBytes]>, OwnPtr<'static, [NTBytes<'static>]>>(resource_paths.into_boxed_slice().into())},
+			_arena: resource_arena,
+		};
+
+		(resource_paths, grug_files)
 	}
 
 	/// Merge threaded compilation and standalone compilation
