@@ -15,6 +15,7 @@ impl<T> SharedVec<T, Global> {
 	}
 }
 
+#[allow(unused)]
 impl<T, A: Allocator> SharedVec<T, A> {
 	pub fn push(&self, val: T) {
 		// We never give out a reference to the inner values.

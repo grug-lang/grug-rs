@@ -267,8 +267,6 @@ pub struct GrugState {
 	// for use when compiling
 	pub(crate) arenas : RefCell<Vec<Arena>>,
 	// pub(crate) backend: Interpreter,
-	pub(crate) current_script: Cell<Option<FileId>>,
-	pub(crate) current_export_fn_id: Cell<Option<ExportFnId>>,
 	pub(crate) is_errorring: Cell<bool>,
 
 	pub(crate) changes: Receiver<Result<OsString, std::io::Error>>,
@@ -358,8 +356,6 @@ impl GrugState {
 			next_script_id: AtomicU64::new(0),
 			arenas: RefCell::new(Vec::new()),
 			backend,
-			current_script: Cell::new(None),
-			current_export_fn_id: Cell::new(None),
 			is_errorring: Cell::new(false),
 			changes: reciever,
 		})
@@ -501,17 +497,10 @@ impl GrugState {
 
 	/// Create a new entity from the input file id
 	pub fn create_entity(&self, file_id: FileId) -> Option<GrugEntityHandle<'_>> {
-		let old_script   = self.current_script  .get();
-		let old_fn_id = self.current_export_fn_id.get();
-		self.current_script  .set(Some(file_id));
-		self.current_export_fn_id.set(Some(ExportFnId(0)));
 
 		let entity = self.entities.insert(unsafe{GrugEntity::new_uninit(self.get_next_entity_id(), file_id)});
 		let entity = unsafe{GrugEntityHandle::new(entity)};
 		let success = self.backend.init_entity(self, &entity);
-
-		self.current_script  .set(old_script);
-		self.current_export_fn_id.set(old_fn_id);
 
 		if success {
 			self.script_entities.borrow_mut().get_mut(file_id.to_inner() as usize)
@@ -685,32 +674,16 @@ impl GrugState {
 	/// `values` may be null
 	#[must_use]
 	pub unsafe fn call_export_fn_raw(&self, entity: &GrugEntity, fn_id: ExportFnId, values: *const Value) -> bool {
-		let old_script   = self.current_script.get();
-		let old_fn_id    = self.current_export_fn_id.get();
-		self.current_script  .set(Some(entity.file_id));
-		self.current_export_fn_id.set(Some(fn_id));
-
 		let ret_val = unsafe {
 			self.backend.call_on_function_raw(self, entity, self.get_export_fn_index(fn_id), values)
 		};
-
-		self.current_script  .set(old_script);
-		self.current_export_fn_id.set(old_fn_id);
 
 		ret_val
 	}
 
 	#[must_use]
 	pub fn call_export_fn(&self, entity: &GrugEntity, fn_id: ExportFnId, values: &[Value]) -> bool {
-		let old_script   = self.current_script  .get();
-		let old_fn_id = self.current_export_fn_id.get();
-		self.current_script  .set(Some(entity.file_id));
-		self.current_export_fn_id.set(Some(fn_id));
-
 		let ret_val = self.backend.call_on_function(self, entity, self.get_export_fn_index(fn_id), values);
-
-		self.current_script  .set(old_script);
-		self.current_export_fn_id.set(old_fn_id);
 
 		ret_val
 	}

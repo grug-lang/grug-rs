@@ -13,6 +13,8 @@ use crate::ntstring::{NTStrPtr, NTStr, NTBytes};
 use crate::types::HostFn;
 use crate::error::SourceSpan;
 
+use std::ffi::OsStr;
+
 /// Represents the type of a value in grug
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C, u32)]
@@ -800,8 +802,15 @@ pub struct GrugAst<'a> {
 	pub helper_functions: &'a mut [HelperFunction<'a>],
 	/// A string that contains the entire file text. Used for Debug info.
 	pub file_text: NTStrPtr<'a>,
-	/// Path to the file relative to the mods directory
+	/// Path to the file relative to the mods directory. Must be compatible with OsStr
 	pub file_path: NTBytes<'a>,
+}
+
+impl<'a> GrugAst<'a> {
+	pub fn file_path(&self) -> &'a OsStr {
+		// SAFETY: file_path is compatible with an OsStr
+		unsafe{OsStr::from_encoded_bytes_unchecked(self.file_path.to_bytes())}
+	}
 }
 
 const _: () = const{

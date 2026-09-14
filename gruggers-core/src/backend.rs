@@ -26,7 +26,7 @@ pub trait Backend {
 	/// The entity member of all entities created from the old script should be
 	/// destroyed. This means that any entity that was created from this file
 	/// is temporarily invalid until the bindings call init_entity on them again.
-	fn insert_file(&self, id: FileId, file: GrugAst<'_>);
+	fn insert_file(&self, id: FileId, file: &GrugAst<'_>);
 	/// Initialize the member data of the entity. When this
 	/// function is called, the member field of `entity` points to garbage and
 	/// must not be deinitialized. The FileId to be used is obtained from
@@ -94,7 +94,7 @@ pub struct ErasedBackend<GrugState: State + 'static> {
 pub struct BackendVTable<GrugState: State> {
 	#[allow(improper_ctypes_definitions)]
 	/// See [`Backend::insert_file`]
-	pub(crate) insert_file         : extern "C" fn(data: NonNull<()>, id: FileId, file: GrugAst<'_>),
+	pub(crate) insert_file         : extern "C" fn(data: NonNull<()>, id: FileId, file: &GrugAst<'_>),
 	/// See [`Backend::init_entity`]
 	pub(crate) init_entity         : extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
 	/// See [`Backend::clear_entities`]
@@ -115,7 +115,7 @@ pub struct BackendVTable<GrugState: State> {
 impl<GrugState: State> ErasedBackend<GrugState> {
 	/// See [`Backend::insert_file`]
 	#[inline]
-	pub fn insert_file(&self, id: FileId, file: GrugAst<'_>) {
+	pub fn insert_file(&self, id: FileId, file: &GrugAst<'_>) {
 		(self.vtable.insert_file)(self.data, id, file)
 	}
 	/// See [`Backend::init_entity`]
@@ -162,7 +162,7 @@ impl<GrugState: State> Drop for ErasedBackend<GrugState> {
 impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
 	fn from(other: T) -> Self {
 		#[allow(improper_ctypes_definitions)]
-		extern "C" fn insert_file<T: Backend>(data: NonNull<()>, id: FileId, file: GrugAst<'_>) {
+		extern "C" fn insert_file<T: Backend>(data: NonNull<()>, id: FileId, file: &GrugAst<'_>) {
 			T::insert_file(
 				unsafe{data.cast::<T>().as_ref()},
 				id,
@@ -275,7 +275,7 @@ pub struct CBackend<B: Backend> {
 impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
 	fn from(other: CBackend<B>) -> Self {
 		#[allow(improper_ctypes_definitions)]
-		extern "C" fn insert_file<B: Backend>(data: NonNull<()>, id: FileId, file: GrugAst<'_>) {
+		extern "C" fn insert_file<B: Backend>(data: NonNull<()>, id: FileId, file: &GrugAst<'_>) {
 			B::insert_file(
 				unsafe{&data.cast::<CBackend<B>>().as_ref().backend},
 				id,

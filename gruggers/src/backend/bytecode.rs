@@ -48,28 +48,29 @@ impl<'a> Compiler<'a> {
 		}
 	}
 
-	fn compile(ast: GrugAst<'a>) -> CompiledFile {
+	fn compile(ast: &GrugAst<'a>, path: &OsStr) -> CompiledFile {
 		let mut compiler = Compiler::new();
-		let mut instructions = Instructions::new();
+		let mut instructions = Instructions::new(path, ast.file_text.to_str());
 
 		let globals_size = ast.members.len() + 1;
 
-		instructions.insert_on_fn("init_globals", 0, GrugFnData{location: 0, args: 1, locals_size: 0});
+		instructions.insert_on_fn(0, GrugFnData{name: "init_globals", location: 0, args_count: 1, locals_size: 0});
 		let me_location = compiler.insert_global_variable("me");
-		instructions.stream.push(Op::StoreGlobal{index: me_location});
+		instructions.push_ins(Op::StoreGlobal{index: me_location}, None);
 		for global in ast.members.iter() {
 			compiler.compile_expr(&mut instructions, &global.assignment_expr);
 			let i = compiler.insert_global_variable(global.name.to_str());
-			instructions.stream.push(Op::StoreGlobal{index: i});
+			instructions.push_ins(Op::StoreGlobal{index: i}, Some(global.span));
 		}
-		instructions.stream.push(Op::ReturnVoid);
+		// Note(nikhil): Maybe this should point to the location of the last member variable
+		instructions.push_ins(Op::ReturnVoid, None);
 
 		for (i, on_function) in ast.on_functions.iter().enumerate() {
 			let Some(on_function) = on_function else {continue};
 			compiler.compile_on_fn(&mut instructions, on_function, i + 1);
 		}
 
-		for helper_function in ast.helper_functions {
+		for helper_function in ast.helper_functions.iter() {
 			compiler.compile_helper_fn(&mut instructions, helper_function);
 		}
 		for (patch_loc, name) in compiler.helper_fn_patches {
@@ -100,7 +101,7 @@ impl<'a> Compiler<'a> {
 		for statement in &*helper_function.body_statements {
 			self.compile_statement(instructions, statement);
 		}
-		instructions.stream.push(Op::ReturnVoid);
+		instructions.push_ins(Op::ReturnVoid, None);
 		instructions.insert_helper_fn(helper_function.name.to_str(), helper_function.parameters.len() as u32, self.locals_size_max, begin_location);
 		self.locals_size_max = 0;
 		self.pop_scope();
@@ -120,8 +121,9 @@ impl<'a> Compiler<'a> {
 		for statement in &*on_function.body_statements {
 			self.compile_statement(instructions, statement);
 		}
-		instructions.stream.push(Op::ReturnVoid);
-		instructions.insert_on_fn(on_function.name.to_str(), index, GrugFnData{location: begin_location, args: param_count as u32, locals_size: self.locals_size_max});
+		// TODO: Maybe we need to store the end span of the function
+		instructions.push_ins(Op::ReturnVoid, None);
+		instructions.insert_on_fn(index, GrugFnData{name: on_function.name.to_str(), location: begin_location, args_count: param_count as u32, locals_size: self.locals_size_max});
 		self.locals_size_max = 0;
 		self.pop_scope();
 	}
@@ -133,17 +135,17 @@ impl<'a> Compiler<'a> {
 				ty,
 				type_span: _,
 				assignment_expr,
-				name_span: _,
+				name_span,
 			} => {
 				let name = name.to_str();
 				self.compile_expr(instructions, assignment_expr);
 				if ty.is_some() {
 					let loc = self.insert_local_variable(name);
-					instructions.stream.push(Op::StoreLocal{index: loc});
+					instructions.push_ins(Op::StoreLocal{index: loc}, Some(*name_span));
 				} else if let Some(loc) = self.get_local_location(name) {
-					instructions.stream.push(Op::StoreLocal{index: loc});
+					instructions.push_ins(Op::StoreLocal{index: loc}, Some(*name_span));
 				} else if let Some(loc) = self.get_global_location(name) {
-					instructions.stream.push(Op::StoreGlobal{index: loc});
+					instructions.push_ins(Op::StoreGlobal{index: loc}, Some(*name_span));
 				} else {
 					unreachable!();
 				}
@@ -164,7 +166,7 @@ impl<'a> Compiler<'a> {
 					self.compile_expr(instructions, condition);
 
 					let condition_patch_loc = instructions.get_loc();
-					instructions.stream.push(Op::JmpIfNot{offset: 0});
+					instructions.push_ins(Op::JmpIfNot{offset: 0}, None);
 
 					self.push_scope();
 					for statement in &**if_block {
@@ -177,7 +179,7 @@ impl<'a> Compiler<'a> {
 						// block to the end of the else block or the end of the
 						// last if block
 						end_patches.push(instructions.get_loc());
-						instructions.stream.push(Op::Jmp{offset: 0});
+						instructions.push_ins(Op::Jmp{offset: 0}, None);
 
 						let cur_loc = instructions.get_loc();
 						// jump from the false condtion to the start of the else block
@@ -220,7 +222,7 @@ impl<'a> Compiler<'a> {
 				let continue_loc = instructions.get_loc();
 				self.compile_expr(instructions, condition);
 				let break_patch_loc = instructions.get_loc();
-				instructions.stream.push(Op::JmpIfNot{offset: 0});
+				instructions.push_ins(Op::JmpIfNot{offset: 0}, None);
 
 				self.while_loop_patches.push((continue_loc, Vec::new()));
 				
@@ -228,7 +230,7 @@ impl<'a> Compiler<'a> {
 					self.compile_statement(instructions, statement);
 				}
 				let end_loc = instructions.get_loc();
-				instructions.stream.push(Op::Jmp{offset: Op::calc_offset(end_loc, continue_loc)});
+				instructions.push_ins(Op::Jmp{offset: Op::calc_offset(end_loc, continue_loc)}, None);
 				let break_loc = instructions.get_loc();
 				instructions.try_patch(Op::JmpIfNot{offset: Op::calc_offset(break_patch_loc, break_loc)}, break_patch_loc).unwrap();
 
@@ -241,21 +243,21 @@ impl<'a> Compiler<'a> {
 			// frame to grow if theres a lot of functions with return types as
 			// statements in a functions
 			Statement::Call(expr) => self.compile_expr(instructions, expr),
-			Statement::Return{return_span: _, expr} => {
+			Statement::Return{return_span: span, expr} => {
 				if let Some(expr) = expr {
 					self.compile_expr(instructions, expr);
-					instructions.stream.push(Op::ReturnValue);
+					instructions.push_ins(Op::ReturnValue, Some(*span));
 				} else {
-					instructions.stream.push(Op::ReturnVoid);
+					instructions.push_ins(Op::ReturnVoid, Some(*span));
 				}
 			}
-			Statement::Break(_) => {
+			Statement::Break(span) => {
 				self.while_loop_patches.last_mut().unwrap().1.push(instructions.get_loc());
-				instructions.stream.push(Op::Jmp{offset: 0});
+				instructions.push_ins(Op::Jmp{offset: 0}, Some(*span));
 			}
-			Statement::Continue(_) => {
+			Statement::Continue(span) => {
 				let continue_loc = self.while_loop_patches.last().unwrap().0;
-				instructions.stream.push(Op::Jmp{offset: Op::calc_offset(instructions.get_loc(), continue_loc)});
+				instructions.push_ins(Op::Jmp{offset: Op::calc_offset(instructions.get_loc(), continue_loc)}, Some(*span));
 			}
 			Statement::EmptyLine => {},
 			Statement::Comment{..}        => {},
@@ -264,24 +266,24 @@ impl<'a> Compiler<'a> {
 
 	fn compile_expr(&mut self, instructions: &mut Instructions, expr: &'a Expr) {
 		match &expr.data {
-			ExprData::True  => instructions.stream.push(Op::LoadTrue ),
-			ExprData::False => instructions.stream.push(Op::LoadFalse),
+			ExprData::True  => instructions.push_ins(Op::LoadTrue , Some(expr.span)),
+			ExprData::False => instructions.push_ins(Op::LoadFalse, Some(expr.span)),
 			ExprData::String(value)   |
 			ExprData::Resource(value) |
 			ExprData::Entity(value)   => {
 				let data_loc = instructions.insert_string(value.to_str());
-				instructions.stream.push(Op::LoadStr{data_loc});
+				instructions.push_ins(Op::LoadStr{data_loc}, Some(expr.span));
 			}
 			ExprData::Number (value, _) => {
 				let data_loc = instructions.insert_number(*value);
-				instructions.stream.push(Op::LoadNumber{data_loc});
+				instructions.push_ins(Op::LoadNumber{data_loc}, Some(expr.span));
 			}
 			ExprData::Identifier(name) => {
 				let name = name.to_str();
 				if let Some(loc) = self.get_local_location(name) {
-					instructions.stream.push(Op::LoadLocal{index: loc});
+					instructions.push_ins(Op::LoadLocal{index: loc}, Some(expr.span));
 				} else if let Some(loc) = self.get_global_location(name) {
-					instructions.stream.push(Op::LoadGlobal{index: loc});
+					instructions.push_ins(Op::LoadGlobal{index: loc}, Some(expr.span));
 				} else {
 					unreachable!();
 				}
@@ -290,28 +292,28 @@ impl<'a> Compiler<'a> {
 				left,
 				right,
 				op,
-				op_span: _,
+				op_span,
 			} => {
 				self.compile_expr(instructions, left);
 				match op {
-					BinaryOperator::Greater       => {self.compile_expr(instructions, right); instructions.stream.push(Op::CmpG);}
-					BinaryOperator::GreaterEquals => {self.compile_expr(instructions, right); instructions.stream.push(Op::CmpGe);}
-					BinaryOperator::Less          => {self.compile_expr(instructions, right); instructions.stream.push(Op::CmpL);}
-					BinaryOperator::LessEquals    => {self.compile_expr(instructions, right); instructions.stream.push(Op::CmpLe);}
-					BinaryOperator::Plus          => {self.compile_expr(instructions, right); instructions.stream.push(Op::Add);}
-					BinaryOperator::Minus         => {self.compile_expr(instructions, right); instructions.stream.push(Op::Sub);}
-					BinaryOperator::Multiply      => {self.compile_expr(instructions, right); instructions.stream.push(Op::Mul);}
-					BinaryOperator::Division      => {self.compile_expr(instructions, right); instructions.stream.push(Op::Div);}
+					BinaryOperator::Greater       => {self.compile_expr(instructions, right); instructions.push_ins(Op::CmpG , Some(*op_span));}
+					BinaryOperator::GreaterEquals => {self.compile_expr(instructions, right); instructions.push_ins(Op::CmpGe, Some(*op_span));}
+					BinaryOperator::Less          => {self.compile_expr(instructions, right); instructions.push_ins(Op::CmpL , Some(*op_span));}
+					BinaryOperator::LessEquals    => {self.compile_expr(instructions, right); instructions.push_ins(Op::CmpLe, Some(*op_span));}
+					BinaryOperator::Plus          => {self.compile_expr(instructions, right); instructions.push_ins(Op::Add  , Some(*op_span));}
+					BinaryOperator::Minus         => {self.compile_expr(instructions, right); instructions.push_ins(Op::Sub  , Some(*op_span));}
+					BinaryOperator::Multiply      => {self.compile_expr(instructions, right); instructions.push_ins(Op::Mul  , Some(*op_span));}
+					BinaryOperator::Division      => {self.compile_expr(instructions, right); instructions.push_ins(Op::Div  , Some(*op_span));}
 					BinaryOperator::DoubleEquals  => {
 						match right.result_type.unwrap() {
 							Type::String => {
 								self.compile_expr(instructions, right);
-								instructions.stream.push(Op::StrEq);
+								instructions.push_ins(Op::StrEq, Some(*op_span));
 							}
 							Type::Void   => unreachable!(),
 							_ => {
 								self.compile_expr(instructions, right);
-								instructions.stream.push(Op::CmpEq);
+								instructions.push_ins(Op::CmpEq, Some(*op_span));
 							}
 						}
 					}
@@ -319,20 +321,20 @@ impl<'a> Compiler<'a> {
 						match right.result_type.unwrap() {
 							Type::String => {
 								self.compile_expr(instructions, right);
-								instructions.stream.push(Op::StrEq);
-								instructions.stream.push(Op::Not);
+								instructions.push_ins(Op::StrEq, Some(*op_span));
+								instructions.push_ins(Op::Not  , Some(*op_span));
 							}
 							Type::Void   => unreachable!(),
 							_ => {
 								self.compile_expr(instructions, right);
-								instructions.stream.push(Op::CmpNeq);
+								instructions.push_ins(Op::CmpNeq, Some(*op_span));
 							}
 						}
 					}
 					BinaryOperator::Or            => {
-						instructions.stream.push(Op::Dup{index: 0});
+						instructions.push_ins(Op::Dup{index: 0}, Some(*op_span));
 						let first_patch_loc = instructions.get_loc();
-						instructions.stream.push(Op::JmpIf{offset: 0});
+						instructions.push_ins(Op::JmpIf{offset: 0}, Some(*op_span));
 						self.compile_expr(instructions, right);
 						instructions.try_patch(
 							Op::JmpIf{
@@ -342,9 +344,9 @@ impl<'a> Compiler<'a> {
 						).unwrap();
 					}
 					BinaryOperator::And           => {
-						instructions.stream.push(Op::Dup{index: 0});
+						instructions.push_ins(Op::Dup{index: 0}, Some(*op_span));
 						let first_patch_loc = instructions.get_loc();
-						instructions.stream.push(Op::JmpIfNot{offset: 0});
+						instructions.push_ins(Op::JmpIfNot{offset: 0}, Some(*op_span));
 						self.compile_expr(instructions, right);
 						instructions.try_patch(
 							Op::JmpIfNot{
@@ -358,16 +360,16 @@ impl<'a> Compiler<'a> {
 			ExprData::Unary {
 				op,
 				expr,
-				op_span: _,
+				op_span,
 			} => {
 				self.compile_expr(instructions, expr);
 				match op {
-					UnaryOperator::Not   => instructions.stream.push(Op::Not),
+					UnaryOperator::Not   => instructions.push_ins(Op::Not, Some(*op_span)),
 					// TODO: Add Negate instruction to do this in a single instruction
 					UnaryOperator::Minus => {
 						let data_loc = instructions.insert_number(-1.);
-						instructions.stream.push(Op::LoadNumber{data_loc}); 
-						instructions.stream.push(Op::Mul);
+						instructions.push_ins(Op::LoadNumber{data_loc}, Some(*op_span)); 
+						instructions.push_ins(Op::Mul, Some(*op_span));
 					}
 				}
 			}
@@ -376,7 +378,7 @@ impl<'a> Compiler<'a> {
 				name,
 				args,
 				ptr: None,
-				name_span: _,
+				name_span,
 				generics: _,
 			} => {
 				let args_count = args.len();
@@ -391,7 +393,7 @@ impl<'a> Compiler<'a> {
 					self.helper_fn_patches.push((instructions.get_loc(), name.to_str()));
 					0
 				});
-				instructions.stream.push(Op::CallHelperFunction{data_loc});
+				instructions.push_ins(Op::CallHelperFunction{data_loc}, Some(*name_span));
 			},
 			ExprData::Call {
 				receiver: Some(_),
@@ -405,10 +407,10 @@ impl<'a> Compiler<'a> {
 			}
 			ExprData::Call {
 				receiver,
-				name: _,
+				name,
 				args,
 				ptr: Some(ptr),
-				name_span: _,
+				name_span,
 				generics,
 			} => {
 				let args_count;
@@ -423,11 +425,11 @@ impl<'a> Compiler<'a> {
 				}
 				
 				let has_return = *expr.result_type.unwrap() != Type::Void;
-				let data_loc = instructions.insert_game_fn_data(args_count as u32, generics, *ptr);
-				instructions.stream.push(Op::CallGameFunction {
+				let data_loc = instructions.insert_game_fn_data(HostFnData{name: name.to_str(), args_count: args_count as u32, generics, ptr: *ptr});
+				instructions.push_ins(Op::CallGameFunction {
 					has_return,
 					data_loc
-				});
+				}, Some(*name_span));
 			}
 			ExprData::Parenthesized(expr) => self.compile_expr(instructions, expr),
 		}
@@ -482,8 +484,8 @@ pub struct BytecodeBackend {
 	// Safety: The strings in the stack frames are stored within self.files, so
 	// their actual lifetime is not `'static`
 	call_stack: SharedVec<&'static StackFrame<'static>>,
-	current_fn_name: Option<&'static str>,
-	current_script_path: Option<&'static OsStr>,
+	current_fn_name: Cell<Option<&'static str>>,
+	current_script_path: Cell<Option<&'static OsStr>>,
 	error_arena: RefCell<Arena>,
 	is_errorring: Cell<bool>,
 }
@@ -494,8 +496,8 @@ impl BytecodeBackend {
 			files: RefCell::new(Vec::new()),
 			stacks: RefCell::new(Vec::new()),
 			call_stack: SharedVec::new(),
-			current_fn_name: None,
-			current_script_path: None,
+			current_fn_name: Cell::new(None),
+			current_script_path: Cell::new(None),
 			error_arena: RefCell::new(Arena::new()),
 			is_errorring: Cell::new(false),
 		}
@@ -510,19 +512,19 @@ impl BytecodeBackend {
 		locals_size: u32, 
 		start_loc: usize
 	) -> Option<Value> {
-		let mut stream = &instructions.stream[start_loc..];
+		let mut stream = instructions.stream[start_loc..].as_ptr().cast::<Op>();
 		let start_time = Instant::now();
 		stack.values.resize(stack.rbp + locals_size as usize, Value{void: ()});
 		let mut i_count: usize = 1;
 		loop {
-			let (ins, next) = unsafe{stream.split_first().unwrap_unchecked()};
-			stream = next;
-			match *ins {
+			let ins = unsafe{*stream};
+			stream = unsafe{stream.add(1)};
+			match ins {
 				Op::ReturnVoid           => {
 					stack.values.truncate(stack.rbp);
 					if let Some((rbp, ip)) = stack.stack_frames.pop() {
 						stack.rbp = rbp;
-						stream = unsafe{instructions.stream.get(ip..).unwrap_unchecked()};
+						stream = ip;
 					} else {
 						return Some(Value{void: ()});
 					}
@@ -533,7 +535,7 @@ impl BytecodeBackend {
 					if let Some((rbp, ip)) = stack.stack_frames.pop() {
 						stack.values.push(ret_val);
 						stack.rbp = rbp;
-						stream = unsafe{instructions.stream.get(ip..).unwrap_unchecked()};
+						stream = ip;
 					} else {
 						return Some(ret_val);
 					}
@@ -599,31 +601,16 @@ impl BytecodeBackend {
 					unsafe{globals.get_unchecked(index as usize).set(stack.values.pop().unwrap_unchecked())};
 				}
 				Op::Jmp{offset}          => {
-					stream = unsafe{
-						std::slice::from_raw_parts(
-							instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
-							(stream.len() as isize - offset as isize) as usize
-						)
-					}
+					stream = unsafe{stream.offset(offset as isize)};
 				}
 				Op::JmpIf{offset}        => {
 					if unsafe{stack.values.pop().unwrap_unchecked().bool} != 0 {
-						stream = unsafe{
-							std::slice::from_raw_parts(
-								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
-								(stream.len() as isize - offset as isize) as usize
-							)
-						}
+						stream = unsafe{stream.offset(offset as isize)};
 					}
 				}
 				Op::JmpIfNot{offset}     => {
 					if unsafe{stack.values.pop().unwrap_unchecked().bool} == 0 {
-						stream = unsafe{
-							std::slice::from_raw_parts(
-								instructions.stream.as_ptr().with_addr(stream.as_ptr().addr()).offset(offset as isize),
-								(stream.len() as isize - offset as isize) as usize
-							)
-						}
+						stream = unsafe{stream.offset(offset as isize)};
 					}
 				}
 				Op::LoadLocal{index}     => {
@@ -637,22 +624,22 @@ impl BytecodeBackend {
 				Op::CallHelperFunction {
 					data_loc,
 				} => {
-					let GrugFnData {args, locals_size, location} = unsafe{instructions.constants[data_loc as usize].local_fn_data};
+					let GrugFnData {args_count, locals_size, location, name: _} = unsafe{instructions.constants[data_loc as usize].local_fn_data};
 					stack.stack_frames.push((
 						stack.rbp,
-						unsafe{stream.as_ptr().offset_from(instructions.stream.as_ptr()) as usize},
+						stream
 					));
-					stack.rbp = stack.values.len() - args as usize;
+					stack.rbp = stack.values.len() - args_count as usize;
 					stack.values.resize(stack.rbp + locals_size as usize, Value{void: ()});
-					stream = unsafe{instructions.stream.get(location..).unwrap_unchecked()};
+					stream = unsafe{instructions.stream.as_ptr().cast::<Op>().add(location)};
 				}
 				Op::CallGameFunction {
 					has_return,
 					data_loc,
 				} => {
-					let HostFnData{args, generics, ptr} = unsafe{instructions.constants[data_loc as usize].host_fn_data};
-					let value = unsafe{(ptr)(state as *const _ as _, stack.values.as_ptr().add(stack.values.len() - args as usize), generics as *const _ as _)};
-					stack.values.truncate(stack.values.len() - args as usize);
+					let HostFnData{args_count, generics, ptr, name: _} = unsafe{instructions.constants[data_loc as usize].host_fn_data};
+					let value = unsafe{(ptr)(state as *const _ as _, stack.values.as_ptr().add(stack.values.len() - args_count as usize), generics as *const _ as _)};
+					stack.values.truncate(stack.values.len() - args_count as usize);
 					if has_return {
 						stack.values.push(value);
 					}
@@ -662,7 +649,7 @@ impl BytecodeBackend {
 				}
 			}
 			if i_count & 0xFFFFF == 0 && start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT) {
-				self.raise_runtime_error_inner(state, RuntimeErrorKind::TimeLimitExceeded, "Time limit exceeded");
+				self.raise_runtime_error_inner(state, RuntimeErrorKind::TimeLimitExceeded, "Took longer than 100 milliseconds to run");
 				return None;
 			}
 			i_count += 1;
@@ -678,12 +665,13 @@ impl BytecodeBackend {
 		let arena = &mut *self.error_arena.borrow_mut();
 		arena.clear();
 		let call_stack = unsafe{self.call_stack.as_slice_unsafe()};
+		let current_fn_name = self.current_fn_name.get().expect("current_fn_name is empty");
+		let current_script_path = self.current_script_path.get().expect("current_script_path is empty");
 		let error = RuntimeError::new_error_in(
 			kind, 
 			call_stack, 
-			// TODO, Like, figure out how to get the actual function names
-			"Some function name",
-			"Some path".as_ref(),
+			current_fn_name,
+			current_script_path,
 			SourceSpan{line: 1, offset: 0}, 
 			"", 
 			message, 
@@ -701,8 +689,9 @@ impl Default for BytecodeBackend {
 
 impl Backend for BytecodeBackend {
 	#[inline]
-	fn insert_file(&self, id: FileId, file: GrugAst) {
-		let compiled_file = Compiler::compile(file);
+	fn insert_file(&self, id: FileId, file: &GrugAst) {
+		let path = file.file_path();
+		let compiled_file = Compiler::compile(file, path);
 		let mut files = self.files.borrow_mut();
 		if let Some(old_file) = files.get_mut(id.0 as usize) {
 			*old_file = compiled_file;
@@ -722,7 +711,22 @@ impl Backend for BytecodeBackend {
 		let globals = unsafe{&*file.data.get_slot().write_slice(file.globals_size, Cell::new(Value{void: ()}))};
 		let mut stack = self.stacks.borrow_mut().pop().unwrap_or_else(Stack::new);
 		stack.values.push(Value{id: entity.id});
+		
+		// SAFETY: These strings are only invalided when a new file is added. 
+		// These strings are removed from self by the time that happens
+		//
+		// TODO: I don't think this is panic safe
+		let prev_fn_name = self.current_fn_name.replace(
+			Some(unsafe{std::mem::transmute::<&str, &'static str>("init_globals")})
+		);
+		let prev_script_path = self.current_script_path.replace(
+			Some(unsafe{std::mem::transmute::<&OsStr, &'static OsStr>(file.instructions.path())})
+		);
 		let ret_val = unsafe{self.run(&mut stack, state, globals, &file.instructions, 1, 0)}.is_some();
+
+		self.current_fn_name.set(prev_fn_name);
+		self.current_script_path.set(prev_script_path);
+
 		entity.members.set(NonNull::from_ref(globals).cast::<()>());
 
 		stack = stack.reset();
@@ -757,6 +761,7 @@ impl Backend for BytecodeBackend {
 
 	#[inline]
 	unsafe fn call_on_function_raw<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: *const Value) -> bool {
+		self.is_errorring.set(false);
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
@@ -766,10 +771,25 @@ impl Backend for BytecodeBackend {
 		let Some(export_fn_info) = file.instructions.on_fn_locations[on_fn_index + 1] else {
 			return false;
 		};
-		for i in 0..(export_fn_info.args as usize){
+		for i in 0..(export_fn_info.args_count as usize){
 			unsafe{stack.values.push(*values.add(i))}
 		}
+
+		// SAFETY: These strings are only invalided when a new file is added. 
+		// These strings are removed from self by the time that happens
+		//
+		// TODO: I don't think this is panic safe
+		let prev_fn_name = self.current_fn_name.replace(
+			Some(unsafe{std::mem::transmute::<&str, &'static str>(export_fn_info.name)})
+		);
+		let prev_script_path = self.current_script_path.replace(
+			Some(unsafe{std::mem::transmute::<&OsStr, &'static OsStr>(file.instructions.path())})
+		);
+		
 		let ret_val = unsafe{self.run(&mut stack, state, globals, &file.instructions, export_fn_info.locals_size, export_fn_info.location)}.is_some();
+
+		self.current_fn_name.set(prev_fn_name);
+		self.current_script_path.set(prev_script_path);
 
 		stack = stack.reset();
 		self.stacks.borrow_mut().push(stack);
@@ -778,6 +798,7 @@ impl Backend for BytecodeBackend {
 
 	#[inline]
 	fn call_on_function<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity, on_fn_index: usize, values: &[Value]) -> bool {
+		self.is_errorring.set(false);
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
@@ -787,11 +808,26 @@ impl Backend for BytecodeBackend {
 		let Some(Some(export_fn_info)) = file.instructions.on_fn_locations.get(on_fn_index + 1) else {
 			return false;
 		};
-		if values.len() != export_fn_info.args as usize {return false;}
+		if values.len() != export_fn_info.args_count as usize {return false;}
 		for value in values {
 			stack.values.push(*value)
 		}
+
+		// SAFETY: These strings are only invalided when a new file is added. 
+		// These strings are removed from self by the time that happens
+		//
+		// TODO: I don't think this is panic safe
+		let prev_fn_name = self.current_fn_name.replace(
+			Some(unsafe{std::mem::transmute::<&str, &'static str>(export_fn_info.name)})
+		);
+		let prev_script_path = self.current_script_path.replace(
+			Some(unsafe{std::mem::transmute::<&OsStr, &'static OsStr>(file.instructions.path())})
+		);
+		
 		let ret_val = unsafe{self.run(&mut stack, state, globals, &file.instructions, export_fn_info.locals_size, export_fn_info.location)}.is_some();
+
+		self.current_fn_name.set(prev_fn_name);
+		self.current_script_path.set(prev_script_path);
 
 		stack = stack.reset();
 		self.stacks.borrow_mut().push(stack);
@@ -877,32 +913,41 @@ impl Op {
 }
 
 #[derive(Copy, Clone)]
-struct GrugFnData {
-	args: u32,
+struct GrugFnData<'a> {
+	name: &'a str,
+	args_count: u32,
 	locals_size: u32,
 	location: usize,
 }
 
 #[derive(Copy, Clone)]
-struct HostFnData {
-	args: u32,
+struct HostFnData<'a> {
+	name: &'a str,
+	args_count: u32,
+	// This is actually 'static
 	generics: &'static [Type<'static>],
 	ptr: HostFn,
 }
 
-union ConstantData {
+union ConstantData<'a> {
 	number: f64,
-	string: NTStrPtr<'static>,
-	local_fn_data: GrugFnData,
-	host_fn_data: HostFnData,
+	string: NTStrPtr<'a>,
+	local_fn_data: GrugFnData<'a>,
+	host_fn_data: HostFnData<'a>,
 }
 
 struct Instructions{
+	// TODO: Maybe this should be hoisted up to CompiledFile
+	path: &'static OsStr,
+	// TODO: same here
+	file_text: &'static NTStr,
 	stream: Vec<Op>,
+	debug_info: Vec<Option<SourceSpan>>,
 	on_fn_locations: Vec<
-		Option<GrugFnData>
+		// not actually static
+		Option<GrugFnData<'static>>
 	>,
-	constants: Vec<ConstantData>,
+	constants: Vec<ConstantData<'static>>,
 	helper_fn_locations: HashMap<&'static str, /* constant location */ u32>,
 	game_fn_locations: HashMap</* HostFn as usize */ HostFn, /* constant location */ u32>,
 	// SAFETY: Strings are not 'static allocated within self._arena
@@ -913,9 +958,15 @@ struct Instructions{
 }
 
 impl Instructions {
-	pub fn new() -> Self {
+	fn new(path: &OsStr, file_text: &str) -> Self {
+		let arena = Arena::new();
+		let path = arena.copy_osstr_into(path);
+		let file_text = arena.copy_str_into_nt(file_text);
 		Self {
+			path: unsafe{std::mem::transmute::<&OsStr, &'static OsStr>(path)},
+			file_text: unsafe{std::mem::transmute::<&NTStr, &'static NTStr>(file_text)},
 			stream: Vec::new(),
+			debug_info: Vec::new(),
 			on_fn_locations: Vec::new(),
 			constants: Vec::new(),
 			helper_fn_locations: HashMap::new(),
@@ -925,11 +976,20 @@ impl Instructions {
 			// jumps_count: 0,
 			// jumps_start: HashMap::new(),
 			// jumps_end: HashMap::new(),
-			_arena: Arena::new(),
+			_arena: arena,
 		}
 	}
 
-	pub fn insert_string(&mut self, string: &'_ str) -> u32 {
+	fn path(&self) -> &OsStr {
+		self.path
+	}
+
+	fn push_ins(&mut self, ins: Op, source_location: Option<SourceSpan>) {
+		self.stream.push(ins);
+		self.debug_info.push(source_location);
+	}
+
+	fn insert_string(&mut self, string: &'_ str) -> u32 {
 		self.strings.get(string).copied().unwrap_or_else(|| {
 			let ret_val = self.constants.len();
 			// SAFETY: bite me
@@ -944,7 +1004,7 @@ impl Instructions {
 		})
 	}
 
-	pub fn insert_number(&mut self, number: f64) -> u32 {
+	fn insert_number(&mut self, number: f64) -> u32 {
 		let ret_val = self.constants.len();
 		self.constants.push(ConstantData{number});
 		assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
@@ -952,7 +1012,7 @@ impl Instructions {
 	}
 
 	#[allow(unused)]
-	pub fn clear(&mut self) { 
+	fn clear(&mut self) { 
 		self.stream.clear();
 		self.on_fn_locations.clear();
 		self.constants.clear();
@@ -965,7 +1025,7 @@ impl Instructions {
 		// self.jumps_start.clear();
 	}
 
-	pub fn get_jump_ends(&self) -> HashMap<usize, usize> {
+	fn get_jump_ends(&self) -> HashMap<usize, usize> {
 		let mut jumps = HashMap::new();
 		for ins in &self.stream {
 			// address of ins is within self.stream
@@ -985,44 +1045,46 @@ impl Instructions {
 		jumps
 	}
 
-	pub fn insert_on_fn(&mut self, name: &str, index: usize, info: GrugFnData) {
+	fn insert_on_fn(&mut self, index: usize, info: GrugFnData) {
 		// SAFETY: we never give out a static str
-		let name = unsafe{std::mem::transmute::<&str, &'static str>(self._arena.copy_str_into(name))};
+		let name = unsafe{std::mem::transmute::<&str, &'static str>(self._arena.copy_str_into(info.name))};
+		let info = GrugFnData {name, ..info};
 		if self.on_fn_locations.len() <= index {
 			self.on_fn_locations.resize(index + 1, None);
 		}
 		self.on_fn_locations[index] = Some(info);
-		self.fn_labels.insert(info.location, name);
+		self.fn_labels.insert(info.location, info.name);
 	}
 
-	pub fn get_helper_fn_info(&mut self, name: &str) -> Option<u32> {
+	fn get_helper_fn_info(&mut self, name: &str) -> Option<u32> {
 		self.helper_fn_locations.get(name).copied()
 	}
 
-	pub fn insert_helper_fn(&mut self, name: &str, args: u32, locals_size: u32, location: usize) {
+	fn insert_helper_fn(&mut self, name: &str, args_count: u32, locals_size: u32, location: usize) {
 		// SAFETY: we never give out a static str
 		let name = unsafe{std::mem::transmute::<&str, &'static str>(self._arena.copy_str_into(name))};
 		let const_location = self.constants.len();
 		assert!(const_location < u32::MAX as usize);
-		self.constants.push(ConstantData{local_fn_data: GrugFnData{args, locals_size, location}});
+		self.constants.push(ConstantData{local_fn_data: GrugFnData{name, args_count, locals_size, location}});
 		self.helper_fn_locations.insert(name, const_location as u32);
 		self.fn_labels.insert(location, name);
 	}
 
-	pub fn insert_game_fn_data(&mut self, args: u32, generics: &'static [Type<'static>], ptr: HostFn) -> u32 {
-		*self.game_fn_locations.entry(ptr).or_insert_with(|| {
+	fn insert_game_fn_data(&mut self, info: HostFnData) -> u32 {
+		let name = unsafe{std::mem::transmute::<&str, &'static str>(self._arena.copy_str_into(info.name))};
+		*self.game_fn_locations.entry(info.ptr).or_insert_with(|| {
 			let ret_val = self.constants.len();
-			self.constants.push(ConstantData{host_fn_data: HostFnData{args, generics, ptr}});
+			self.constants.push(ConstantData{host_fn_data: HostFnData{name, ..info}});
 			assert!(ret_val < u32::MAX as usize, "internal error: script has more than {} constants", u32::MAX);
 			ret_val as u32
 		})
 	}
 
-	pub fn get_loc(&self) -> usize {
+	fn get_loc(&self) -> usize {
 		self.stream.len()
 	}
 
-	pub fn try_patch(&mut self, op: Op, location: usize) -> Option<()> {
+	fn try_patch(&mut self, op: Op, location: usize) -> Option<()> {
 		match (self.stream.get_mut(location)?, op) {
 			(Op::Jmp{offset: patch}, Op::Jmp{offset}) | 
 			(Op::JmpIf{offset: patch}, Op::JmpIf{offset}) |
@@ -1052,10 +1114,21 @@ impl std::fmt::Debug for Instructions {
 
 impl std::fmt::Display for Instructions {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		let stream = &mut &*self.stream;
 		let jumps_end = self.get_jump_ends();
-		while let Some((ins, next)) = stream.split_first() {
-			let addr = unsafe{(ins as *const Op).offset_from(self.stream.as_ptr())};
+		let mut last_line = None;
+		for (addr, (ins, location)) in self.stream.iter().zip(&self.debug_info).enumerate() {
+			match (&mut last_line, location) {
+				(_, None) => (),
+				(None, Some(location)) => {
+					writeln!(f, "// {}", location.get_source_line(self.file_text).trim())?;
+					last_line = Some(location.line);
+				}
+				(Some(last_line), Some(location)) if location.line != *last_line => {
+					writeln!(f, "// {}", location.get_source_line(self.file_text).trim())?;
+					*last_line = location.line;
+				}
+				_ => (),
+			}
 			if let Some(name) = self.fn_labels.get(&(addr as usize)) {
 				writeln!(f, "{}:", name)?;
 			}
@@ -1063,8 +1136,7 @@ impl std::fmt::Display for Instructions {
 				writeln!(f, "L_{}: ", label)?;
 			}
 
-			*stream = next;
-			let end_addr = unsafe{stream.as_ptr().offset_from(self.stream.as_ptr())};
+			let end_addr = addr as isize + 1;
 			write!(f, " 0x{:08x} ", addr)?;
 			match ins {
 				Op::ReturnVoid => write!(f, "ReturnVoid"),
@@ -1120,15 +1192,15 @@ impl std::fmt::Display for Instructions {
 				Op::CallHelperFunction {
 					data_loc,
 				} => {
-					let GrugFnData{args, locals_size, location} = unsafe{self.constants[*data_loc as usize].local_fn_data};
-					write!(f, "CallHelperFunction {} {} {}", args, locals_size, self.fn_labels.get(&location).unwrap())
+					let GrugFnData{args_count: _, locals_size: _, location: _, name} = unsafe{self.constants[*data_loc as usize].local_fn_data};
+					write!(f, "CallHelperFunction {}", name)
 				}
 				Op::CallGameFunction {
-					has_return,
+					has_return: _,
 					data_loc,
 				} => {
-					let HostFnData{args, generics, ptr} = unsafe{self.constants[*data_loc as usize].host_fn_data};
-					write!(f, "CallGameFunction {} {} 0x{:016x} generics: {}", has_return, args, &unsafe{std::mem::transmute::<HostFn, *const ()>(ptr).addr()}, TypeListDisplay(generics))
+					let HostFnData{args_count: _, generics, ptr: _, name} = unsafe{self.constants[*data_loc as usize].host_fn_data};
+					write!(f, "CallGameFunction {} generics: {}", name, TypeListDisplay(generics))
 				}
 			}?;
 			// print labels: 
@@ -1140,7 +1212,7 @@ impl std::fmt::Display for Instructions {
 
 pub struct Stack {
 	values: Vec<Value>,
-	stack_frames: Vec<(/* rbp */ usize, /* ip */ usize)>,
+	stack_frames: Vec<(/* rbp */ usize, /* ip */ *const Op)>,
 	rbp: usize,
 }
 

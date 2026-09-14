@@ -182,7 +182,7 @@ impl GrugState {
 				if !self_resources.contains(*resource) {self_resources.insert(OsString::from(resource));}
 			}
 			let id = self.get_or_insert_script_id(path.as_ref());
-			self.backend.insert_file(id, file);
+			self.backend.insert_file(id, &file);
 
 			let mut script_entities = self.script_entities.borrow_mut();
 			// Add entity tracking info to self.script_entities
@@ -275,7 +275,7 @@ impl GrugState {
 					Ok(ast) => {
 						let id = self.get_or_insert_script_id(path.as_ref());
 						// Send to backend
-						self.backend.insert_file(id, ast);
+						self.backend.insert_file(id, &ast);
 
 						let mut script_entities = self.script_entities.borrow_mut();
 						// Add entity tracking info to self.script_entities
@@ -381,7 +381,7 @@ impl GrugState {
 					Ok(ast) => {
 						let id = self.get_or_insert_script_id(path.as_ref());
 						// Send to backend
-						self.backend.insert_file(id, ast);
+						self.backend.insert_file(id, &ast);
 
 						let mut script_entities = self.script_entities.borrow_mut();
 						// Add entity tracking info to self.script_entities
