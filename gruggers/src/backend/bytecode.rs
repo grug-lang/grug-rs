@@ -8,11 +8,12 @@ use crate::ast::{
 };
 use crate::error::SourceSpan;
 use crate::shared_vec::SharedVec;
-use crate::ntstring::{NTStrPtr, NTStr};
+use crate::ntstring::{NTStrPtr, NTStr, NTBytes};
 use crate::arena::Arena;
 use crate::xar::{ErasedXar, ErasedPtr};
 use crate::backend::Backend;
 use crate::frontend::type_propagation::TypeListDisplay;
+use crate::nt;
 
 use gruggers_core::runtime_error::{RuntimeError, RuntimeErrorKind, ON_FN_TIME_LIMIT, MAX_RECURSION_LIMIT, StackFrame};
 use gruggers_core::state::State;
@@ -54,7 +55,7 @@ impl<'a> Compiler<'a> {
 
 		let globals_size = ast.members.len() + 1;
 
-		instructions.insert_on_fn(0, GrugFnData{name: "init_globals", location: 0, args_count: 1, locals_size: 0});
+		instructions.insert_on_fn(0, GrugFnData{name: nt!("init_globals"), location: 0, args_count: 1, locals_size: 0});
 		let me_location = compiler.insert_global_variable("me");
 		instructions.push_ins(Op::StoreGlobal{index: me_location}, None);
 		for global in ast.members.iter() {
@@ -102,7 +103,7 @@ impl<'a> Compiler<'a> {
 			self.compile_statement(instructions, statement);
 		}
 		instructions.push_ins(Op::ReturnVoid, None);
-		instructions.insert_helper_fn(helper_function.name.to_str(), helper_function.parameters.len() as u32, self.locals_size_max, begin_location);
+		instructions.insert_helper_fn(helper_function.name.to_ntstr(), helper_function.parameters.len() as u32, self.locals_size_max, begin_location);
 		self.locals_size_max = 0;
 		self.pop_scope();
 	}
@@ -123,7 +124,7 @@ impl<'a> Compiler<'a> {
 		}
 		// TODO: Maybe we need to store the end span of the function
 		instructions.push_ins(Op::ReturnVoid, None);
-		instructions.insert_on_fn(index, GrugFnData{name: on_function.name.to_str(), location: begin_location, args_count: param_count as u32, locals_size: self.locals_size_max});
+		instructions.insert_on_fn(index, GrugFnData{name: on_function.name.to_ntstr(), location: begin_location, args_count: param_count as u32, locals_size: self.locals_size_max});
 		self.locals_size_max = 0;
 		self.pop_scope();
 	}
@@ -425,7 +426,8 @@ impl<'a> Compiler<'a> {
 				}
 				
 				let has_return = *expr.result_type.unwrap() != Type::Void;
-				let data_loc = instructions.insert_game_fn_data(HostFnData{name: name.to_str(), args_count: args_count as u32, generics, ptr: *ptr});
+				let data_loc = instructions.insert_game_fn_data(HostFnData{name: name.to_ntstr(), args_count: args_count as u32, generics, ptr: *ptr});
+				
 				instructions.push_ins(Op::CallGameFunction {
 					has_return,
 					data_loc
@@ -483,9 +485,7 @@ pub struct BytecodeBackend {
 	stacks: RefCell<Vec<Stack>>,
 	// Safety: The strings in the stack frames are stored within self.files, so
 	// their actual lifetime is not `'static`
-	call_stack: SharedVec<&'static StackFrame<'static>>,
-	current_fn_name: Cell<Option<&'static str>>,
-	current_script_path: Cell<Option<&'static OsStr>>,
+	call_stack: SharedVec<StackFrame<'static>>,
 	error_arena: RefCell<Arena>,
 	is_errorring: Cell<bool>,
 }
@@ -496,13 +496,13 @@ impl BytecodeBackend {
 			files: RefCell::new(Vec::new()),
 			stacks: RefCell::new(Vec::new()),
 			call_stack: SharedVec::new(),
-			current_fn_name: Cell::new(None),
-			current_script_path: Cell::new(None),
 			error_arena: RefCell::new(Arena::new()),
 			is_errorring: Cell::new(false),
 		}
 	}
 
+	/// # Safety:
+	/// The instruction stream must be valid
 	unsafe fn run<GrugState: State>(
 		&self, 
 		stack: &mut Stack,
@@ -522,6 +522,7 @@ impl BytecodeBackend {
 			match ins {
 				Op::ReturnVoid           => {
 					stack.values.truncate(stack.rbp);
+					self.call_stack.pop();
 					if let Some((rbp, ip)) = stack.stack_frames.pop() {
 						stack.rbp = rbp;
 						stream = ip;
@@ -532,6 +533,7 @@ impl BytecodeBackend {
 				Op::ReturnValue          => {
 					let ret_val = unsafe{stack.values.pop().unwrap_unchecked()};
 					stack.values.truncate(stack.rbp);
+					self.call_stack.pop();
 					if let Some((rbp, ip)) = stack.stack_frames.pop() {
 						stack.values.push(ret_val);
 						stack.rbp = rbp;
@@ -624,21 +626,56 @@ impl BytecodeBackend {
 				Op::CallHelperFunction {
 					data_loc,
 				} => {
-					let GrugFnData {args_count, locals_size, location, name: _} = unsafe{instructions.constants[data_loc as usize].local_fn_data};
+					let GrugFnData {args_count, locals_size, location, name} = unsafe{instructions.constants[data_loc as usize].local_fn_data};
 					stack.stack_frames.push((
 						stack.rbp,
 						stream
 					));
+					let offset = unsafe{stream.offset_from_unsigned(instructions.stream.as_ptr().cast()) - 1};
+					// update the last stack frame to point at the current location
+					self.call_stack.push(StackFrame {
+						span: unsafe{*instructions.debug_info.get_unchecked(offset)},
+						// SAFETY: We always push a value to the call stack before entering this function
+						..unsafe{self.call_stack.pop().unwrap_unchecked()}
+					});
+					// push the next stack frame
+					self.call_stack.push(StackFrame {
+						span: SourceSpan{line: 0, offset: 0},
+						fn_name: name.as_ntstrptr(), 
+						file_path: Some(instructions.path),
+						file_text: instructions.file_text.as_ntstrptr(),
+					});
 					stack.rbp = stack.values.len() - args_count as usize;
 					stack.values.resize(stack.rbp + locals_size as usize, Value{void: ()});
 					stream = unsafe{instructions.stream.as_ptr().cast::<Op>().add(location)};
+					if self.call_stack.len() >= MAX_RECURSION_LIMIT {
+						self.raise_runtime_error_inner(state, RuntimeErrorKind::StackOverflow, "Stack overflow, so check for accidental infinite recursion");
+						return None;
+					}
 				}
 				Op::CallGameFunction {
 					has_return,
 					data_loc,
 				} => {
-					let HostFnData{args_count, generics, ptr, name: _} = unsafe{instructions.constants[data_loc as usize].host_fn_data};
+					let HostFnData{args_count, generics, ptr, name} = unsafe{instructions.constants[data_loc as usize].host_fn_data};
+
+					let offset = unsafe{stream.offset_from_unsigned(instructions.stream.as_ptr().cast()) - 1};
+					// update the last stack frame to point at the current location
+					self.call_stack.push(StackFrame {
+						span: unsafe{*instructions.debug_info.get_unchecked(offset as usize)},
+						// SAFETY: We always push a value to the call stack before entering this function
+						..unsafe{self.call_stack.pop().unwrap_unchecked()}
+					});
+					// push the next stack frame
+					self.call_stack.push(StackFrame {
+						span: unsafe{*instructions.debug_info.get_unchecked(offset as usize)},
+						fn_name: name.as_ntstrptr(), 
+						file_path: None,
+						file_text: instructions.file_text.as_ntstrptr(),
+					});
+
 					let value = unsafe{(ptr)(state as *const _ as _, stack.values.as_ptr().add(stack.values.len() - args_count as usize), generics as *const _ as _)};
+					self.call_stack.pop();
 					stack.values.truncate(stack.values.len() - args_count as usize);
 					if has_return {
 						stack.values.push(value);
@@ -653,10 +690,6 @@ impl BytecodeBackend {
 				return None;
 			}
 			i_count += 1;
-			if stack.stack_frames.len() >= MAX_RECURSION_LIMIT {
-				self.raise_runtime_error_inner(state, RuntimeErrorKind::StackOverflow, "Stack overflow, so check for accidental infinite recursion");
-				return None;
-			}
 		}
 	}
 
@@ -665,15 +698,22 @@ impl BytecodeBackend {
 		let arena = &mut *self.error_arena.borrow_mut();
 		arena.clear();
 		let call_stack = unsafe{self.call_stack.as_slice_unsafe()};
-		let current_fn_name = self.current_fn_name.get().expect("current_fn_name is empty");
-		let current_script_path = self.current_script_path.get().expect("current_script_path is empty");
+		let last_frame = *call_stack.last().expect("call_stack cannot be empty");
+		let fn_name = call_stack.iter().rev().flat_map(|frame| frame.file_path.map(|_| frame.fn_name))
+			.filter(|fn_name| !fn_name.to_str().starts_with("_")).next()
+			.expect("must have at least one export function call").to_str();
+		let span = last_frame.span;
+		let script_path = call_stack.iter().rev().flat_map(|frame| frame.file_path).next()
+			.expect("must have at least one grug stack frame");
+
+		let script_path = unsafe{OsStr::from_encoded_bytes_unchecked(script_path.to_bytes())};
 		let error = RuntimeError::new_error_in(
 			kind, 
-			call_stack, 
-			current_fn_name,
-			current_script_path,
-			SourceSpan{line: 1, offset: 0}, 
-			"", 
+			&call_stack[..call_stack.len() - 1], 
+			fn_name,
+			script_path,
+			span, 
+			last_frame.file_text.to_str(), 
 			message, 
 			arena
 		);
@@ -716,16 +756,20 @@ impl Backend for BytecodeBackend {
 		// These strings are removed from self by the time that happens
 		//
 		// TODO: I don't think this is panic safe
-		let prev_fn_name = self.current_fn_name.replace(
-			Some(unsafe{std::mem::transmute::<&str, &'static str>("init_globals")})
-		);
-		let prev_script_path = self.current_script_path.replace(
-			Some(unsafe{std::mem::transmute::<&OsStr, &'static OsStr>(file.instructions.path())})
-		);
+		let old_len = self.call_stack.len();
+		self.call_stack.push(StackFrame {
+			fn_name: nt!("init_globals").as_ntstrptr(),
+			file_path: Some(file.instructions.path),
+			span: SourceSpan{line: 0, offset: 0},
+			file_text: file.instructions.file_text.as_ntstrptr(),
+		});
+
 		let ret_val = unsafe{self.run(&mut stack, state, globals, &file.instructions, 1, 0)}.is_some();
 
-		self.current_fn_name.set(prev_fn_name);
-		self.current_script_path.set(prev_script_path);
+		// Make sure that any stack frames pushed by subsequent code are
+		// popped. This way code inside the run function doesn't have to worry
+		// about popping recursive function calls
+		self.call_stack.truncate(old_len);
 
 		entity.members.set(NonNull::from_ref(globals).cast::<()>());
 
@@ -779,17 +823,18 @@ impl Backend for BytecodeBackend {
 		// These strings are removed from self by the time that happens
 		//
 		// TODO: I don't think this is panic safe
-		let prev_fn_name = self.current_fn_name.replace(
-			Some(unsafe{std::mem::transmute::<&str, &'static str>(export_fn_info.name)})
-		);
-		let prev_script_path = self.current_script_path.replace(
-			Some(unsafe{std::mem::transmute::<&OsStr, &'static OsStr>(file.instructions.path())})
-		);
-		
+		let old_len = self.call_stack.len();
+		self.call_stack.push(StackFrame{
+			fn_name: unsafe{std::mem::transmute::<NTStrPtr, NTStrPtr<'static>>(export_fn_info.name.as_ntstrptr())},
+			file_path: Some(file.instructions.path),
+			span: SourceSpan{line: 0, offset: 0},
+			file_text: file.instructions.file_text.as_ntstrptr(),
+		});
 		let ret_val = unsafe{self.run(&mut stack, state, globals, &file.instructions, export_fn_info.locals_size, export_fn_info.location)}.is_some();
-
-		self.current_fn_name.set(prev_fn_name);
-		self.current_script_path.set(prev_script_path);
+		// Make sure that any stack frames pushed by subsequent code are
+		// popped. This way code inside the run function doesn't have to worry
+		// about popping recursive function calls
+		self.call_stack.truncate(old_len);
 
 		stack = stack.reset();
 		self.stacks.borrow_mut().push(stack);
@@ -817,17 +862,20 @@ impl Backend for BytecodeBackend {
 		// These strings are removed from self by the time that happens
 		//
 		// TODO: I don't think this is panic safe
-		let prev_fn_name = self.current_fn_name.replace(
-			Some(unsafe{std::mem::transmute::<&str, &'static str>(export_fn_info.name)})
-		);
-		let prev_script_path = self.current_script_path.replace(
-			Some(unsafe{std::mem::transmute::<&OsStr, &'static OsStr>(file.instructions.path())})
-		);
+		let old_len = self.call_stack.len();
+		self.call_stack.push(StackFrame{
+			fn_name: unsafe{std::mem::transmute::<NTStrPtr, NTStrPtr<'static>>(export_fn_info.name.as_ntstrptr())},
+			file_path: Some(file.instructions.path),
+			span: SourceSpan{line: 0, offset: 0},
+			file_text: file.instructions.file_text.as_ntstrptr(),
+		});
 		
 		let ret_val = unsafe{self.run(&mut stack, state, globals, &file.instructions, export_fn_info.locals_size, export_fn_info.location)}.is_some();
 
-		self.current_fn_name.set(prev_fn_name);
-		self.current_script_path.set(prev_script_path);
+		// Make sure that any stack frames pushed by subsequent code are
+		// popped. This way code inside the run function doesn't have to worry
+		// about popping recursive function calls
+		self.call_stack.truncate(old_len);
 
 		stack = stack.reset();
 		self.stacks.borrow_mut().push(stack);
@@ -914,7 +962,7 @@ impl Op {
 
 #[derive(Copy, Clone)]
 struct GrugFnData<'a> {
-	name: &'a str,
+	name: &'a NTStr,
 	args_count: u32,
 	locals_size: u32,
 	location: usize,
@@ -922,7 +970,7 @@ struct GrugFnData<'a> {
 
 #[derive(Copy, Clone)]
 struct HostFnData<'a> {
-	name: &'a str,
+	name: &'a NTStr,
 	args_count: u32,
 	// This is actually 'static
 	generics: &'static [Type<'static>],
@@ -938,11 +986,12 @@ union ConstantData<'a> {
 
 struct Instructions{
 	// TODO: Maybe this should be hoisted up to CompiledFile
-	path: &'static OsStr,
+	/// Can be converted into an OsStr
+	path: NTBytes<'static>,
 	// TODO: same here
 	file_text: &'static NTStr,
 	stream: Vec<Op>,
-	debug_info: Vec<Option<SourceSpan>>,
+	debug_info: Vec<SourceSpan>,
 	on_fn_locations: Vec<
 		// not actually static
 		Option<GrugFnData<'static>>
@@ -960,10 +1009,10 @@ struct Instructions{
 impl Instructions {
 	fn new(path: &OsStr, file_text: &str) -> Self {
 		let arena = Arena::new();
-		let path = arena.copy_osstr_into(path);
+		let path = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(path.as_encoded_bytes()))};
 		let file_text = arena.copy_str_into_nt(file_text);
 		Self {
-			path: unsafe{std::mem::transmute::<&OsStr, &'static OsStr>(path)},
+			path: unsafe{std::mem::transmute::<NTBytes, NTBytes<'static>>(path)},
 			file_text: unsafe{std::mem::transmute::<&NTStr, &'static NTStr>(file_text)},
 			stream: Vec::new(),
 			debug_info: Vec::new(),
@@ -980,13 +1029,16 @@ impl Instructions {
 		}
 	}
 
+	#[allow(unused)]
 	fn path(&self) -> &OsStr {
-		self.path
+		// SAFETY: self.path is compatible with OsStr
+		unsafe{OsStr::from_encoded_bytes_unchecked(self.path.to_bytes())}
 	}
 
 	fn push_ins(&mut self, ins: Op, source_location: Option<SourceSpan>) {
 		self.stream.push(ins);
-		self.debug_info.push(source_location);
+		self.debug_info.push(source_location.unwrap_or(SourceSpan{offset: 0, line: 0}));
+		debug_assert_eq!(self.stream.len(), self.debug_info.len());
 	}
 
 	fn insert_string(&mut self, string: &'_ str) -> u32 {
@@ -1047,7 +1099,7 @@ impl Instructions {
 
 	fn insert_on_fn(&mut self, index: usize, info: GrugFnData) {
 		// SAFETY: we never give out a static str
-		let name = unsafe{std::mem::transmute::<&str, &'static str>(self._arena.copy_str_into(info.name))};
+		let name = unsafe{std::mem::transmute::<&NTStr, &'static NTStr>(self._arena.copy_str_into_nt(info.name))};
 		let info = GrugFnData {name, ..info};
 		if self.on_fn_locations.len() <= index {
 			self.on_fn_locations.resize(index + 1, None);
@@ -1062,7 +1114,7 @@ impl Instructions {
 
 	fn insert_helper_fn(&mut self, name: &str, args_count: u32, locals_size: u32, location: usize) {
 		// SAFETY: we never give out a static str
-		let name = unsafe{std::mem::transmute::<&str, &'static str>(self._arena.copy_str_into(name))};
+		let name = unsafe{std::mem::transmute::<&NTStr, &'static NTStr>(self._arena.copy_str_into_nt(name))};
 		let const_location = self.constants.len();
 		assert!(const_location < u32::MAX as usize);
 		self.constants.push(ConstantData{local_fn_data: GrugFnData{name, args_count, locals_size, location}});
@@ -1071,7 +1123,7 @@ impl Instructions {
 	}
 
 	fn insert_game_fn_data(&mut self, info: HostFnData) -> u32 {
-		let name = unsafe{std::mem::transmute::<&str, &'static str>(self._arena.copy_str_into(info.name))};
+		let name = unsafe{std::mem::transmute::<&NTStr, &'static NTStr>(self._arena.copy_str_into_nt(info.name))};
 		*self.game_fn_locations.entry(info.ptr).or_insert_with(|| {
 			let ret_val = self.constants.len();
 			self.constants.push(ConstantData{host_fn_data: HostFnData{name, ..info}});
@@ -1118,12 +1170,13 @@ impl std::fmt::Display for Instructions {
 		let mut last_line = None;
 		for (addr, (ins, location)) in self.stream.iter().zip(&self.debug_info).enumerate() {
 			match (&mut last_line, location) {
-				(_, None) => (),
-				(None, Some(location)) => {
+				// offset 0, line 0 can only happen if there is no debug info
+				(_, SourceSpan{offset: 0, line: 0}) => (),
+				(None, location) => {
 					writeln!(f, "// {}", location.get_source_line(self.file_text).trim())?;
 					last_line = Some(location.line);
 				}
-				(Some(last_line), Some(location)) if location.line != *last_line => {
+				(Some(last_line), location) if location.line != *last_line => {
 					writeln!(f, "// {}", location.get_source_line(self.file_text).trim())?;
 					*last_line = location.line;
 				}

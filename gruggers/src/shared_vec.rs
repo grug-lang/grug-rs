@@ -35,4 +35,11 @@ impl<T, A: Allocator> SharedVec<T, A> {
 	pub fn leak<'a> (self) -> &'a [T] where A: 'a {
 		self.0.into_inner().leak()
 	}
+
+	pub fn len<'a> (&self) -> usize {
+		unsafe{&*self.0.get()}.len()
+	}
+	pub fn truncate(&self, len: usize) {
+		unsafe{&mut *self.0.get()}.truncate(len);
+	}
 }

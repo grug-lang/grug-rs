@@ -1,7 +1,7 @@
-// #![deny(warnings)]
+#![deny(warnings)]
 #![allow(improper_ctypes)]
 mod test_bindings {
-	use gruggers::ntstring::{NTStrPtr, NTStr, NTBytes};
+	use gruggers::ntstring::{NTStrPtr, NTBytes};
 	use gruggers::state::{GrugState, GrugInitSettings, GrugEntityHandle};
 	use gruggers::backend::BytecodeBackend as Backend;
 	use gruggers::types::{GrugEntity, FileId, ExportFnId, Value};
