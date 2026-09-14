@@ -2,7 +2,6 @@
 use std::ffi::c_double;
 use std::cell::Cell;
 use std::ptr::NonNull;
-use std::marker::PhantomPinned;
 use std::ffi::c_void;
 use crate::ntstring::NTStrPtr;
 use crate::state::State;
@@ -74,7 +73,7 @@ impl std::ops::Deref for HostFnRegErased {
 ///
 /// This is the type erased version of [`HostFnWithState`] for use in the AST.
 /// 
-/// Conversion to and from [`HostFnWithState`] is done using [`Self::as_ptr`] and [`Self::from_ptr`]
+/// Conversion from [`HostFnWithState`] is done using [`Self::from_ptr`]
 /// 
 #[derive(Clone, Copy, Hash, Eq)]
 #[repr(transparent)]
@@ -133,6 +132,7 @@ pub struct Id(pub u64);
 
 /// An id that uniquely refers to a script path. 
 pub type FileId = Id;
+/// This id is used to indicate that a particular grug file had a compilation error
 pub const INVALID_GRUG_FILE_ID: FileId = FileId::new(u64::MAX);
 
 impl std::fmt::Display for Id {
@@ -142,10 +142,12 @@ impl std::fmt::Display for Id {
 }
 
 impl Id {
+	/// Create a new id with the the input value
 	pub const fn new(id: u64) -> Self {
 		Self(id)
 	}
 
+	/// Conversts the id to its inner value
 	pub const fn to_inner(self) -> u64 {
 		self.0
 	}
@@ -166,12 +168,19 @@ pub struct ExportFnId(pub u64);
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub union Value {
+	/// As a number
 	pub number: c_double,
+	/// As a boolean
 	pub bool: u8,
+	/// As an Id
 	pub id: Id,
+	/// As a raw pointer
 	pub custom_type: *mut (),
+	/// As raw bytes
 	pub bytes: [u8; 8],
+	/// As a string pointer
 	pub string: NTStrPtr<'static>,
+	/// As empty data
 	pub void: (),
 }
 
@@ -185,7 +194,6 @@ pub struct GrugEntity {
 	pub file_id: FileId,
 	/// Pointer to the entity's members stored by the backend
 	pub members: Cell<NonNull<()>>,
-	pub _marker: PhantomPinned,
 }
 
 impl GrugEntity {
@@ -198,44 +206,6 @@ impl GrugEntity {
 			id,
 			file_id,
 			members: Cell::new(NonNull::dangling()),
-			_marker: PhantomPinned,
-		}
-	}
-}
-
-pub struct GrugStr {
-	inner: NonNull<u8>,
-}
-#[repr(C)]
-struct GrugStrInner {
-	ref_count: Cell<usize>,
-	len: usize,
-	/// This should be treated like a flexible array member
-	str: [u8;0],
-}
-
-impl std::ops::Deref for GrugStr {
-	type Target = str;
-	fn deref(&self) -> &str {
-		let len = unsafe{self.inner.cast::<usize>().sub(1).read()};
-		unsafe{std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.inner.as_ptr(), len))}
-	}
-}
-
-impl GrugStr {
-	pub fn from_str(input: &str) -> Self {
-		let alloc = std::alloc::Layout::new::<GrugStrInner>().extend(std::alloc::Layout::array::<u8>(input.len() + 1).unwrap())
-			.expect("Could not create layout").0;
-		let ptr = unsafe{std::alloc::alloc(alloc).cast::<GrugStrInner>()};
-		if ptr.is_null() {
-			panic!("Could not allocate memory");
-		}
-		unsafe{ptr.write(GrugStrInner{ref_count: Cell::new(1), len: input.len(), str: []})}
-		let ret_ptr = unsafe{&raw mut (*ptr).str as *mut u8};
-		unsafe{ret_ptr.copy_from(input.as_ptr(), input.len())};
-		unsafe{ret_ptr.add(input.len()).write(b'\0')};
-		Self {
-			inner: unsafe{NonNull::new_unchecked(ret_ptr)},
 		}
 	}
 }

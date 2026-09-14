@@ -50,7 +50,9 @@ pub enum Type<'a> {
 	String,
 	/// TODO: Explain usage of ID types in grug
 	Id{
+		/// Custom name of the id type
 		name: NTStrPtr<'a>,
+		/// The generics of the type, if any
 		generics: &'a [Type<'a>]
 	},
 	/// Type of a resource string
@@ -58,13 +60,23 @@ pub enum Type<'a> {
 	/// TODO: Explain what resources can be used for with examples
 	///
 	/// This can only be used as the type of an argument of a game function
-	Resource{extension: NTStrPtr<'a>},
+	Resource{
+		/// The extension of the resources string.
+		///
+		/// This value ensures that only file paths with particular extensions
+		/// can be passed to host functions
+		extension: NTStrPtr<'a>
+	},
 	/// Type of an entity string
 	///
 	/// TODO: Explain what entity strings can be used for with examples
 	///
 	/// This can only be used as the type of an argument of a game function
-	Entity{entity_type: Option<NTStrPtr<'a>>},
+	Entity{
+		/// The type of the entity pointed to by the entity string
+		entity_type: Option<NTStrPtr<'a>>
+	},
+	#[doc(hidden)]
 	/// For internal use, Backends should never ever see this
 	Existential {
 		idx: usize
@@ -72,6 +84,8 @@ pub enum Type<'a> {
 }
 
 impl<'a> Type<'a> {
+	/// Returns true if the shape of both types match. i.e., they are identical
+	/// up to existential types.
 	pub fn matches(&self, other: &Self) -> bool {
 		use Type::*;
 		match (self, other) {
@@ -619,7 +633,9 @@ pub enum Statement<'a> {
 	},
 	/// A comment within a function
 	Comment{
+		/// The span of the comment within the file
 		comment_span: SourceSpan,
+		/// The value of the comment
 		value: NTStrPtr<'a>
 	},
 	/// A break statement.
@@ -807,6 +823,8 @@ pub struct GrugAst<'a> {
 }
 
 impl<'a> GrugAst<'a> {
+	/// Gets the file path as an OsStr instead of NTBytes.
+	/// This function is safe assuming the file path was originally created from an OsStr
 	pub fn file_path(&self) -> &'a OsStr {
 		// SAFETY: file_path is compatible with an OsStr
 		unsafe{OsStr::from_encoded_bytes_unchecked(self.file_path.to_bytes())}

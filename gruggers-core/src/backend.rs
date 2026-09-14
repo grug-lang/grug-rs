@@ -20,7 +20,7 @@ pub trait Backend {
 	/// If the same script id is returned again, then it means the old script
 	/// associated with the id should be destroyed and replaced with this one. 
 	///
-	/// The bindings are expected to call [`init_entity`] on all entities that
+	/// The bindings are expected to call [`Backend::init_entity`] on all entities that
 	/// belongs to the old script. 
 	///
 	/// The entity member of all entities created from the old script should be
@@ -33,27 +33,22 @@ pub trait Backend {
 	/// the file_id member of `entity`. 
 	///
 	/// Returns `Some` if there was a runtime error during execution
-	///
 	#[must_use]
 	fn init_entity<GrugState: State>(&self, state: &GrugState, entity: &GrugEntity) -> bool;
-	/// Deinitialize all the data associated with all entities. The pointers
-	/// stored during `init_entity` must be used to get access to the entity data.
-	/// The entities can only be accessed as a &GrugEntity even self is available with an exclusive reference
+	/// Deinitialize all the data associated with all entities. 
 	fn clear_entities(&mut self);
 	/// Deinitialize the data associated with `entity`. 
 	///
 	/// # Safety:
 	/// This function must not be called on an uninitialized entity. 
 	/// An entity is considered uninitialized if
-	/// 	- It has just been created and [`init_entity`] hasn't been called on it. 
-	/// 	- The file an entity belongs to has be reloaded and [`init_entity`]
+	/// 	- It has just been created and [`Backend::init_entity`] hasn't been called on it. 
+	/// 	- The file an entity belongs to has be reloaded and [`Backend::init_entity`]
 	/// 	hasn't been called on it.
 	/// 	- This function has been called on the entity
 	unsafe fn destroy_entity_data(&self, entity: &GrugEntity);
 	/// Run the on function at index `on_fn_index` of the script associated
 	/// with `entity`.
-	///
-	/// See [`get_last_error`] for details about the returned value
 	///
 	/// # SAFETY
 	/// `values` must point to an array of GrugValues of at least as
@@ -65,8 +60,6 @@ pub trait Backend {
 	/// Run the on function at index `on_fn_index` of the script associated
 	/// with `entity`.
 	///
-	/// See [`get_last_error`] for details about the returned value;
-	///
 	/// # Panics: The length of `values` must exactly match the number of
 	/// expected arguments to the on_ function
 	#[must_use]
@@ -76,8 +69,8 @@ pub trait Backend {
 	///
 	/// Once this function is called, all currently execution grug scripts must
 	/// unwind as soon as control is returned to them.  This unwinding state
-	/// should persist until the next call to  [`init_entity`],
-	/// [`call_on_function_raw`], or [`call_on_function`]. The backend is
+	/// should persist until the next call to  [`Backend::init_entity`],
+	/// [`Backend::call_on_function_raw`], or [`Backend::call_on_function`]. The backend is
 	/// responsible for maintaining this unwinding state.
 	fn raise_runtime_error<GrugState: State>(&self, state: &GrugState, message: &str);
 }
@@ -85,7 +78,10 @@ pub trait Backend {
 /// C-api compatible version of `&dyn [Backend]`
 #[repr(C)]
 pub struct ErasedBackend<GrugState: State + 'static> {
+	/// A pointer to a heap allocation which owns the data required by the backend
 	pub data: NonNull<()>,
+	/// A pointer to a statically allocated (or leaked) vtable which contains
+	/// all the functions required to be implemented by backends.
 	pub vtable: &'static BackendVTable<GrugState>,
 }
 

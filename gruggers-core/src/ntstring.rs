@@ -39,11 +39,15 @@ mod str {
 	#[repr(transparent)]
 	pub struct NTStr(str);
 
+	/// Indicates an error that can occur when converting a [`prim@str`] into an [`NTStr`]
 	#[derive(Debug, Clone, Copy)]
 	pub enum NTStrError {
+		/// A null byte was found in the middle of the string
 		UnexpectedNullByte {
+			/// The byte offset of the null byte
 			location: usize,
 		},
+		/// The null terminator was missing from the input
 		MissingNullTerminator,
 	}
 
@@ -103,10 +107,12 @@ mod str {
 			self.0.len() - 1
 		}
 
+		/// Converts self into a [`prim@str`] excluding the null terminator
 		pub fn as_str(&self) -> &str {
 			&self.0[..(self.0.len() - 1)]
 		}
 
+		/// Converts self into a [`prim@str`] including the null terminator
 		pub const fn as_str_with_null(&self) -> &str {
 			&self.0
 		}
@@ -118,6 +124,7 @@ mod str {
 			unsafe {std::mem::transmute::<&str, &NTStr>(value)}
 		}
 		
+		/// Tries to converts a str into an NTStr 
 		pub fn try_from_str(value: &str) -> Result<&NTStr, NTStrError> {
 			if let Some(last) = value.as_bytes().last() && *last == b'\0' {
 				for (i, byte) in value.as_bytes()[0..value.len()-1].iter().enumerate() {
@@ -132,11 +139,13 @@ mod str {
 			}
 		}
 
+		/// Get the string as a [`NTStrPtr`]
 		pub const fn as_ntstrptr(&self) -> NTStrPtr<'_> {
 			// SAFETY There is a null byte at the self.len()
 			unsafe{NTStrPtr::from_ptr(NonNull::from_ref(&self.0).cast::<i8>())}
 		}
 
+		/// Get the string as a [`NTBytes`]
 		pub const fn as_ntbytes(&self) -> NTBytes<'_> {
 			self.as_ntstrptr().as_ntbytes()
 		}
@@ -241,13 +250,23 @@ mod str {
 			self.0.cast::<u8>().as_ptr().cast_const()
 		}
 
+		/// A version of the len function that can work in const
 		pub const fn const_len(self) -> usize {
 			let mut len = 0;
 			while unsafe{self.0.add(len).read() as u8} != b'\0' {len += 1;}
 			len
 		}
 
-		// This causes asan errors
+		/// get the length of the string using SIMD intrinsics if available on
+		/// the target platform. 
+		///
+		/// The way the SIMD algorithm works will cause asan errors because
+		/// there are out of bounds reads. However, there is no memory safety
+		/// concern here because any bits are read from out of bounds are discarded.
+		///
+		/// Additionally, the out of bounds reads will never straddle a page
+		/// boundary, so there will never be a seg fault caused by this
+		/// function
 		pub fn len(self) -> usize {
 			#[inline]
 			fn len_default(val: NTStrPtr) -> usize {
@@ -385,6 +404,7 @@ mod str {
 			unsafe{std::mem::transmute::<Self, NTStrPtr<'static>>(self)}
 		}
 
+		/// Get the string as an [`NTBytes`]
 		pub const fn as_ntbytes(self) -> NTBytes<'a> {
 			unsafe{NTBytes::from_ptr(self.0.cast().as_ptr())}
 		}
@@ -473,17 +493,23 @@ mod bytes {
 			self.0.cast::<u8>().as_ptr().cast_const()
 		}
 
+		/// A version of the len function that can work in const
 		pub const fn const_len(self) -> usize {
 			let mut len = 0;
 			while unsafe{self.0.add(len).read() as u8} != b'\0' {len += 1;}
 			len
 		}
 
-		// This causes asan errors
-		/// Uses SIMD to find the length of the buffer faster than checking byte by byte.
-		/// Falls back to byte by byte checking on onknown platforms or if SIMD is not available.
+		/// get the length of the string using SIMD intrinsics if available on
+		/// the target platform. 
 		///
-		/// This function will never segfault on modern platforms, but it may cause ASAN read errors
+		/// The way the SIMD algorithm works will cause asan errors because
+		/// there are out of bounds reads. However, there is no memory safety
+		/// concern here because any bits are read from out of bounds are discarded.
+		///
+		/// Additionally, the out of bounds reads will never straddle a page
+		/// boundary, so there will never be a seg fault caused by this
+		/// function
 		pub fn len(self) -> usize {
 			#[inline]
 			fn len_default(val: NTBytes) -> usize {

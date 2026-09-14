@@ -445,7 +445,7 @@ mod arena_impl {
 
 		/// Copy a slice of bytes into the current arena and returns the new slice.
 		///
-		/// See [`copy_osstr_into`]  and [`copy_str_into`] for more specific
+		/// See [`Self::copy_osstr_into`] and [`Self::copy_str_into`] for more specific
 		/// versions of this function
 		pub fn copy_bytes_into(&self, bytes: &[u8]) -> &[u8] {
 			let ptr = self.alloc(Layout::array::<u8>(bytes.len())
@@ -461,7 +461,7 @@ mod arena_impl {
 		/// Copy a slice of bytes into the current arena and returns the new
 		/// slice with a null byte appended
 		///
-		/// See [`copy_osstr_into`]  and [`copy_str_into`] for more specific
+		/// See [`Self::copy_osstr_into`]  and [`Self::copy_str_into`] for more specific
 		/// versions of this function
 		/// 
 		/// This function does not check if a null byte already exists within
@@ -479,7 +479,7 @@ mod arena_impl {
 		
 		/// Copy an `&OsStr` into the current arena and return the new OsStr
 		///
-		/// see [`copy_bytes_into`] for a more general version of this function
+		/// see [`Self::copy_bytes_into`] for a more general version of this function
 		pub fn copy_osstr_into(&self, bytes: &OsStr) -> &OsStr {
 			// SAFETY: input is an OsStr
 			unsafe{OsStr::from_encoded_bytes_unchecked(self.copy_bytes_into(bytes.as_encoded_bytes()))}
@@ -487,7 +487,7 @@ mod arena_impl {
 
 		/// Copy a `&str` into the current arena and return the new str
 		///
-		/// see [`copy_bytes_into`] for a more general version of this function
+		/// see [`Self::copy_bytes_into`] for a more general version of this function
 		pub fn copy_str_into(&self, bytes: &str) -> &str {
 			// SAFETY: input is a str
 			unsafe{std::str::from_utf8_unchecked(self.copy_bytes_into(bytes.as_ref()))}
@@ -496,7 +496,7 @@ mod arena_impl {
 		/// Copy a `&str` into the current arena and return the new str with a
 		/// null byte appended
 		///
-		/// see [`copy_bytes_into`] for a more general version of this function
+		/// see [`Self::copy_bytes_into`] for a more general version of this function
 		/// 
 		/// # Panics
 		///
@@ -885,7 +885,7 @@ mod mt_arena {
 
 		/// Copy a slice of bytes into the current arena and returns the new slice.
 		///
-		/// See [`copy_osstr_into`]  and [`copy_str_into`] for more specific
+		/// See [`Self::copy_osstr_into`] and [`Self::copy_str_into`] for more specific
 		/// versions of this function
 		pub fn copy_bytes_into(&self, bytes: &[u8]) -> &[u8] {
 			let ptr = self.alloc(Layout::array::<u8>(bytes.len())
@@ -901,7 +901,7 @@ mod mt_arena {
 		/// Copy a slice of bytes into the current arena and returns the new
 		/// slice with a null byte appended
 		///
-		/// See [`copy_osstr_into`]  and [`copy_str_into`] for more specific
+		/// See [`Self::copy_osstr_into`] and [`Self::copy_str_into`] for more specific
 		/// versions of this function
 		/// 
 		/// # Panics
@@ -921,7 +921,7 @@ mod mt_arena {
 		
 		/// Copy an `&OsStr` into the current arena and return the new OsStr
 		///
-		/// see [`copy_bytes_into`] for a more general version of this function
+		/// see [`Self::copy_bytes_into`] for a more general version of this function
 		pub fn copy_osstr_into(&self, bytes: &OsStr) -> &OsStr {
 			// SAFETY: input is an OsStr
 			unsafe{OsStr::from_encoded_bytes_unchecked(self.copy_bytes_into(bytes.as_encoded_bytes()))}
@@ -929,7 +929,7 @@ mod mt_arena {
 
 		/// Copy a `&str` into the current arena and return the new str
 		///
-		/// see [`copy_bytes_into`] for a more general version of this function
+		/// see [`Self::copy_bytes_into`] for a more general version of this function
 		pub fn copy_str_into(&self, bytes: &str) -> &str {
 			// SAFETY: input is a str
 			unsafe{std::str::from_utf8_unchecked(self.copy_bytes_into(bytes.as_ref()))}
@@ -938,7 +938,7 @@ mod mt_arena {
 		/// Copy a `&str` into the current arena and return the new str with a
 		/// null byte appended
 		///
-		/// see [`copy_bytes_into`] for a more general version of this function
+		/// see [`Self::copy_bytes_into`] for a more general version of this function
 		/// 
 		/// # Panics
 		///

@@ -17,14 +17,34 @@ pub const ON_FN_TIME_LIMIT: u64 = 100; // ms
 /// Backends are allowed to go further than this limit because of optimizations.
 pub const MAX_RECURSION_LIMIT: usize = 100;
 
+/// Indicates the kind of runtime error that has occurred
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeErrorKind {
+	/// The grug code recursed too many times
 	StackOverflow,
+	/// The grug code took too long to execute
 	TimeLimitExceeded,
+	/// A host function triggered an arbitrary error
 	HostFnError,
 }
 
+/// Contains all data associated with a runtime error in grug
+/// 
+/// In order to maintain c compatibility, all string fields are represented as
+/// null terminated pointers. 
+/// 
+/// This error API does not allow for an owned [`RuntimeError`] within safe rust. 
+///
+/// Downstream crates could provide owned versions of the error using an
+/// allocator that frees all memory owned by these strings on drop. However,
+/// they should seriously consider if this is necessary. 
+///
+/// The `call_stack` field stores a pointer to the entire file text where the
+/// frame occurred to make error reporting easier. By default, they are just
+/// pointers into already allocated strings, so they do not cause any memory
+/// allocations. A naive copy could create a new allocation for each of these
+/// strings, which could lead to arbitrarily high memory usage.
 #[repr(C)]
 pub struct RuntimeError<'a> {
 	/// The kind of runtime error 
@@ -123,20 +143,27 @@ impl<'a> RuntimeError<'a> {
 		}
 	}
 
+	/// Get the script_path field as an OsStr instead of an NTBytes.
 	pub fn script_path_as_osstr(&self) -> &'a OsStr {
 		// SAFETY: self.script_path is valid to convert to an OsStr
 		unsafe{OsStr::from_encoded_bytes_unchecked(self.script_path.to_bytes())}
 	}
 }
 
+/// Provides information about a single stack frame in a grug execution
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct StackFrame<'a> {
+	/// The name of the function being executed
 	pub fn_name: NTStrPtr<'a>,
+	/// The path to the file relative to the mods directory
+	///
 	/// file_path == None (null in c) indicates that this is a host fn frame.
 	/// if file_path is none, the span and file text is the span within the last grug script.
 	pub file_path: Option<NTBytes<'a>>,
+	/// The location in code where another function was called
 	pub span: SourceSpan,
+	/// The entire text of the file where the frame occurred
 	pub file_text: NTStrPtr<'a>,
 }
 

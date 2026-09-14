@@ -38,7 +38,7 @@ impl Error {
 
 	/// Leaks the arena and returns a &'static [`GrugError`]
 	///
-	/// The only known use case of this is the [`grug_init`] function in the c
+	/// The only known use case of this is the [`grug_init`](crate::capi::grug_init) function in the c
 	/// api. That function has no place to store an [`Error`], so it has to
 	/// leak the memory to return an error to the caller.
 	pub fn leak<'a>(self) -> GrugError<'static> {

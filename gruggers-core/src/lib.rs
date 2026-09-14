@@ -1,4 +1,34 @@
+//! Contains the core types used by all grug implementations to ensure compatibility with a c api.
+//!
+//! This can be used both to implement grug bindings and grug backends.
+//!
+//! [`mod@state`] contains the interface that bindings must follow to ensure
+//! for backends. Following this interface also lets backends implemented in
+//! other languages to interface with rust bindings seamlessly
+//!
+//! [`mod@backend`] contains the interface that backends must follow to ensure
+//! they can be used by bindings. Following this interface lets backends
+//! written in rust to seamlessly operate with bindings in other languages.
+//!
+//! [`mod@error`] contains the interface of compile time and initialization
+//! errors. 
+//!
+//! [`mod@runtime_error`] contains the interface of runtime errors.
+//!
+//! [`mod@ntstring`] defines null terminated string types for interop with C. A
+//! lot of types in this crate use there string types instead of the default
+//! rust string types to ensure layout compatibility with other langauges. The
+//! strings in this module can often be cheaply converted into rust string types.
+//!
+//! [`mod@ast`] defines all the types that are used by the [`GrugAst`](ast::GrugAst) struct.
+//! [`GrugAst`](ast::GrugAst) contains ast nodes for various parts of the grug language. It
+//! contains both structs and enums and is fully compatible with equivalent c
+//! structs and tagged unions.
+//! 
+//! [`mod@types`] defines types that are likely to be used by lots of bindings'
+//! implementations. 
 #![deny(warnings)]
+#![warn(missing_docs)]
 pub mod types;
 pub mod ast;
 pub mod backend;

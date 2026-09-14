@@ -1,3 +1,4 @@
+//! Contains types related to compile time error reporting.
 use allocator_api2::alloc::Allocator;
 use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
@@ -6,11 +7,16 @@ use crate::utils::{copy_str, copy_bytes_nt, copy_str_nt};
 use std::io::Write;
 use std::ffi::OsStr;
 
-#[allow(dead_code)]
+/// Points at a particual location within a file. Only contains the byte offset
+/// from the start of the file and the line number. The column number must be
+/// determined by scanning the file backwards from the offset. The offset is
+/// guaranteed to be at a utf-8 codepoint boundary.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct SourceSpan {
+	/// The byte offset within the file where the span begins
 	pub offset: usize,
+	/// The line number of the span
 	pub line: usize,
 }
 
@@ -87,27 +93,46 @@ pub struct ErrorKind([u8;4]);
 const _: () = const {assert!(std::mem::size_of::<ErrorKind>() == 4)};
 
 impl ErrorKind {
+	/// No Error
 	pub const NONE:                        Self = Self([0x0, 0, 0, 0]);
+	/// An error during state initialization
 	pub const INIT_ERROR:                  Self = Self([0x1, 0, 0, 0]);
+	/// An error during compilation
 	pub const COMPILE_ERROR:               Self = Self([0x2, 0, 0, 0]);
-	pub const RUNTIME_ERROR:               Self = Self([0x3, 0, 0, 0]);
 
+	/// An error in the mod_api
 	pub const MOD_API_ERROR:               Self = Self::INIT_ERROR.add_component(0x1);
+	/// An error that occurred when registering functions
 	pub const FUNCTION_REGISTRATION_ERROR: Self = Self::INIT_ERROR.add_component(0x2);
 
+	/// An io error that occurred during mod api initialization
 	pub const MOD_API_IO_ERROR:            Self = Self::MOD_API_ERROR.add_component(0x1);
+	/// A json error in the mod api
 	pub const MOD_API_JSON_ERROR:          Self = Self::MOD_API_ERROR.add_component(0x2);
 
+	/// An io error when compiling a file
 	pub const IO_ERROR:                    Self = Self::COMPILE_ERROR.add_component(0x1);
+	/// An error in the name of a file
 	pub const FILE_NAME_ERROR:             Self = Self::COMPILE_ERROR.add_component(0x2);
+	/// An unexpected null byte was found in the file
 	pub const UNEXPECTED_NULL_BYTE:        Self = Self::COMPILE_ERROR.add_component(0x3);
+	/// The file was not utf8 encoded
 	pub const UTF8_ERROR:                  Self = Self::COMPILE_ERROR.add_component(0x4);
+	/// An error that occurred during lexical analysis
 	pub const TOKENIZER_ERROR:             Self = Self::COMPILE_ERROR.add_component(0x5);
+	/// An error that occurred during parsing
 	pub const PARSER_ERROR:                Self = Self::COMPILE_ERROR.add_component(0x6);
+	/// An error that occurred when type checking
 	pub const TYPE_CHECKER_ERROR:          Self = Self::COMPILE_ERROR.add_component(0x7);
 
+	/// The file was empty
 	pub const EMPTY_FILE:                  Self = Self::FILE_NAME_ERROR.add_component(0x1);
 
+	/// Adds a new component to an existing error
+	/// 
+	/// # Panics
+	///
+	/// if 4 components have already been added to the error
 	pub const fn add_component(mut self, other: u8) -> Self {
 		let mut i = 0;
 		while i < self.0.len() {
@@ -120,6 +145,7 @@ impl ErrorKind {
 		panic!("");
 	}
 
+	/// Checks if two different error kinds match upto the first 0 byte
 	pub const fn matches(&self, other: &Self) -> bool {
 		let mut i = 0;
 		while i < self.0.len() {
@@ -133,6 +159,7 @@ impl ErrorKind {
 		true
 	}
 
+	/// Returns the error kind as a u32
 	pub const fn as_u32(self) -> u32 {
 		u32::from_ne_bytes(self.0)
 	}
@@ -198,6 +225,10 @@ impl<'a> GrugError<'a> {
 }
 
 impl<'a> GrugError<'a> {
+	/// Create a new [`GrugError`] within the given allocator.
+	///
+	/// The allocator is expected to be a temporary allocator (like an arena).
+	/// Using a non-temporary allocator will unconditionally cause a memory leak.
 	#[track_caller]
 	pub fn new_error_in<A: Allocator>(error_kind: ErrorKind, function_name: &str, file_path: &OsStr, source_text: &str, err_span: SourceSpan, error_message: std::fmt::Arguments, alloc: &'a A) -> Self {
 		// println!("{:?}", std::panic::Location::caller());
@@ -315,6 +346,7 @@ impl<'a> GrugError<'a> {
 		}
 	}
 
+	/// Deep copy a [`GrugError`] into a new allocator.
 	pub fn copy_into<'b, A: Allocator>(&self, alloc: &'b A) -> GrugError<'b> {
 		GrugError {
 			error_kind: self.error_kind,
