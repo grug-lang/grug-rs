@@ -209,6 +209,7 @@ pub use windows::*;
 mod fallback {
 	use crate::arena::Arena;
 	use crate::error::Error;
+	use crate::ntstring::NTStr;
 	use std::fs::File;
 	use std::ffi::OsStr;
 	use std::io::Read;
