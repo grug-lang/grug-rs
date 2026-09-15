@@ -801,7 +801,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				}
 			},
 			ExprData::Call{
-				receiver: Some(receiver),
+				receiver: receiver_slot @ Some(_),
 				name,
 				args,
 				ptr,
@@ -809,98 +809,203 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 				generics: final_generics,
 			} => {
 				let name = name.to_str();
-				let receiver_type = self.fill_expr(ty_ctx, substitutions, receiver, arena)?;
-				// We want to at least know the first level of the type is known
-				let receiver_type = if let Some(ty) = ty_ctx.get_current_type(receiver_type) {ty} else {
-					return Err(self.new_error(
-						receiver.span,
-						format_args!("Unable to infer type of method receiver"),
-					));
-				};
-				
-				let receiver_name = match receiver_type {
-					Type::Id{name, ..} => name.to_str(),
-					ty => return Err(self.new_error(
-						receiver.span,
-						format_args!("Cannot call method on '{}' type", ty)
-					))
-				};
-				let (receiver_ty, receiver_methods) = if let Some(class) = self.mod_api.classes().get(receiver_name) {
-					(class.ty, &*class.methods)
-				} else if let Some(entity) = self.mod_api.entities().get(receiver_name) {
-					(entity.ty, &*entity.methods)
-				} else {
-					return Err(self.new_error(
-						receiver.span,
-						format_args!("Type '{}' does not have any methods", receiver_name)
-					));
-				};
-				let Some((_, host_fn)) = receiver_methods.iter().find(|(fn_name, _)| fn_name.as_str() == name) else {
-					return Err(self.new_error(
-						receiver.span,
-						format_args!("Cannot find method '{}' on type '{}'", name, receiver_name)
-					));
-				};
 
-				// Create the actual types to represent generics
-				let generics = if let Some(substitutions) = substitutions {
-					// for the second time through, replace the existentials as they are created, and also verify traits
-					let mut generics = Vec::with_capacity_in(host_fn.generics.len(), arena);
-					for generic in host_fn.generics {
-						let Type::Existential{idx} = ty_ctx.create_existential(name, *name_span) else {unreachable!()};
-						let actual_ty = substitutions[idx];
-						ty_ctx.verify_traits(actual_ty, generic.traits(), *name_span, name)?;
-						generics.push(actual_ty)
-					}
-					generics.leak()
-				} else {
-					// The first time through, just create the existentials
-					arena.slice_from_iter(host_fn.generics.iter().map(|_| {
-						ty_ctx.create_existential(name, *name_span)
-					}))
-				};
-
-				// substitute generic arguments in host fn parameters with actual types (existentials the first time through)
-				let parameters = arena.slice_from_iter(host_fn.parameters.iter().map(|param| {
-					Parameter {
-						ty: Self::convert_mod_api_type(param.ty, generics, arena),
-						..*param
-					}
-				}));
-
-				// do the same for the method receiver, and add a constraint between that and the actual type of the receiver
-				let mod_api_receiver_type = Self::convert_mod_api_type(receiver_ty, generics, arena);
-				// TODO: Fix the error message here (i actually don't know if this can even error)
-				ty_ctx.add_constraint(receiver.span, mod_api_receiver_type, receiver_type).map_err(|err| self.new_error(
-					err.span,
-					format_args!("Expected {} but got {}", err.diff, err.diff.swapped())
-				))?;
-				
-				self.fill_arguments(name, ty_ctx, substitutions, *name_span, parameters, args, arena)?;
-
-				// only fill in the host function pointer the second time
-				// through.
-				if substitutions.is_some() {
-					*final_generics = self.type_storage.insert_type_list(generics);
-					// non generic functions directly use the function
-					// from the host function data
-					if let Some(host_fn_ptr) = host_fn.fn_ptr {
-						*ptr = Some(host_fn_ptr);
-					} else if let Some(fn_registerer) = host_fn.registerer {
-						let result = unsafe{fn_registerer(generics.as_ptr())};
-						if let Some(result) = result {
-							*ptr = Some(result);
+				// A bare identifier receiver that isn't shadowed by a variable,
+				// but does name a declared class or entity, is a static method
+				// call (`Type.method()`) rather than an ordinary method call on
+				// a value. A variable of the same name always wins, so
+				// declaring one can never change the meaning of a call that
+				// was already resolving to it.
+				let static_type_name: Option<&str> = match receiver_slot.as_deref() {
+					Some(Expr{data: ExprData::Identifier(recv_name), ..}) => {
+						let recv_name = recv_name.to_str();
+						if self.get_variable_type(recv_name).is_none() && self.mod_api.declares_type(recv_name) {
+							Some(recv_name)
 						} else {
+							None
+						}
+					}
+					_ => None,
+				};
+
+				if let Some(type_name) = static_type_name {
+					// The receiver named a type, not a value, so there is
+					// nothing to evaluate. A resolved static call has the
+					// shape of a free function call from here on. Only the
+					// second pass may drop the receiver, since the first
+					// pass (which collects constraints) still has to
+					// recognize this as a call on `receiver_slot`.
+					if substitutions.is_some() {
+						*receiver_slot = None;
+					}
+
+					let static_methods = self.mod_api.static_methods_of(type_name)
+						.expect("declares_type implies static_methods_of returns Some");
+					let Some((_, host_fn)) = static_methods.iter().find(|(fn_name, _)| fn_name.as_str() == name) else {
+						let is_method = self.mod_api.classes().get(type_name).is_some_and(|class| class.methods.iter().any(|(fn_name, _)| fn_name.as_str() == name))
+							|| self.mod_api.entities().get(type_name).is_some_and(|entity| entity.methods.iter().any(|(fn_name, _)| fn_name.as_str() == name));
+						if is_method {
 							return Err(self.new_error(
 								*name_span,
-								format_args!("generic method '{}.{}' failed instantiation for types {}", receiver_name, name, TypeListDisplay(generics))
+								format_args!("'{}' is a method on '{}', so it must be called on a value of that type, like 'x.{}()'", name, type_name, name)
 							));
 						}
+						return Err(self.new_error(
+							*name_span,
+							format_args!("Cannot find static method '{}' on '{}'", name, type_name)
+						));
+					};
+
+					// Create the actual types to represent generics
+					let generics = if let Some(substitutions) = substitutions {
+						// for the second time through, replace the existentials as they are created, and also verify traits
+						let mut generics = Vec::with_capacity_in(host_fn.generics.len(), arena);
+						for generic in host_fn.generics {
+							let Type::Existential{idx} = ty_ctx.create_existential(name, *name_span) else {unreachable!()};
+							let actual_ty = substitutions[idx];
+							ty_ctx.verify_traits(actual_ty, generic.traits(), *name_span, name)?;
+							generics.push(actual_ty)
+						}
+						generics.leak()
 					} else {
-						panic!("method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", receiver_name, name);
+						// The first time through, just create the existentials
+						arena.slice_from_iter(host_fn.generics.iter().map(|_| {
+							ty_ctx.create_existential(name, *name_span)
+						}))
+					};
+
+					// substitute generic arguments in host fn parameters with actual types (existentials the first time through)
+					let parameters = arena.slice_from_iter(host_fn.parameters.iter().map(|param| {
+						Parameter {
+							ty: Self::convert_mod_api_type(param.ty, generics, arena),
+							..*param
+						}
+					}));
+
+					self.fill_arguments(name, ty_ctx, substitutions, *name_span, parameters, args, arena)?;
+
+					// only fill in the host function pointer the second time
+					// through.
+					if substitutions.is_some() {
+						*final_generics = self.type_storage.insert_type_list(generics);
+						if let Some(host_fn_ptr) = host_fn.fn_ptr {
+							*ptr = Some(host_fn_ptr);
+						} else if let Some(fn_registerer) = host_fn.registerer {
+							let result = unsafe{fn_registerer(generics.as_ptr())};
+							if let Some(result) = result {
+								*ptr = Some(result);
+							} else {
+								return Err(self.new_error(
+									*name_span,
+									format_args!("generic static method '{}.{}' failed instantiation for types {}", type_name, name, TypeListDisplay(generics))
+								));
+							}
+						} else {
+							panic!("static method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", type_name, name);
+						}
 					}
+					Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
+				} else {
+					let receiver = receiver_slot.as_deref_mut().expect("matched Some(_) above");
+					let receiver_type = self.fill_expr(ty_ctx, substitutions, receiver, arena)?;
+					// We want to at least know the first level of the type is known
+					let receiver_type = if let Some(ty) = ty_ctx.get_current_type(receiver_type) {ty} else {
+						return Err(self.new_error(
+							receiver.span,
+							format_args!("Unable to infer type of method receiver"),
+						));
+					};
+
+					let receiver_name = match receiver_type {
+						Type::Id{name, ..} => name.to_str(),
+						ty => return Err(self.new_error(
+							receiver.span,
+							format_args!("Cannot call method on '{}' type", ty)
+						))
+					};
+					let (receiver_ty, receiver_methods) = if let Some(class) = self.mod_api.classes().get(receiver_name) {
+						(class.ty, &*class.methods)
+					} else if let Some(entity) = self.mod_api.entities().get(receiver_name) {
+						(entity.ty, &*entity.methods)
+					} else {
+						return Err(self.new_error(
+							receiver.span,
+							format_args!("Type '{}' does not have any methods", receiver_name)
+						));
+					};
+					let Some((_, host_fn)) = receiver_methods.iter().find(|(fn_name, _)| fn_name.as_str() == name) else {
+						let static_method = self.mod_api.classes().get(receiver_name).and_then(|class| class.get_static_method(name))
+							.or_else(|| self.mod_api.entities().get(receiver_name).and_then(|entity| entity.get_static_method(name)));
+						if static_method.is_some() {
+							return Err(self.new_error(
+								*name_span,
+								format_args!("'{}' is a static method on '{}', so it must be called as '{}.{}()'", name, receiver_name, receiver_name, name)
+							));
+						}
+						return Err(self.new_error(
+							receiver.span,
+							format_args!("Cannot find method '{}' on type '{}'", name, receiver_name)
+						));
+					};
+
+					// Create the actual types to represent generics
+					let generics = if let Some(substitutions) = substitutions {
+						// for the second time through, replace the existentials as they are created, and also verify traits
+						let mut generics = Vec::with_capacity_in(host_fn.generics.len(), arena);
+						for generic in host_fn.generics {
+							let Type::Existential{idx} = ty_ctx.create_existential(name, *name_span) else {unreachable!()};
+							let actual_ty = substitutions[idx];
+							ty_ctx.verify_traits(actual_ty, generic.traits(), *name_span, name)?;
+							generics.push(actual_ty)
+						}
+						generics.leak()
+					} else {
+						// The first time through, just create the existentials
+						arena.slice_from_iter(host_fn.generics.iter().map(|_| {
+							ty_ctx.create_existential(name, *name_span)
+						}))
+					};
+
+					// substitute generic arguments in host fn parameters with actual types (existentials the first time through)
+					let parameters = arena.slice_from_iter(host_fn.parameters.iter().map(|param| {
+						Parameter {
+							ty: Self::convert_mod_api_type(param.ty, generics, arena),
+							..*param
+						}
+					}));
+
+					// do the same for the method receiver, and add a constraint between that and the actual type of the receiver
+					let mod_api_receiver_type = Self::convert_mod_api_type(receiver_ty, generics, arena);
+					// TODO: Fix the error message here (i actually don't know if this can even error)
+					ty_ctx.add_constraint(receiver.span, mod_api_receiver_type, receiver_type).map_err(|err| self.new_error(
+						err.span,
+						format_args!("Expected {} but got {}", err.diff, err.diff.swapped())
+					))?;
+
+					self.fill_arguments(name, ty_ctx, substitutions, *name_span, parameters, args, arena)?;
+
+					// only fill in the host function pointer the second time
+					// through.
+					if substitutions.is_some() {
+						*final_generics = self.type_storage.insert_type_list(generics);
+						if let Some(host_fn_ptr) = host_fn.fn_ptr {
+							*ptr = Some(host_fn_ptr);
+						} else if let Some(fn_registerer) = host_fn.registerer {
+							let result = unsafe{fn_registerer(generics.as_ptr())};
+							if let Some(result) = result {
+								*ptr = Some(result);
+							} else {
+								return Err(self.new_error(
+									*name_span,
+									format_args!("generic method '{}.{}' failed instantiation for types {}", receiver_name, name, TypeListDisplay(generics))
+								));
+							}
+						} else {
+							panic!("method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", receiver_name, name);
+						}
+					}
+					Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
 				}
-				Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
 			}
 			ExprData::Parenthesized(expr) => {
 				self.fill_expr(ty_ctx, substitutions, expr, arena)?
