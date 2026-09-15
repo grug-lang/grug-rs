@@ -1,4 +1,3 @@
-// TODO: Methods on entities
 use std::collections::HashMap;
 use std::path::Path;
 use std::io::Write;
@@ -37,7 +36,7 @@ unsafe impl Sync for ModApi {}
 
 impl ModApi {
 	pub(crate) fn entities<'a>(&'a self) -> &'a HashMap<&'a NTStr, ModApiEntity<'a>> {
-		// SAFETY: Invariance of the methods field requires this transmute
+		// SAFETY: Invariance of the methods and static_methods fields requires this transmute
 		// This transmute brings it back to the actual lifetime
 		unsafe{std::mem::transmute::<&'a HashMap<&'static NTStr, ModApiEntity<'static>>, &'a HashMap<&'a NTStr, ModApiEntity<'a>>>(&self.entities)}
 	}
@@ -52,29 +51,73 @@ impl ModApi {
 		&self.host_fns
 	}
 
+	/// The static methods declared on a class or entity named `type_name`, or
+	/// `None` if the name does not belong to either.
+	pub(crate) fn static_methods_of<'a>(&'a self, type_name: &str) -> Option<&'a [(&'a NTStr, ModApiHostFn<'a>)]> {
+		if let Some(class) = self.classes().get(type_name) {
+			return Some(class.static_methods);
+		}
+		if let Some(entity) = self.entities().get(type_name) {
+			return Some(entity.static_methods);
+		}
+		None
+	}
+
+	/// Whether `type_name` names a class or an entity declared in mod_api.json.
+	pub(crate) fn declares_type(&self, type_name: &str) -> bool {
+		self.classes.contains_key(type_name) || self.entities.contains_key(type_name)
+	}
+
+	/// The method or static method `type_name.fn_name` names.
+	///
+	/// A name identifies at most one of them, because a class that declares
+	/// both is rejected when mod_api.json is parsed.
+	fn lookup_on_type_mut(&mut self, type_name: &str, fn_name: &str) -> Result<&mut ModApiHostFn<'static>> {
+		if let Some(class) = self.classes.get_mut(type_name) {
+			if let Some((_, host_fn_data)) = class.methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) {
+				return Ok(host_fn_data);
+			}
+			if let Some((_, host_fn_data)) = class.static_methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) {
+				return Ok(host_fn_data);
+			}
+			return Err(Error::new(
+				ErrorKind::FUNCTION_REGISTRATION_ERROR,
+				"",
+				"".as_ref(),
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("Class with name '{}' does not contain method with name '{}'", type_name, fn_name),
+			));
+		}
+		if let Some(entity) = self.entities.get_mut(type_name) {
+			if let Some((_, host_fn_data)) = entity.methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) {
+				return Ok(host_fn_data);
+			}
+			if let Some((_, host_fn_data)) = entity.static_methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) {
+				return Ok(host_fn_data);
+			}
+			return Err(Error::new(
+				ErrorKind::FUNCTION_REGISTRATION_ERROR,
+				"",
+				"".as_ref(),
+				"",
+				SourceSpan{offset: 0, line: 0},
+				format_args!("Class with name '{}' does not contain method with name '{}'", type_name, fn_name),
+			));
+		}
+		Err(Error::new(
+			ErrorKind::FUNCTION_REGISTRATION_ERROR,
+			"",
+			"".as_ref(),
+			"",
+			SourceSpan{offset: 0, line: 0},
+			format_args!("Class with name '{}' is not found in mod_api.json", type_name),
+		))
+	}
+
 	pub(crate) fn register_fn<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnWithState<N, GrugState>) -> Result<()> {
 		if let Some(class_name) = class_name {
-			let Some(class) = self.classes.get_mut(class_name) else {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Class '{}' is not found in mod_api.json", class_name),
-				));
-			};
-			let Some((_, host_fn_data)) = class.methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) else {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Class '{}' does not contain method with name '{}'", class_name, fn_name),
-				));
-			};
-
+			let host_fn_data = self.lookup_on_type_mut(class_name, fn_name)?;
 			if !host_fn_data.generics.is_empty() && N == 0 {
 				return Err(Error::new(
 					ErrorKind::FUNCTION_REGISTRATION_ERROR,
@@ -153,26 +196,7 @@ impl ModApi {
 	/// expected by the functions matches the number defined in the mod_api
 	pub(crate) fn register_generic_fn<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnReg<N, GrugState>) -> Result<()> {
 		if let Some(class_name) = class_name {
-			let Some(class) = self.classes.get_mut(class_name) else {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Class '{}' is not found in mod_api.json", class_name),
-				));
-			};
-			let Some((_, host_fn_data)) = class.methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) else {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Method {}.{} is not found in the mod_api.json", class_name, fn_name),
-				));
-			};
+			let host_fn_data = self.lookup_on_type_mut(class_name, fn_name)?;
 			if host_fn_data.generics.is_empty() {
 				return Err(Error::new(
 					ErrorKind::FUNCTION_REGISTRATION_ERROR,
@@ -261,26 +285,7 @@ impl ModApi {
 	/// This is intended to be used directly by c code
 	pub(crate) unsafe fn register_generic_fn_unchecked(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnRegErased) -> Result<()> {
 		if let Some(class_name) = class_name {
-			let Some(class) = self.classes.get_mut(class_name) else {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Class '{}' is not found in mod_api.json", class_name),
-				));
-			};
-			let Some((_, host_fn_data)) = class.methods.iter_mut().find(|(name, _)| name.as_str() == fn_name) else {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Method {}.{} is not found in mod_api.json", class_name, fn_name),
-				));
-			};
+			let host_fn_data = self.lookup_on_type_mut(class_name, fn_name)?;
 			if host_fn_data.generics.is_empty() {
 				return Err(Error::new(
 					ErrorKind::FUNCTION_REGISTRATION_ERROR,
@@ -366,6 +371,22 @@ impl ModApi {
 					host_fn.registerer = Some(dummy_generic_fn);
 				}
 			}
+			for (_, host_fn) in &mut *class.static_methods {
+				if host_fn.generics.is_empty() {
+					host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
+				} else {
+					host_fn.registerer = Some(dummy_generic_fn);
+				}
+			}
+		}
+		for (_, entity) in &mut self.entities {
+			for (_, host_fn) in &mut *entity.static_methods {
+				if host_fn.generics.is_empty() {
+					host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
+				} else {
+					host_fn.registerer = Some(dummy_generic_fn);
+				}
+			}
 		}
 	}
 }
@@ -407,7 +428,14 @@ pub(crate) struct ModApiClass<'a> {
 	pub(crate) description: &'a str,
 	pub(crate) ty: Type<'a>,
 	pub(crate) methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
+	pub(crate) static_methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
 	pub(crate) generics: &'a [Generic<'a>],
+}
+
+impl<'a> ModApiClass<'a> {
+	pub(crate) fn get_static_method(&self, name: &str) -> Option<&ModApiHostFn<'a>> {
+		self.static_methods.iter().find_map(|(fn_name, func)| (name == fn_name.as_str()).then_some(func))
+	}
 }
 
 #[derive(Debug)]
@@ -417,11 +445,16 @@ pub(crate) struct ModApiEntity<'a> {
 	pub(crate) ty: Type<'a>,
 	pub(crate) export_fns: &'a [(&'a NTStr, ModApiExportFn<'a>)],
 	pub(crate) methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
+	pub(crate) static_methods: &'a mut [(&'a NTStr, ModApiHostFn<'a>)],
 }
 
 impl<'a> ModApiEntity<'a> {
 	pub(crate) fn get_export_fn(&self, name: &str) -> Option<(usize, &ModApiExportFn<'_>)> {
 		self.export_fns.iter().enumerate().find_map(|(i, (fn_name, func))| (name == fn_name.as_str()).then_some((i, func)))
+	}
+
+	pub(crate) fn get_static_method(&self, name: &str) -> Option<&ModApiHostFn<'a>> {
+		self.static_methods.iter().find_map(|(fn_name, func)| (name == fn_name.as_str()).then_some(func))
 	}
 }
 
@@ -1112,12 +1145,32 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 				&mut []
 			};
 
+			// optional "static_methods" object
+			let static_methods = if let Some(static_methods) = entity_values.get("static_methods") {
+				context.push_path(JsonPathComponent::ObjectKey("static_methods"));
+				let JsonValue::Object(static_methods) = static_methods else {
+					return Err(context.new_error("is not an object"));
+				};
+				let mut temp = Vec::new_in(&arena);
+				for (static_method_name, static_method_values) in static_methods.iter() {
+					context.push_path(JsonPathComponent::ObjectKey(static_method_name));
+					let static_method_name = arena.copy_str_into_nt(static_method_name);
+					temp.push((static_method_name, context.parse_host_fn(static_method_values, &[], &traits, &arena)?));
+					context.pop_path();
+				}
+				context.pop_path();
+				temp.leak()
+			} else {
+				&mut []
+			};
+
 			context.pop_path();
 			Ok((entity_name, ModApiEntity{
 				description,
 				ty,
 				export_fns,
 				methods,
+				static_methods,
 			}))
 		}).collect::<Result<HashMap<_, _>>>()?;
 		context.pop_path();
@@ -1177,12 +1230,33 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			} else {
 				&mut []
 			};
+
+			// optional "static_methods" object
+			let static_methods = if let Some(static_methods) = class_values.get("static_methods") {
+				context.push_path(JsonPathComponent::ObjectKey("static_methods"));
+				let JsonValue::Object(static_methods) = static_methods else {
+					return Err(context.new_error("is not an object"));
+				};
+				let mut temp = Vec::new_in(&arena);
+				for (static_method_name, static_method_values) in static_methods.iter() {
+					context.push_path(JsonPathComponent::ObjectKey(static_method_name));
+					let static_method_name = arena.copy_str_into_nt(static_method_name);
+					temp.push((static_method_name, context.parse_host_fn(static_method_values, generics, &traits, &arena)?));
+					context.pop_path();
+				}
+				context.pop_path();
+				temp.leak()
+			} else {
+				&mut []
+			};
+
 			context.pop_path();
 			Ok((class_name, ModApiClass {
 				description,
 				ty,
 				generics,
 				methods,
+				static_methods,
 			}))
 		}).collect::<Result<HashMap<_, _>>>()?;
 		context.pop_path();
@@ -1243,6 +1317,20 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			context.pop_path();
 		}
 		context.pop_path();
+		context.push_path(JsonPathComponent::ObjectKey("static_methods"));
+		for (static_method_name, host_fn) in &*class_data.static_methods {
+			context.push_path(JsonPathComponent::ObjectKey(static_method_name));
+			// A static method can't share a name with a regular method,
+			// since both are called as `Type.name(...)` in different forms
+			// (`Type.name()` vs `value.name()`) and the ambiguity isn't
+			// resolvable from the call site alone.
+			if class_data.methods.iter().any(|(method_name, _)| method_name.as_str() == static_method_name.as_str()) {
+				return Err(context.new_error("is already declared as a method"));
+			}
+			context.validate_function(host_fn.parameters, host_fn.return_ty, host_fn.generics, known_types)?;
+			context.pop_path();
+		}
+		context.pop_path();
 		context.pop_path();
 	}
 	context.pop_path();
@@ -1278,6 +1366,13 @@ pub(crate) fn get_mod_api_from_text(mod_api_path: impl AsRef<Path>, mod_api_text
 			context.validate_function(export_fn.parameters, Type::Void, &[], known_types)?;
 			context.pop_path();
 		}
+		context.push_path(JsonPathComponent::ObjectKey("static_methods"));
+		for (static_method_name, host_fn) in &*entity.static_methods {
+			context.push_path(JsonPathComponent::ObjectKey(static_method_name));
+			context.validate_function(host_fn.parameters, host_fn.return_ty, host_fn.generics, known_types)?;
+			context.pop_path();
+		}
+		context.pop_path();
 		context.pop_path();
 	}
 	context.pop_path();
