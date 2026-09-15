@@ -352,6 +352,7 @@ mod game_fn_bindings {
         safe fn game_fn_vec_number_push               <'a>(state: &'a GrugState, values: *const Value) -> Value;
         safe fn game_fn_vec_number_pop                <'a>(state: &'a GrugState, values: *const Value) -> Value;
         safe fn game_fn_vec_number_insert             <'a>(state: &'a GrugState, values: *const Value) -> Value;
+        safe fn game_fn_vec_number_with_capacity      <'a>(state: &'a GrugState, values: *const Value) -> Value;
         safe fn game_fn_utils                         <'a>(state: &'a GrugState, values: *const Value) -> Value;
         safe fn game_fn_Utils_assert_state_is_not_null<'a>(state: &'a GrugState, values: *const Value) -> Value;
         safe fn game_fn_Utils_cause_game_fn_error     <'a>(state: &'a GrugState, values: *const Value) -> Value;
@@ -423,6 +424,11 @@ mod game_fn_bindings {
 		state.register_method("VecNumber", "push",   game_fn_vec_number_push     )?; 
 		state.register_method("VecNumber", "pop",    game_fn_vec_number_pop      )?; 
 		state.register_method("VecNumber", "insert", game_fn_vec_number_insert   )?; 
+		// Static methods. These reuse the same native functions as their free-function counterparts.
+		state.register_method("VecNumber", "new",           game_fn_vec_number_new          )?; 
+		state.register_method("VecNumber", "with_capacity", game_fn_vec_number_with_capacity)?; 
+		state.register_method("D", "magic", game_fn_magic)?; 
+		state.register_method("Utils", "fail", game_fn_cause_game_fn_error)?; 
 
 		state.register_method("Utils", "assert_state_is_not_null", game_fn_Utils_assert_state_is_not_null)?; 
 		state.register_method("Utils", "cause_game_fn_error",      game_fn_Utils_cause_game_fn_error     )?; 
@@ -433,6 +439,8 @@ mod game_fn_bindings {
 		state.register_generic_method("Vec", "push"  , reg_game_fn_vec_push  )?; 
 		state.register_generic_method("Vec", "pop"   , reg_game_fn_vec_pop   )?; 
 		state.register_generic_method("Vec", "insert", reg_game_fn_vec_insert)?; 
+		// Static method, reusing the same native registerer as the free "vec" function.
+		state.register_generic_method("Vec", "new", reg_game_fn_vec_new)?; 
 
 		state.register_generic_fn("box", reg_game_fn_box)?;
 		state.register_generic_method("Box", "get"   , reg_game_fn_box_get   )?; 
