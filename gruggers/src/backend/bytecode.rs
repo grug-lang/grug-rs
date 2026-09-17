@@ -772,6 +772,8 @@ impl Backend for BytecodeBackend {
 		self.call_stack.truncate(old_len);
 
 		entity.members.set(NonNull::from_ref(globals).cast::<()>());
+		let data_ptr = ErasedPtr::from_ptr(entity.members.get());
+		debug_assert!(file.data.contains(data_ptr));
 
 		stack = stack.reset();
 		self.stacks.borrow_mut().push(stack);

@@ -126,7 +126,6 @@ impl<'a> RuntimeError<'a> {
 				.expect("null byte found in error message")
 				.as_ntstrptr()
 		};
-		println!("{}", error_string);
 
 		let export_fn_name = copy_str_as_ntstr(export_fn_name, a).as_ntstrptr();
 		let script_path = copy_bytes_as_nt(script_path.as_encoded_bytes(), a);

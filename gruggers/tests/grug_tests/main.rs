@@ -38,6 +38,7 @@ mod test_bindings {
 			.set_mod_api_path(unsafe{OsStr::from_encoded_bytes_unchecked(mod_api_path.to_bytes())})
 			.set_mods_dir(unsafe{OsStr::from_encoded_bytes_unchecked(mods_dir_path.to_bytes())})
 			.set_runtime_error_handler(|error| {
+				println!("{}", error.error_string);
 				unsafe{
 					grug_tests_runtime_error_handler (
 						error.error_message,
