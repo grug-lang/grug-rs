@@ -768,16 +768,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 						*final_generics = self.type_storage.insert_type_list(generics);
 						if let Some(host_fn_ptr) = host_fn.fn_ptr {
 							*ptr = Some(host_fn_ptr);
-						} else if let Some(fn_registerer) = host_fn.registerer {
-							let result = unsafe{fn_registerer(generics.as_ptr())};
-							if let Some(result) = result {
-								*ptr = Some(result);
-							} else {
-								return Err(self.new_error(
-									*name_span,
-									format_args!("generic function '{}' failed instantiation for types {}", name, TypeListDisplay(generics))
-								));
-							}
 						} else {
 							panic!("function {} was not registered (Note: This error is not triggerred by grug_tests)", name);
 						}
@@ -890,16 +880,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 						*final_generics = self.type_storage.insert_type_list(generics);
 						if let Some(host_fn_ptr) = host_fn.fn_ptr {
 							*ptr = Some(host_fn_ptr);
-						} else if let Some(fn_registerer) = host_fn.registerer {
-							let result = unsafe{fn_registerer(generics.as_ptr())};
-							if let Some(result) = result {
-								*ptr = Some(result);
-							} else {
-								return Err(self.new_error(
-									*name_span,
-									format_args!("generic static method '{}.{}' failed instantiation for types {}", type_name, name, TypeListDisplay(generics))
-								));
-							}
 						} else {
 							panic!("static method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", type_name, name);
 						}
@@ -990,16 +970,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 						*final_generics = self.type_storage.insert_type_list(generics);
 						if let Some(host_fn_ptr) = host_fn.fn_ptr {
 							*ptr = Some(host_fn_ptr);
-						} else if let Some(fn_registerer) = host_fn.registerer {
-							let result = unsafe{fn_registerer(generics.as_ptr())};
-							if let Some(result) = result {
-								*ptr = Some(result);
-							} else {
-								return Err(self.new_error(
-									*name_span,
-									format_args!("generic method '{}.{}' failed instantiation for types {}", receiver_name, name, TypeListDisplay(generics))
-								));
-							}
 						} else {
 							panic!("method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", receiver_name, name);
 						}

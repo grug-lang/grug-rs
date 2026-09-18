@@ -597,6 +597,7 @@ impl Interpreter {
 				name: _,
 				args,
 				ptr: Some(ptr),
+				generics,
 				..
 			} => {
 				let mut values = if let Some(receiver) = receiver {
@@ -605,7 +606,7 @@ impl Interpreter {
 					vec![]
 				};
 				args.iter().map(|arg| Some(values.push(self.run_expr(call_stack, state, file, entity, arg)?))).collect::<Option<Vec<()>>>()?;
-				let ret_val = unsafe{ptr(state as *const _ as _, values.as_ptr(), &[] as *const _)};
+				let ret_val = unsafe{ptr(state as *const _ as _, values.as_ptr(), generics.as_ptr() as *const _)};
 				let ret_val = if expr.result_type == Some(&Type::Void) {Value{void: ()}} else {ret_val};
 				if state.is_errorring() {
 					return None;
