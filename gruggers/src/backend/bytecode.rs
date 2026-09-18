@@ -790,7 +790,6 @@ impl Backend for BytecodeBackend {
 		let files = self.files.borrow();
 		let file = files.get(entity.file_id.0 as usize)
 			.expect("file already compiled");
-		unsafe{file.data.delete(ErasedPtr::from_ptr(entity.members.get()))};
 		
 		// This pointer is guaranteed to point within file.data because we only ever set it to file.data.
 		// The only case were it may point to something else is if the entity
