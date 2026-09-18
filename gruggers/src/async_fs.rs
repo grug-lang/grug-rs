@@ -234,11 +234,14 @@ mod fallback {
 			// Should actually be unnecessary but the Read interface requires
 			// that the input buffer is fully initialized
 			unsafe{buf.cast::<u8>().write_bytes(0, buf.len())};
-			// SAFETY: buffer is fully initialized
-			let buf = unsafe{std::slice::from_raw_parts_mut(buf.cast::<u8>().as_ptr(), cap)};
+			// SAFETY: buffer is fully initialized, and `size` (file length + 1
+			// for the null terminator) never exceeds the buffer's capacity,
+			// since `allocate_buffer_for_file` rounds that same size up when
+			// sizing the allocation.
+			let buf = unsafe{std::slice::from_raw_parts_mut(buf.cast::<u8>().as_ptr(), size as usize)};
 
 			match file.read(buf) {
-				Ok(size) => files_data.push(super::verify_file_data(&buf[..size + 1])),
+				Ok(bytes_read) => files_data.push(super::verify_file_data(&buf[..bytes_read + 1], "file_unknown (ig)".as_ref())),
 				Err(err) => files_data.push(Err(Error::from_io_error(err, "file_unknown (ig)".as_ref())))
 			}
 		}

@@ -37,6 +37,7 @@ mod test_bindings {
 		let mut state = GrugInitSettings::new()
 			.set_mod_api_path(unsafe{OsStr::from_encoded_bytes_unchecked(mod_api_path.to_bytes())})
 			.set_mods_dir(unsafe{OsStr::from_encoded_bytes_unchecked(mods_dir_path.to_bytes())})
+			.set_poll_interval(std::time::Duration::from_millis(20))
 			.set_runtime_error_handler(|error| {
 				println!("{}", error.error_string);
 				unsafe{
@@ -92,10 +93,25 @@ mod test_bindings {
 		state.destroy_entity(handle);
 	}
 
+	// Holds the resource paths reported by the most recent call to
+	// `update`, so that `get_updated_resources` can hand them back to
+	// tests.c afterwards. Test-only plumbing, mirroring the statics tests.c
+	// itself uses to capture call data.
+	static mut LAST_UPDATED_RESOURCES: Option<gruggers::state::ResourcePaths> = None;
+
 	pub extern "C" fn update<'a>((state, arena): &'a CState, err_out: &mut Option<NTStrPtr<'a>>) {
-		std::thread::sleep(std::time::Duration::from_micros(1));
+		// create_grug_state() above configures a 20ms poll interval for
+		// this test binary (instead of the 1 second production default).
+		// Sleeping here for comfortably longer than that guarantees at
+		// least one full scan has happened since the previous call to
+		// update(), instead of racing that background thread's own
+		// schedule. This is test-only: real hosts call update() once per
+		// frame and don't want any of this delay.
+		std::thread::sleep(std::time::Duration::from_millis(100));
 		match state.update_files() {
-			(_, updated_files) => {
+			(resources, updated_files) => {
+				// SAFETY: single threaded test harness
+				unsafe{LAST_UPDATED_RESOURCES = Some(resources)};
 				// for each file in the `updated_files`, find it in `files`,
 				// copy its contents over to the `files`'s arena and replace it
 				for updated_file in updated_files.files() {
@@ -107,6 +123,25 @@ mod test_bindings {
 			},
 		}
 		*err_out = None;
+	}
+
+	pub extern "C" fn get_updated_resources(_state: &CState, count_out: &mut usize) -> *const *const std::ffi::c_char {
+		// SAFETY: single threaded test harness
+		let resources = unsafe{&LAST_UPDATED_RESOURCES};
+		match resources {
+			Some(resources) => {
+				let paths = resources.paths();
+				*count_out = paths.len();
+				// SAFETY: `NTBytes` is `#[repr(transparent)]` over
+				// `NonNull<c_char>`, so `&[NTBytes]` has the same layout
+				// as `&[*const c_char]`
+				paths.as_ptr().cast::<*const std::ffi::c_char>()
+			}
+			None => {
+				*count_out = 0;
+				std::ptr::null()
+			}
+		}
 	}
 
 	#[allow(unused_variables)]
@@ -192,6 +227,8 @@ mod test_bindings {
 	#[allow(non_camel_case_types)]
 	pub type update_t = for<'a> extern "C" fn (&'a CState, &mut Option<NTStrPtr<'a>>);
 	#[allow(non_camel_case_types)]
+	pub type get_updated_resources_t = extern "C" fn (&CState, &mut usize) -> *const *const std::ffi::c_char;
+	#[allow(non_camel_case_types)]
 	pub type call_export_fn_t = for<'a> extern "C" fn (&'a CState, GrugEntityHandle<'a>, NTStrPtr<'_>, *const Value, usize);
 	#[allow(non_camel_case_types)]
 	pub type dump_file_to_json_t = extern "C" fn (&CState, NTStrPtr<'_>, *mut u8, usize) -> i32;
@@ -210,6 +247,7 @@ mod test_bindings {
 		create_entity: create_entity_t,
 		destroy_entity: destroy_entity_t,
 		update: update_t,
+		get_updated_resources: get_updated_resources_t,
 		call_export_fn: call_export_fn_t,
 		dump_file_to_json: dump_file_to_json_t,
 		generate_file_from_json: generate_file_from_json_t,
@@ -225,11 +263,19 @@ mod test_bindings {
 		create_entity,
 		destroy_entity,
 		update,
+		get_updated_resources,
 		call_export_fn,
 		dump_file_to_json,
 		generate_file_from_json,
 		game_fn_error,
 	};
+
+	#[repr(C)]
+	pub struct GrugTestsOptions {
+		pub whitelisted_test: Option<NTStrPtr<'static>>,
+		pub continue_on_fail: bool,
+		pub results_json_path: Option<NTStrPtr<'static>>,
+	}
 
 	#[link(name="tests", kind="dylib")]
 	unsafe extern "C" {
@@ -244,14 +290,14 @@ mod test_bindings {
 			tests_dir_path_: NTStrPtr<'static>, 
 			mod_api_path: NTStrPtr<'static>, 
 			vtable: GrugStateVTable,
-			whitelisted_test_: Option<NTStrPtr<'static>>
+			options: GrugTestsOptions,
 		);
 	}
 }
 use test_bindings::*;
 
 mod game_fn_bindings {
-	use gruggers::types::{Value, HostFnWithState};
+	use gruggers::types::Value;
 	use gruggers::ast::Type;
 	use gruggers::state::GrugState;
 	use gruggers::error::Error;
@@ -268,10 +314,10 @@ mod game_fn_bindings {
 		safe fn game_fn_sin                           <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
 		safe fn game_fn_cos                           <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_mega                          <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
+        safe fn game_fn_eval_order_1                  <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
+        safe fn game_fn_eval_order_2                  <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_get_false                     <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_set_is_happy                  <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
-        safe fn game_fn_mega_f32                      <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
-        safe fn game_fn_mega_i32                      <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_draw                          <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_assert_state_is_not_null      <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_blocked_alrm                  <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
@@ -295,14 +341,13 @@ mod game_fn_bindings {
         safe fn game_fn_cause_game_fn_error           <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_call_on_b_fn                  <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_call_on_b_fn_number           <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
-        safe fn game_fn_store                         <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
-        safe fn game_fn_retrieve                      <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_box_number                    <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_print_csv                     <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_vec_number_new                <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_vec_number_push               <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_vec_number_pop                <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
-        safe fn game_fn_vec_number_insert             <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
+        safe fn game_fn_vec_number_insert              <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
+        safe fn game_fn_vec_number_with_capacity      <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_utils                         <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_Utils_assert_state_is_not_null<'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
         safe fn game_fn_Utils_cause_game_fn_error     <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;0]) -> Value;
@@ -323,9 +368,8 @@ mod game_fn_bindings {
 
         safe fn game_fn_box                           <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;1]) -> Value;
         safe fn game_fn_box_get                       <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;1]) -> Value;
-        safe fn game_fn_box_set                       <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;1]) -> Value;
 		
-		safe fn reg_game_fn_default                           (types: &[Type;1]) -> Option<HostFnWithState<1, GrugState>>;
+		safe fn game_fn_default                       <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;1]) -> Value;
 
         safe fn game_fn_dict                          <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;2]) -> Value;
         safe fn game_fn_dict_from_vec                 <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;2]) -> Value;
@@ -353,10 +397,10 @@ mod game_fn_bindings {
 		state.register_host_fn("sin",                      game_fn_sin                 )?; 
 		state.register_host_fn("cos",                      game_fn_cos                 )?; 
 		state.register_host_fn("mega",                     game_fn_mega                )?; 
+		state.register_host_fn("eval_order_1",             game_fn_eval_order_1        )?; 
+		state.register_host_fn("eval_order_2",             game_fn_eval_order_2        )?; 
 		state.register_host_fn("get_false",                game_fn_get_false           )?; 
 		state.register_host_fn("set_is_happy",             game_fn_set_is_happy        )?; 
-		state.register_host_fn("mega_f32",                 game_fn_mega_f32            )?; 
-		state.register_host_fn("mega_i32",                 game_fn_mega_i32            )?; 
 		state.register_host_fn("draw",                     game_fn_draw                )?; 
 		state.register_host_fn("assert_state_is_not_null", game_fn_assert_state_is_not_null)?; 
 		state.register_host_fn("blocked_alrm",             game_fn_blocked_alrm        )?; 
@@ -380,8 +424,6 @@ mod game_fn_bindings {
 		state.register_host_fn("cause_game_fn_error",      game_fn_cause_game_fn_error )?; 
 		state.register_host_fn("call_on_b_fn",             game_fn_call_on_b_fn        )?; 
 		state.register_host_fn("call_on_b_fn_number",      game_fn_call_on_b_fn_number )?; 
-		state.register_host_fn("store",                    game_fn_store               )?; 
-		state.register_host_fn("retrieve",                 game_fn_retrieve            )?; 
 		state.register_host_fn("box_number",               game_fn_box_number          )?; 
 		state.register_host_fn("print_csv",                game_fn_print_csv           )?; 
 		state.register_host_fn("vec_number_new",           game_fn_vec_number_new      )?; 
@@ -390,6 +432,11 @@ mod game_fn_bindings {
 		state.register_method("VecNumber", "push",   game_fn_vec_number_push     )?; 
 		state.register_method("VecNumber", "pop",    game_fn_vec_number_pop      )?; 
 		state.register_method("VecNumber", "insert", game_fn_vec_number_insert   )?; 
+		// Static methods. These reuse the same native functions as their free-function counterparts.
+		state.register_method("VecNumber", "new",           game_fn_vec_number_new          )?; 
+		state.register_method("VecNumber", "with_capacity", game_fn_vec_number_with_capacity)?; 
+		state.register_method("D", "magic", game_fn_magic)?; 
+		state.register_method("Utils", "fail", game_fn_cause_game_fn_error)?; 
 
 		state.register_method("Utils", "assert_state_is_not_null", game_fn_Utils_assert_state_is_not_null)?; 
 		state.register_method("Utils", "cause_game_fn_error",      game_fn_Utils_cause_game_fn_error     )?; 
@@ -400,10 +447,11 @@ mod game_fn_bindings {
 		state.register_method("Vec", "push"  , game_fn_vec_push  )?; 
 		state.register_method("Vec", "pop"   , game_fn_vec_pop   )?; 
 		state.register_method("Vec", "insert", game_fn_vec_insert)?; 
+		// Static method, reusing the same native symbol as the free "vec" function.
+		state.register_method("Vec", "new", game_fn_vec_new)?; 
 
 		state.register_host_fn("box", game_fn_box)?;
-		state.register_method("Box", "set"   , game_fn_box_set   )?; 
-		state.register_method("Box", "get"   , game_fn_box_get   )?; 
+		state.register_method("Box", "get", game_fn_box_get)?; 
 
 		state.register_host_fn("make_pair",     game_fn_make_pair)?; 
 		state.register_method("Pair", "first" , game_fn_pair_first)?; 
@@ -413,7 +461,7 @@ mod game_fn_bindings {
 		state.register_host_fn("dict_from_vec", game_fn_dict_from_vec)?; 
 		state.register_method("Dict", "put", game_fn_dict_put)?; 
 
-		state.register_generic_fn("default",       reg_game_fn_default)?; 
+		state.register_host_fn("default",       game_fn_default)?; 
 		state.register_host_fn("cause_game_fn_error_generic", game_fn_cause_game_fn_error_generic)?; 
 
 		Ok(())
@@ -421,35 +469,58 @@ mod game_fn_bindings {
 }
 use std::io::Write;
 
-#[test]
-fn grug_tests () {
-	let mut args = std::env::args().collect::<Vec<_>>();
+pub fn main() {
+    let mut args = std::env::args().collect::<Vec<_>>();
 
-	let mut whitelisted_test = None;
-	if args.len() >= 3 {
-		let mut test = args.remove(2);
-		if !test.starts_with("--") {
-			test.push('\0');
-			whitelisted_test = unsafe{Some(NTStr::from_str_unchecked(String::leak(test)).as_ntstrptr())};
-		}
-	};
+    // args[0] is the executable path.
+    // Only treat args[1] as the whitelisted test name if it isn't itself a
+    // flag; otherwise leave it in `args` so the loop below can pick it up.
+    let mut whitelisted_test = None;
+    if args.len() >= 2 && !args[1].starts_with("--") {
+        let mut test = args.remove(1);
+        test.push('\0');
+        whitelisted_test = unsafe { Some(NTStr::from_str_unchecked(String::leak(test)).as_ntstrptr()) };
+    }
 
-	let grug_tests_path = nt!("src/grug-tests/tests");
-	let mod_api_path = nt!("src/grug-tests/mod_api.json");
+    let mut continue_on_fail = false;
+    let mut results_json_path = None;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--continue-on-fail" {
+            args.remove(i);
+            continue_on_fail = true;
+        } else if args[i] == "--results-json-path" {
+            args.remove(i);
+            if i < args.len() {
+                let mut path = args.remove(i);
+                path.push('\0');
+                results_json_path = unsafe { Some(NTStr::from_str_unchecked(String::leak(path)).as_ntstrptr()) };
+            }
+        } else {
+            i += 1;
+        }
+    }
 
-	std::panic::set_hook(Box::new(|info| {
-		_ = std::io::stdout().write_fmt(
-			format_args!("{}: {}\n", info.location().unwrap(), info.payload_as_str().unwrap_or("No info"))
-		);
-		std::process::exit(2);
-	}));
-	unsafe {
-		grug_tests_run(
-			grug_tests_path.as_ntstrptr(),
-			mod_api_path.as_ntstrptr(),
-			STATE_VTABLE,
-			whitelisted_test,
-		)
-	}
-	_ = std::panic::take_hook();
+    let grug_tests_path = nt!("src/grug-tests/tests");
+    let mod_api_path = nt!("src/grug-tests/mod_api.json");
+
+    std::panic::set_hook(Box::new(|info| {
+        _ = std::io::stdout().write_fmt(
+            format_args!("{}: {}\n", info.location().unwrap(), info.payload_as_str().unwrap_or("No info"))
+        );
+        std::process::exit(2);
+    }));
+    unsafe {
+        grug_tests_run(
+            grug_tests_path.as_ntstrptr(),
+            mod_api_path.as_ntstrptr(),
+            STATE_VTABLE,
+            GrugTestsOptions {
+                whitelisted_test,
+                continue_on_fail,
+                results_json_path,
+            },
+        )
+    }
+    _ = std::panic::take_hook();
 }

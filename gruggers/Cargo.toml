@@ -8,7 +8,7 @@ repository = "https://github.com/grug-lang/grug-rs"
 license = "MIT"
 default-run = "grugc"
 
-[lib] 
+[lib]
 crate-type = ["lib", "staticlib"]
 
 [[bin]]
@@ -22,3 +22,7 @@ gruggers-core = {version = "0.9.1", path = "../gruggers-core"}
 
 [features]
 generics = ["gruggers-core/generics"]
+
+[[test]]
+name = "grug_tests"
+harness = false
