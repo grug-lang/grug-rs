@@ -48,7 +48,7 @@ use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{Value, Id, HostFnWithState, HostFn, ExportFnId, FileId, GrugEntity, INVALID_GRUG_FILE_ID};
+use crate::types::{Value, Id, HostFnWithState, ExportFnId, FileId, GrugEntity, INVALID_GRUG_FILE_ID};
 use crate::xar::Xar;
 use crate::ntstring::{NTStrPtr};
 use crate::arena::Arena;
@@ -610,57 +610,6 @@ impl GrugState {
 		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
 		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
 		unsafe{(&mut *mod_api).register_fn(class_name, fn_name, func)}
-	}
-
-	/// Registers a generic host function
-	pub unsafe fn register_generic_fn<const N: usize>(&mut self, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
-		unsafe{self.register_generic_fn_internal(None, fn_name, func)}
-	}
-
-	/// Registers a generic host method
-	pub unsafe fn register_generic_method<const N: usize>(&mut self, class_name: &str, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
-		unsafe{self.register_generic_fn_internal(Some(class_name), fn_name, func)}
-	}
-
-	unsafe fn register_generic_fn_internal<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
-		// SAFETY: This Arc is shared between the state and all the compiler
-		// threads.  Because we have a &mut self, we assume that all compiler
-		// threads are parked waiting to receive more compile commands. This
-		// means that they cannot have an active reference to the mod_api data
-		// during this call to get_mut_unchecked
-		
-		// Note: We dont want to use interior mutability here because that would
-		// technically allow the compiler threads to modify the data too.
-		// 
-		// In that case, there would actually be a thread safety issue with
-		// this
-		
-		// Note: This is the same as the unstable get_mut_unchecked on Arc;
-		// Once that is stabilized, this can be replaced
-		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
-		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
-		unsafe{(&mut *mod_api).register_generic_fn(class_name, fn_name, func)}
-	}
-
-	/// Registers a generics function without checking the number of generic parameters
-	pub(crate) unsafe fn register_generic_fn_internal_unsafe(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFn) -> Result<(), Error> {
-		// SAFETY: This Arc is shared between the state and all the compiler
-		// threads.  Because we have a &mut self, we assume that all compiler
-		// threads are parked waiting to receive more compile commands. This
-		// means that they cannot have an active reference to the mod_api data
-		// during this call to get_mut_unchecked
-		
-		// Note: We dont want to use interior mutability here because that would
-		// technically allow the compiler threads to modify the data too.
-		// 
-		// In that case, there would actually be a thread safety issue with
-		// this
-		
-		// Note: This is the same as the unstable get_mut_unchecked on Arc;
-		// Once that is stabilized, this can be replaced
-		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
-		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
-		unsafe{(&mut *mod_api).register_generic_fn_unchecked(class_name, fn_name, func)}
 	}
 
 	/// Register a dummy function for each game function defined in the mod_api
