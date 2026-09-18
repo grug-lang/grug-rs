@@ -5,7 +5,7 @@
 #![allow(improper_ctypes_definitions)]
 use crate::state::{ExportFnEntry, GrugEntityHandle, GrugInitSettings, GrugState, Files, FileInfo, ResourcePaths};
 use crate::ntstring::{NTBytes, NTStrPtr};
-use crate::types::{FileId, ExportFnId, GrugEntity, Value, HostFn, HostFnWithState, INVALID_GRUG_FILE_ID};
+use crate::types::{FileId, ExportFnId, GrugEntity, Value, HostFnWithState, INVALID_GRUG_FILE_ID};
 use crate::error::{Error, GrugError};
 
 use std::cell::UnsafeCell;
@@ -148,30 +148,6 @@ pub unsafe extern "C" fn grug_register_host_fn<'a>(state: &'a mut CState, fn_nam
 pub unsafe extern "C" fn grug_register_method<'a>(state: &'a mut CState, class_name: NTStrPtr, fn_name: NTStrPtr, func: HostFnWithState<0, GrugState>) -> Option<&'a GrugError<'a>> {
 	// SAFETY: This function is exposed to C and is inherently unsafe
 	if let Err(err) = unsafe{state.0.register_method(class_name.to_str(), fn_name.to_str(), func)} {
-		Some(state.1.get_mut().insert(err).inner())
-	} else {
-		None
-	}
-}
-
-/// # SAFETY
-/// same as [`GrugState::register_generic_fn`]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_register_generic_fn<'a>(state: &'a mut CState, fn_name: NTStrPtr, func: HostFnWithState<0, GrugState>) -> Option<&'a GrugError<'a>> {
-	// SAFETY: This function is exposed to C and is inherently unsafe
-	if let Err(err) = unsafe{state.0.register_generic_fn_internal_unsafe(None, fn_name.to_str(), HostFn::from_ptr(func))} {
-		Some(state.1.get_mut().insert(err).inner())
-	} else {
-		None
-	}
-}
-
-/// # SAFETY
-/// same as [`GrugState::register_generic_method`]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_register_generic_method<'a>(state: &'a mut CState, class_name: NTStrPtr, fn_name: NTStrPtr, func: HostFnWithState<0, GrugState>) -> Option<&'a GrugError<'a>> {
-	// SAFETY: This function is exposed to C and is inherently unsafe
-	if let Err(err) = unsafe{state.0.register_generic_fn_internal_unsafe(Some(class_name.to_str()), fn_name.to_str(), HostFn::from_ptr(func))} {
 		Some(state.1.get_mut().insert(err).inner())
 	} else {
 		None
