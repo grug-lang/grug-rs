@@ -10,7 +10,7 @@ use crate::ast::{Parameter, Type};
 use crate::arena::Arena;
 use crate::state::GrugState;
 use crate::error::{ErrorKind, Error, SourceSpan, Result};
-use crate::types::{HostFn, HostFnWithState, HostFnReg, HostFnRegErased};
+use crate::types::{HostFn, HostFnWithState};
 use crate::HAS_CONSTRAINTS;
 
 use allocator_api2::vec::Vec;
@@ -194,7 +194,7 @@ impl ModApi {
 
 	/// Registers a generic function and checks that the number of generics
 	/// expected by the functions matches the number defined in the mod_api
-	pub(crate) fn register_generic_fn<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnReg<N, GrugState>) -> Result<()> {
+	pub(crate) fn register_generic_fn<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnWithState<N, GrugState>) -> Result<()> {
 		if let Some(class_name) = class_name {
 			let host_fn_data = self.lookup_on_type_mut(class_name, fn_name)?;
 			if host_fn_data.generics.is_empty() {
@@ -217,7 +217,7 @@ impl ModApi {
 					format_args!("Method {}.{} has {} generics but the function provided expects {} generics", class_name, fn_name, host_fn_data.generics.len(), N),
 				));
 			}
-			match &mut host_fn_data.registerer {
+			match &mut host_fn_data.fn_ptr {
 				Some(_) => {
 					return Err(Error::new(
 						ErrorKind::FUNCTION_REGISTRATION_ERROR,
@@ -228,7 +228,7 @@ impl ModApi {
 						format_args!("Method {}.{} has already been registered", fn_name, class_name),
 					));
 				}
-				x => *x = Some(ptr.into()),
+				x => *x = Some(HostFn::from_ptr(ptr)),
 			}
 		} else {
 			let Some(host_fn_data) = self.host_fns.get_mut(fn_name) else {
@@ -261,7 +261,7 @@ impl ModApi {
 					format_args!("Host function '{}' has {} generics but the function provided expects {} generics", fn_name, host_fn_data.generics.len(), N),
 				));
 			}
-			match &mut host_fn_data.registerer {
+			match &mut host_fn_data.fn_ptr {
 				Some(_) => {
 					return Err(Error::new(
 						ErrorKind::FUNCTION_REGISTRATION_ERROR,
@@ -272,7 +272,7 @@ impl ModApi {
 						format_args!("Host function '{}' has already been registered", fn_name),
 					));
 				}
-				x => *x = Some(ptr.into()),
+				x => *x = Some(HostFn::from_ptr(ptr)),
 			}
 		}
 		Ok(())
@@ -283,7 +283,7 @@ impl ModApi {
 	/// mod_api. 
 	///
 	/// This is intended to be used directly by c code
-	pub(crate) unsafe fn register_generic_fn_unchecked(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnRegErased) -> Result<()> {
+	pub(crate) unsafe fn register_generic_fn_unchecked(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFn) -> Result<()> {
 		if let Some(class_name) = class_name {
 			let host_fn_data = self.lookup_on_type_mut(class_name, fn_name)?;
 			if host_fn_data.generics.is_empty() {
@@ -296,7 +296,7 @@ impl ModApi {
 					format_args!("Method {}.{} is not generic", class_name, fn_name),
 				));
 			}
-			match &mut host_fn_data.registerer {
+			match &mut host_fn_data.fn_ptr {
 				Some(_) => {
 					return Err(Error::new(
 						ErrorKind::FUNCTION_REGISTRATION_ERROR,
@@ -330,7 +330,7 @@ impl ModApi {
 					format_args!("Host function '{}' is not generic", fn_name),
 				));
 			}
-			match &mut host_fn_data.registerer {
+			match &mut host_fn_data.fn_ptr {
 				Some(_) => {
 					return Err(Error::new(
 						ErrorKind::FUNCTION_REGISTRATION_ERROR,
@@ -352,40 +352,20 @@ impl ModApi {
 		extern "C" fn dummy_host_fn(_state: *const c_void, _arguments: *const Value, _generics: *const Type) -> Value {
 			Value{void: ()}
 		}
-		unsafe extern "C" fn dummy_generic_fn(_: *const Type<'static>) -> Option<HostFn> {
-			Some(HostFn::from_erased_ptr(dummy_host_fn))
-		}
-		let dummy_generic_fn = (dummy_generic_fn as unsafe extern "C" fn (*const Type<'static>) -> _).into();
 		for (_, host_fn) in &mut self.host_fns {
-			if host_fn.generics.is_empty() {
-				host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
-			} else {
-				host_fn.registerer = Some(dummy_generic_fn);
-			}
+			host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
 		}
 		for (_, class) in &mut self.classes {
 			for (_, host_fn) in &mut *class.methods {
-				if host_fn.generics.is_empty() {
-					host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
-				} else {
-					host_fn.registerer = Some(dummy_generic_fn);
-				}
+				host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
 			}
 			for (_, host_fn) in &mut *class.static_methods {
-				if host_fn.generics.is_empty() {
-					host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
-				} else {
-					host_fn.registerer = Some(dummy_generic_fn);
-				}
+				host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
 			}
 		}
 		for (_, entity) in &mut self.entities {
 			for (_, host_fn) in &mut *entity.static_methods {
-				if host_fn.generics.is_empty() {
-					host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
-				} else {
-					host_fn.registerer = Some(dummy_generic_fn);
-				}
+				host_fn.fn_ptr = const{Some(HostFn::from_erased_ptr(dummy_host_fn))};
 			}
 		}
 	}
@@ -473,7 +453,6 @@ pub(crate) struct ModApiHostFn<'a> {
 	pub(crate) parameters: &'a [Parameter<'a>],
 	pub(crate) return_ty: Type<'a>,
 	pub(crate) fn_ptr: Option<HostFn>,
-	pub(crate) registerer: Option<HostFnRegErased>,
 }
 
 struct ModApiContext<'a, 'error> {
@@ -753,7 +732,6 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 			generics,
 			parameters,
 			fn_ptr: None,
-			registerer: None,
 		})
 	}
 

@@ -48,7 +48,7 @@ use crate::xar::XarHandle;
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{Value, Id, HostFnWithState, HostFnReg, HostFnRegErased, ExportFnId, FileId, GrugEntity, INVALID_GRUG_FILE_ID};
+use crate::types::{Value, Id, HostFnWithState, HostFn, ExportFnId, FileId, GrugEntity, INVALID_GRUG_FILE_ID};
 use crate::xar::Xar;
 use crate::ntstring::{NTStrPtr};
 use crate::arena::Arena;
@@ -470,7 +470,7 @@ impl GrugState {
 	pub fn all_host_fns_registered(&self) -> Result<(), Error> {
 		// Check all normal host functions
 		for (host_fn_name, host_fn) in self.mod_api.host_fns() {
-			if let None = host_fn.fn_ptr && let None = host_fn.registerer {
+			if host_fn.fn_ptr.is_none() {
 				return Err(Error::new(
 					ErrorKind::INIT_ERROR,
 					"",
@@ -484,7 +484,7 @@ impl GrugState {
 		// check all methods
 		for (class_name, class) in self.mod_api.classes() {
 			for (method_name, method) in &*class.methods {
-				if let None = method.fn_ptr && let None = method.registerer {
+				if method.fn_ptr.is_none() {
 					return Err(Error::new(
 						ErrorKind::INIT_ERROR,
 						"",
@@ -613,16 +613,16 @@ impl GrugState {
 	}
 
 	/// Registers a generic host function
-	pub unsafe fn register_generic_fn<const N: usize>(&mut self, fn_name: &str, func: HostFnReg<N, Self>) -> Result<(), Error> {
+	pub unsafe fn register_generic_fn<const N: usize>(&mut self, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
 		unsafe{self.register_generic_fn_internal(None, fn_name, func)}
 	}
 
 	/// Registers a generic host method
-	pub unsafe fn register_generic_method<const N: usize>(&mut self, class_name: &str, fn_name: &str, func: HostFnReg<N, Self>) -> Result<(), Error> {
+	pub unsafe fn register_generic_method<const N: usize>(&mut self, class_name: &str, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
 		unsafe{self.register_generic_fn_internal(Some(class_name), fn_name, func)}
 	}
 
-	unsafe fn register_generic_fn_internal<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFnReg<N, Self>) -> Result<(), Error> {
+	unsafe fn register_generic_fn_internal<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
 		// SAFETY: This Arc is shared between the state and all the compiler
 		// threads.  Because we have a &mut self, we assume that all compiler
 		// threads are parked waiting to receive more compile commands. This
@@ -643,7 +643,7 @@ impl GrugState {
 	}
 
 	/// Registers a generics function without checking the number of generic parameters
-	pub(crate) unsafe fn register_generic_fn_internal_unsafe(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFnRegErased) -> Result<(), Error> {
+	pub(crate) unsafe fn register_generic_fn_internal_unsafe(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFn) -> Result<(), Error> {
 		// SAFETY: This Arc is shared between the state and all the compiler
 		// threads.  Because we have a &mut self, we assume that all compiler
 		// threads are parked waiting to receive more compile commands. This

@@ -5,7 +5,7 @@
 #![allow(improper_ctypes_definitions)]
 use crate::state::{ExportFnEntry, GrugEntityHandle, GrugInitSettings, GrugState, Files, FileInfo, ResourcePaths};
 use crate::ntstring::{NTBytes, NTStrPtr};
-use crate::types::{FileId, ExportFnId, GrugEntity, Value, HostFnWithState, HostFnRegErased, INVALID_GRUG_FILE_ID};
+use crate::types::{FileId, ExportFnId, GrugEntity, Value, HostFn, HostFnWithState, INVALID_GRUG_FILE_ID};
 use crate::error::{Error, GrugError};
 
 use std::cell::UnsafeCell;
@@ -96,15 +96,18 @@ pub extern "C" fn grug_init(
         rust_settings = rust_settings.set_runtime_error_handler(
             move |error: &gruggers_core::runtime_error::RuntimeError| {
                 let user_data_ptr = c_user_data as *mut std::ffi::c_void;
+                let error_message = error.error_message.to_str();
+                let export_fn_name = error.export_fn_name.to_str();
+                let script_path = error.script_path.to_bytes();
                 c_handler_fn(
                     user_data_ptr,
-                    error.kind as u32 as i32,
-                    error.error_message.as_ptr() as *mut std::ffi::c_char,
-                    error.error_message.to_str().len(),
-                    error.export_fn_name.as_ptr() as *mut std::ffi::c_char,
-                    error.export_fn_name.to_str().len(),
-                    error.script_path.as_ptr() as *mut std::ffi::c_char,
-                    error.script_path.to_str().len(),
+                    error.kind as u32,
+                    error_message.as_ptr() as *mut std::ffi::c_char,
+                    error_message.len(),
+                    export_fn_name.as_ptr() as *mut std::ffi::c_char,
+                    export_fn_name.len(),
+                    script_path.as_ptr() as *mut std::ffi::c_char,
+                    script_path.len(),
                 );
             }
         );
@@ -154,9 +157,9 @@ pub unsafe extern "C" fn grug_register_method<'a>(state: &'a mut CState, class_n
 /// # SAFETY
 /// same as [`GrugState::register_generic_fn`]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_register_generic_fn<'a>(state: &'a mut CState, fn_name: NTStrPtr, func: HostFnRegErased) -> Option<&'a GrugError<'a>> {
+pub unsafe extern "C" fn grug_register_generic_fn<'a>(state: &'a mut CState, fn_name: NTStrPtr, func: HostFnWithState<0, GrugState>) -> Option<&'a GrugError<'a>> {
 	// SAFETY: This function is exposed to C and is inherently unsafe
-	if let Err(err) = unsafe{state.0.register_generic_fn_internal_unsafe(None, fn_name.to_str(), func)} {
+	if let Err(err) = unsafe{state.0.register_generic_fn_internal_unsafe(None, fn_name.to_str(), HostFn::from_ptr(func))} {
 		Some(state.1.get_mut().insert(err).inner())
 	} else {
 		None
@@ -166,9 +169,9 @@ pub unsafe extern "C" fn grug_register_generic_fn<'a>(state: &'a mut CState, fn_
 /// # SAFETY
 /// same as [`GrugState::register_generic_method`]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_register_generic_method<'a>(state: &'a mut CState, class_name: NTStrPtr, fn_name: NTStrPtr, func: HostFnRegErased) -> Option<&'a GrugError<'a>> {
+pub unsafe extern "C" fn grug_register_generic_method<'a>(state: &'a mut CState, class_name: NTStrPtr, fn_name: NTStrPtr, func: HostFnWithState<0, GrugState>) -> Option<&'a GrugError<'a>> {
 	// SAFETY: This function is exposed to C and is inherently unsafe
-	if let Err(err) = unsafe{state.0.register_generic_fn_internal_unsafe(Some(class_name.to_str()), fn_name.to_str(), func)} {
+	if let Err(err) = unsafe{state.0.register_generic_fn_internal_unsafe(Some(class_name.to_str()), fn_name.to_str(), HostFn::from_ptr(func))} {
 		Some(state.1.get_mut().insert(err).inner())
 	} else {
 		None

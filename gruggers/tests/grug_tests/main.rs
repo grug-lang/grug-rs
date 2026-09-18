@@ -296,7 +296,7 @@ mod test_bindings {
 use test_bindings::*;
 
 mod game_fn_bindings {
-	use gruggers::types::{Value, HostFnWithState};
+	use gruggers::types::Value;
 	use gruggers::ast::Type;
 	use gruggers::state::GrugState;
 	use gruggers::error::Error;
@@ -368,7 +368,7 @@ mod game_fn_bindings {
         safe fn game_fn_box                           <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;1]) -> Value;
         safe fn game_fn_box_get                       <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;1]) -> Value;
 		
-		safe fn reg_game_fn_default                           (types: &[Type;1]) -> Option<HostFnWithState<1, GrugState>>;
+		safe fn game_fn_default                       <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;1]) -> Value;
 
         safe fn game_fn_dict                          <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;2]) -> Value;
         safe fn game_fn_dict_from_vec                 <'a>(state: &'a GrugState, values: *const Value, generics: &[Type;2]) -> Value;
@@ -460,7 +460,7 @@ mod game_fn_bindings {
 		state.register_host_fn("dict_from_vec", game_fn_dict_from_vec)?; 
 		state.register_method("Dict", "put", game_fn_dict_put)?; 
 
-		state.register_generic_fn("default",       reg_game_fn_default)?; 
+		state.register_host_fn("default",       game_fn_default)?; 
 		state.register_host_fn("cause_game_fn_error_generic", game_fn_cause_game_fn_error_generic)?; 
 
 		Ok(())
