@@ -118,27 +118,6 @@ impl ModApi {
 	pub(crate) fn register_fn<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnWithState<N, GrugState>) -> Result<()> {
 		if let Some(class_name) = class_name {
 			let host_fn_data = self.lookup_on_type_mut(class_name, fn_name)?;
-			if !host_fn_data.generics.is_empty() && N == 0 {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Host method '{}.{}' is supposed to be generic", class_name, fn_name),
-				));
-			}
-
-			if host_fn_data.generics.len() != N {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Host method '{}.{}' is supposed to have {} generics, but it has {}", class_name, fn_name, host_fn_data.generics.len(), N),
-				));
-			}
 
 			match &mut host_fn_data.fn_ptr {
 				Some(_) => {
@@ -165,16 +144,6 @@ impl ModApi {
 				));
 			};
 
-			if host_fn_data.generics.len() != N {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Host method '{}' is supposed to have {} generics, but it has {}", fn_name, host_fn_data.generics.len(), N),
-				));
-			}
 			match &mut host_fn_data.fn_ptr {
 				Some(_) => {
 					return Err(Error::new(
@@ -187,161 +156,6 @@ impl ModApi {
 					));
 				}
 				x => *x = Some(HostFn::from_ptr(ptr)),
-			}
-		}
-		Ok(())
-	}
-
-	/// Registers a generic function and checks that the number of generics
-	/// expected by the functions matches the number defined in the mod_api
-	pub(crate) fn register_generic_fn<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFnWithState<N, GrugState>) -> Result<()> {
-		if let Some(class_name) = class_name {
-			let host_fn_data = self.lookup_on_type_mut(class_name, fn_name)?;
-			if host_fn_data.generics.is_empty() {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Method {}.{} is not generic", class_name, fn_name),
-				));
-			}
-			if host_fn_data.generics.len() != N {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Method {}.{} has {} generics but the function provided expects {} generics", class_name, fn_name, host_fn_data.generics.len(), N),
-				));
-			}
-			match &mut host_fn_data.fn_ptr {
-				Some(_) => {
-					return Err(Error::new(
-						ErrorKind::FUNCTION_REGISTRATION_ERROR,
-						"",
-						"".as_ref(),
-						"",
-						SourceSpan{offset: 0, line: 0},
-						format_args!("Method {}.{} has already been registered", fn_name, class_name),
-					));
-				}
-				x => *x = Some(HostFn::from_ptr(ptr)),
-			}
-		} else {
-			let Some(host_fn_data) = self.host_fns.get_mut(fn_name) else {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Host function '{}' is not found in mod_api.json", fn_name),
-				));
-			};
-			if host_fn_data.generics.is_empty() {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Host function '{}' is not generic", fn_name),
-				));
-			}
-			if host_fn_data.generics.len() != N {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Host function '{}' has {} generics but the function provided expects {} generics", fn_name, host_fn_data.generics.len(), N),
-				));
-			}
-			match &mut host_fn_data.fn_ptr {
-				Some(_) => {
-					return Err(Error::new(
-						ErrorKind::FUNCTION_REGISTRATION_ERROR,
-						"",
-						"".as_ref(),
-						"",
-						SourceSpan{offset: 0, line: 0},
-						format_args!("Host function '{}' has already been registered", fn_name),
-					));
-				}
-				x => *x = Some(HostFn::from_ptr(ptr)),
-			}
-		}
-		Ok(())
-	}
-
-	/// Registers a generic function and does not check that the number of
-	/// generics expected by the functions matches the number defined in the
-	/// mod_api. 
-	///
-	/// This is intended to be used directly by c code
-	pub(crate) unsafe fn register_generic_fn_unchecked(&mut self, class_name: Option<&str>, fn_name: &str, ptr: HostFn) -> Result<()> {
-		if let Some(class_name) = class_name {
-			let host_fn_data = self.lookup_on_type_mut(class_name, fn_name)?;
-			if host_fn_data.generics.is_empty() {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Method {}.{} is not generic", class_name, fn_name),
-				));
-			}
-			match &mut host_fn_data.fn_ptr {
-				Some(_) => {
-					return Err(Error::new(
-						ErrorKind::FUNCTION_REGISTRATION_ERROR,
-						"",
-						"".as_ref(),
-						"",
-						SourceSpan{offset: 0, line: 0},
-						format_args!("Method {}.{} has already been registered", fn_name, class_name),
-					));
-				}
-				x => *x = Some(ptr),
-			}
-		} else {
-			let Some(host_fn_data) = self.host_fns.get_mut(fn_name) else {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Host function '{}' is not found in mod_api.json", fn_name),
-				));
-			};
-			if host_fn_data.generics.is_empty() {
-				return Err(Error::new(
-					ErrorKind::FUNCTION_REGISTRATION_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("Host function '{}' is not generic", fn_name),
-				));
-			}
-			match &mut host_fn_data.fn_ptr {
-				Some(_) => {
-					return Err(Error::new(
-						ErrorKind::FUNCTION_REGISTRATION_ERROR,
-						"",
-						"".as_ref(),
-						"",
-						SourceSpan{offset: 0, line: 0},
-						format_args!("Host function '{}' has already been registered", fn_name),
-					));
-				}
-				x => *x = Some(ptr),
 			}
 		}
 		Ok(())

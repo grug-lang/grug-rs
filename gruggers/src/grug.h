@@ -57,7 +57,6 @@ struct grug_source_span {
 };
 
 typedef union grug_value (*host_fn)(struct grug_state* gst, const union grug_value[]);
-typedef host_fn (*registration_fn)(struct grug_type_info*);
 
 typedef struct {
 	uint8_t tag[4];
@@ -185,12 +184,6 @@ struct grug_file {
 	struct grug_error* error;
 };
 
-enum grug_type
-
-struct grug_type_info {
-	
-}
-
 // Free all resource owned by the backend
 typedef void (*grug_backend_vtable_drop)(void* backend_data);
 /// The AST of a typechecked grug file is provided to let the backend do
@@ -284,10 +277,8 @@ struct grug_error* grug_get_error(struct grug_state* gst);
 //
 // This function should be able to provide a user data pointer, but grug-rs
 // does not handle that in its main branch yet
-struct grug_error* grug_register_host_fn       (struct grug_state* gst, char* fn_name, host_fn func);
-struct grug_error* grug_register_method        (struct grug_state* gst, char* class_name, char* fn_name, host_fn func);
-struct grug_error* grug_register_generic_fn    (struct grug_state* gst, char* fn_name, registration_fn func);
-struct grug_error* grug_register_generic_method(struct grug_state* gst, char* class_name, char* fn_name, registration_fn func);
+struct grug_error* grug_register_host_fn(struct grug_state* gst, char* fn_name, host_fn func);
+struct grug_error* grug_register_method (struct grug_state* gst, char* class_name, char* fn_name, host_fn func);
 
 // Returns true if all game functions defined in mod_api.json are registered
 struct grug_error* grug_all_host_functions_registered(struct grug_state* gst);
