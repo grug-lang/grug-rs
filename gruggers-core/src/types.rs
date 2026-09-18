@@ -7,64 +7,6 @@ use crate::ntstring::NTStrPtr;
 use crate::state::State;
 use crate::ast::Type;
 
-
-/// A function pointer to a function that provides specialized versions of
-/// generic host functions
-///
-/// This function is called after type inference has determined all relevant
-/// generic types to obtain the actual host function pointer for the function
-/// call.
-///
-/// Grug implementations are allowed to cache the results of these function
-/// calls, so providers must ensure these functions are pure. 
-///
-/// The argument is a pointer to an array of grug types. These types indicate
-/// the generic parameters associated with this specific host function call
-///
-/// The number of types provided is determined by the mod_api.
-///
-/// For normal host functions, it is the number of elements in the
-/// "used_generics" field of the host_function
-///
-/// For methods, it is the number of elements in the "used_generics"
-/// field of the class and the method combined.
-pub type HostFnReg<const N: usize, State> = extern "C" fn (&'static [Type<'static>; N]) -> Option<HostFnWithState<N, State>>;
-
-/// Type erased version of HostFnReg
-///
-/// This is the version of HostFnReg that grug.h exports. 
-/// 
-/// [`HostFnReg`] can be transmuted into [`HostFnRegErased`] and it is sound
-/// to call as long as the number of elements provided to the function is the
-/// same as the generic `N` in [`HostFnReg`]
-#[derive(Clone, Copy, Debug)]
-#[repr(transparent)]
-pub struct HostFnRegErased(unsafe extern "C" fn (*const Type<'static>) -> Option<HostFn>);
-
-impl<const N: usize, GrugState: State> From<HostFnReg<N, GrugState>> for HostFnRegErased {
-	fn from(other: HostFnReg<N, GrugState>) -> HostFnRegErased {
-		// HostFnReg has the exact same ABI as HostFnRegErased.
-		//
-		// HostFnRegErased is unsafe. The requirement for calling it is that
-		// the number of generics expected by HostFnReg (N).
-		//
-		// As long as the unsafe precondition is met, the call is safe
-		unsafe{std::mem::transmute::<HostFnReg<N, GrugState>, HostFnRegErased>(other)}
-	}
-}
-impl From<unsafe extern "C" fn (*const Type<'static>) -> Option<HostFn>> for HostFnRegErased {
-	fn from(other: unsafe extern "C" fn (*const Type<'static>) -> Option<HostFn>) -> HostFnRegErased {
-		Self(other)
-	}
-}
-
-impl std::ops::Deref for HostFnRegErased {
-	type Target = unsafe extern "C" fn (*const Type<'static>) -> Option<HostFn>;
-	fn deref(&self) -> &Self::Target {
-		&self.0
-	}
-}
-
 /// A function pointer to a game function
 /// Game functions have one the following signature
 /// ```text
@@ -80,15 +22,15 @@ impl std::ops::Deref for HostFnRegErased {
 pub struct HostFn(ErasedHostFnPtr);
 
 impl PartialEq for HostFn {
-	fn eq(&self, other: &Self) -> bool {
-		self.0 as usize == other.0 as usize
-	}
+    fn eq(&self, other: &Self) -> bool {
+        self.0 as usize == other.0 as usize
+    }
 }
 impl std::ops::Deref for HostFn {
-	type Target = ErasedHostFnPtr;
-	fn deref(&self) -> &ErasedHostFnPtr {
-		&self.0
-	}
+    type Target = ErasedHostFnPtr;
+    fn deref(&self) -> &ErasedHostFnPtr {
+        &self.0
+    }
 }
 
 /// SAFETY: This function should only be called with the same state type and
@@ -108,20 +50,20 @@ unsafe impl Sync for HostFn {}
 pub type HostFnWithState<const N: usize, GrugState> = extern "C" fn (&GrugState, *const Value, generics: &'static [Type<'static>; N]) -> Value;
 
 impl HostFn {
-	/// Type erases a [`HostFnWithState`]
-	pub const fn from_erased_ptr(value: ErasedHostFnPtr) -> Self {
-		Self(value)
-	}
-	/// Type erases a [`HostFnWithState`]
-	pub const fn from_ptr<const N: usize, GrugState: State>(value: HostFnWithState<N, GrugState>) -> Self {
-		Self(unsafe{std::mem::transmute::<HostFnWithState<N, GrugState>, ErasedHostFnPtr>(value)})
-	}
+    /// Type erases a [`HostFnWithState`]
+    pub const fn from_erased_ptr(value: ErasedHostFnPtr) -> Self {
+        Self(value)
+    }
+    /// Type erases a [`HostFnWithState`]
+    pub const fn from_ptr<const N: usize, GrugState: State>(value: HostFnWithState<N, GrugState>) -> Self {
+        Self(unsafe{std::mem::transmute::<HostFnWithState<N, GrugState>, ErasedHostFnPtr>(value)})
+    }
 }
 
 impl std::fmt::Debug for HostFn {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		self.0.fmt(f)
-	}
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 /// Represents a handle to an object owned by grug
@@ -136,21 +78,21 @@ pub type FileId = Id;
 pub const INVALID_GRUG_FILE_ID: FileId = FileId::new(u64::MAX);
 
 impl std::fmt::Display for Id {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		self.0.fmt(f)
-	}
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 impl Id {
-	/// Create a new id with the the input value
-	pub const fn new(id: u64) -> Self {
-		Self(id)
-	}
+    /// Create a new id with the the input value
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
 
-	/// Conversts the id to its inner value
-	pub const fn to_inner(self) -> u64 {
-		self.0
-	}
+    /// Conversts the id to its inner value
+    pub const fn to_inner(self) -> u64 {
+        self.0
+    }
 }
 
 /// Uniquely refers to a particular on function from a particular entity from
@@ -168,44 +110,44 @@ pub struct ExportFnId(pub u64);
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub union Value {
-	/// As a number
-	pub number: c_double,
-	/// As a boolean
-	pub bool: u8,
-	/// As an Id
-	pub id: Id,
-	/// As a raw pointer
-	pub custom_type: *mut (),
-	/// As raw bytes
-	pub bytes: [u8; 8],
-	/// As a string pointer
-	pub string: NTStrPtr<'static>,
-	/// As empty data
-	pub void: (),
+    /// As a number
+    pub number: c_double,
+    /// As a boolean
+    pub bool: u8,
+    /// As an Id
+    pub id: Id,
+    /// As a raw pointer
+    pub custom_type: *mut (),
+    /// As raw bytes
+    pub bytes: [u8; 8],
+    /// As a string pointer
+    pub string: NTStrPtr<'static>,
+    /// As empty data
+    pub void: (),
 }
 
 /// Entity data owned by the state. Entity members are stored by the backend
 /// and a pointer to it is stored in `members`
 #[derive(Debug)]
 pub struct GrugEntity {
-	/// id of the `me` member variable in a grug_script
-	pub id: Id,
-	/// File id of file this entity is created from 
-	pub file_id: FileId,
-	/// Pointer to the entity's members stored by the backend
-	pub members: Cell<NonNull<()>>,
+    /// id of the `me` member variable in a grug_script
+    pub id: Id,
+    /// File id of file this entity is created from 
+    pub file_id: FileId,
+    /// Pointer to the entity's members stored by the backend
+    pub members: Cell<NonNull<()>>,
 }
 
 impl GrugEntity {
-	/// # SAFETY 
-	/// The `members` field of the returned entity are uninitialized
-	/// This data must be initialized by the backend before it is actually used
-	/// as an entity
-	pub unsafe fn new_uninit(id: Id, file_id: FileId) -> Self {
-		Self {
-			id,
-			file_id,
-			members: Cell::new(NonNull::dangling()),
-		}
-	}
+    /// # SAFETY 
+    /// The `members` field of the returned entity are uninitialized
+    /// This data must be initialized by the backend before it is actually used
+    /// as an entity
+    pub unsafe fn new_uninit(id: Id, file_id: FileId) -> Self {
+        Self {
+            id,
+            file_id,
+            members: Cell::new(NonNull::dangling()),
+        }
+    }
 }
