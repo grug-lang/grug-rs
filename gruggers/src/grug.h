@@ -81,6 +81,56 @@ static inline bool grug_error_kind_matches(grug_error_kind left, grug_error_kind
 	return true;
 }
 
+enum grug_runtime_error_kind {
+	GRUG_RUNTIME_ERROR_STACK_OVERFLOW,
+	GRUG_RUNTIME_ERROR_TIME_LIMIT_EXCEEDED,
+	GRUG_RUNTIME_ERROR_HOST_FN,
+};
+
+struct grug_stack_frame {
+    /// The name of the function being executed
+	char* fn_name;
+    /// The path to the file relative to the mods directory
+    ///
+    /// file_path == NULL (None in c) indicates that this is a host fn frame.
+    /// if file_path is none, the span and file text is the span within the last grug script.
+	char* file_path;
+    /// The location in code where another function was called
+	grug_source_span span;
+    /// The entire text of the file where the frame occurred
+	char* file_text;
+};
+
+struct grug_runtime_error {
+    // The kind of runtime error
+	uint32_t error_kind;
+    /// The state of the callstack when the error occurred
+    /// This is a best effort guess at the state which may or may not be
+    /// deformed due to optimizations
+	struct {
+		struct grug_stack_frame* frames;
+		size_t len;
+	} call_stack;
+    /// The last export function that was called before the error occurred
+	char* export_fn_name;
+    /// The script path of the last export function that was called.
+    /// Must be valid to convert to an OsStr.
+	char* script_path;
+    /// The location the error occurred at
+	grug_source_span err_span;
+    /// The source line where the error occurred.
+	/// There might be a null byte inside the string, so this contains a length
+	struct {
+		char* ptr;
+		size_t len;
+	} source_line;
+    /// A message string that explains the error
+	char* error_message;
+    /// A string that can be directly printed to the screen. The format of the
+    /// error depends on the exact error kind.
+	char* error_string: char*;
+};
+
 struct grug_error {
 	// Represents the kind of error that occurred
 	grug_error_kind kind;
@@ -147,13 +197,7 @@ struct grug_runtime_error_handler {
 	void (*drop_fn)(void*);
 	void (*handler_fn)(
 		void* data,
-		uint32_t err_kind,
-		char* reason_str,
-		size_t reason_len,
-		char* export_fn_name,
-		size_t export_fn_name_len,
-		char* script_path,
-		size_t script_path_len,
+		grug_runtime_error* error;
 	);
 };
 
@@ -257,6 +301,7 @@ struct grug_init_settings {
 	char const* mods_dir_path;
 	size_t mods_dir_path_len;
 	struct grug_runtime_error_handler runtime_error_handler;
+	uint64_t poll_interval;
 	struct grug_backend backend;
 };
 
