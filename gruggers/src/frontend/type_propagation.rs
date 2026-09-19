@@ -649,15 +649,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         ));
                     }
                 }
-                Statement::Continue(span)
-                    if self.num_while_loops_deep == 0 => {
-                        return Err(self.new_error(
-                            *span,
-                            format_args!(
-                                "There is a continue statement that isn't inside of a while loop"
-                            ),
-                        ));
-                    }
+                Statement::Continue(span) if self.num_while_loops_deep == 0 => {
+                    return Err(self.new_error(
+                        *span,
+                        format_args!(
+                            "There is a continue statement that isn't inside of a while loop"
+                        ),
+                    ));
+                }
                 _ => (),
             }
         }
@@ -1001,9 +1000,20 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     *return_ty
                 } else if let Some(host_fn) = self.mod_api.host_fns().get(name) {
                     check_host_fn!(
-                        self, name, ty_ctx, substitutions, *name_span,
-                        host_fn, args, arena, final_generics, ptr,
-                        format!("function {} was not registered (Note: This error is not triggerred by grug_tests)", name)
+                        self,
+                        name,
+                        ty_ctx,
+                        substitutions,
+                        *name_span,
+                        host_fn,
+                        args,
+                        arena,
+                        final_generics,
+                        ptr,
+                        format!(
+                            "function {} was not registered (Note: This error is not triggerred by grug_tests)",
+                            name
+                        )
                     )
                 } else if name.starts_with("_") {
                     return Err(self.new_error(
@@ -1109,9 +1119,20 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     };
 
                     check_host_fn!(
-                        self, name, ty_ctx, substitutions, *name_span,
-                        host_fn, args, arena, final_generics, ptr,
-                        format!("static method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", type_name, name)
+                        self,
+                        name,
+                        ty_ctx,
+                        substitutions,
+                        *name_span,
+                        host_fn,
+                        args,
+                        arena,
+                        final_generics,
+                        ptr,
+                        format!(
+                            "static method {}.{} was not registered (Note: This error is not triggerred by grug_tests)",
+                            type_name, name
+                        )
                     )
                 } else {
                     let receiver = receiver_slot.as_deref_mut().expect("matched Some(_) above");
@@ -1727,10 +1748,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 }
                 // An existential is always equal to it
                 (Type::Existential { idx: left_idx }, Type::Existential { idx: right_idx })
-                    if left_idx == right_idx =>
-                {
-                    
-                }
+                    if left_idx == right_idx => {}
                 // At least one side is an existential
                 // This part *is* recursive. The error should contain the new types
                 (Type::Existential { idx }, other) | (other, Type::Existential { idx }) => {
@@ -1779,7 +1797,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 if let Type::Existential { idx } = self.substitutions[idx] {
                     return Type::Existential { idx };
                 }
-                
+
                 unsafe { self.copy_type_into(self.substitutions[idx], arena) }
             }
             Type::Id { name, generics } => Type::Id {
