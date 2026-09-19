@@ -2,7 +2,7 @@ use crate::arena::Arena;
 use crate::ast::*;
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::mod_api::ModApi;
-use crate::ntstring::{NTBytes, NTStr, NTStrPtr};
+use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
 use crate::own_ptr::OwnPtr;
 use crate::state::{FileInfo, Files, GrugState, ResourcePaths};
 use crate::type_storage::TypeStorage;
@@ -510,17 +510,13 @@ impl GrugState {
         // don't need to live as long as (and aren't related to) the
         // arena backing `grug_files` above.
         let resource_arena = Arena::new();
-        let resource_paths: std::vec::Vec<NTBytes<'_>> = updated_resources
+        let resource_paths: std::vec::Vec<NTOsStrPtr<'_>> = updated_resources
             .iter()
-            .map(|path| unsafe {
-                NTBytes::from_bytes_unchecked(
-                    resource_arena.copy_bytes_into_nt(path.as_encoded_bytes()),
-                )
-            })
+			.map(|path| resource_arena.copy_osstr_into_nt(path).as_ntosstrptr())
             .collect();
         let resource_paths = ResourcePaths {
             inner: unsafe {
-                std::mem::transmute::<OwnPtr<[NTBytes]>, OwnPtr<'static, [NTBytes<'static>]>>(
+                std::mem::transmute::<OwnPtr<[NTOsStrPtr]>, OwnPtr<'static, [NTOsStrPtr<'static>]>>(
                     resource_paths.into_boxed_slice().into(),
                 )
             },
@@ -608,9 +604,7 @@ impl GrugState {
 
         // SAFETY: copy_bytes_into_nt ensures the slice has a single null byte
         // at the end of the string
-        let file_path = unsafe {
-            NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(path.as_encoded_bytes()))
-        };
+		let file_path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
         let file = GrugAst {
             members: member_variables.leak(),
             on_functions: on_functions.leak(),

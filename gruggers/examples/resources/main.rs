@@ -59,7 +59,7 @@ fn main() {
         for resource in resources.paths() {
             print!(
                 "{}, ",
-                std::str::from_utf8(resource.to_bytes()).unwrap_or_default()
+				resource.display()
             );
         }
         println!();

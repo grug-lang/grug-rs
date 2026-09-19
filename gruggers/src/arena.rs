@@ -168,7 +168,7 @@ mod page_alloc {
         pub struct PageAllocator;
 
         pub static PAGE_SIZE: std::sync::LazyLock<u32> =
-            std::sync::LazyLock::new(PageAllocator::page_size);
+            std::sync::LazyLock::new(|| PageAllocator::page_size());
 
         impl PageAllocator {
             pub const fn page_size() -> u32 {
@@ -222,7 +222,7 @@ mod page_alloc {
 }
 
 mod arena_impl {
-    use crate::ntstring::NTStr;
+    use crate::ntstring::{NTOsStr, NTStr};
 
     use super::page_alloc::{PAGE_SIZE, PageAllocator};
     use std::alloc::Layout;
@@ -479,9 +479,6 @@ mod arena_impl {
         pub fn free(self) {}
 
         /// Copy a slice of bytes into the current arena and returns the new slice.
-        ///
-        /// See [`Self::copy_osstr_into`] and [`Self::copy_str_into`] for more specific
-        /// versions of this function
         pub fn copy_bytes_into(&self, bytes: &[u8]) -> &[u8] {
             let ptr = self
                 .alloc(Layout::array::<u8>(bytes.len()).expect("invalid layout for slice"))
@@ -525,6 +522,22 @@ mod arena_impl {
             }
         }
 
+        /// Copy a `&OsStr` into the current arena and return the new str with a
+        /// null byte appended
+        ///
+        /// see [`Self::copy_str_into_nt`] and [`Self::copy_bytes_into_nt`] for
+        /// other versions of this function
+        ///
+        /// # Panics
+        ///
+        /// if `bytes` contains a null byte
+        pub fn copy_osstr_into_nt(&self, bytes: &OsStr) -> &NTOsStr {
+            assert!(!bytes.as_encoded_bytes().contains(&b'\0'));
+            let slice = self.copy_bytes_into_nt(bytes.as_encoded_bytes());
+            // SAFETY: input is an OsStr
+            unsafe { NTOsStr::from_osstr_unchecked(OsStr::from_encoded_bytes_unchecked(slice)) }
+        }
+
         /// Copy a `&str` into the current arena and return the new str
         ///
         /// see [`Self::copy_bytes_into`] for a more general version of this function
@@ -543,17 +556,7 @@ mod arena_impl {
         /// if `bytes` contains a null byte
         pub fn copy_str_into_nt(&self, bytes: &str) -> &NTStr {
             assert!(!bytes.as_bytes().contains(&b'\0'));
-            let ptr = self
-                .alloc(Layout::array::<u8>(bytes.len() + 1).expect("invalid layout for slice"))
-                .expect("unable to allocate")
-                .cast::<u8>()
-                .as_ptr();
-
-            // SAFETY: allocation is of length `bytes.len() + 1`
-            unsafe { ptr.copy_from(bytes.as_ptr(), bytes.len()) };
-            unsafe { ptr.add(bytes.len()).write(b'\0') };
-            // SAFETY: ptr is trivially aligned and valid to read for `bytes.len() + 1` bytes
-            let slice = unsafe { std::slice::from_raw_parts(ptr, bytes.len() + 1) };
+            let slice = self.copy_bytes_into_nt(bytes.as_bytes());
 
             // SAFETY: input is a str
             unsafe { NTStr::from_str_unchecked(std::str::from_utf8_unchecked(slice)) }
@@ -621,7 +624,7 @@ mod arena_impl {
         #[test]
         fn arena_test() {
             let x = Arena::new();
-            assert!(x.current.get().is_null());
+            assert!(x.current.get() == std::ptr::null_mut());
             x.free();
 
             let y = Arena::new();
@@ -1092,7 +1095,7 @@ mod mt_arena {
         #[test]
         fn arena_test() {
             let x = MTArena::new();
-            assert!(x.current.load(Ordering::Relaxed).is_null());
+            assert!(x.current.load(Ordering::Relaxed) == std::ptr::null_mut());
             x.free();
 
             let y = MTArena::new();

@@ -2,7 +2,7 @@
 #![allow(improper_ctypes)]
 mod test_bindings {
     use gruggers::backend::BytecodeBackend as Backend;
-    use gruggers::ntstring::{NTBytes, NTStrPtr};
+    use gruggers::ntstring::{NTOsStrPtr, NTStrPtr};
     use gruggers::state::{GrugEntityHandle, GrugInitSettings, GrugState};
     use gruggers::types::{ExportFnId, FileId, GrugEntity, Value};
 
@@ -107,7 +107,7 @@ mod test_bindings {
             reason: NTStrPtr<'a>,
             error_kind: u32,
             on_fn_name: NTStrPtr<'a>,
-            script_path: NTBytes<'a>,
+            script_path: NTOsStrPtr<'a>,
         );
 
         pub fn grug_bench_run<'a>(
