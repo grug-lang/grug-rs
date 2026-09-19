@@ -25,6 +25,12 @@ jobs:
       - run: cmake -S gruggers/src/grug-bench/ -B ./gruggers/src/grug-bench/build/ -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build ./gruggers/src/grug-bench/build
       
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+        
+      - name: Lint with clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      
       - name: Build
         run: cargo build --verbose
         
