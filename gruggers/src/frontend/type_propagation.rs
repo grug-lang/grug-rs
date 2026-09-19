@@ -59,6 +59,88 @@ impl<'a> From<Error> for TypeInferenceError<'a> {
     }
 }
 
+macro_rules! check_host_fn {
+    (
+        $self:expr, $name:expr, $ty_ctx:expr, $substitutions:expr, $name_span:expr,
+        $host_fn:expr, $args:expr, $arena:expr, $final_generics:expr, $ptr:expr,
+        $panic_msg:expr
+        $(, receiver: $receiver_span:expr, $mod_api_receiver_type:expr, $receiver_type:expr)?
+    ) => {{
+        // Create the actual types to represent generics
+        let generics = if let Some(substitutions) = $substitutions {
+            // for the second time through, replace the existentials as they are created, and also verify traits
+            let mut generics = Vec::with_capacity_in($host_fn.generics.len(), $arena);
+            for generic in $host_fn.generics {
+                let Type::Existential { idx } =
+                    $ty_ctx.create_existential($name, $name_span)
+                else {
+                    unreachable!()
+                };
+                let actual_ty = substitutions[idx];
+                $ty_ctx.verify_traits(actual_ty, generic.traits(), $name_span, $name)?;
+                generics.push(actual_ty)
+            }
+            generics.leak()
+        } else {
+            // The first time through, just create the existentials
+            $arena.slice_from_iter(
+                $host_fn
+                    .generics
+                    .iter()
+                    .map(|_| $ty_ctx.create_existential($name, $name_span)),
+            )
+        };
+
+        // substitute generic arguments in host fn parameters with actual types (existentials the first time through)
+        let parameters =
+            $arena.slice_from_iter($host_fn.parameters.iter().map(|param| Parameter {
+                ty: Self::convert_mod_api_type(param.ty, generics, $arena),
+                ..*param
+            }));
+
+        $(
+            // do the same for the method receiver, and add a constraint between that and the actual type of the receiver
+            let converted_receiver =
+                Self::convert_mod_api_type($mod_api_receiver_type, generics, $arena);
+            // TODO: Fix the error message here (i actually don't know if this can even error)
+            $ty_ctx
+                .add_constraint($receiver_span, converted_receiver, $receiver_type)
+                .map_err(|err| {
+                    $self.new_error(
+                        err.span,
+                        format_args!(
+                            "Expected {} but got {}",
+                            err.diff,
+                            err.diff.swapped()
+                        ),
+                    )
+                })?;
+        )?
+
+        $self.fill_arguments(
+            $name,
+            $ty_ctx,
+            $substitutions,
+            $name_span,
+            parameters,
+            $args,
+            $arena,
+        )?;
+
+        // only fill in the host function pointer the second time
+        // through.
+        if $substitutions.is_some() {
+            *$final_generics = $self.type_storage.insert_type_list(generics);
+            if let Some(host_fn_ptr) = $host_fn.fn_ptr {
+                *$ptr = Some(host_fn_ptr);
+            } else {
+                panic!("{}", $panic_msg);
+            }
+        }
+        Self::convert_mod_api_type($host_fn.return_ty, generics, $arena)
+    }};
+}
+
 impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 'temp> {
     // TODO: This should only be called within fill_result_types
     pub fn new(
@@ -918,62 +1000,11 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     )?;
                     *return_ty
                 } else if let Some(host_fn) = self.mod_api.host_fns().get(name) {
-                    // Create the actual types to represent generics
-                    let generics = if let Some(substitutions) = substitutions {
-                        // for the second time through, replace the existentials as they are created, and also verify traits
-                        let mut generics = Vec::with_capacity_in(host_fn.generics.len(), arena);
-                        for generic in host_fn.generics {
-                            let Type::Existential { idx } =
-                                ty_ctx.create_existential(name, *name_span)
-                            else {
-                                unreachable!()
-                            };
-                            let actual_ty = substitutions[idx];
-                            ty_ctx.verify_traits(actual_ty, generic.traits(), *name_span, name)?;
-                            generics.push(actual_ty)
-                        }
-                        generics.leak()
-                    } else {
-                        // The first time through, just create the existentials
-                        arena.slice_from_iter(
-                            host_fn
-                                .generics
-                                .iter()
-                                .map(|_| ty_ctx.create_existential(name, *name_span)),
-                        )
-                    };
-
-                    // substitute generic arguments in host fn parameters with actual types (existentials the first time through)
-                    let parameters =
-                        arena.slice_from_iter(host_fn.parameters.iter().map(|param| Parameter {
-                            ty: Self::convert_mod_api_type(param.ty, generics, arena),
-                            ..*param
-                        }));
-
-                    self.fill_arguments(
-                        name,
-                        ty_ctx,
-                        substitutions,
-                        *name_span,
-                        parameters,
-                        args,
-                        arena,
-                    )?;
-
-                    // only fill in the host function pointer the second time
-                    // through.
-                    if substitutions.is_some() {
-                        *final_generics = self.type_storage.insert_type_list(generics);
-                        if let Some(host_fn_ptr) = host_fn.fn_ptr {
-                            *ptr = Some(host_fn_ptr);
-                        } else {
-                            panic!(
-                                "function {} was not registered (Note: This error is not triggerred by grug_tests)",
-                                name
-                            );
-                        }
-                    }
-                    Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
+                    check_host_fn!(
+                        self, name, ty_ctx, substitutions, *name_span,
+                        host_fn, args, arena, final_generics, ptr,
+                        format!("function {} was not registered (Note: This error is not triggerred by grug_tests)", name)
+                    )
                 } else if name.starts_with("_") {
                     return Err(self.new_error(
                         *name_span,
@@ -1077,62 +1108,11 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         ));
                     };
 
-                    // Create the actual types to represent generics
-                    let generics = if let Some(substitutions) = substitutions {
-                        // for the second time through, replace the existentials as they are created, and also verify traits
-                        let mut generics = Vec::with_capacity_in(host_fn.generics.len(), arena);
-                        for generic in host_fn.generics {
-                            let Type::Existential { idx } =
-                                ty_ctx.create_existential(name, *name_span)
-                            else {
-                                unreachable!()
-                            };
-                            let actual_ty = substitutions[idx];
-                            ty_ctx.verify_traits(actual_ty, generic.traits(), *name_span, name)?;
-                            generics.push(actual_ty)
-                        }
-                        generics.leak()
-                    } else {
-                        // The first time through, just create the existentials
-                        arena.slice_from_iter(
-                            host_fn
-                                .generics
-                                .iter()
-                                .map(|_| ty_ctx.create_existential(name, *name_span)),
-                        )
-                    };
-
-                    // substitute generic arguments in host fn parameters with actual types (existentials the first time through)
-                    let parameters =
-                        arena.slice_from_iter(host_fn.parameters.iter().map(|param| Parameter {
-                            ty: Self::convert_mod_api_type(param.ty, generics, arena),
-                            ..*param
-                        }));
-
-                    self.fill_arguments(
-                        name,
-                        ty_ctx,
-                        substitutions,
-                        *name_span,
-                        parameters,
-                        args,
-                        arena,
-                    )?;
-
-                    // only fill in the host function pointer the second time
-                    // through.
-                    if substitutions.is_some() {
-                        *final_generics = self.type_storage.insert_type_list(generics);
-                        if let Some(host_fn_ptr) = host_fn.fn_ptr {
-                            *ptr = Some(host_fn_ptr);
-                        } else {
-                            panic!(
-                                "static method {}.{} was not registered (Note: This error is not triggerred by grug_tests)",
-                                type_name, name
-                            );
-                        }
-                    }
-                    Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
+                    check_host_fn!(
+                        self, name, ty_ctx, substitutions, *name_span,
+                        host_fn, args, arena, final_generics, ptr,
+                        format!("static method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", type_name, name)
+                    )
                 } else {
                     let receiver = receiver_slot.as_deref_mut().expect("matched Some(_) above");
                     let receiver_type = self.fill_expr(ty_ctx, substitutions, receiver, arena)?;
@@ -1196,79 +1176,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         ));
                     };
 
-                    // Create the actual types to represent generics
-                    let generics = if let Some(substitutions) = substitutions {
-                        // for the second time through, replace the existentials as they are created, and also verify traits
-                        let mut generics = Vec::with_capacity_in(host_fn.generics.len(), arena);
-                        for generic in host_fn.generics {
-                            let Type::Existential { idx } =
-                                ty_ctx.create_existential(name, *name_span)
-                            else {
-                                unreachable!()
-                            };
-                            let actual_ty = substitutions[idx];
-                            ty_ctx.verify_traits(actual_ty, generic.traits(), *name_span, name)?;
-                            generics.push(actual_ty)
-                        }
-                        generics.leak()
-                    } else {
-                        // The first time through, just create the existentials
-                        arena.slice_from_iter(
-                            host_fn
-                                .generics
-                                .iter()
-                                .map(|_| ty_ctx.create_existential(name, *name_span)),
-                        )
-                    };
-
-                    // substitute generic arguments in host fn parameters with actual types (existentials the first time through)
-                    let parameters =
-                        arena.slice_from_iter(host_fn.parameters.iter().map(|param| Parameter {
-                            ty: Self::convert_mod_api_type(param.ty, generics, arena),
-                            ..*param
-                        }));
-
-                    // do the same for the method receiver, and add a constraint between that and the actual type of the receiver
-                    let mod_api_receiver_type =
-                        Self::convert_mod_api_type(receiver_ty, generics, arena);
-                    // TODO: Fix the error message here (i actually don't know if this can even error)
-                    ty_ctx
-                        .add_constraint(receiver.span, mod_api_receiver_type, receiver_type)
-                        .map_err(|err| {
-                            self.new_error(
-                                err.span,
-                                format_args!(
-                                    "Expected {} but got {}",
-                                    err.diff,
-                                    err.diff.swapped()
-                                ),
-                            )
-                        })?;
-
-                    self.fill_arguments(
-                        name,
-                        ty_ctx,
-                        substitutions,
-                        *name_span,
-                        parameters,
-                        args,
-                        arena,
-                    )?;
-
-                    // only fill in the host function pointer the second time
-                    // through.
-                    if substitutions.is_some() {
-                        *final_generics = self.type_storage.insert_type_list(generics);
-                        if let Some(host_fn_ptr) = host_fn.fn_ptr {
-                            *ptr = Some(host_fn_ptr);
-                        } else {
-                            panic!(
-                                "method {}.{} was not registered (Note: This error is not triggerred by grug_tests)",
-                                receiver_name, name
-                            );
-                        }
-                    }
-                    Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
+                    check_host_fn!(
+                        self, name, ty_ctx, substitutions, *name_span,
+                        host_fn, args, arena, final_generics, ptr,
+                        format!("method {}.{} was not registered (Note: This error is not triggerred by grug_tests)", receiver_name, name),
+                        receiver: receiver.span, receiver_ty, receiver_type
+                    )
                 }
             }
             ExprData::Parenthesized(expr) => self.fill_expr(ty_ctx, substitutions, expr, arena)?,
