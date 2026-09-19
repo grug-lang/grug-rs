@@ -744,8 +744,6 @@ impl GrugState {
         fn_id: ExportFnId,
         values: *const Value,
     ) -> bool {
-        
-
         unsafe {
             self.backend
                 .call_on_function_raw(self, entity, self.get_export_fn_index(fn_id), values)
@@ -754,10 +752,8 @@ impl GrugState {
 
     #[must_use]
     pub fn call_export_fn(&self, entity: &GrugEntity, fn_id: ExportFnId, values: &[Value]) -> bool {
-        
-
         self.backend
-                .call_on_function(self, entity, self.get_export_fn_index(fn_id), values)
+            .call_on_function(self, entity, self.get_export_fn_index(fn_id), values)
     }
 }
 

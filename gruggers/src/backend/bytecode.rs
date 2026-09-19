@@ -909,7 +909,8 @@ impl BytecodeBackend {
         let fn_name = call_stack
             .iter()
             .rev()
-            .flat_map(|frame| frame.file_path.map(|_| frame.fn_name)).find(|fn_name| !fn_name.to_str().starts_with("_"))
+            .flat_map(|frame| frame.file_path.map(|_| frame.fn_name))
+            .find(|fn_name| !fn_name.to_str().starts_with("_"))
             .expect("must have at least one export function call")
             .to_str();
         let span = last_frame.span;
