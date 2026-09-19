@@ -497,7 +497,9 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
             // required "type" string
             let ty = self.get_key(param_values, "type")?;
             let ty = self.parse_type(ty, generics, arena)?;
-            if ty == Type::Void { return Err(self.new_error("cannot be void")) }
+            if ty == Type::Void {
+                return Err(self.new_error("cannot be void"));
+            }
             self.pop_path();
 
             self.pop_path();
@@ -734,8 +736,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                         generics.len()
                     ))));
                 }
-                for (i, (generic, constraint)) in generics.iter().zip(*constraints).enumerate()
-                {
+                for (i, (generic, constraint)) in generics.iter().zip(*constraints).enumerate() {
                     self.push_path(JsonPathComponent::ArrayIdx(i));
                     match *generic {
                         Type::Resource { .. } => {
@@ -744,9 +745,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                             );
                         }
                         Type::Entity { .. } => {
-                            return Err(
-                                self.new_error("entity strings cannot be used in generics")
-                            );
+                            return Err(self.new_error("entity strings cannot be used in generics"));
                         }
                         _ => {
                             for tr in constraint.traits() {
