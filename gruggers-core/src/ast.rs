@@ -9,9 +9,9 @@
 //! allocated in. The gruggers crate allocates these in an arena and
 //! deallocates them automatically after the call to [`Backend::insert_file`](crate::backend::Backend::insert_file).
 //! This may be changed in a later release
-use crate::ntstring::{NTStrPtr, NTStr, NTBytes};
-use crate::types::HostFn;
 use crate::error::SourceSpan;
+use crate::ntstring::{NTBytes, NTStr, NTStrPtr};
+use crate::types::HostFn;
 
 use std::ffi::OsStr;
 
@@ -19,473 +19,480 @@ use std::ffi::OsStr;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C, u32)]
 pub enum Type<'a> {
-	/// Return type of a function with no return value
-	///
-	/// An expression can only have a value of type Void if it is the top level
-	/// of a [`Call`](Statement::Call) statement.
-	///
-	/// It cannot be stored in a variable or be the result of an intermediate
-	/// expression
-	Void = 0,
-	/// Type of a boolean value
-	///
-	/// ```text
-	/// x_0: bool = true
-	/// x_1: bool = false
-	/// x_2: bool = x_0 and x_1
-	/// x_3: bool = x_0 or x_1
-	/// ```
-	Bool,
-	/// Type of a number
-	///
-	/// ```text
-	/// x: number = 25
-	/// ```
-	Number,
-	/// Type of a string
-	///
-	/// ```text
-	/// x: string = "Hello world"
-	/// ```
-	String,
-	/// TODO: Explain usage of ID types in grug
-	Id{
-		/// Custom name of the id type
-		name: NTStrPtr<'a>,
-		/// The generics of the type, if any
-		generics: &'a [Type<'a>]
-	},
-	/// Type of a resource string
-	///
-	/// TODO: Explain what resources can be used for with examples
-	///
-	/// This can only be used as the type of an argument of a game function
-	Resource{
-		/// The extension of the resources string.
-		///
-		/// This value ensures that only file paths with particular extensions
-		/// can be passed to host functions
-		extension: NTStrPtr<'a>
-	},
-	/// Type of an entity string
-	///
-	/// TODO: Explain what entity strings can be used for with examples
-	///
-	/// This can only be used as the type of an argument of a game function
-	Entity{
-		/// The type of the entity pointed to by the entity string
-		entity_type: Option<NTStrPtr<'a>>
-	},
-	#[doc(hidden)]
-	/// For internal use, Backends should never ever see this
-	Existential {
-		idx: usize
-	}
+    /// Return type of a function with no return value
+    ///
+    /// An expression can only have a value of type Void if it is the top level
+    /// of a [`Call`](Statement::Call) statement.
+    ///
+    /// It cannot be stored in a variable or be the result of an intermediate
+    /// expression
+    Void = 0,
+    /// Type of a boolean value
+    ///
+    /// ```text
+    /// x_0: bool = true
+    /// x_1: bool = false
+    /// x_2: bool = x_0 and x_1
+    /// x_3: bool = x_0 or x_1
+    /// ```
+    Bool,
+    /// Type of a number
+    ///
+    /// ```text
+    /// x: number = 25
+    /// ```
+    Number,
+    /// Type of a string
+    ///
+    /// ```text
+    /// x: string = "Hello world"
+    /// ```
+    String,
+    /// TODO: Explain usage of ID types in grug
+    Id {
+        /// Custom name of the id type
+        name: NTStrPtr<'a>,
+        /// The generics of the type, if any
+        generics: &'a [Type<'a>],
+    },
+    /// Type of a resource string
+    ///
+    /// TODO: Explain what resources can be used for with examples
+    ///
+    /// This can only be used as the type of an argument of a game function
+    Resource {
+        /// The extension of the resources string.
+        ///
+        /// This value ensures that only file paths with particular extensions
+        /// can be passed to host functions
+        extension: NTStrPtr<'a>,
+    },
+    /// Type of an entity string
+    ///
+    /// TODO: Explain what entity strings can be used for with examples
+    ///
+    /// This can only be used as the type of an argument of a game function
+    Entity {
+        /// The type of the entity pointed to by the entity string
+        entity_type: Option<NTStrPtr<'a>>,
+    },
+    #[doc(hidden)]
+    /// For internal use, Backends should never ever see this
+    Existential { idx: usize },
 }
 
 impl<'a> Type<'a> {
-	/// Returns true if the shape of both types match. i.e., they are identical
-	/// up to existential types.
-	pub fn matches(&self, other: &Self) -> bool {
-		use Type::*;
-		match (self, other) {
-			(Void, Void) => true,
-			(Bool, Bool) => true,
-			(Number, Number) => true,
-			(String, String) => true,
-			(Existential{..}, _) => true,
-			(_, Existential{..}) => true,
-			(Id{name: name_1, generics: generics_1, ..}, Id{name: name_2, generics: generics_2, ..}) => 
-				name_1 == name_2 && generics_1.iter().zip(*generics_2).all(|(x, y)| x.matches(y)),
-			(
-				Resource {extension: extension_1}, 
-				Resource {extension: extension_2}, 
-			) => extension_1 == extension_2,
-			(Resource{..}, _) => false,
-			(_, Resource{..}) => false,
-			(
-				Entity {entity_type: ty_1}, 
-				Entity {entity_type: ty_2}, 
-			) => ty_1 == ty_2,
-			(Entity{..}, _) => false,
-			(_, Entity{..}) => false,
-			_ => false,
-		}
-	}
+    /// Returns true if the shape of both types match. i.e., they are identical
+    /// up to existential types.
+    pub fn matches(&self, other: &Self) -> bool {
+        use Type::*;
+        match (self, other) {
+            (Void, Void) => true,
+            (Bool, Bool) => true,
+            (Number, Number) => true,
+            (String, String) => true,
+            (Existential { .. }, _) => true,
+            (_, Existential { .. }) => true,
+            (
+                Id {
+                    name: name_1,
+                    generics: generics_1,
+                    ..
+                },
+                Id {
+                    name: name_2,
+                    generics: generics_2,
+                    ..
+                },
+            ) => {
+                name_1 == name_2
+                    && generics_1
+                        .iter()
+                        .zip(*generics_2)
+                        .all(|(x, y)| x.matches(y))
+            }
+            (
+                Resource {
+                    extension: extension_1,
+                },
+                Resource {
+                    extension: extension_2,
+                },
+            ) => extension_1 == extension_2,
+            (Resource { .. }, _) => false,
+            (_, Resource { .. }) => false,
+            (Entity { entity_type: ty_1 }, Entity { entity_type: ty_2 }) => ty_1 == ty_2,
+            (Entity { .. }, _) => false,
+            (_, Entity { .. }) => false,
+            _ => false,
+        }
+    }
 }
 
 impl<'a> std::fmt::Display for Type<'a> {
-	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		match self {
-			Self::Void => write!(f, "void"),
-			Self::Bool => write!(f, "bool"),
-			Self::Number => write!(f, "number"),
-			Self::String => write!(f, "string"),
-			Self::Id{
-				name,
-				generics,
-			} => {
-				write!(f, "{}", name)?;
-				if !generics.is_empty() {
-					write!(f, "[")?;
-					for (i, generic) in generics.iter().enumerate() {
-						write!(f, "{}", generic)?;
-						if i != generics.len() - 1 {
-							write!(f, ", ")?;
-						}
-					}
-					write!(f, "]")?;
-				}
-				Ok(())
-			}
-			Self::Resource {
-				extension: _,
-			} => write!(f, "resource"),
-			Self::Entity {
-				entity_type: Some(name),
-			} => write!(f, "{}", name),
-			Self::Entity {
-				entity_type: None,
-			} => write!(f, "entity"),
-			Self::Existential {
-				idx,
-			} => write!(f, "${idx}"),
-		}
-	}
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            Self::Void => write!(f, "void"),
+            Self::Bool => write!(f, "bool"),
+            Self::Number => write!(f, "number"),
+            Self::String => write!(f, "string"),
+            Self::Id { name, generics } => {
+                write!(f, "{}", name)?;
+                if !generics.is_empty() {
+                    write!(f, "[")?;
+                    for (i, generic) in generics.iter().enumerate() {
+                        write!(f, "{}", generic)?;
+                        if i != generics.len() - 1 {
+                            write!(f, ", ")?;
+                        }
+                    }
+                    write!(f, "]")?;
+                }
+                Ok(())
+            }
+            Self::Resource { extension: _ } => write!(f, "resource"),
+            Self::Entity {
+                entity_type: Some(name),
+            } => write!(f, "{}", name),
+            Self::Entity { entity_type: None } => write!(f, "entity"),
+            Self::Existential { idx } => write!(f, "${idx}"),
+        }
+    }
 }
 
 /// Represents a unary operator
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum UnaryOperator {
-	/// Logical `not` operator.
-	///
-	/// The inner expression must have an output type of [`Type::Bool`].
-	///
-	/// The output type of the expression is [`Type::Bool`]
-	///
-	/// ```text
-	/// x: bool = not true
-	///           ^^^ - `Not`
-	/// ```
-	Not = 0,
-	/// Unary `Negate` operator.
-	///
-	/// The inner expression must have an output type of [`Type::Number`].
-	///
-	/// The output type of the expression is [`Type::Number`]
-	///
-	/// ```text
-	/// x: number = -25
-	///             ^ - `Minus`
-	/// ```
-	Minus, 
+    /// Logical `not` operator.
+    ///
+    /// The inner expression must have an output type of [`Type::Bool`].
+    ///
+    /// The output type of the expression is [`Type::Bool`]
+    ///
+    /// ```text
+    /// x: bool = not true
+    ///           ^^^ - `Not`
+    /// ```
+    Not = 0,
+    /// Unary `Negate` operator.
+    ///
+    /// The inner expression must have an output type of [`Type::Number`].
+    ///
+    /// The output type of the expression is [`Type::Number`]
+    ///
+    /// ```text
+    /// x: number = -25
+    ///             ^ - `Minus`
+    /// ```
+    Minus,
 }
 
 impl std::fmt::Display for UnaryOperator {
-	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		match self {
-			Self::Not => write!(f, "not"),
-			Self::Minus => write!(f, "-"),
-		}
-	}
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            Self::Not => write!(f, "not"),
+            Self::Minus => write!(f, "-"),
+        }
+    }
 }
 
 /// Represents a binary operator
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum BinaryOperator {
-	/// Logical `or` operator.
-	///
-	/// Both sides of the expression must have an output type of [`Type::Bool`].
-	///
-	/// The output type of the expression is [`Type::Bool`]
-	///
-	/// ```text
-	/// x: bool = true or false
-	///                ^^ - `Or`
-	/// ```
-	Or = 0,
-	/// Logical `and` operator
-	///
-	/// Both sides of the expression must have an output type of [`Type::Bool`]
-	///
-	/// The output type of the expression is [`Type::Bool`]
-	///
-	/// ```text
-	/// x: bool = true and false
-	///                ^^^ - `And`
-	/// ```
-	And, 
-	/// Equality Operator
-	///
-	/// Both sides of the expression must have the same output type
-	///
-	/// The output type of the expression is [`Type::Bool`]
-	///
-	/// ```text
-	/// x: number = 25
-	/// y: bool = x == 25
-	///             ^^ - `DoubleEquals`
-	/// ```
-	DoubleEquals,
-	/// Equality Operator
-	///
-	/// Both sides of the expression must have the same output type
-	///
-	/// The output type of the expression is [`Type::Bool`]
-	///
-	/// ```text
-	/// x: number = 25
-	/// y: bool = x != 25
-	///             ^^ - `NotEquals`
-	/// ```
-	NotEquals,
-	/// `Greater than` operator
-	///
-	/// Both sides of the expression must have an output type of [`Type::Number`]
-	///
-	/// The output type of the expression is [`Type::Bool`]
-	///
-	/// ```text
-	/// x: number = 25
-	/// y: bool = x > 25
-	///             ^ - `Greater`
-	/// ```
-	Greater,
-	/// `Greater than or equal to` operator
-	///
-	/// Both sides of the expression must have an output type of [`Type::Number`]
-	///
-	/// The output type of the expression is [`Type::Bool`]
-	///
-	/// ```text
-	/// x: number = 25
-	/// y: bool = x >= 25
-	///             ^^ - `GreaterEquals`
-	/// ```
-	GreaterEquals,
-	/// `Less than` operator
-	///
-	/// Both sides of the expression must have an output type of [`Type::Number`]
-	///
-	/// The output type of the expression is [`Type::Bool`]
-	///
-	/// ```text
-	/// x: number = 25
-	/// y: bool = x < 25
-	///             ^ - `Less`
-	/// ```
-	Less,
-	/// `Less than or equal to` operator
-	///
-	/// Both sides of the expression must have an output type of [`Type::Number`]
-	///
-	/// The output type of the expression is [`Type::Bool`]
-	///
-	/// ```text
-	/// x: number = 25
-	/// y: bool = x <= 25
-	///             ^^ - `LessEquals`
-	/// ```
-	LessEquals,
-	/// Addition operator
-	///
-	/// Both sides of the expression must have an output type of [`Type::Number`]
-	///
-	/// The output type of the expression is [`Type::Number`]
-	///
-	/// ```text
-	/// x: number = 25
-	/// y: number = x + 25
-	///               ^ - `Plus`
-	/// ```
-	Plus,
-	/// Subtraction operator
-	///
-	/// Both sides of the expression must have an output type of [`Type::Number`]
-	///
-	/// The output type of the expression is [`Type::Number`]
-	///
-	/// ```text
-	/// x: number = 25
-	/// y: number = x - 25
-	///               ^ - `Minus`
-	/// ```
-	Minus,
-	/// Multiplication operator
-	///
-	/// Both sides of the expression must have an output type of [`Type::Number`]
-	///
-	/// The output type of the expression is [`Type::Number`]
-	///
-	/// ```text
-	/// x: number = 25
-	/// y: number = x * 25
-	///               ^ - `Multiply`
-	/// ```
-	Multiply,
-	/// Division operator
-	///
-	/// Both sides of the expression must have an output type of [`Type::Number`]
-	///
-	/// The output type of the expression is [`Type::Number`]
-	///
-	/// ```text
-	/// x: number = 25
-	/// y: number = x / 25
-	///               ^ - `Division`
-	/// ```
-	Division,
+    /// Logical `or` operator.
+    ///
+    /// Both sides of the expression must have an output type of [`Type::Bool`].
+    ///
+    /// The output type of the expression is [`Type::Bool`]
+    ///
+    /// ```text
+    /// x: bool = true or false
+    ///                ^^ - `Or`
+    /// ```
+    Or = 0,
+    /// Logical `and` operator
+    ///
+    /// Both sides of the expression must have an output type of [`Type::Bool`]
+    ///
+    /// The output type of the expression is [`Type::Bool`]
+    ///
+    /// ```text
+    /// x: bool = true and false
+    ///                ^^^ - `And`
+    /// ```
+    And,
+    /// Equality Operator
+    ///
+    /// Both sides of the expression must have the same output type
+    ///
+    /// The output type of the expression is [`Type::Bool`]
+    ///
+    /// ```text
+    /// x: number = 25
+    /// y: bool = x == 25
+    ///             ^^ - `DoubleEquals`
+    /// ```
+    DoubleEquals,
+    /// Equality Operator
+    ///
+    /// Both sides of the expression must have the same output type
+    ///
+    /// The output type of the expression is [`Type::Bool`]
+    ///
+    /// ```text
+    /// x: number = 25
+    /// y: bool = x != 25
+    ///             ^^ - `NotEquals`
+    /// ```
+    NotEquals,
+    /// `Greater than` operator
+    ///
+    /// Both sides of the expression must have an output type of [`Type::Number`]
+    ///
+    /// The output type of the expression is [`Type::Bool`]
+    ///
+    /// ```text
+    /// x: number = 25
+    /// y: bool = x > 25
+    ///             ^ - `Greater`
+    /// ```
+    Greater,
+    /// `Greater than or equal to` operator
+    ///
+    /// Both sides of the expression must have an output type of [`Type::Number`]
+    ///
+    /// The output type of the expression is [`Type::Bool`]
+    ///
+    /// ```text
+    /// x: number = 25
+    /// y: bool = x >= 25
+    ///             ^^ - `GreaterEquals`
+    /// ```
+    GreaterEquals,
+    /// `Less than` operator
+    ///
+    /// Both sides of the expression must have an output type of [`Type::Number`]
+    ///
+    /// The output type of the expression is [`Type::Bool`]
+    ///
+    /// ```text
+    /// x: number = 25
+    /// y: bool = x < 25
+    ///             ^ - `Less`
+    /// ```
+    Less,
+    /// `Less than or equal to` operator
+    ///
+    /// Both sides of the expression must have an output type of [`Type::Number`]
+    ///
+    /// The output type of the expression is [`Type::Bool`]
+    ///
+    /// ```text
+    /// x: number = 25
+    /// y: bool = x <= 25
+    ///             ^^ - `LessEquals`
+    /// ```
+    LessEquals,
+    /// Addition operator
+    ///
+    /// Both sides of the expression must have an output type of [`Type::Number`]
+    ///
+    /// The output type of the expression is [`Type::Number`]
+    ///
+    /// ```text
+    /// x: number = 25
+    /// y: number = x + 25
+    ///               ^ - `Plus`
+    /// ```
+    Plus,
+    /// Subtraction operator
+    ///
+    /// Both sides of the expression must have an output type of [`Type::Number`]
+    ///
+    /// The output type of the expression is [`Type::Number`]
+    ///
+    /// ```text
+    /// x: number = 25
+    /// y: number = x - 25
+    ///               ^ - `Minus`
+    /// ```
+    Minus,
+    /// Multiplication operator
+    ///
+    /// Both sides of the expression must have an output type of [`Type::Number`]
+    ///
+    /// The output type of the expression is [`Type::Number`]
+    ///
+    /// ```text
+    /// x: number = 25
+    /// y: number = x * 25
+    ///               ^ - `Multiply`
+    /// ```
+    Multiply,
+    /// Division operator
+    ///
+    /// Both sides of the expression must have an output type of [`Type::Number`]
+    ///
+    /// The output type of the expression is [`Type::Number`]
+    ///
+    /// ```text
+    /// x: number = 25
+    /// y: number = x / 25
+    ///               ^ - `Division`
+    /// ```
+    Division,
 }
 
 impl std::fmt::Display for BinaryOperator {
-	fn fmt (&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-		match self {
-			Self::Or => write!(f, "or"),
-			Self::And => write!(f, "and"),
-			Self::DoubleEquals => write!(f, "=="),
-			Self::NotEquals => write!(f, "!="),
-			Self::Greater => write!(f, ">"),
-			Self::GreaterEquals => write!(f, ">="),
-			Self::Less => write!(f, "<"),
-			Self::LessEquals => write!(f, "<="),
-			Self::Plus => write!(f, "+"),
-			Self::Minus => write!(f, "-"),
-			Self::Multiply => write!(f, "*"),
-			Self::Division => write!(f, "/"),
-		}
-	}
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            Self::Or => write!(f, "or"),
+            Self::And => write!(f, "and"),
+            Self::DoubleEquals => write!(f, "=="),
+            Self::NotEquals => write!(f, "!="),
+            Self::Greater => write!(f, ">"),
+            Self::GreaterEquals => write!(f, ">="),
+            Self::Less => write!(f, "<"),
+            Self::LessEquals => write!(f, "<="),
+            Self::Plus => write!(f, "+"),
+            Self::Minus => write!(f, "-"),
+            Self::Multiply => write!(f, "*"),
+            Self::Division => write!(f, "/"),
+        }
+    }
 }
 
 /// Actual data needed to represent the expression
 #[derive(Debug)]
 #[repr(C, u32)]
 pub enum ExprData<'a> {
-	/// Represents a literal Boolean `true`
-	True,
-	/// Represents a literal Boolean `false`
-	False,
-	/// Represents a string literal
-	///
-	/// ```text
-	/// x: number = "Hello world"
-	///             ^^^^^^^^^^^^^ - `string literal`
-	/// ```
-	/// 
-	/// Before type propagation, resource and entities are treated as normal strings
-	String(NTStrPtr<'a>),
-	/// Represents a resource string literal
-	///
-	/// The frontend ensures that the resource actually exists within the mod
-	Resource(NTStrPtr<'a>),
-	/// Represents an entity string literal
-	///
-	/// The frontend ensures that the entity actually exists within the indicated mod
-	Entity(NTStrPtr<'a>),
-	/// Represents an expression that evaluates to the value of a variable at this moment
-	Identifier(NTStrPtr<'a>),
-	/// Represents a number literal
-	Number(f64, NTStrPtr<'a>),
-	/// Represents a unary expression
-	///
-	/// ```text
-	/// x: bool = !true
-	///           ^^^^^ - `expr`
-	///           |
-	///           + - `op`
-	/// ```
-	Unary {
-		/// Operator
-		op   : UnaryOperator,
-		/// Inner expression
-		expr : &'a mut Expr<'a>,
-		/// Span of the operator
-		op_span: SourceSpan
-	},
-	/// Represents a binary expression
-	///
-	/// ```text
-	/// x: number = 20 + 30
-	///             ^^ ^ ^^ - `right`
-	///             |  | 
-	///             |  + - `op`
-	///             |
-	///             + - `left`
-	/// ```
-	Binary {
-		/// Operator
-		op    : BinaryOperator,
-		/// Left hand side of the expression
-		left  : &'a mut Expr<'a>,
-		/// Right hand side of the expression
-		right : &'a mut Expr<'a>,
-		/// Span of the operator
-		op_span: SourceSpan
-	},
-	/// Represents a function call
-	///
-	/// Can either be a helper function call, a game function call or a method call.
-	/// Represents a game function call if the `ptr` field is not [`None`]
-	/// And represents a method call if the receiver field is not [`None`]
-	///
-	/// for a function call, the fields are as defined below
-	/// ```text
-	/// x: number = helper_max(25 + 32, 03 + 28)
-	///    `name` - ^^^^^^^^^^ ^^^^^^^  ^^^^^^^ - `args[1]`
-	///                        |
-	///                        + - `args[0]`
-	/// ```
-	///
-	/// for a method call, the fields are as defined below
-	/// ```text
-	/// vec: VecNumber = vec_number_new()
-	/// y: number = vec.get(2, 30)
-	///             ^^^ ^^^ ^  ^^ - `args[1]`
-	///             |   |   |
-	///             |   |   + - `args[0]`
-	///             |   |
-	///             |   + - `name`
-	///             |
-	///             + - `receiver`
-	/// ```
-	Call {
-		/// Receiver of the method
-		receiver: Option<&'a mut Expr<'a>>,
-		/// Name of the function or method
-		name : NTStrPtr<'a>,
-		/// Expressions for each of the arguments of the function call
-		args : &'a mut [Expr<'a>],
-		/// Pointer to the host function if this expression is a game function call
-		ptr  : Option<HostFn>,
-		/// Span of the function or method name,
-		name_span: SourceSpan,
-		/// The generics array that should be passed to the function when
-		/// called
-		generics: &'static [Type<'static>],
-	},
-	/// Represents a parenthesized expression
-	///
-	/// ```text
-	/// x: number = (25 + 32)
-	///              ^^^^^^^ - inner expression
-	/// ```
-	Parenthesized(&'a mut Expr<'a>),
+    /// Represents a literal Boolean `true`
+    True,
+    /// Represents a literal Boolean `false`
+    False,
+    /// Represents a string literal
+    ///
+    /// ```text
+    /// x: number = "Hello world"
+    ///             ^^^^^^^^^^^^^ - `string literal`
+    /// ```
+    ///
+    /// Before type propagation, resource and entities are treated as normal strings
+    String(NTStrPtr<'a>),
+    /// Represents a resource string literal
+    ///
+    /// The frontend ensures that the resource actually exists within the mod
+    Resource(NTStrPtr<'a>),
+    /// Represents an entity string literal
+    ///
+    /// The frontend ensures that the entity actually exists within the indicated mod
+    Entity(NTStrPtr<'a>),
+    /// Represents an expression that evaluates to the value of a variable at this moment
+    Identifier(NTStrPtr<'a>),
+    /// Represents a number literal
+    Number(f64, NTStrPtr<'a>),
+    /// Represents a unary expression
+    ///
+    /// ```text
+    /// x: bool = !true
+    ///           ^^^^^ - `expr`
+    ///           |
+    ///           + - `op`
+    /// ```
+    Unary {
+        /// Operator
+        op: UnaryOperator,
+        /// Inner expression
+        expr: &'a mut Expr<'a>,
+        /// Span of the operator
+        op_span: SourceSpan,
+    },
+    /// Represents a binary expression
+    ///
+    /// ```text
+    /// x: number = 20 + 30
+    ///             ^^ ^ ^^ - `right`
+    ///             |  |
+    ///             |  + - `op`
+    ///             |
+    ///             + - `left`
+    /// ```
+    Binary {
+        /// Operator
+        op: BinaryOperator,
+        /// Left hand side of the expression
+        left: &'a mut Expr<'a>,
+        /// Right hand side of the expression
+        right: &'a mut Expr<'a>,
+        /// Span of the operator
+        op_span: SourceSpan,
+    },
+    /// Represents a function call
+    ///
+    /// Can either be a helper function call, a game function call or a method call.
+    /// Represents a game function call if the `ptr` field is not [`None`]
+    /// And represents a method call if the receiver field is not [`None`]
+    ///
+    /// for a function call, the fields are as defined below
+    /// ```text
+    /// x: number = helper_max(25 + 32, 03 + 28)
+    ///    `name` - ^^^^^^^^^^ ^^^^^^^  ^^^^^^^ - `args[1]`
+    ///                        |
+    ///                        + - `args[0]`
+    /// ```
+    ///
+    /// for a method call, the fields are as defined below
+    /// ```text
+    /// vec: VecNumber = vec_number_new()
+    /// y: number = vec.get(2, 30)
+    ///             ^^^ ^^^ ^  ^^ - `args[1]`
+    ///             |   |   |
+    ///             |   |   + - `args[0]`
+    ///             |   |
+    ///             |   + - `name`
+    ///             |
+    ///             + - `receiver`
+    /// ```
+    Call {
+        /// Receiver of the method
+        receiver: Option<&'a mut Expr<'a>>,
+        /// Name of the function or method
+        name: NTStrPtr<'a>,
+        /// Expressions for each of the arguments of the function call
+        args: &'a mut [Expr<'a>],
+        /// Pointer to the host function if this expression is a game function call
+        ptr: Option<HostFn>,
+        /// Span of the function or method name,
+        name_span: SourceSpan,
+        /// The generics array that should be passed to the function when
+        /// called
+        generics: &'static [Type<'static>],
+    },
+    /// Represents a parenthesized expression
+    ///
+    /// ```text
+    /// x: number = (25 + 32)
+    ///              ^^^^^^^ - inner expression
+    /// ```
+    Parenthesized(&'a mut Expr<'a>),
 }
-const _: () = const {assert!(std::mem::size_of::<Option<HostFn>>() == std::mem::size_of::<HostFn>())};
+const _: () =
+    const { assert!(std::mem::size_of::<Option<HostFn>>() == std::mem::size_of::<HostFn>()) };
 
 /// Represents a complete expression. Can contain nested expressions
 #[derive(Debug)]
 #[repr(C)]
 pub struct Expr<'a> {
-	/// Output type of the expression.
-	/// This is filled in during typechecking. 
-	/// Backends will never see the [`None`] value of this field.
-	pub result_type : Option<&'a Type<'a>>,
-	/// Actual data needed to represent the expression
-	pub data        : ExprData<'a>,
-	/// Span of the expression
-	pub span       : SourceSpan
+    /// Output type of the expression.
+    /// This is filled in during typechecking.
+    /// Backends will never see the [`None`] value of this field.
+    pub result_type: Option<&'a Type<'a>>,
+    /// Actual data needed to represent the expression
+    pub data: ExprData<'a>,
+    /// Span of the expression
+    pub span: SourceSpan,
 }
 
 /// Represents a single member variable declaration within a file
@@ -501,185 +508,185 @@ pub struct Expr<'a> {
 #[repr(C)]
 #[derive(Debug)]
 pub struct MemberVariable<'a> {
-	/// Name of the variable
-	pub name           : NTStrPtr<'a>,
-	/// Type of the variable
-	pub ty             : Type<'a>,
-	/// Source Span of the type
-	pub type_span      : SourceSpan,
-	/// Initializer of the variable.
-	/// It is not allowed to call an on function or helper function.
-	pub assignment_expr: Expr<'a>,
-	/// Source span of the name of the variable
-	pub span           : SourceSpan,
+    /// Name of the variable
+    pub name: NTStrPtr<'a>,
+    /// Type of the variable
+    pub ty: Type<'a>,
+    /// Source Span of the type
+    pub type_span: SourceSpan,
+    /// Initializer of the variable.
+    /// It is not allowed to call an on function or helper function.
+    pub assignment_expr: Expr<'a>,
+    /// Source span of the name of the variable
+    pub span: SourceSpan,
 }
 
 /// Represents a statement within a function
 #[derive(Debug)]
 #[repr(C, u32)]
 pub enum Statement<'a> {
-	/// A variable declaration or a variable assignment.
-	///
-	/// If the type is provided, it is a declaration. 
-	///
-	/// ```text
-	/// x: number = 25 # declaration
-	/// x = 30 # assignment
-	/// ``` 
-	///
-	/// A declaration indicates that there is no other variable with the same
-	/// name accessible from the current scope.
-	///
-	/// An assignment indicates that there is definitely an existing variable
-	/// with that name accessible from the current scope. The existing variable
-	/// may either be a member variable or a local variable.
-	Variable {
-		/// Name of the variable
-		name            : NTStrPtr<'a>,
-		/// Type of the variable if the statement is a declaration
-		ty              : Option<&'a Type<'a>>,
-		/// Span of the type, if it exists, or just the span of the name again,
-		type_span       : SourceSpan,
-		/// Expression to assign to the variable
-		assignment_expr : Expr<'a>,
-		/// Span of the name
-		name_span       : SourceSpan,
-	},
-	/// A statement that only consists of a single function call.
-	///
-	/// ```text
-	/// my_position: number = 0
-	/// on_tick() {
-	///     my_position = my_position + 2
-	///     set_position(my_position) # Call statement
-	/// }
-	/// ```
-	///
-	/// The [`Expr`] within this variant is guaranteed to be a [call expression](ExprData::Call)
-	Call(Expr<'a>),
-	/// An if statement
-	///
-	/// ```text
-	/// helper_fib(n: number) number {
-	///     if n <= 0 {
-	///         return 0
-	///     } else if n <= 2 {
-	///         return 1
-	///     } else {
-	///         ...
-	///     }
-	/// }
-	/// ```
-	///
-	/// Chained else if statements are represented as a nested if block within
-	/// the else block with the `is_chained` field set to true. The else block
-	/// contains a single If statement in that case. 
-	// TODO: change this to the newer grug-for-c layout
-	If {
-		/// The condition expression of the if block. The result_type of the
-		/// expression must be a boolean
-		condition: Expr<'a>,
-		/// Indicates whether the statement is chained or not
-		is_chained: bool,
-		/// The statements within the if block
-		if_block: &'a mut [Statement<'a>],
-		/// The statements within the else block if it exists.
-		/// If the `is_chained` field is true, the list contains a single If statement
-		else_block: &'a mut [Statement<'a>],
-	},
-	/// A while loop
-	///
-	/// ```text
-	/// helper_fib(n: number) number {
-	///     result: number = 0
-	///     if number < 0 {
-	///         result = 0
-	///     } else if number == 1 {
-	///         result = 1
-	///     } else {
-	///         a: number = 1
-	///         b: number = 1
-	///         i: number = 2
-	///         while i < number {
-	///             temp: number = a + b
-	///             a = b
-	///             b = temp
-	///             i = i + 1
-	///         }
-	///         result = b
-	///     }
-	///     return result
-	/// }
-	/// ```
-	///
-	/// While loops are the only loop construct available in grug (except for recursion)
-	While {
-		/// The condition expression of the while block. The result_type of the
-		/// expression must be a boolean
-		condition: Expr<'a>,
-		/// The list of statements within the while block
-		block: &'a mut [Statement<'a>],
-	},
-	/// Returns a value from the current function
-	/// ```text
-	/// result: number = 25
-	/// return result
-	/// ```
-	Return {
-		/// Span of the return keyword
-		return_span: SourceSpan,
-		/// Expression that is returned from the function
-		expr: Option<&'a mut Expr<'a>>,
-	},
-	/// A comment within a function
-	Comment{
-		/// The span of the comment within the file
-		comment_span: SourceSpan,
-		/// The value of the comment
-		value: NTStrPtr<'a>
-	},
-	/// A break statement.
-	///
-	/// ```text
-	/// helper_foo() number {
-	///     i: number = 0
-	///     while i < 30000 {
-	///         if helper_bar(i) {
-	///             break
-	///         }
-	///         game_fn_foo(i)
-	///         i = i + 1
-	///     } 
-	/// }
-	/// ```
-	/// 
-	/// This statement can only occur within a while loop
-	/// 
-	/// The span points at the location of the `break` keyword
-	Break(SourceSpan),
-	/// A continue statement.
-	///
-	/// ```text
-	/// helper_foo() number {
-	///     i: number = 0
-	///     while i < 30000 {
-	///         if helper_bar(i) {
-	///             continue
-	///         }
-	///         game_fn_foo(i)
-	///         i = i + 1
-	///     } 
-	/// }
-	/// ```
-	///
-	/// This statement can only occur within a while loop
-	///
-	/// The span points at the location of the `continue` keyword
-	Continue(SourceSpan),
-	/// An empty line within a function.
-	/// 
-	/// It is a compile error to have multiple empty lines in a row
-	EmptyLine,
+    /// A variable declaration or a variable assignment.
+    ///
+    /// If the type is provided, it is a declaration.
+    ///
+    /// ```text
+    /// x: number = 25 # declaration
+    /// x = 30 # assignment
+    /// ```
+    ///
+    /// A declaration indicates that there is no other variable with the same
+    /// name accessible from the current scope.
+    ///
+    /// An assignment indicates that there is definitely an existing variable
+    /// with that name accessible from the current scope. The existing variable
+    /// may either be a member variable or a local variable.
+    Variable {
+        /// Name of the variable
+        name: NTStrPtr<'a>,
+        /// Type of the variable if the statement is a declaration
+        ty: Option<&'a Type<'a>>,
+        /// Span of the type, if it exists, or just the span of the name again,
+        type_span: SourceSpan,
+        /// Expression to assign to the variable
+        assignment_expr: Expr<'a>,
+        /// Span of the name
+        name_span: SourceSpan,
+    },
+    /// A statement that only consists of a single function call.
+    ///
+    /// ```text
+    /// my_position: number = 0
+    /// on_tick() {
+    ///     my_position = my_position + 2
+    ///     set_position(my_position) # Call statement
+    /// }
+    /// ```
+    ///
+    /// The [`Expr`] within this variant is guaranteed to be a [call expression](ExprData::Call)
+    Call(Expr<'a>),
+    /// An if statement
+    ///
+    /// ```text
+    /// helper_fib(n: number) number {
+    ///     if n <= 0 {
+    ///         return 0
+    ///     } else if n <= 2 {
+    ///         return 1
+    ///     } else {
+    ///         ...
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Chained else if statements are represented as a nested if block within
+    /// the else block with the `is_chained` field set to true. The else block
+    /// contains a single If statement in that case.
+    // TODO: change this to the newer grug-for-c layout
+    If {
+        /// The condition expression of the if block. The result_type of the
+        /// expression must be a boolean
+        condition: Expr<'a>,
+        /// Indicates whether the statement is chained or not
+        is_chained: bool,
+        /// The statements within the if block
+        if_block: &'a mut [Statement<'a>],
+        /// The statements within the else block if it exists.
+        /// If the `is_chained` field is true, the list contains a single If statement
+        else_block: &'a mut [Statement<'a>],
+    },
+    /// A while loop
+    ///
+    /// ```text
+    /// helper_fib(n: number) number {
+    ///     result: number = 0
+    ///     if number < 0 {
+    ///         result = 0
+    ///     } else if number == 1 {
+    ///         result = 1
+    ///     } else {
+    ///         a: number = 1
+    ///         b: number = 1
+    ///         i: number = 2
+    ///         while i < number {
+    ///             temp: number = a + b
+    ///             a = b
+    ///             b = temp
+    ///             i = i + 1
+    ///         }
+    ///         result = b
+    ///     }
+    ///     return result
+    /// }
+    /// ```
+    ///
+    /// While loops are the only loop construct available in grug (except for recursion)
+    While {
+        /// The condition expression of the while block. The result_type of the
+        /// expression must be a boolean
+        condition: Expr<'a>,
+        /// The list of statements within the while block
+        block: &'a mut [Statement<'a>],
+    },
+    /// Returns a value from the current function
+    /// ```text
+    /// result: number = 25
+    /// return result
+    /// ```
+    Return {
+        /// Span of the return keyword
+        return_span: SourceSpan,
+        /// Expression that is returned from the function
+        expr: Option<&'a mut Expr<'a>>,
+    },
+    /// A comment within a function
+    Comment {
+        /// The span of the comment within the file
+        comment_span: SourceSpan,
+        /// The value of the comment
+        value: NTStrPtr<'a>,
+    },
+    /// A break statement.
+    ///
+    /// ```text
+    /// helper_foo() number {
+    ///     i: number = 0
+    ///     while i < 30000 {
+    ///         if helper_bar(i) {
+    ///             break
+    ///         }
+    ///         game_fn_foo(i)
+    ///         i = i + 1
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// This statement can only occur within a while loop
+    ///
+    /// The span points at the location of the `break` keyword
+    Break(SourceSpan),
+    /// A continue statement.
+    ///
+    /// ```text
+    /// helper_foo() number {
+    ///     i: number = 0
+    ///     while i < 30000 {
+    ///         if helper_bar(i) {
+    ///             continue
+    ///         }
+    ///         game_fn_foo(i)
+    ///         i = i + 1
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// This statement can only occur within a while loop
+    ///
+    /// The span points at the location of the `continue` keyword
+    Continue(SourceSpan),
+    /// An empty line within a function.
+    ///
+    /// It is a compile error to have multiple empty lines in a row
+    EmptyLine,
 }
 
 /// Represents the name and type of a function parameter
@@ -690,16 +697,16 @@ pub enum Statement<'a> {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Parameter<'a> {
-	/// Name of the parameter
-	/// `n` is the name in the example
-	pub name: NTStrPtr<'a>,
-	/// Type of the parameter
-	/// `number` is the type in the example
-	pub ty  : Type<'a>,
-	/// Span of the name
-	pub name_span: SourceSpan,
-	/// Span of the type
-	pub type_span: SourceSpan,
+    /// Name of the parameter
+    /// `n` is the name in the example
+    pub name: NTStrPtr<'a>,
+    /// Type of the parameter
+    /// `number` is the type in the example
+    pub ty: Type<'a>,
+    /// Span of the name
+    pub name_span: SourceSpan,
+    /// Span of the type
+    pub type_span: SourceSpan,
 }
 
 // TODO: Rename to ExportFunction
@@ -712,19 +719,19 @@ pub struct Parameter<'a> {
 ///     set_weapon("sword.json")
 /// }
 /// ```
-/// 
+///
 /// On functions need to be defined after all member variables and before all helper functions
 #[repr(C)]
 #[derive(Debug)]
 pub struct OnFunction<'a> {
-	/// Name of the function as a [null terminated string](crate::ntstring::NTStrPtr)
-	pub name: NTStrPtr<'a>,
-	/// List of parameters to the function and their types 
-	pub parameters: &'a [Parameter<'a>],
-	/// List of statements that make up the top level of the function. 
-	pub body_statements: &'a mut [Statement<'a>],
-	/// Source span of the name of the on function
-	pub span: SourceSpan,
+    /// Name of the function as a [null terminated string](crate::ntstring::NTStrPtr)
+    pub name: NTStrPtr<'a>,
+    /// List of parameters to the function and their types
+    pub parameters: &'a [Parameter<'a>],
+    /// List of statements that make up the top level of the function.
+    pub body_statements: &'a mut [Statement<'a>],
+    /// Source span of the name of the on function
+    pub span: SourceSpan,
 }
 
 /// Represents a single helper function declaration
@@ -741,7 +748,7 @@ pub struct OnFunction<'a> {
 ///         return color("yellow")
 ///     } else if n == 3 {
 ///         return color("black")
-///     } 
+///     }
 ///     return game_fn_error("invalid color id")
 /// }
 /// ```
@@ -751,20 +758,20 @@ pub struct OnFunction<'a> {
 #[repr(C)]
 #[derive(Debug)]
 pub struct HelperFunction<'a> {
-	/// Name of the function as a [null terminated string](crate::ntstring::NTStrPtr)
-	pub name: NTStrPtr<'a>,
-	/// Return type of the function. 
-	///
-	/// Return type is [`Type::Void`] if there is no return type
-	pub return_type: Type<'a>,
-	/// Source Span of the return type
-	pub return_type_span: SourceSpan,
-	/// List of parameters to the function and their types 
-	pub parameters: &'a [Parameter<'a>],
-	/// List of statements that make up the top level of the function. 
-	pub body_statements: &'a mut [Statement<'a>],
-	/// Source span of the name of the helper function
-	pub span: SourceSpan,
+    /// Name of the function as a [null terminated string](crate::ntstring::NTStrPtr)
+    pub name: NTStrPtr<'a>,
+    /// Return type of the function.
+    ///
+    /// Return type is [`Type::Void`] if there is no return type
+    pub return_type: Type<'a>,
+    /// Source Span of the return type
+    pub return_type_span: SourceSpan,
+    /// List of parameters to the function and their types
+    pub parameters: &'a [Parameter<'a>],
+    /// List of statements that make up the top level of the function.
+    pub body_statements: &'a mut [Statement<'a>],
+    /// Source span of the name of the helper function
+    pub span: SourceSpan,
 }
 
 // TODO: All the references here should be mut references
@@ -772,86 +779,98 @@ pub struct HelperFunction<'a> {
 #[repr(C)]
 #[derive(Debug)]
 pub struct GrugAst<'a> {
-	/// Represents the member functions declared at the top of the functions
-	///
-	/// ```text
-	/// x: number = 25
-	/// ```
-	///
-	/// These variable declarations must define both a type and a initializer
-	pub members: &'a mut [MemberVariable<'a>],
-	/// Represents all the on function declarations in the file
-	///
-	/// ```text
-	/// on_init(id: number) {
-	///     set_max_health(50)
-	///     set_unarmed_damage(2)
-	///     set_weapon("sword.json")
-	/// }
-	/// ```
-	///
-	/// This array contains an entry for every on function defined in the
-	/// mod_api for the current entity in the order defined in the mod_api even
-	/// if it is not present in the file.
-	///
-	/// If an on function is not present in the file, that entry will be `None`
-	/// (or a null pointer on the c side)
-	pub on_functions: &'a mut [Option<&'a OnFunction<'a>>],
-	/// Represents all the helper function declarations in the file
-	///
-	/// ```text
-	/// helper_color(n: number) Color {
-	///     if n == 0 {
-	///         return color("blue")
-	///     } else if n == 1 {
-	///         return color("red")
-	///     } else if n == 2 {
-	///         return color("green")
-	///     } else if n == 3 {
-	///         return color("yellow")
-	///     } else if n == 3 {
-	///         return color("black")
-	///     } 
-	///     return game_fn_error("invalid color id")
-	/// }
-	/// ```
-	pub helper_functions: &'a mut [HelperFunction<'a>],
-	/// A string that contains the entire file text. Used for Debug info.
-	pub file_text: NTStrPtr<'a>,
-	/// Path to the file relative to the mods directory. Must be compatible with OsStr
-	pub file_path: NTBytes<'a>,
+    /// Represents the member functions declared at the top of the functions
+    ///
+    /// ```text
+    /// x: number = 25
+    /// ```
+    ///
+    /// These variable declarations must define both a type and a initializer
+    pub members: &'a mut [MemberVariable<'a>],
+    /// Represents all the on function declarations in the file
+    ///
+    /// ```text
+    /// on_init(id: number) {
+    ///     set_max_health(50)
+    ///     set_unarmed_damage(2)
+    ///     set_weapon("sword.json")
+    /// }
+    /// ```
+    ///
+    /// This array contains an entry for every on function defined in the
+    /// mod_api for the current entity in the order defined in the mod_api even
+    /// if it is not present in the file.
+    ///
+    /// If an on function is not present in the file, that entry will be `None`
+    /// (or a null pointer on the c side)
+    pub on_functions: &'a mut [Option<&'a OnFunction<'a>>],
+    /// Represents all the helper function declarations in the file
+    ///
+    /// ```text
+    /// helper_color(n: number) Color {
+    ///     if n == 0 {
+    ///         return color("blue")
+    ///     } else if n == 1 {
+    ///         return color("red")
+    ///     } else if n == 2 {
+    ///         return color("green")
+    ///     } else if n == 3 {
+    ///         return color("yellow")
+    ///     } else if n == 3 {
+    ///         return color("black")
+    ///     }
+    ///     return game_fn_error("invalid color id")
+    /// }
+    /// ```
+    pub helper_functions: &'a mut [HelperFunction<'a>],
+    /// A string that contains the entire file text. Used for Debug info.
+    pub file_text: NTStrPtr<'a>,
+    /// Path to the file relative to the mods directory. Must be compatible with OsStr
+    pub file_path: NTBytes<'a>,
 }
 
 impl<'a> GrugAst<'a> {
-	/// Gets the file path as an OsStr instead of NTBytes.
-	/// This function is safe assuming the file path was originally created from an OsStr
-	pub fn file_path(&self) -> &'a OsStr {
-		// SAFETY: file_path is compatible with an OsStr
-		unsafe{OsStr::from_encoded_bytes_unchecked(self.file_path.to_bytes())}
-	}
+    /// Gets the file path as an OsStr instead of NTBytes.
+    /// This function is safe assuming the file path was originally created from an OsStr
+    pub fn file_path(&self) -> &'a OsStr {
+        // SAFETY: file_path is compatible with an OsStr
+        unsafe { OsStr::from_encoded_bytes_unchecked(self.file_path.to_bytes()) }
+    }
 }
 
-const _: () = const{
-	// The C interop defined above assumes that slice pointers have a layout like this
-	// struct Slice<T> {
-	// 		data: NonNull<T>,
-	// 		len : usize,
-	// }
-	// 
-	// The rust compiler currently does not guarantee the layout of slice pointer.
-	// These assertions ensure that if the assumption is broken, we get a
-	// compile error instead of random crashes
-	use crate::nt;
-	let x: &[MemberVariable] = &[];
-	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
-	let x: &[OnFunction] = &[];
-	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
-	let x: &[HelperFunction] = &[];
-	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
-	let x: &[Parameter] = &[];
-	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
-	let x: &[Statement] = &[];
-	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
-	let x: &NTStr = nt!("Hello");
-	unsafe{assert!(x.len() + 1 == (&x as *const _ as *const usize).add(1).read());}
+const _: () = const {
+    // The C interop defined above assumes that slice pointers have a layout like this
+    // struct Slice<T> {
+    // 		data: NonNull<T>,
+    // 		len : usize,
+    // }
+    //
+    // The rust compiler currently does not guarantee the layout of slice pointer.
+    // These assertions ensure that if the assumption is broken, we get a
+    // compile error instead of random crashes
+    use crate::nt;
+    let x: &[MemberVariable] = &[];
+    unsafe {
+        assert!(x.len() == (&x as *const _ as *const usize).add(1).read());
+    }
+    let x: &[OnFunction] = &[];
+    unsafe {
+        assert!(x.len() == (&x as *const _ as *const usize).add(1).read());
+    }
+    let x: &[HelperFunction] = &[];
+    unsafe {
+        assert!(x.len() == (&x as *const _ as *const usize).add(1).read());
+    }
+    let x: &[Parameter] = &[];
+    unsafe {
+        assert!(x.len() == (&x as *const _ as *const usize).add(1).read());
+    }
+    let x: &[Statement] = &[];
+    unsafe {
+        assert!(x.len() == (&x as *const _ as *const usize).add(1).read());
+    }
+    let x: &NTStr = nt!("Hello");
+    unsafe {
+        assert!(x.len() + 1 == (&x as *const _ as *const usize).add(1).read());
+    }
 };

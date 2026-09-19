@@ -1,13 +1,13 @@
 //! This module exports the [`NTStr`] and [`NTStrPtr`] types which represent
-//! null terminated utf8 strings. 
+//! null terminated utf8 strings.
 //!
 //! This is allow simpler interfacing with c apis. [`NTStrPtr`] can be used in
 //! FFI in place of a non-null `const char*` c string. It is also
 //! `#[repr(transparent)]`, so [`Option<NTStrPtr>`] can be used in place of a
-//! `const char*` c string. 
+//! `const char*` c string.
 //!
 //! ## Why not just use [`CStr`]?
-//! 
+//!
 //! [`CStr`] is a wide pointer so it cannot be used directly in FFI and it requires
 //! unsafe parsing at the boundary. It also cannot be easily displayed without
 //! converting into a string
@@ -20,684 +20,748 @@
 //! [`CStr`] will catch this when converting into a [prim@`str`]. This is a
 //! limitation of these types to be aware of.
 
-use std::sync::Arc;
-use std::ops::Deref;
-use std::ffi::{CStr, c_char};
-use std::mem::MaybeUninit;
-use std::ptr::NonNull;
-use std::marker::PhantomData;
 use std::borrow::Borrow;
+use std::ffi::{CStr, c_char};
+use std::marker::PhantomData;
+use std::mem::MaybeUninit;
+use std::ops::Deref;
+use std::ptr::NonNull;
+use std::sync::Arc;
 
 use allocator_api2::alloc::Allocator;
 use allocator_api2::boxed::Box;
 
-
 pub use str::*;
 mod str {
-	use super::*;
-	/// Represents a utf-8 string with a single null byte at the end.
-	#[repr(transparent)]
-	pub struct NTStr(str);
+    use super::*;
+    /// Represents a utf-8 string with a single null byte at the end.
+    #[repr(transparent)]
+    pub struct NTStr(str);
 
-	/// Indicates an error that can occur when converting a [`prim@str`] into an [`NTStr`]
-	#[derive(Debug, Clone, Copy)]
-	pub enum NTStrError {
-		/// A null byte was found in the middle of the string
-		UnexpectedNullByte {
-			/// The byte offset of the null byte
-			location: usize,
-		},
-		/// The null terminator was missing from the input
-		MissingNullTerminator,
-	}
+    /// Indicates an error that can occur when converting a [`prim@str`] into an [`NTStr`]
+    #[derive(Debug, Clone, Copy)]
+    pub enum NTStrError {
+        /// A null byte was found in the middle of the string
+        UnexpectedNullByte {
+            /// The byte offset of the null byte
+            location: usize,
+        },
+        /// The null terminator was missing from the input
+        MissingNullTerminator,
+    }
 
-	/// # SAFETY
-	///
-	/// Same as str
-	unsafe impl Send for NTStr {}
-	/// # SAFETY
-	///
-	/// Same as str
-	unsafe impl Sync for NTStr {}
+    /// # SAFETY
+    ///
+    /// Same as str
+    unsafe impl Send for NTStr {}
+    /// # SAFETY
+    ///
+    /// Same as str
+    unsafe impl Sync for NTStr {}
 
-	impl NTStr {
-		/// Copy `value` into a `Arc<NTStr>`
-		/// 
-		/// # Panics
-		///
-		/// if `value` contains a null byte
-		pub fn arc_from_str (value: &str) -> Arc<Self> {
-			assert!(!value.contains('\0'));
-			let arc = Arc::into_raw(Arc::<[u8]>::new_uninit_slice(value.len() + 1));
+    impl NTStr {
+        /// Copy `value` into a `Arc<NTStr>`
+        ///
+        /// # Panics
+        ///
+        /// if `value` contains a null byte
+        pub fn arc_from_str(value: &str) -> Arc<Self> {
+            assert!(!value.contains('\0'));
+            let arc = Arc::into_raw(Arc::<[u8]>::new_uninit_slice(value.len() + 1));
 
-			unsafe{
-				std::ptr::copy(value.as_ptr(), arc.cast_mut().cast(), value.len());
-				arc.cast_mut().cast::<u8>().add(value.len()).write(b'\0');
-				std::mem::transmute(Arc::from_raw(arc).assume_init())
-			}
-		}
+            unsafe {
+                std::ptr::copy(value.as_ptr(), arc.cast_mut().cast(), value.len());
+                arc.cast_mut().cast::<u8>().add(value.len()).write(b'\0');
+                std::mem::transmute(Arc::from_raw(arc).assume_init())
+            }
+        }
 
-		/// Copy `value` into a `Box<NTStr>` in allocator `a`.
-		///
-		/// # Panics
-		///
-		/// if `value` contains a null byte
-		// TODO: remove this
-		pub fn box_from_str_in<A: Allocator>(value: &str, a: A) -> Box<Self, A> {
-			assert!(!value.contains('\0'));
-			let (ptr, a) = Box::into_raw_with_allocator(Box::<[u8], _>::new_uninit_slice_in(value.len() + 1, a));
+        /// Copy `value` into a `Box<NTStr>` in allocator `a`.
+        ///
+        /// # Panics
+        ///
+        /// if `value` contains a null byte
+        // TODO: remove this
+        pub fn box_from_str_in<A: Allocator>(value: &str, a: A) -> Box<Self, A> {
+            assert!(!value.contains('\0'));
+            let (ptr, a) = Box::into_raw_with_allocator(Box::<[u8], _>::new_uninit_slice_in(
+                value.len() + 1,
+                a,
+            ));
 
-			unsafe{
-				std::ptr::copy(value.as_ptr(), ptr.cast(), value.len());
-				ptr.cast::<u8>().add(value.len()).write(b'\0');
-				let ptr = std::mem::transmute::<*mut [MaybeUninit<u8>], *mut NTStr>(ptr);
-				Box::from_raw_in(ptr, a)
-			}
-		}
+            unsafe {
+                std::ptr::copy(value.as_ptr(), ptr.cast(), value.len());
+                ptr.cast::<u8>().add(value.len()).write(b'\0');
+                let ptr = std::mem::transmute::<*mut [MaybeUninit<u8>], *mut NTStr>(ptr);
+                Box::from_raw_in(ptr, a)
+            }
+        }
 
-		/// Equivalent to `self.is_len == 0`
-		pub const fn is_empty(&self) -> bool {
-			self.len() == 0
-		}
+        /// Equivalent to `self.is_len == 0`
+        pub const fn is_empty(&self) -> bool {
+            self.len() == 0
+        }
 
-		/// Returns the number of bytes until the null byte is encountered
-		///
-		/// Equivalent of `strlen` in the c standard library
-		pub const fn len(&self) -> usize {
-			self.0.len() - 1
-		}
+        /// Returns the number of bytes until the null byte is encountered
+        ///
+        /// Equivalent of `strlen` in the c standard library
+        pub const fn len(&self) -> usize {
+            self.0.len() - 1
+        }
 
-		/// Converts self into a [`prim@str`] excluding the null terminator
-		pub fn as_str(&self) -> &str {
-			&self.0[..(self.0.len() - 1)]
-		}
+        /// Converts self into a [`prim@str`] excluding the null terminator
+        pub fn as_str(&self) -> &str {
+            &self.0[..(self.0.len() - 1)]
+        }
 
-		/// Converts self into a [`prim@str`] including the null terminator
-		pub const fn as_str_with_null(&self) -> &str {
-			&self.0
-		}
+        /// Converts self into a [`prim@str`] including the null terminator
+        pub const fn as_str_with_null(&self) -> &str {
+            &self.0
+        }
 
-		/// # SAFETY
-		///
-		/// The last byte of `value` MUST be a null byte and there must be no other null byte in between
-		pub const unsafe fn from_str_unchecked(value: &str) -> &Self {
-			unsafe {std::mem::transmute::<&str, &NTStr>(value)}
-		}
-		
-		/// Tries to converts a str into an NTStr 
-		pub fn try_from_str(value: &str) -> Result<&NTStr, NTStrError> {
-			if let Some(last) = value.as_bytes().last() && *last == b'\0' {
-				for (i, byte) in value.as_bytes()[0..value.len()-1].iter().enumerate() {
-					if *byte == b'\0' {
-						return Err(NTStrError::UnexpectedNullByte{location: i});
-					}
-				}
-				// SAFETY: last byte (if it exists) is null
-				unsafe{Ok(Self::from_str_unchecked(value))}
-			} else {
-				Err(NTStrError::MissingNullTerminator)
-			}
-		}
+        /// # SAFETY
+        ///
+        /// The last byte of `value` MUST be a null byte and there must be no other null byte in between
+        pub const unsafe fn from_str_unchecked(value: &str) -> &Self {
+            unsafe { std::mem::transmute::<&str, &NTStr>(value) }
+        }
 
-		/// Get the string as a [`NTStrPtr`]
-		pub const fn as_ntstrptr(&self) -> NTStrPtr<'_> {
-			// SAFETY There is a null byte at the self.len()
-			unsafe{NTStrPtr::from_ptr(NonNull::from_ref(&self.0).cast::<i8>())}
-		}
+        /// Tries to converts a str into an NTStr
+        pub fn try_from_str(value: &str) -> Result<&NTStr, NTStrError> {
+            if let Some(last) = value.as_bytes().last()
+                && *last == b'\0'
+            {
+                for (i, byte) in value.as_bytes()[0..value.len() - 1].iter().enumerate() {
+                    if *byte == b'\0' {
+                        return Err(NTStrError::UnexpectedNullByte { location: i });
+                    }
+                }
+                // SAFETY: last byte (if it exists) is null
+                unsafe { Ok(Self::from_str_unchecked(value)) }
+            } else {
+                Err(NTStrError::MissingNullTerminator)
+            }
+        }
 
-		/// Get the string as a [`NTBytes`]
-		pub const fn as_ntbytes(&self) -> NTBytes<'_> {
-			self.as_ntstrptr().as_ntbytes()
-		}
-	}
+        /// Get the string as a [`NTStrPtr`]
+        pub const fn as_ntstrptr(&self) -> NTStrPtr<'_> {
+            // SAFETY There is a null byte at the self.len()
+            unsafe { NTStrPtr::from_ptr(NonNull::from_ref(&self.0).cast::<i8>()) }
+        }
 
-	impl std::fmt::Debug for NTStr {
-		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-			self.as_str_with_null().fmt(f)
-		}
-	}
+        /// Get the string as a [`NTBytes`]
+        pub const fn as_ntbytes(&self) -> NTBytes<'_> {
+            self.as_ntstrptr().as_ntbytes()
+        }
+    }
 
-	impl std::fmt::Display for NTStr {
-		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-			self.deref().fmt(f)
-		}
-	}
+    impl std::fmt::Debug for NTStr {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            self.as_str_with_null().fmt(f)
+        }
+    }
 
-	impl<'a> TryFrom<&'a str> for &'a NTStr {
-		type Error = NTStrError;
-		fn try_from(value: &str) -> Result<&NTStr, Self::Error> {
-			NTStr::try_from_str(value)
-		}
-	}
+    impl std::fmt::Display for NTStr {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            self.deref().fmt(f)
+        }
+    }
 
-	impl std::ops::Deref for NTStr {
-		type Target = str;
-		fn deref(&self) -> &Self::Target {
-			self.as_str()
-		}
-	}
+    impl<'a> TryFrom<&'a str> for &'a NTStr {
+        type Error = NTStrError;
+        fn try_from(value: &str) -> Result<&NTStr, Self::Error> {
+            NTStr::try_from_str(value)
+        }
+    }
 
-	impl AsRef<str> for NTStr {
-		fn as_ref(&self) -> &str {
-			&self.0[..(self.0.len() - 1)]
-		}
-	}
+    impl std::ops::Deref for NTStr {
+        type Target = str;
+        fn deref(&self) -> &Self::Target {
+            self.as_str()
+        }
+    }
 
-	impl AsRef<CStr> for NTStr {
-		fn as_ref(&self) -> &CStr {
-			// SAFETY: There is a single null byte at the end
-			unsafe{CStr::from_bytes_with_nul_unchecked(self.0.as_bytes())}
-		}
-	}
+    impl AsRef<str> for NTStr {
+        fn as_ref(&self) -> &str {
+            &self.0[..(self.0.len() - 1)]
+        }
+    }
 
-	impl std::hash::Hash for NTStr {
-		fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
-			self.as_str().hash(hasher)
-		}
-	}
+    impl AsRef<CStr> for NTStr {
+        fn as_ref(&self) -> &CStr {
+            // SAFETY: There is a single null byte at the end
+            unsafe { CStr::from_bytes_with_nul_unchecked(self.0.as_bytes()) }
+        }
+    }
 
-	impl PartialEq for NTStr {
-		fn eq(&self, other: &Self) -> bool {
-			self.as_str() == other.as_str()
-		}
-	}
-	impl Eq for NTStr {}
+    impl std::hash::Hash for NTStr {
+        fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+            self.as_str().hash(hasher)
+        }
+    }
 
-	impl<'a> From<&'a NTStr> for String {
-		fn from(other: &'a NTStr) -> String {
-			String::from(other.as_str_with_null())
-		}
-	}
+    impl PartialEq for NTStr {
+        fn eq(&self, other: &Self) -> bool {
+            self.as_str() == other.as_str()
+        }
+    }
+    impl Eq for NTStr {}
 
-	impl Borrow<str> for &NTStr {
-		fn borrow(&self) -> &str {
-			self.as_str()
-		}
-	}
+    impl<'a> From<&'a NTStr> for String {
+        fn from(other: &'a NTStr) -> String {
+            String::from(other.as_str_with_null())
+        }
+    }
 
-	#[cfg(test)]
-	mod test {
-		use super::*;
-		#[test]
-		fn ntstr_test() {
-			let str = "hello\0";
-			let ntstr = <&NTStr>::try_from(str).unwrap();
-			let str2 = &**ntstr;
-			assert_eq!(str2, "hello");
-		}
-	}
+    impl Borrow<str> for &NTStr {
+        fn borrow(&self) -> &str {
+            self.as_str()
+        }
+    }
 
-	/// Represents a null terminated UTF-8 string as a single pointer (unlike CStr which uses two)
-	/// Requires that there is atleast one null byte between the pointer and the end of the buffer it points to
-	/// This pointer must be valid to read until the null byte
-	#[repr(transparent)]
-	#[derive(Clone, Copy)]
-	pub struct NTStrPtr<'a>(NonNull<c_char>, PhantomData<&'a ()>);
-	const _: () = const {assert!(std::mem::size_of::<NTStrPtr>() ==  std::mem::size_of::<Option<NTStrPtr>>())};
+    #[cfg(test)]
+    mod test {
+        use super::*;
+        #[test]
+        fn ntstr_test() {
+            let str = "hello\0";
+            let ntstr = <&NTStr>::try_from(str).unwrap();
+            let str2 = &**ntstr;
+            assert_eq!(str2, "hello");
+        }
+    }
 
-	/// # SAFETY
-	///
-	/// Same as str
-	unsafe impl Send for NTStrPtr<'_> {}
-	/// # SAFETY
-	///
-	/// Same as str
-	unsafe impl Sync for NTStrPtr<'_> {}
+    /// Represents a null terminated UTF-8 string as a single pointer (unlike CStr which uses two)
+    /// Requires that there is atleast one null byte between the pointer and the end of the buffer it points to
+    /// This pointer must be valid to read until the null byte
+    #[repr(transparent)]
+    #[derive(Clone, Copy)]
+    pub struct NTStrPtr<'a>(NonNull<c_char>, PhantomData<&'a ()>);
+    const _: () = const {
+        assert!(std::mem::size_of::<NTStrPtr>() == std::mem::size_of::<Option<NTStrPtr>>())
+    };
 
-	impl<'a> NTStrPtr<'a> {
-		/// Returns a raw pointer to the string
-		pub fn as_ptr(self) -> *const u8 {
-			self.0.cast::<u8>().as_ptr().cast_const()
-		}
+    /// # SAFETY
+    ///
+    /// Same as str
+    unsafe impl Send for NTStrPtr<'_> {}
+    /// # SAFETY
+    ///
+    /// Same as str
+    unsafe impl Sync for NTStrPtr<'_> {}
 
-		/// A version of the len function that can work in const
-		pub const fn const_len(self) -> usize {
-			let mut len = 0;
-			while unsafe{self.0.add(len).read() as u8} != b'\0' {len += 1;}
-			len
-		}
+    impl<'a> NTStrPtr<'a> {
+        /// Returns a raw pointer to the string
+        pub fn as_ptr(self) -> *const u8 {
+            self.0.cast::<u8>().as_ptr().cast_const()
+        }
 
-		/// get the length of the string using SIMD intrinsics if available on
-		/// the target platform. 
-		///
-		/// The way the SIMD algorithm works will cause asan errors because
-		/// there are out of bounds reads. However, there is no memory safety
-		/// concern here because any bits are read from out of bounds are discarded.
-		///
-		/// Additionally, the out of bounds reads will never straddle a page
-		/// boundary, so there will never be a seg fault caused by this
-		/// function
-		pub fn len(self) -> usize {
-			#[inline]
-			fn len_default(val: NTStrPtr) -> usize {
-				let mut len = 0;
-				while unsafe{val.0.add(len).read() as u8} != b'\0' {len += 1;}
-				len
-			}
-			#[cfg(target_arch="x86_64")]
-			{
-				#[inline]
-				#[target_feature(enable = "sse2")]
-				fn len_sse(val: NTStrPtr) -> usize {
-					use std::arch::x86_64::*;
-					use std::mem::{align_of, size_of};
+        /// A version of the len function that can work in const
+        pub const fn const_len(self) -> usize {
+            let mut len = 0;
+            while unsafe { self.0.add(len).read() as u8 } != b'\0' {
+                len += 1;
+            }
+            len
+        }
 
-					let ptr = val.0.cast::<u8>().as_ptr();
-					const _: () = const {assert!(size_of::<__m128i>() == align_of::<__m128i>());};
-					let diff = size_of::<__m128i>() - ptr.align_offset(align_of::<__m128i>());
-					let ptr = ptr.wrapping_sub(diff).cast::<__m128i>();
+        /// get the length of the string using SIMD intrinsics if available on
+        /// the target platform.
+        ///
+        /// The way the SIMD algorithm works will cause asan errors because
+        /// there are out of bounds reads. However, there is no memory safety
+        /// concern here because any bits are read from out of bounds are discarded.
+        ///
+        /// Additionally, the out of bounds reads will never straddle a page
+        /// boundary, so there will never be a seg fault caused by this
+        /// function
+        pub fn len(self) -> usize {
+            #[inline]
+            fn len_default(val: NTStrPtr) -> usize {
+                let mut len = 0;
+                while unsafe { val.0.add(len).read() as u8 } != b'\0' {
+                    len += 1;
+                }
+                len
+            }
+            #[cfg(target_arch = "x86_64")]
+            {
+                #[inline]
+                #[target_feature(enable = "sse2")]
+                fn len_sse(val: NTStrPtr) -> usize {
+                    use std::arch::x86_64::*;
+                    use std::mem::{align_of, size_of};
 
-					let zeros: __m128i = _mm_set1_epi8(0);
-					
-					let movemask = _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe{ptr.read()})) >> diff;
-					if movemask != 0 {return movemask.trailing_zeros() as usize};
+                    let ptr = val.0.cast::<u8>().as_ptr();
+                    const _: () = const {
+                        assert!(size_of::<__m128i>() == align_of::<__m128i>());
+                    };
+                    let diff = size_of::<__m128i>() - ptr.align_offset(align_of::<__m128i>());
+                    let ptr = ptr.wrapping_sub(diff).cast::<__m128i>();
 
-					let mut offset = 0;
+                    let zeros: __m128i = _mm_set1_epi8(0);
 
-					loop {
-						offset += 1;
-						let movemask = _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe{ptr.add(offset).read()}));
-						if movemask != 0 {return offset * size_of::<__m128i>() + movemask.trailing_zeros() as usize - diff};
-					}
-				}
+                    let movemask =
+                        _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe { ptr.read() })) >> diff;
+                    if movemask != 0 {
+                        return movemask.trailing_zeros() as usize;
+                    };
 
-				#[inline]
-				#[target_feature(enable = "avx2")]
-				fn len_avx2(val: NTStrPtr) -> usize {
-					use std::arch::x86_64::*;
-					use std::mem::{align_of, size_of};
+                    let mut offset = 0;
 
-					let ptr = val.0.cast::<u8>().as_ptr();
-					const _: () = const {assert!(size_of::<__m256i>() == align_of::<__m256i>());};
-					let diff = (ptr.addr()) & (size_of::<__m256i>() - 1);
-					let ptr = ptr.wrapping_sub(diff).cast::<__m256i>();
+                    loop {
+                        offset += 1;
+                        let movemask = _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe {
+                            ptr.add(offset).read()
+                        }));
+                        if movemask != 0 {
+                            return offset * size_of::<__m128i>()
+                                + movemask.trailing_zeros() as usize
+                                - diff;
+                        };
+                    }
+                }
 
-					let zeros: __m256i = _mm256_set1_epi8(0);
-					
-					let movemask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(zeros, unsafe{ptr.read()})) >> diff;
-					if movemask != 0 {return movemask.trailing_zeros() as usize};
+                #[inline]
+                #[target_feature(enable = "avx2")]
+                fn len_avx2(val: NTStrPtr) -> usize {
+                    use std::arch::x86_64::*;
+                    use std::mem::{align_of, size_of};
 
-					let mut offset = 0;
+                    let ptr = val.0.cast::<u8>().as_ptr();
+                    const _: () = const {
+                        assert!(size_of::<__m256i>() == align_of::<__m256i>());
+                    };
+                    let diff = (ptr.addr()) & (size_of::<__m256i>() - 1);
+                    let ptr = ptr.wrapping_sub(diff).cast::<__m256i>();
 
-					loop {
-						offset += 1;
-						let movemask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(zeros, unsafe{ptr.add(offset).read()}));
-						if movemask != 0 {return offset * size_of::<__m256i>() + movemask.trailing_zeros() as usize - diff};
-					}
-				}
-				// SAFETY: We choose whichever one is available
-				if std::arch::is_x86_feature_detected!("avx2") {
-					unsafe{len_avx2(self)}
-				} else if std::arch::is_x86_feature_detected!("sse2") {
-					unsafe{len_sse(self)}
-				} else {
-					len_default(self)
-				}
-			}
-			#[cfg(not(target_arch="x86_64"))]
-			{
-				len_default(self)
-			}
-		}
+                    let zeros: __m256i = _mm256_set1_epi8(0);
 
-		/// returns true if the first byte is null (indicating that there is no data behind the string)
-		pub fn is_empty(self) -> bool {
-			// SAFETY: NTStrPtr is guaranteed to point to allocated memory that ends in a null byte
-			unsafe{self.0.cast::<u8>().read() == b'\0'}
-		}
+                    let movemask =
+                        _mm256_movemask_epi8(_mm256_cmpeq_epi8(zeros, unsafe { ptr.read() }))
+                            >> diff;
+                    if movemask != 0 {
+                        return movemask.trailing_zeros() as usize;
+                    };
 
-		/// # Safety
-		/// `ptr` must point at a buffer that is valid to read until the next
-		/// null byte
-		/// The memory pointed to by `ptr` must not be modified as long as the
-		/// returned string exists
-		pub const unsafe fn from_ptr (ptr: NonNull<c_char>) -> Self {
-			Self(ptr, PhantomData)
-		}
+                    let mut offset = 0;
 
-		/// Returns a `&CStr` to the string
-		pub fn to_cstr(self) -> &'a CStr {
-			unsafe{CStr::from_ptr(self.0.as_ptr().cast_const())}
-		}
+                    loop {
+                        offset += 1;
+                        let movemask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(zeros, unsafe {
+                            ptr.add(offset).read()
+                        }));
+                        if movemask != 0 {
+                            return offset * size_of::<__m256i>()
+                                + movemask.trailing_zeros() as usize
+                                - diff;
+                        };
+                    }
+                }
+                // SAFETY: We choose whichever one is available
+                if std::arch::is_x86_feature_detected!("avx2") {
+                    unsafe { len_avx2(self) }
+                } else if std::arch::is_x86_feature_detected!("sse2") {
+                    unsafe { len_sse(self) }
+                } else {
+                    len_default(self)
+                }
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                len_default(self)
+            }
+        }
 
-		/// Returns a `&NTStr` to the string excluding the null byte
-		pub fn to_ntstr(self) -> &'a NTStr {
-			let len = self.len();
-			// buffer is okay to read upto len = i
-			let slice = unsafe{std::slice::from_raw_parts(self.0.cast::<u8>().as_ptr(), len + 1)};
-			// SAFETY: NTStrPtr points to a utf8 encoded buffer
-			let slice = unsafe{std::str::from_utf8_unchecked(slice)};
-			// SAFETY: Last byte is null
-			unsafe{NTStr::from_str_unchecked(slice)}
-		}
+        /// returns true if the first byte is null (indicating that there is no data behind the string)
+        pub fn is_empty(self) -> bool {
+            // SAFETY: NTStrPtr is guaranteed to point to allocated memory that ends in a null byte
+            unsafe { self.0.cast::<u8>().read() == b'\0' }
+        }
 
-		/// Returns a `&str` to the string excluding the null byte
-		pub fn to_str(self) -> &'a str {
-			self.to_ntstr().as_str()
-		}
-		
-		/// # SAFETY 
-		///
-		/// There must be at least one null byte within the str
-		pub unsafe fn from_str_unchecked(value: &'a str) -> Self {
-			unsafe{Self::from_ptr(NonNull::from_ref(value).cast::<c_char>())}
-		}
+        /// # Safety
+        /// `ptr` must point at a buffer that is valid to read until the next
+        /// null byte
+        /// The memory pointed to by `ptr` must not be modified as long as the
+        /// returned string exists
+        pub const unsafe fn from_ptr(ptr: NonNull<c_char>) -> Self {
+            Self(ptr, PhantomData)
+        }
 
-		/// Checks if the underlying pointers are equal
-		pub fn ptr_eq(self, other: Self) -> bool {
-			self.0 == other.0
-		}
-		
-		/// Expects a single null byte at the end of the string and no null bytes
-		/// in the rest of the string
-		pub fn try_from_str(value: &'a str) -> Result<Self, NTStrError> {
-			Ok(NTStr::try_from_str(value)?.as_ntstrptr())
-		}
-		
-		/// Returns a pointer with a static lifetime. 
-		///
-		/// # SAFETY
-		///
-		/// It is UB to use the returned pointer after the backing memory is
-		/// deallocated or borrowed mutably
-		pub unsafe fn detach_lifetime(self) -> NTStrPtr<'static> {
-			unsafe{std::mem::transmute::<Self, NTStrPtr<'static>>(self)}
-		}
+        /// Returns a `&CStr` to the string
+        pub fn to_cstr(self) -> &'a CStr {
+            unsafe { CStr::from_ptr(self.0.as_ptr().cast_const()) }
+        }
 
-		/// Get the string as an [`NTBytes`]
-		pub const fn as_ntbytes(self) -> NTBytes<'a> {
-			unsafe{NTBytes::from_ptr(self.0.cast().as_ptr())}
-		}
-	}
+        /// Returns a `&NTStr` to the string excluding the null byte
+        pub fn to_ntstr(self) -> &'a NTStr {
+            let len = self.len();
+            // buffer is okay to read upto len = i
+            let slice =
+                unsafe { std::slice::from_raw_parts(self.0.cast::<u8>().as_ptr(), len + 1) };
+            // SAFETY: NTStrPtr points to a utf8 encoded buffer
+            let slice = unsafe { std::str::from_utf8_unchecked(slice) };
+            // SAFETY: Last byte is null
+            unsafe { NTStr::from_str_unchecked(slice) }
+        }
 
-	impl<'a> std::hash::Hash for NTStrPtr<'a> {
-		fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
-			std::hash::Hash::hash(self.to_str(), hasher)
-		}
-	}
+        /// Returns a `&str` to the string excluding the null byte
+        pub fn to_str(self) -> &'a str {
+            self.to_ntstr().as_str()
+        }
 
-	impl<'a> std::fmt::Display for NTStrPtr<'a> {
-		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-			self.to_str().fmt(f)
-		}
-	}
+        /// # SAFETY
+        ///
+        /// There must be at least one null byte within the str
+        pub unsafe fn from_str_unchecked(value: &'a str) -> Self {
+            unsafe { Self::from_ptr(NonNull::from_ref(value).cast::<c_char>()) }
+        }
 
-	impl<'a> PartialEq for NTStrPtr<'a> {
-		fn eq(&self, other: &Self) -> bool {
-			if self.0 == other.0 {
-				true
-			} else {
-				let first = self.to_cstr();
-				let other = other.to_cstr();
-				first == other
-			}
-		}
-	}
+        /// Checks if the underlying pointers are equal
+        pub fn ptr_eq(self, other: Self) -> bool {
+            self.0 == other.0
+        }
 
-	impl<'a> Eq for NTStrPtr<'a> {}
+        /// Expects a single null byte at the end of the string and no null bytes
+        /// in the rest of the string
+        pub fn try_from_str(value: &'a str) -> Result<Self, NTStrError> {
+            Ok(NTStr::try_from_str(value)?.as_ntstrptr())
+        }
 
-	impl<'a> From<&'a NTStr> for NTStrPtr<'a> {
-		fn from (other: &'a NTStr) -> Self {
-			other.as_ntstrptr()
-		}
-	}
+        /// Returns a pointer with a static lifetime.
+        ///
+        /// # SAFETY
+        ///
+        /// It is UB to use the returned pointer after the backing memory is
+        /// deallocated or borrowed mutably
+        pub unsafe fn detach_lifetime(self) -> NTStrPtr<'static> {
+            unsafe { std::mem::transmute::<Self, NTStrPtr<'static>>(self) }
+        }
 
-	impl<'a> std::fmt::Debug for NTStrPtr<'a> {
-		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-			self.to_str().fmt(f)
-		}
-	}
+        /// Get the string as an [`NTBytes`]
+        pub const fn as_ntbytes(self) -> NTBytes<'a> {
+            unsafe { NTBytes::from_ptr(self.0.cast().as_ptr()) }
+        }
+    }
 
-	/// Creates an NTStr from a literal
-	#[macro_export]
-	macro_rules! nt {
-		($lit: literal) => {
-			{
-				const {
-					let bytes = $lit.as_bytes();
-					let mut i = 0;
-					while i < bytes.len() {
-						assert!(bytes[i] != b'\0');
-						i += 1;
-					}
-				};
-				unsafe{$crate::ntstring::NTStr::from_str_unchecked(concat!($lit, "\0"))}
-			}
-		}
-	}
+    impl<'a> std::hash::Hash for NTStrPtr<'a> {
+        fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+            std::hash::Hash::hash(self.to_str(), hasher)
+        }
+    }
+
+    impl<'a> std::fmt::Display for NTStrPtr<'a> {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            self.to_str().fmt(f)
+        }
+    }
+
+    impl<'a> PartialEq for NTStrPtr<'a> {
+        fn eq(&self, other: &Self) -> bool {
+            if self.0 == other.0 {
+                true
+            } else {
+                let first = self.to_cstr();
+                let other = other.to_cstr();
+                first == other
+            }
+        }
+    }
+
+    impl<'a> Eq for NTStrPtr<'a> {}
+
+    impl<'a> From<&'a NTStr> for NTStrPtr<'a> {
+        fn from(other: &'a NTStr) -> Self {
+            other.as_ntstrptr()
+        }
+    }
+
+    impl<'a> std::fmt::Debug for NTStrPtr<'a> {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            self.to_str().fmt(f)
+        }
+    }
+
+    /// Creates an NTStr from a literal
+    #[macro_export]
+    macro_rules! nt {
+        ($lit: literal) => {{
+            const {
+                let bytes = $lit.as_bytes();
+                let mut i = 0;
+                while i < bytes.len() {
+                    assert!(bytes[i] != b'\0');
+                    i += 1;
+                }
+            };
+            unsafe { $crate::ntstring::NTStr::from_str_unchecked(concat!($lit, "\0")) }
+        }};
+    }
 }
 
 pub use bytes::*;
 mod bytes {
-	use super::*;
-	/// Represents a null terminated string as a single pointer (unlike CStr which uses two)
-	/// Requires that there is atleast one null byte between the pointer and the end of the buffer it points to
-	/// This pointer must be valid to read until the null byte
-	#[repr(transparent)]
-	#[derive(Clone, Copy)]
-	pub struct NTBytes<'a>(NonNull<c_char>, PhantomData<&'a ()>);
-	const _: () = const {assert!(std::mem::size_of::<NTBytes>() ==  std::mem::size_of::<Option<NTBytes>>())};
+    use super::*;
+    /// Represents a null terminated string as a single pointer (unlike CStr which uses two)
+    /// Requires that there is atleast one null byte between the pointer and the end of the buffer it points to
+    /// This pointer must be valid to read until the null byte
+    #[repr(transparent)]
+    #[derive(Clone, Copy)]
+    pub struct NTBytes<'a>(NonNull<c_char>, PhantomData<&'a ()>);
+    const _: () =
+        const { assert!(std::mem::size_of::<NTBytes>() == std::mem::size_of::<Option<NTBytes>>()) };
 
-	/// # SAFETY
-	///
-	/// Same as str
-	unsafe impl Send for NTBytes<'_> {}
-	/// # SAFETY
-	///
-	/// Same as str
-	unsafe impl Sync for NTBytes<'_> {}
+    /// # SAFETY
+    ///
+    /// Same as str
+    unsafe impl Send for NTBytes<'_> {}
+    /// # SAFETY
+    ///
+    /// Same as str
+    unsafe impl Sync for NTBytes<'_> {}
 
-	impl<'a> NTBytes<'a> {
-		/// Returns a raw pointer to the string
-		pub fn as_ptr(self) -> *const u8 {
-			self.0.cast::<u8>().as_ptr().cast_const()
-		}
+    impl<'a> NTBytes<'a> {
+        /// Returns a raw pointer to the string
+        pub fn as_ptr(self) -> *const u8 {
+            self.0.cast::<u8>().as_ptr().cast_const()
+        }
 
-		/// A version of the len function that can work in const
-		pub const fn const_len(self) -> usize {
-			let mut len = 0;
-			while unsafe{self.0.add(len).read() as u8} != b'\0' {len += 1;}
-			len
-		}
+        /// A version of the len function that can work in const
+        pub const fn const_len(self) -> usize {
+            let mut len = 0;
+            while unsafe { self.0.add(len).read() as u8 } != b'\0' {
+                len += 1;
+            }
+            len
+        }
 
-		/// get the length of the string using SIMD intrinsics if available on
-		/// the target platform. 
-		///
-		/// The way the SIMD algorithm works will cause asan errors because
-		/// there are out of bounds reads. However, there is no memory safety
-		/// concern here because any bits are read from out of bounds are discarded.
-		///
-		/// Additionally, the out of bounds reads will never straddle a page
-		/// boundary, so there will never be a seg fault caused by this
-		/// function
-		pub fn len(self) -> usize {
-			#[inline]
-			fn len_default(val: NTBytes) -> usize {
-				let mut len = 0;
-				while unsafe{val.0.add(len).read() as u8} != b'\0' {len += 1;}
-				len
-			}
-			#[cfg(target_arch="x86_64")]
-			{
-				#[inline]
-				#[target_feature(enable = "sse2")]
-				fn len_sse(val: NTBytes) -> usize {
-					use std::arch::x86_64::*;
-					use std::mem::{align_of, size_of};
+        /// get the length of the string using SIMD intrinsics if available on
+        /// the target platform.
+        ///
+        /// The way the SIMD algorithm works will cause asan errors because
+        /// there are out of bounds reads. However, there is no memory safety
+        /// concern here because any bits are read from out of bounds are discarded.
+        ///
+        /// Additionally, the out of bounds reads will never straddle a page
+        /// boundary, so there will never be a seg fault caused by this
+        /// function
+        pub fn len(self) -> usize {
+            #[inline]
+            fn len_default(val: NTBytes) -> usize {
+                let mut len = 0;
+                while unsafe { val.0.add(len).read() as u8 } != b'\0' {
+                    len += 1;
+                }
+                len
+            }
+            #[cfg(target_arch = "x86_64")]
+            {
+                #[inline]
+                #[target_feature(enable = "sse2")]
+                fn len_sse(val: NTBytes) -> usize {
+                    use std::arch::x86_64::*;
+                    use std::mem::{align_of, size_of};
 
-					
-					let ptr = val.0.cast::<u8>().as_ptr();
-					const _: () = const {assert!(size_of::<__m128i>() == align_of::<__m128i>());};
-					// calculate the difference between the pointer and the
-					// nearest multiple of 16 bytes
-					let diff = size_of::<__m128i>() - ptr.align_offset(align_of::<__m128i>());
-					// Round the pointer down to the nearest multiple of 16
-					// bytes (size_of::<__m128i>)
-					let ptr = ptr.wrapping_sub(diff).cast::<__m128i>();
+                    let ptr = val.0.cast::<u8>().as_ptr();
+                    const _: () = const {
+                        assert!(size_of::<__m128i>() == align_of::<__m128i>());
+                    };
+                    // calculate the difference between the pointer and the
+                    // nearest multiple of 16 bytes
+                    let diff = size_of::<__m128i>() - ptr.align_offset(align_of::<__m128i>());
+                    // Round the pointer down to the nearest multiple of 16
+                    // bytes (size_of::<__m128i>)
+                    let ptr = ptr.wrapping_sub(diff).cast::<__m128i>();
 
-					let zeros: __m128i = _mm_set1_epi8(0);
-					
-					// movemask filled with null bytes shifted down by diff to
-					// mask off any bytes before the actual data
-					let movemask = _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe{ptr.read()})) >> diff;
-					if movemask != 0 {return movemask.trailing_zeros() as usize};
+                    let zeros: __m128i = _mm_set1_epi8(0);
 
-					let mut offset = 0;
+                    // movemask filled with null bytes shifted down by diff to
+                    // mask off any bytes before the actual data
+                    let movemask =
+                        _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe { ptr.read() })) >> diff;
+                    if movemask != 0 {
+                        return movemask.trailing_zeros() as usize;
+                    };
 
-					loop {
-						offset += 1;
-						// movemask of null bytes
-						let movemask = _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe{ptr.add(offset).read()}));
-						// if any null bytes are found, return the length to
-						// the first null byte
-						// Any data afterwards is ignored
-						if movemask != 0 {return offset * size_of::<__m128i>() + movemask.trailing_zeros() as usize - diff};
-					}
-				}
+                    let mut offset = 0;
 
-				#[inline]
-				#[target_feature(enable = "avx2")]
-				fn len_avx2(val: NTBytes) -> usize {
-					use std::arch::x86_64::*;
-					use std::mem::{align_of, size_of};
+                    loop {
+                        offset += 1;
+                        // movemask of null bytes
+                        let movemask = _mm_movemask_epi8(_mm_cmpeq_epi8(zeros, unsafe {
+                            ptr.add(offset).read()
+                        }));
+                        // if any null bytes are found, return the length to
+                        // the first null byte
+                        // Any data afterwards is ignored
+                        if movemask != 0 {
+                            return offset * size_of::<__m128i>()
+                                + movemask.trailing_zeros() as usize
+                                - diff;
+                        };
+                    }
+                }
 
-					let ptr = val.0.cast::<u8>().as_ptr();
-					const _: () = const {assert!(size_of::<__m256i>() == align_of::<__m256i>());};
-					let diff = (ptr.addr()) & (size_of::<__m256i>() - 1);
-					let ptr = ptr.wrapping_sub(diff).cast::<__m256i>();
+                #[inline]
+                #[target_feature(enable = "avx2")]
+                fn len_avx2(val: NTBytes) -> usize {
+                    use std::arch::x86_64::*;
+                    use std::mem::{align_of, size_of};
 
-					let zeros: __m256i = _mm256_set1_epi8(0);
-					
-					let movemask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(zeros, unsafe{ptr.read()})) >> diff;
-					if movemask != 0 {return movemask.trailing_zeros() as usize};
+                    let ptr = val.0.cast::<u8>().as_ptr();
+                    const _: () = const {
+                        assert!(size_of::<__m256i>() == align_of::<__m256i>());
+                    };
+                    let diff = (ptr.addr()) & (size_of::<__m256i>() - 1);
+                    let ptr = ptr.wrapping_sub(diff).cast::<__m256i>();
 
-					let mut offset = 0;
+                    let zeros: __m256i = _mm256_set1_epi8(0);
 
-					loop {
-						offset += 1;
-						let movemask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(zeros, unsafe{ptr.add(offset).read()}));
-						if movemask != 0 {return offset * size_of::<__m256i>() + movemask.trailing_zeros() as usize - diff};
-					}
-				}
-				// SAFETY: We choose whichever one is available
-				if std::arch::is_x86_feature_detected!("avx2") {
-					unsafe{len_avx2(self)}
-				} else if std::arch::is_x86_feature_detected!("sse2") {
-					unsafe{len_sse(self)}
-				} else {
-					len_default(self)
-				}
-			}
-			#[cfg(not(target_arch="x86_64"))]
-			{
-				len_default(self)
-			}
-		}
+                    let movemask =
+                        _mm256_movemask_epi8(_mm256_cmpeq_epi8(zeros, unsafe { ptr.read() }))
+                            >> diff;
+                    if movemask != 0 {
+                        return movemask.trailing_zeros() as usize;
+                    };
 
-		/// returns true if the first byte is null (indicating that there is no data behind the string)
-		pub fn is_empty(self) -> bool {
-			// SAFETY: NTStrPtr is guaranteed to point to allocated memory that ends in a null byte
-			unsafe{self.0.cast::<u8>().read() == b'\0'}
-		}
+                    let mut offset = 0;
 
-		/// Unconditionally creates an NTBytes from a raw pointer
-		///
-		/// # SAFETY
-		///
-		/// The pointer must point to a buffer that contains a
-		/// null byte and is valid to read until the null byte
-		pub const unsafe fn from_ptr(ptr: *const u8) -> Self {
-			unsafe{Self(NonNull::new_unchecked(ptr.cast_mut()).cast(), PhantomData)}
-		}
+                    loop {
+                        offset += 1;
+                        let movemask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(zeros, unsafe {
+                            ptr.add(offset).read()
+                        }));
+                        if movemask != 0 {
+                            return offset * size_of::<__m256i>()
+                                + movemask.trailing_zeros() as usize
+                                - diff;
+                        };
+                    }
+                }
+                // SAFETY: We choose whichever one is available
+                if std::arch::is_x86_feature_detected!("avx2") {
+                    unsafe { len_avx2(self) }
+                } else if std::arch::is_x86_feature_detected!("sse2") {
+                    unsafe { len_sse(self) }
+                } else {
+                    len_default(self)
+                }
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                len_default(self)
+            }
+        }
 
-		/// Converts self into a `&[u8]`
-		///
-		/// Excludes the null byte unlike [`Self::to_bytes_with_null`]
-		pub fn to_bytes(self) -> &'a [u8] {
-			let len = self.len();
-			unsafe{std::slice::from_raw_parts(self.0.cast().as_ptr(), len)}
-		}
-		
-		/// Converts self into a `&[u8]`
-		///
-		/// Includes the null byte unlike [`Self::to_bytes`]
-		pub fn to_bytes_with_null(self) -> &'a [u8] {
-			let len = self.len();
-			unsafe{std::slice::from_raw_parts(self.0.cast().as_ptr(), len)}
-		}
+        /// returns true if the first byte is null (indicating that there is no data behind the string)
+        pub fn is_empty(self) -> bool {
+            // SAFETY: NTStrPtr is guaranteed to point to allocated memory that ends in a null byte
+            unsafe { self.0.cast::<u8>().read() == b'\0' }
+        }
 
-		/// Returns a `&CStr` to the buffer
-		pub fn to_cstr(self) -> &'a CStr {
-			unsafe{std::mem::transmute::<&[u8], &CStr>(self.to_bytes_with_null())}
-		}
+        /// Unconditionally creates an NTBytes from a raw pointer
+        ///
+        /// # SAFETY
+        ///
+        /// The pointer must point to a buffer that contains a
+        /// null byte and is valid to read until the null byte
+        pub const unsafe fn from_ptr(ptr: *const u8) -> Self {
+            unsafe { Self(NonNull::new_unchecked(ptr.cast_mut()).cast(), PhantomData) }
+        }
 
-		/// # SAFETY 
-		///
-		/// There must be at least one null byte within `value`.
-		pub unsafe fn from_bytes_unchecked(value: &'a [u8]) -> Self {
-			unsafe{Self::from_ptr(value.as_ptr())}
-		}
-		
-		/// Expects a single null byte at the end of the string and no null bytes
-		/// in the rest of the string
-		pub fn from_bytes(value: &'a [u8]) -> Option<Self> {
-			if *value.last()? != b'\0' {return None;}
-			if value[..(value.len()-1)].contains(&b'\0') {return None;}
-			// SAFETY: Preconditions checked
-			unsafe{Some(Self::from_bytes_unchecked(value))}
-		}
-		
-		/// Returns a pointer with a static lifetime. 
-		///
-		/// # SAFETY
-		///
-		/// It is UB to use the returned pointer after the backing memory is
-		/// deallocated or borrowed mutably
-		pub unsafe fn detach_lifetime(self) -> NTBytes<'static> {
-			unsafe{std::mem::transmute::<Self, NTBytes<'static>>(self)}
-		}
-	}
+        /// Converts self into a `&[u8]`
+        ///
+        /// Excludes the null byte unlike [`Self::to_bytes_with_null`]
+        pub fn to_bytes(self) -> &'a [u8] {
+            let len = self.len();
+            unsafe { std::slice::from_raw_parts(self.0.cast().as_ptr(), len) }
+        }
 
-	impl<'a> PartialEq for NTBytes<'a> {
-		fn eq(&self, other: &Self) -> bool {
-			if self.0 == other.0 {
-				true
-			} else {
-				let first = self.to_cstr();
-				let other = other.to_cstr();
-				first == other
-			}
-		}
-	}
+        /// Converts self into a `&[u8]`
+        ///
+        /// Includes the null byte unlike [`Self::to_bytes`]
+        pub fn to_bytes_with_null(self) -> &'a [u8] {
+            let len = self.len();
+            unsafe { std::slice::from_raw_parts(self.0.cast().as_ptr(), len) }
+        }
 
-	impl<'a> Eq for NTBytes<'a> {}
+        /// Returns a `&CStr` to the buffer
+        pub fn to_cstr(self) -> &'a CStr {
+            unsafe { std::mem::transmute::<&[u8], &CStr>(self.to_bytes_with_null()) }
+        }
 
-	impl<'a> From<&'a NTStr> for NTBytes<'a> {
-		fn from (other: &'a NTStr) -> Self {
-			other.as_ntstrptr().as_ntbytes()
-		}
-	}
+        /// # SAFETY
+        ///
+        /// There must be at least one null byte within `value`.
+        pub unsafe fn from_bytes_unchecked(value: &'a [u8]) -> Self {
+            unsafe { Self::from_ptr(value.as_ptr()) }
+        }
 
-	impl<'a> std::fmt::Debug for NTBytes<'a> {
-		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-			self.to_bytes().fmt(f)
-		}
-	}
+        /// Expects a single null byte at the end of the string and no null bytes
+        /// in the rest of the string
+        pub fn from_bytes(value: &'a [u8]) -> Option<Self> {
+            if *value.last()? != b'\0' {
+                return None;
+            }
+            if value[..(value.len() - 1)].contains(&b'\0') {
+                return None;
+            }
+            // SAFETY: Preconditions checked
+            unsafe { Some(Self::from_bytes_unchecked(value)) }
+        }
 
-	/// Returns a null terminated Box<[u8]> allocated within 'alloc'
-	/// 
-	/// # Panics
-	///
-	/// If the buffer contains a null byte
-	// TODO: remove this
-	pub fn copy_box_nt_bytes_in<A: Allocator>(bytes: &[u8], a: A) -> Box<[u8], A> {
-		assert!(!bytes.contains(&b'\0'));
-		let (ptr, a) = Box::into_raw_with_allocator(Box::<[u8], _>::new_uninit_slice_in(bytes.len() + 1, a));
+        /// Returns a pointer with a static lifetime.
+        ///
+        /// # SAFETY
+        ///
+        /// It is UB to use the returned pointer after the backing memory is
+        /// deallocated or borrowed mutably
+        pub unsafe fn detach_lifetime(self) -> NTBytes<'static> {
+            unsafe { std::mem::transmute::<Self, NTBytes<'static>>(self) }
+        }
+    }
 
-		unsafe{
-			std::ptr::copy(bytes.as_ptr(), ptr.cast(), bytes.len());
-			ptr.cast::<u8>().add(bytes.len()).write(b'\0');
-			Box::from_raw_in(ptr, a).assume_init()
-		}
-	}
+    impl<'a> PartialEq for NTBytes<'a> {
+        fn eq(&self, other: &Self) -> bool {
+            if self.0 == other.0 {
+                true
+            } else {
+                let first = self.to_cstr();
+                let other = other.to_cstr();
+                first == other
+            }
+        }
+    }
+
+    impl<'a> Eq for NTBytes<'a> {}
+
+    impl<'a> From<&'a NTStr> for NTBytes<'a> {
+        fn from(other: &'a NTStr) -> Self {
+            other.as_ntstrptr().as_ntbytes()
+        }
+    }
+
+    impl<'a> std::fmt::Debug for NTBytes<'a> {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            self.to_bytes().fmt(f)
+        }
+    }
+
+    /// Returns a null terminated Box<[u8]> allocated within 'alloc'
+    ///
+    /// # Panics
+    ///
+    /// If the buffer contains a null byte
+    // TODO: remove this
+    pub fn copy_box_nt_bytes_in<A: Allocator>(bytes: &[u8], a: A) -> Box<[u8], A> {
+        assert!(!bytes.contains(&b'\0'));
+        let (ptr, a) =
+            Box::into_raw_with_allocator(Box::<[u8], _>::new_uninit_slice_in(bytes.len() + 1, a));
+
+        unsafe {
+            std::ptr::copy(bytes.as_ptr(), ptr.cast(), bytes.len());
+            ptr.cast::<u8>().add(bytes.len()).write(b'\0');
+            Box::from_raw_in(ptr, a).assume_init()
+        }
+    }
 }

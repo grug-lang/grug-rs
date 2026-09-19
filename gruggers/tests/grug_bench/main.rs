@@ -1,157 +1,226 @@
 #![deny(warnings)]
 #![allow(improper_ctypes)]
 mod test_bindings {
-	use gruggers::ntstring::{NTStrPtr, NTBytes};
-	use gruggers::state::{GrugState, GrugInitSettings, GrugEntityHandle};
-	use gruggers::backend::BytecodeBackend as Backend;
-	use gruggers::types::{GrugEntity, FileId, ExportFnId, Value};
+    use gruggers::backend::BytecodeBackend as Backend;
+    use gruggers::ntstring::{NTBytes, NTStrPtr};
+    use gruggers::state::{GrugEntityHandle, GrugInitSettings, GrugState};
+    use gruggers::types::{ExportFnId, FileId, GrugEntity, Value};
 
-	use super::game_functions::*;
-	
-	#[repr(C)]
-	pub struct GrugVTable {
-		create_grug_state: extern "C" fn(NTStrPtr<'_>, NTStrPtr<'_>) -> Box<GrugState>,
-		destroy_grug_state: extern "C" fn(Box<GrugState>),
+    use super::game_functions::*;
 
-		compile_grug_file: extern "C" fn(&GrugState, NTStrPtr<'_>) -> FileId,
-		create_entity: for<'a> extern "C" fn(&'a GrugState, FileId) -> GrugEntityHandle<'a>,
-		get_on_fn_id: extern "C" fn(&GrugState, NTStrPtr<'_>, NTStrPtr<'_>) -> ExportFnId,
-		call_entity_on_fn: extern "C" fn(&GrugState, &GrugEntity, ExportFnId, *const Value, usize),
-		destroy_entity: for<'a> extern "C" fn(&'a GrugState, GrugEntityHandle<'a>),
-	}
+    #[repr(C)]
+    pub struct GrugVTable {
+        create_grug_state: extern "C" fn(NTStrPtr<'_>, NTStrPtr<'_>) -> Box<GrugState>,
+        destroy_grug_state: extern "C" fn(Box<GrugState>),
 
-	extern "C" fn create_grug_state(mod_api_path: NTStrPtr<'_>, mods_dir_path: NTStrPtr<'_>) -> Box<GrugState> {
-		let mut state = GrugInitSettings::new()
-			.set_mods_dir(mods_dir_path.to_str())
-			.set_mod_api_path(mod_api_path.to_str())
-			.set_backend(Backend::new())
-			.set_runtime_error_handler(|error| {
-				unsafe{
-					runtime_error_handler(
-						error.error_message,
-						error.kind as u32,
-						error.export_fn_name,
-						error.script_path,
-					)
-				};
-			})
-			.build_state()
-			.map_err(|err| {println!("{}", err); err})
-			.unwrap();
-		register_game_functions(&mut state);
-		state.all_host_fns_registered().unwrap();
-		Box::new(state)
-	}
+        compile_grug_file: extern "C" fn(&GrugState, NTStrPtr<'_>) -> FileId,
+        create_entity: for<'a> extern "C" fn(&'a GrugState, FileId) -> GrugEntityHandle<'a>,
+        get_on_fn_id: extern "C" fn(&GrugState, NTStrPtr<'_>, NTStrPtr<'_>) -> ExportFnId,
+        call_entity_on_fn: extern "C" fn(&GrugState, &GrugEntity, ExportFnId, *const Value, usize),
+        destroy_entity: for<'a> extern "C" fn(&'a GrugState, GrugEntityHandle<'a>),
+    }
 
-	extern "C" fn destroy_grug_state(_: Box<GrugState>) {}
+    extern "C" fn create_grug_state(
+        mod_api_path: NTStrPtr<'_>,
+        mods_dir_path: NTStrPtr<'_>,
+    ) -> Box<GrugState> {
+        let mut state = GrugInitSettings::new()
+            .set_mods_dir(mods_dir_path.to_str())
+            .set_mod_api_path(mod_api_path.to_str())
+            .set_backend(Backend::new())
+            .set_runtime_error_handler(|error| {
+                unsafe {
+                    runtime_error_handler(
+                        error.error_message,
+                        error.kind as u32,
+                        error.export_fn_name,
+                        error.script_path,
+                    )
+                };
+            })
+            .build_state()
+            .map_err(|err| {
+                println!("{}", err);
+                err
+            })
+            .unwrap();
+        register_game_functions(&mut state);
+        state.all_host_fns_registered().unwrap();
+        Box::new(state)
+    }
 
-	extern "C" fn compile_grug_file(state: &GrugState, script_path: NTStrPtr<'_>) -> FileId {
-		state.compile_grug_file(script_path.to_str()).unwrap()
-	}
+    extern "C" fn destroy_grug_state(_: Box<GrugState>) {}
 
-	extern "C" fn get_on_fn_id(state: &GrugState, entity_name: NTStrPtr<'_>, on_fn_name: NTStrPtr<'_>) -> ExportFnId {
-		state.get_export_fn_id(entity_name.to_str(), on_fn_name.to_str())
-			.unwrap()
-	}
+    extern "C" fn compile_grug_file(state: &GrugState, script_path: NTStrPtr<'_>) -> FileId {
+        state.compile_grug_file(script_path.to_str()).unwrap()
+    }
 
-	extern "C" fn create_entity(state: &GrugState, script_id: FileId) -> GrugEntityHandle<'_> {
-		state.create_entity(script_id).unwrap()
-	}
+    extern "C" fn get_on_fn_id(
+        state: &GrugState,
+        entity_name: NTStrPtr<'_>,
+        on_fn_name: NTStrPtr<'_>,
+    ) -> ExportFnId {
+        state
+            .get_export_fn_id(entity_name.to_str(), on_fn_name.to_str())
+            .unwrap()
+    }
 
-	extern "C" fn destroy_entity(state: &GrugState, handle: GrugEntityHandle<'_>) {
-		state.destroy_entity(handle);
-	}
+    extern "C" fn create_entity(state: &GrugState, script_id: FileId) -> GrugEntityHandle<'_> {
+        state.create_entity(script_id).unwrap()
+    }
 
-	extern "C" fn call_entity_on_fn(state: &GrugState, entity: &GrugEntity, on_fn_id: ExportFnId, values: *const Value, values_len: usize) {
-		let values = unsafe{if values.is_null() {&[]} else {std::slice::from_raw_parts(values, values_len)}};
-		assert!(state.call_export_fn(
-			entity, 
-			on_fn_id, 
-			values,
-		));
-	}
+    extern "C" fn destroy_entity(state: &GrugState, handle: GrugEntityHandle<'_>) {
+        state.destroy_entity(handle);
+    }
 
-	pub const GRUG_VTABLE: GrugVTable = GrugVTable{
-		create_grug_state,
-		destroy_grug_state,
+    extern "C" fn call_entity_on_fn(
+        state: &GrugState,
+        entity: &GrugEntity,
+        on_fn_id: ExportFnId,
+        values: *const Value,
+        values_len: usize,
+    ) {
+        let values = unsafe {
+            if values.is_null() {
+                &[]
+            } else {
+                std::slice::from_raw_parts(values, values_len)
+            }
+        };
+        assert!(state.call_export_fn(entity, on_fn_id, values,));
+    }
 
-		compile_grug_file,
-		create_entity,
-		get_on_fn_id,
-		call_entity_on_fn,
-		destroy_entity,
-	};
-	
-	
-	#[link(name = "bench", kind="dylib")]
-	unsafe extern "C" {
-		fn runtime_error_handler<'a>(
-			reason: NTStrPtr<'a>,
-			error_kind: u32,
-			on_fn_name: NTStrPtr<'a>,
-			script_path: NTBytes<'a>,
-		);
+    pub const GRUG_VTABLE: GrugVTable = GrugVTable {
+        create_grug_state,
+        destroy_grug_state,
 
-		pub fn grug_bench_run<'a>(
-			mod_api_path: NTStrPtr<'a>,
-			mods_dir_path: NTStrPtr<'a>,
-			grug_vtable: &'static GrugVTable,
-			headless: bool
-		);
-	}
+        compile_grug_file,
+        create_entity,
+        get_on_fn_id,
+        call_entity_on_fn,
+        destroy_entity,
+    };
+
+    #[link(name = "bench", kind = "dylib")]
+    unsafe extern "C" {
+        fn runtime_error_handler<'a>(
+            reason: NTStrPtr<'a>,
+            error_kind: u32,
+            on_fn_name: NTStrPtr<'a>,
+            script_path: NTBytes<'a>,
+        );
+
+        pub fn grug_bench_run<'a>(
+            mod_api_path: NTStrPtr<'a>,
+            mods_dir_path: NTStrPtr<'a>,
+            grug_vtable: &'static GrugVTable,
+            headless: bool,
+        );
+    }
 }
 use test_bindings::*;
 
 mod game_functions {
-	use gruggers::state::GrugState;
-	use gruggers::types::Value;
-	use gruggers::ast::Type;
+    use gruggers::ast::Type;
+    use gruggers::state::GrugState;
+    use gruggers::types::Value;
 
-	#[link(name = "bench", kind="dylib")]
-	unsafe extern "C" {
-		safe fn game_fn_print_number<'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
-		safe fn game_fn_print_bool  <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
-		safe fn game_fn_get_1       <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
-		safe fn game_fn_get_mass    <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
-		safe fn game_fn_get_number  <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
-		safe fn game_fn_x           <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
-		safe fn game_fn_y           <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
-		safe fn game_fn_sqrt        <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
-		safe fn game_fn_set_acc     <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
-		safe fn game_fn_fmod        <'a>(state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value;
-	}
+    #[link(name = "bench", kind = "dylib")]
+    unsafe extern "C" {
+        safe fn game_fn_print_number<'a>(
+            state: &'a GrugState,
+            arguments: *const Value,
+            _: &[Type; 0],
+        ) -> Value;
+        safe fn game_fn_print_bool<'a>(
+            state: &'a GrugState,
+            arguments: *const Value,
+            _: &[Type; 0],
+        ) -> Value;
+        safe fn game_fn_get_1<'a>(
+            state: &'a GrugState,
+            arguments: *const Value,
+            _: &[Type; 0],
+        ) -> Value;
+        safe fn game_fn_get_mass<'a>(
+            state: &'a GrugState,
+            arguments: *const Value,
+            _: &[Type; 0],
+        ) -> Value;
+        safe fn game_fn_get_number<'a>(
+            state: &'a GrugState,
+            arguments: *const Value,
+            _: &[Type; 0],
+        ) -> Value;
+        safe fn game_fn_x<'a>(
+            state: &'a GrugState,
+            arguments: *const Value,
+            _: &[Type; 0],
+        ) -> Value;
+        safe fn game_fn_y<'a>(
+            state: &'a GrugState,
+            arguments: *const Value,
+            _: &[Type; 0],
+        ) -> Value;
+        safe fn game_fn_sqrt<'a>(
+            state: &'a GrugState,
+            arguments: *const Value,
+            _: &[Type; 0],
+        ) -> Value;
+        safe fn game_fn_set_acc<'a>(
+            state: &'a GrugState,
+            arguments: *const Value,
+            _: &[Type; 0],
+        ) -> Value;
+        safe fn game_fn_fmod<'a>(
+            state: &'a GrugState,
+            arguments: *const Value,
+            _: &[Type; 0],
+        ) -> Value;
+    }
 
-	pub fn register_game_functions(state: &mut GrugState) { unsafe {
-		state.register_host_fn("print_number", game_fn_print_number).unwrap();
-		state.register_host_fn("print_bool"  , game_fn_print_bool  ).unwrap();
-		state.register_host_fn("get_1"       , game_fn_get_1       ).unwrap();
-		state.register_host_fn("get_mass"    , game_fn_get_mass    ).unwrap();
-		state.register_host_fn("get_number"  , game_fn_get_number  ).unwrap();
-		state.register_host_fn("x"           , game_fn_x           ).unwrap();
-		state.register_host_fn("y"           , game_fn_y           ).unwrap();
-		state.register_host_fn("sqrt"        , game_fn_sqrt        ).unwrap();
-		state.register_host_fn("set_acc"     , game_fn_set_acc     ).unwrap();
-		state.register_host_fn("fmod"        , game_fn_fmod        ).unwrap();
-	}}
+    pub fn register_game_functions(state: &mut GrugState) {
+        unsafe {
+            state
+                .register_host_fn("print_number", game_fn_print_number)
+                .unwrap();
+            state
+                .register_host_fn("print_bool", game_fn_print_bool)
+                .unwrap();
+            state.register_host_fn("get_1", game_fn_get_1).unwrap();
+            state
+                .register_host_fn("get_mass", game_fn_get_mass)
+                .unwrap();
+            state
+                .register_host_fn("get_number", game_fn_get_number)
+                .unwrap();
+            state.register_host_fn("x", game_fn_x).unwrap();
+            state.register_host_fn("y", game_fn_y).unwrap();
+            state.register_host_fn("sqrt", game_fn_sqrt).unwrap();
+            state.register_host_fn("set_acc", game_fn_set_acc).unwrap();
+            state.register_host_fn("fmod", game_fn_fmod).unwrap();
+        }
+    }
 }
 
 use gruggers::nt;
 #[test]
-fn grug_bench () {
-	use std::io::Write;
-	std::panic::set_hook(Box::new(|info| {
-		_ = std::io::stdout().write_fmt(
-			format_args!("{}: {}\n", info.location().unwrap(), info.payload_as_str().unwrap_or("No info"))
-		);
-		std::process::exit(2);
-	}));
-	unsafe {
-		grug_bench_run(
-			nt!("src/grug-bench/mod_api.json").as_ntstrptr(),
-			nt!("src/grug-bench/mods").as_ntstrptr(),
-			&GRUG_VTABLE,
-			true,
-		);
-	}
+fn grug_bench() {
+    use std::io::Write;
+    std::panic::set_hook(Box::new(|info| {
+        _ = std::io::stdout().write_fmt(format_args!(
+            "{}: {}\n",
+            info.location().unwrap(),
+            info.payload_as_str().unwrap_or("No info")
+        ));
+        std::process::exit(2);
+    }));
+    unsafe {
+        grug_bench_run(
+            nt!("src/grug-bench/mod_api.json").as_ntstrptr(),
+            nt!("src/grug-bench/mods").as_ntstrptr(),
+            &GRUG_VTABLE,
+            true,
+        );
+    }
 }
-

@@ -4,20 +4,20 @@
 //! The first thing to do is to create a GrugInitSettings. This contains
 //! configuration data for the state. Important configuration parameters
 //! include mod_api path, the mods directory path, the runtime error handler,
-//! and an explicit backend. 
+//! and an explicit backend.
 //!
-//! GrugInitSettings can be initialized directly from c code as a normal struct. 
+//! GrugInitSettings can be initialized directly from c code as a normal struct.
 //! It can be zeroed to set all options to the defaults.
-//! 
+//!
 //! Once configuration is complete, the GrugState can be built with
 //! [`GrugInitSettings::build_state`]. If there is any error when creating the
-//! state, an [`Error`] with kind INIT_ERROR will be returned. 
+//! state, an [`Error`] with kind INIT_ERROR will be returned.
 //!
 //! If there is no error, you can then begin registering the host functions.
 //! Host functions are functions that grug code can call to perform any action
 //! not directly built into grug (which includes almost every single useful
 //! operation). All host functions mentioned in the mod_api should be registered
-//! exactly once at this stage. 
+//! exactly once at this stage.
 //!
 //! It is not an error to not register a host function, but if a script
 //! encounters that function, The compilation threads will panic. It is always
@@ -26,7 +26,7 @@
 //!
 //! [`GrugState::all_host_fns_registered`] can be used to verify that all host
 //! functions are registered.
-//! 
+//!
 //! At this point, you can begin compiling the grug files.
 //! [`GrugState::compile_all_files`] can be used to compile all files within
 //! the mods directory at once. This is the most efficient way to compile
@@ -44,651 +44,757 @@
 //! Hot reloading whatever lives at those paths (a texture, a `.lang` file,
 //! some JSON data, etc) is left up to the host.
 
-use crate::xar::XarHandle;
-use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
-use crate::error::{Error, ErrorKind, SourceSpan};
-use crate::backend::{Backend, ErasedBackend, BytecodeBackend};
-use crate::types::{Value, Id, HostFnWithState, ExportFnId, FileId, GrugEntity, INVALID_GRUG_FILE_ID};
-use crate::xar::Xar;
-use crate::ntstring::{NTStrPtr};
 use crate::arena::Arena;
-use crate::own_ptr::OwnPtr;
+use crate::backend::{Backend, BytecodeBackend, ErasedBackend};
+use crate::error::{Error, ErrorKind, SourceSpan};
+use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::nt;
-use crate::watcher::watch_changes;
+use crate::ntstring::NTStrPtr;
+use crate::own_ptr::OwnPtr;
 use crate::type_storage::TypeStorage;
+use crate::types::{
+    ExportFnId, FileId, GrugEntity, HostFnWithState, INVALID_GRUG_FILE_ID, Id, Value,
+};
+use crate::watcher::watch_changes;
+use crate::xar::Xar;
+use crate::xar::XarHandle;
 
+pub use gruggers_core::ast::GrugAst;
 use gruggers_core::runtime_error::RuntimeError;
 pub use gruggers_core::state::State;
-pub use gruggers_core::ast::GrugAst;
 
-use std::path::{Path, PathBuf};
-use std::marker::PhantomData;
-use std::ptr::NonNull;
-use std::cell::{Cell, RefCell, Ref};
+use std::cell::{Cell, Ref, RefCell};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::ffi::{OsString, OsStr};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::ffi::{OsStr, OsString};
+use std::marker::PhantomData;
+use std::path::{Path, PathBuf};
+use std::ptr::NonNull;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
-/// Called by the 
+/// Called by the
 #[repr(C)]
 pub struct RuntimeErrorHandler {
-	data: NonNull<()>,
-	drop: Option<extern "C" fn(data: Option<NonNull<()>>)>,
-	func: Option<for <'a> extern "C" fn(
-		data: NonNull<()>, 
-		error: &'a RuntimeError<'a>,
-	)>,
+    data: NonNull<()>,
+    drop: Option<extern "C" fn(data: Option<NonNull<()>>)>,
+    func: Option<for<'a> extern "C" fn(data: NonNull<()>, error: &'a RuntimeError<'a>)>,
 }
 
 const _: () = const {
-	assert!(std::mem::size_of::<RuntimeErrorHandler>() == std::mem::size_of::<Option<RuntimeErrorHandler>>());
+    assert!(
+        std::mem::size_of::<RuntimeErrorHandler>()
+            == std::mem::size_of::<Option<RuntimeErrorHandler>>()
+    );
 };
 
 impl RuntimeErrorHandler {
-	pub const fn new_default () -> Self {
-		Self {
-			data: NonNull::dangling(),
-			drop: None, 
-			func: None
-		}
-	}
+    pub const fn new_default() -> Self {
+        Self {
+            data: NonNull::dangling(),
+            drop: None,
+            func: None,
+        }
+    }
 
-	fn handle_error(&self, error: &RuntimeError) {
-		if let Some(func) = self.func {
-			func(
-				self.data,
-				error
-			)
-		} 
-	}
+    fn handle_error(&self, error: &RuntimeError) {
+        if let Some(func) = self.func {
+            func(self.data, error)
+        }
+    }
 }
 
 impl Default for RuntimeErrorHandler {
-	fn default() -> Self {
-		Self::new_default()
-	}
+    fn default() -> Self {
+        Self::new_default()
+    }
 }
 
 impl<F: for<'b> Fn(&RuntimeError)> From<F> for RuntimeErrorHandler {
-	fn from(f: F) -> Self {
-		let f = unsafe{NonNull::new_unchecked(Box::into_raw(Box::new(f)))}.cast::<()>();
-		extern "C" fn handler<F: Fn(&RuntimeError)> (
-			data: NonNull<()>, 
-			error: &RuntimeError,
-		) {
-			unsafe{(data.cast::<F>().as_ref())(
-				error
-			)};
-		}
-		extern "C" fn drop<F>(data: Option<NonNull<()>>) {
-			data.map(|x| unsafe{Box::from_raw(x.cast::<F>().as_ptr())});
-		}
-		Self {
-			data: f,
-			drop: Some(drop::<F> as extern "C" fn(_)),
-			func: Some(handler::<F> as for <'a> extern "C" fn(NonNull<()>, &'a RuntimeError<'a>)),
-		}
-	}
+    fn from(f: F) -> Self {
+        let f = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(f))) }.cast::<()>();
+        extern "C" fn handler<F: Fn(&RuntimeError)>(data: NonNull<()>, error: &RuntimeError) {
+            unsafe { (data.cast::<F>().as_ref())(error) };
+        }
+        extern "C" fn drop<F>(data: Option<NonNull<()>>) {
+            data.map(|x| unsafe { Box::from_raw(x.cast::<F>().as_ptr()) });
+        }
+        Self {
+            data: f,
+            drop: Some(drop::<F> as extern "C" fn(_)),
+            func: Some(handler::<F> as for<'a> extern "C" fn(NonNull<()>, &'a RuntimeError<'a>)),
+        }
+    }
 }
 
 #[repr(C)]
 pub struct GrugInitSettings<'a> {
-	_marker: PhantomData<&'a ()>,
-	mod_api_path: Option<NonNull<u8>>,
-	mod_api_path_len: usize,
-	mods_dir_path: Option<NonNull<u8>>,
-	mods_dir_path_len: usize,
-	runtime_error_handler: Option<RuntimeErrorHandler>,
-	/// How often the background file watcher rescans the mods directory
-	/// for changes, on platforms that don't have a native change
-	/// notification API to fall back to (see [`crate::watcher`]). Defaults
-	/// to 1 second. Most hosts have no reason to change this; it's mainly
-	/// useful for shrinking well below the default in automated tests, so
-	/// they don't have to wait out someone else's timer to observe a
-	/// change.
-	poll_interval: Option<std::time::Duration>,
+    _marker: PhantomData<&'a ()>,
+    mod_api_path: Option<NonNull<u8>>,
+    mod_api_path_len: usize,
+    mods_dir_path: Option<NonNull<u8>>,
+    mods_dir_path_len: usize,
+    runtime_error_handler: Option<RuntimeErrorHandler>,
+    /// How often the background file watcher rescans the mods directory
+    /// for changes, on platforms that don't have a native change
+    /// notification API to fall back to (see [`crate::watcher`]). Defaults
+    /// to 1 second. Most hosts have no reason to change this; it's mainly
+    /// useful for shrinking well below the default in automated tests, so
+    /// they don't have to wait out someone else's timer to observe a
+    /// change.
+    poll_interval: Option<std::time::Duration>,
 
-	backend: Option<ErasedBackend<GrugState>>,
+    backend: Option<ErasedBackend<GrugState>>,
 }
 
 const _: () = const {
-	unsafe{std::mem::forget(std::mem::MaybeUninit::<GrugInitSettings<'static>>::zeroed().assume_init())};
+    unsafe {
+        std::mem::forget(std::mem::MaybeUninit::<GrugInitSettings<'static>>::zeroed().assume_init())
+    };
 };
 
 impl<'a> GrugInitSettings<'a> {
-	pub const fn new() -> Self {
-		Self {
-			_marker: PhantomData,
-			mod_api_path: None,
-			mod_api_path_len: 0,
-			mods_dir_path: None,
-			mods_dir_path_len: 0,
-			runtime_error_handler: None,
-			poll_interval: None,
-			backend: None,
-		}
-	}
+    pub const fn new() -> Self {
+        Self {
+            _marker: PhantomData,
+            mod_api_path: None,
+            mod_api_path_len: 0,
+            mods_dir_path: None,
+            mods_dir_path_len: 0,
+            runtime_error_handler: None,
+            poll_interval: None,
+            backend: None,
+        }
+    }
 
-	pub fn set_mods_dir<P: AsRef<OsStr> + ?Sized>(mut self, dir: &'a P) -> Self {
-		let dir = dir.as_ref();
-		if dir.is_empty() {
-			self.mods_dir_path = None;
-			self.mods_dir_path_len = 0;
-		} else {
-			self.mods_dir_path = Some(NonNull::from_ref(dir).cast::<u8>());
-			self.mods_dir_path_len = dir.len();
-		}
-		self
-	}
+    pub fn set_mods_dir<P: AsRef<OsStr> + ?Sized>(mut self, dir: &'a P) -> Self {
+        let dir = dir.as_ref();
+        if dir.is_empty() {
+            self.mods_dir_path = None;
+            self.mods_dir_path_len = 0;
+        } else {
+            self.mods_dir_path = Some(NonNull::from_ref(dir).cast::<u8>());
+            self.mods_dir_path_len = dir.len();
+        }
+        self
+    }
 
-	pub fn set_mod_api_path<P: AsRef<OsStr> + ?Sized>(mut self, mod_api: &'a P) -> Self {
-		let mod_api = mod_api.as_ref();
-		if mod_api.is_empty() {
-			self.mod_api_path = None;
-			self.mod_api_path_len = 0;
-		} else {
-			self.mod_api_path = Some(NonNull::from_ref(mod_api).cast::<u8>());
-			self.mod_api_path_len = mod_api.len();
-		}
-		self
-	}
+    pub fn set_mod_api_path<P: AsRef<OsStr> + ?Sized>(mut self, mod_api: &'a P) -> Self {
+        let mod_api = mod_api.as_ref();
+        if mod_api.is_empty() {
+            self.mod_api_path = None;
+            self.mod_api_path_len = 0;
+        } else {
+            self.mod_api_path = Some(NonNull::from_ref(mod_api).cast::<u8>());
+            self.mod_api_path_len = mod_api.len();
+        }
+        self
+    }
 
-	pub fn set_backend<B: Backend>(mut self, backend: B) -> Self {
-		self.backend = Some(backend.into());
-		self
-	}
+    pub fn set_backend<B: Backend>(mut self, backend: B) -> Self {
+        self.backend = Some(backend.into());
+        self
+    }
 
-	pub fn set_runtime_error_handler<F: for<'b> Fn(&RuntimeError)> (mut self, f: F) -> Self {
-		self.runtime_error_handler = Some(f.into());
-		self
-	}
+    pub fn set_runtime_error_handler<F: for<'b> Fn(&RuntimeError)>(mut self, f: F) -> Self {
+        self.runtime_error_handler = Some(f.into());
+        self
+    }
 
-	/// How often the background file watcher rescans the mods directory
-	/// for changes, on platforms without a native change notification API
-	/// to fall back to. Defaults to 1 second if never called.
-	pub fn set_poll_interval(mut self, interval: std::time::Duration) -> Self {
-		self.poll_interval = Some(interval);
-		self
-	}
+    /// How often the background file watcher rescans the mods directory
+    /// for changes, on platforms without a native change notification API
+    /// to fall back to. Defaults to 1 second if never called.
+    pub fn set_poll_interval(mut self, interval: std::time::Duration) -> Self {
+        self.poll_interval = Some(interval);
+        self
+    }
 
-	pub fn build_state(self) -> Result<GrugState, Error> {
-		let mod_api_path = unsafe{Self::maybe_nt_or_length(self.mod_api_path, self.mod_api_path_len)}
-			.unwrap_or("./mod_api.json");
-		let mods_dir_path = unsafe{Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len)}
-			.unwrap_or("./mods");
+    pub fn build_state(self) -> Result<GrugState, Error> {
+        let mod_api_path =
+            unsafe { Self::maybe_nt_or_length(self.mod_api_path, self.mod_api_path_len) }
+                .unwrap_or("./mod_api.json");
+        let mods_dir_path =
+            unsafe { Self::maybe_nt_or_length(self.mods_dir_path, self.mods_dir_path_len) }
+                .unwrap_or("./mods");
 
-		GrugState::new(
-			mod_api_path,
-			mods_dir_path,
-			self.runtime_error_handler.unwrap_or_else(RuntimeErrorHandler::new_default), 
-			self.poll_interval.unwrap_or(std::time::Duration::from_secs(1)),
-			self.backend.unwrap_or_else(|| BytecodeBackend::new().into())
-		)
-	}
+        GrugState::new(
+            mod_api_path,
+            mods_dir_path,
+            self.runtime_error_handler
+                .unwrap_or_else(RuntimeErrorHandler::new_default),
+            self.poll_interval
+                .unwrap_or(std::time::Duration::from_secs(1)),
+            self.backend
+                .unwrap_or_else(|| BytecodeBackend::new().into()),
+        )
+    }
 
-	unsafe fn maybe_nt_or_length(ptr: Option<NonNull<u8>>, len: usize) -> Option<&'a str> {
-		// null terminated
-		if let Some(ptr) = ptr {
-			if len == 0 {
-				let mut i = 0;
-				loop {
-					if unsafe{ptr.add(i).read()} == b'\0' {
-						return Some(
-							unsafe{std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr.as_ptr(), i))}
-						)
-					}
-					i += 1;
-				}
-			} else {
-				Some(
-					unsafe{std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr.as_ptr(), len))}
-				)
-			}
-		} else {None}
-	}
+    unsafe fn maybe_nt_or_length(ptr: Option<NonNull<u8>>, len: usize) -> Option<&'a str> {
+        // null terminated
+        if let Some(ptr) = ptr {
+            if len == 0 {
+                let mut i = 0;
+                loop {
+                    if unsafe { ptr.add(i).read() } == b'\0' {
+                        return Some(unsafe {
+                            std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                                ptr.as_ptr(),
+                                i,
+                            ))
+                        });
+                    }
+                    i += 1;
+                }
+            } else {
+                Some(unsafe {
+                    std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr.as_ptr(), len))
+                })
+            }
+        } else {
+            None
+        }
+    }
 }
 
 impl Default for GrugInitSettings<'static> {
-	fn default () -> Self {
-		Self::new()
-	}
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-pub fn default_runtime_error_handler(_err_kind: u32, reason: &str, on_fn_name: &str, script_path: &str) {
-	println!("Runtime Error: {} in function {} in script {}", reason, on_fn_name, script_path);
-	std::process::exit(1);
+pub fn default_runtime_error_handler(
+    _err_kind: u32,
+    reason: &str,
+    on_fn_name: &str,
+    script_path: &str,
+) {
+    println!(
+        "Runtime Error: {} in function {} in script {}",
+        reason, on_fn_name, script_path
+    );
+    std::process::exit(1);
 }
 
 pub struct GrugState {
-	pub(crate) mod_api: Arc<ModApi>,
-	pub(crate) mods_dir_path: OsString,
-	pub(crate) type_storage: RefCell<TypeStorage>,
-	next_entity_id: AtomicU64,
-	pub(crate) runtime_error_handler: RuntimeErrorHandler,
+    pub(crate) mod_api: Arc<ModApi>,
+    pub(crate) mods_dir_path: OsString,
+    pub(crate) type_storage: RefCell<TypeStorage>,
+    next_entity_id: AtomicU64,
+    pub(crate) runtime_error_handler: RuntimeErrorHandler,
 
-	pub(crate) script_entities: RefCell<Vec<Vec<NonNull<GrugEntity>>>>,
-	pub(crate) entities: Xar<GrugEntity>,
-	/// Send an arena and a slice of filepaths to compile (allocated within the arena)
-	pub(crate) compiler_senders: Vec<Sender<(Arena, &'static [&'static OsStr])>>,
-	/// Receive the arena and a slice of ASTs and the corresponding filepaths,
-	/// and a list of resources used by these files
-	/// (all allocated within the same arena)
-	pub(crate) compiler_receiver: Receiver<(Arena, OwnPtr<'static, [(Result<GrugAst<'static>, Error>, &'static OsStr)]>, &'static [&'static OsStr])>,
-	/// SAFETY: The strings within the `export_functions` field is allocated within
-	/// `mod_api`. So any reference given out to this field must have the 'self
-	/// lifetime
-	/// If a later change makes mod_api mutable, these need to be allocated separately
-	export_functions: Vec<ExportFnEntry<'static>>,
-	pub(crate) path_to_script_ids: RefCell<HashMap<OsString, (OsString, FileId)>>,
-	next_script_id: AtomicU64,
+    pub(crate) script_entities: RefCell<Vec<Vec<NonNull<GrugEntity>>>>,
+    pub(crate) entities: Xar<GrugEntity>,
+    /// Send an arena and a slice of filepaths to compile (allocated within the arena)
+    pub(crate) compiler_senders: Vec<Sender<(Arena, &'static [&'static OsStr])>>,
+    /// Receive the arena and a slice of ASTs and the corresponding filepaths,
+    /// and a list of resources used by these files
+    /// (all allocated within the same arena)
+    pub(crate) compiler_receiver: Receiver<(
+        Arena,
+        OwnPtr<'static, [(Result<GrugAst<'static>, Error>, &'static OsStr)]>,
+        &'static [&'static OsStr],
+    )>,
+    /// SAFETY: The strings within the `export_functions` field is allocated within
+    /// `mod_api`. So any reference given out to this field must have the 'self
+    /// lifetime
+    /// If a later change makes mod_api mutable, these need to be allocated separately
+    export_functions: Vec<ExportFnEntry<'static>>,
+    pub(crate) path_to_script_ids: RefCell<HashMap<OsString, (OsString, FileId)>>,
+    next_script_id: AtomicU64,
 
-	pub(crate) backend: ErasedBackend<Self>,
-	// for use when compiling
-	pub(crate) arenas : RefCell<Vec<Arena>>,
-	// pub(crate) backend: Interpreter,
-	pub(crate) is_errorring: Cell<bool>,
+    pub(crate) backend: ErasedBackend<Self>,
+    // for use when compiling
+    pub(crate) arenas: RefCell<Vec<Arena>>,
+    // pub(crate) backend: Interpreter,
+    pub(crate) is_errorring: Cell<bool>,
 
-	pub(crate) changes: Receiver<Result<OsString, std::io::Error>>,
+    pub(crate) changes: Receiver<Result<OsString, std::io::Error>>,
 }
 
 impl State for GrugState {
-	fn handle_runtime_error(&self, error: &RuntimeError) {
-		self.is_errorring.set(true);
-		self.runtime_error_handler.handle_error(
-			error, 
-		);
-	}
+    fn handle_runtime_error(&self, error: &RuntimeError) {
+        self.is_errorring.set(true);
+        self.runtime_error_handler.handle_error(error);
+    }
 }
 
 // Miscellaneous functions
 impl GrugState {
-	fn new (mod_api_path: impl AsRef<OsStr>, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, poll_interval: std::time::Duration, backend: ErasedBackend<Self>) -> Result<Self, Error> {
-		let mod_api = get_mod_api(mod_api_path.as_ref())?;
-		Self::new_inner(mod_api, mods_dir_path, handler, poll_interval, backend)
-	}
+    fn new(
+        mod_api_path: impl AsRef<OsStr>,
+        mods_dir_path: impl AsRef<OsStr>,
+        handler: RuntimeErrorHandler,
+        poll_interval: std::time::Duration,
+        backend: ErasedBackend<Self>,
+    ) -> Result<Self, Error> {
+        let mod_api = get_mod_api(mod_api_path.as_ref())?;
+        Self::new_inner(mod_api, mods_dir_path, handler, poll_interval, backend)
+    }
 
-	pub fn new_from_text (mod_api_text: &str, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, poll_interval: std::time::Duration, backend: impl Into<ErasedBackend<Self>>) -> Result<Self, Error> {
-		let mod_api = get_mod_api_from_text("<Mod API Source>", mod_api_text)?;
-		Self::new_inner(mod_api, mods_dir_path, handler, poll_interval, backend.into())
-	}
+    pub fn new_from_text(
+        mod_api_text: &str,
+        mods_dir_path: impl AsRef<OsStr>,
+        handler: RuntimeErrorHandler,
+        poll_interval: std::time::Duration,
+        backend: impl Into<ErasedBackend<Self>>,
+    ) -> Result<Self, Error> {
+        let mod_api = get_mod_api_from_text("<Mod API Source>", mod_api_text)?;
+        Self::new_inner(
+            mod_api,
+            mods_dir_path,
+            handler,
+            poll_interval,
+            backend.into(),
+        )
+    }
 
-	fn new_inner (mod_api: ModApi, mods_dir_path: impl AsRef<OsStr>, handler: RuntimeErrorHandler, poll_interval: std::time::Duration, backend: ErasedBackend<Self>) -> Result<Self, Error> {
-		let mut on_fns = Vec::new();
-		let init_globals = nt!("init_globals");
-		let mods_dir_path = PathBuf::from(mods_dir_path.as_ref());
-		
-		for (entity_type, entity) in mod_api.entities() {
-			on_fns.push(ExportFnEntry {
-				// SAFETY: All EventFnEntries we give out have a 'self
-				// lifetime, which is the same as the 'mod_api lifetime they
-				// actually have
-				entity_type   : unsafe{entity_type.as_ntstrptr().detach_lifetime()},
-				fn_name : unsafe{init_globals.as_ntstrptr().detach_lifetime()},
-				index      : 0,
-			});
-			for (i, (fn_name, _)) in entity.export_fns.iter().enumerate() {
-				on_fns.push(ExportFnEntry{
-					// SAFETY: All EventFnEntries we give out have a 'self
-					// lifetime, which is the same as the 'mod_api lifetime they
-					// actually have
-					entity_type   : unsafe{entity_type.as_ntstrptr().detach_lifetime()},
-					fn_name : unsafe{fn_name.as_ntstrptr().detach_lifetime()},
-					index         : i,
-				});
-			}
-		}
+    fn new_inner(
+        mod_api: ModApi,
+        mods_dir_path: impl AsRef<OsStr>,
+        handler: RuntimeErrorHandler,
+        poll_interval: std::time::Duration,
+        backend: ErasedBackend<Self>,
+    ) -> Result<Self, Error> {
+        let mut on_fns = Vec::new();
+        let init_globals = nt!("init_globals");
+        let mods_dir_path = PathBuf::from(mods_dir_path.as_ref());
 
-		let mod_api = Arc::new(mod_api);
+        for (entity_type, entity) in mod_api.entities() {
+            on_fns.push(ExportFnEntry {
+                // SAFETY: All EventFnEntries we give out have a 'self
+                // lifetime, which is the same as the 'mod_api lifetime they
+                // actually have
+                entity_type: unsafe { entity_type.as_ntstrptr().detach_lifetime() },
+                fn_name: unsafe { init_globals.as_ntstrptr().detach_lifetime() },
+                index: 0,
+            });
+            for (i, (fn_name, _)) in entity.export_fns.iter().enumerate() {
+                on_fns.push(ExportFnEntry {
+                    // SAFETY: All EventFnEntries we give out have a 'self
+                    // lifetime, which is the same as the 'mod_api lifetime they
+                    // actually have
+                    entity_type: unsafe { entity_type.as_ntstrptr().detach_lifetime() },
+                    fn_name: unsafe { fn_name.as_ntstrptr().detach_lifetime() },
+                    index: i,
+                });
+            }
+        }
 
-		let (sender, reciever) = channel();
-		watch_changes(&mods_dir_path, poll_interval, move |changes| sender.send(changes).is_ok()).unwrap();
-		let num_threads = {
-			let available_threads = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(1);
-			if available_threads <= 2 {1} else {available_threads - 2}
-		};
-		let (snd, rcv) = channel();
-		// Create compiler threads
-		let compiler_senders = (0..num_threads).map(|_| {
-			let (per_thread_send, per_thread_rcv) = channel();
-			std::thread::spawn(Self::compiler_thread_fn(
-				per_thread_rcv, 
-				snd.clone(), 
-				mods_dir_path.clone(), 
-				Arc::clone(&mod_api), 
-			));
-			per_thread_send
-		}).collect::<Vec<_>>();
+        let mod_api = Arc::new(mod_api);
 
-		Ok(Self {
-			mod_api,
-			mods_dir_path: mods_dir_path.into(),
-			type_storage: RefCell::new(TypeStorage::new()),
-			next_entity_id: AtomicU64::new(0),
-			runtime_error_handler: handler,
-			script_entities: RefCell::new(Vec::new()),
-			entities: Xar::new(),
-			compiler_senders,
-			compiler_receiver: rcv,
-			export_functions: on_fns,
-			path_to_script_ids: RefCell::new(HashMap::new()),
-			next_script_id: AtomicU64::new(0),
-			arenas: RefCell::new(Vec::new()),
-			backend,
-			is_errorring: Cell::new(false),
-			changes: reciever,
-		})
-	}
+        let (sender, reciever) = channel();
+        watch_changes(&mods_dir_path, poll_interval, move |changes| {
+            sender.send(changes).is_ok()
+        })
+        .unwrap();
+        let num_threads = {
+            let available_threads = std::thread::available_parallelism()
+                .map(|x| x.get())
+                .unwrap_or(1);
+            if available_threads <= 2 {
+                1
+            } else {
+                available_threads - 2
+            }
+        };
+        let (snd, rcv) = channel();
+        // Create compiler threads
+        let compiler_senders = (0..num_threads)
+            .map(|_| {
+                let (per_thread_send, per_thread_rcv) = channel();
+                std::thread::spawn(Self::compiler_thread_fn(
+                    per_thread_rcv,
+                    snd.clone(),
+                    mods_dir_path.clone(),
+                    Arc::clone(&mod_api),
+                ));
+                per_thread_send
+            })
+            .collect::<Vec<_>>();
 
-	pub(crate) fn get_or_insert_script_id(&self, path: &Path) -> FileId {
-		let mut canonicalized = PathBuf::from(self.mods_dir_path.clone());
-		canonicalized.push(path);
-		let canonicalized = canonicalized.canonicalize().expect("error while canonicalizing");
+        Ok(Self {
+            mod_api,
+            mods_dir_path: mods_dir_path.into(),
+            type_storage: RefCell::new(TypeStorage::new()),
+            next_entity_id: AtomicU64::new(0),
+            runtime_error_handler: handler,
+            script_entities: RefCell::new(Vec::new()),
+            entities: Xar::new(),
+            compiler_senders,
+            compiler_receiver: rcv,
+            export_functions: on_fns,
+            path_to_script_ids: RefCell::new(HashMap::new()),
+            next_script_id: AtomicU64::new(0),
+            arenas: RefCell::new(Vec::new()),
+            backend,
+            is_errorring: Cell::new(false),
+            changes: reciever,
+        })
+    }
 
-		let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
-		match path_to_script_ids.get(canonicalized.as_os_str()) {
-			Some((_, id)) => *id,
-			None => {
-				let id = self.get_next_script_id();
-				assert!(path_to_script_ids.insert(canonicalized.into_os_string(), (OsString::from(path), id)).is_none());
-				id
-			}
-		}
-	}
+    pub(crate) fn get_or_insert_script_id(&self, path: &Path) -> FileId {
+        let mut canonicalized = PathBuf::from(self.mods_dir_path.clone());
+        canonicalized.push(path);
+        let canonicalized = canonicalized
+            .canonicalize()
+            .expect("error while canonicalizing");
 
-	pub fn mods_dir_path(&self) -> &OsStr {
-		self.mods_dir_path.as_ref()
-	}
+        let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
+        match path_to_script_ids.get(canonicalized.as_os_str()) {
+            Some((_, id)) => *id,
+            None => {
+                let id = self.get_next_script_id();
+                assert!(
+                    path_to_script_ids
+                        .insert(canonicalized.into_os_string(), (OsString::from(path), id))
+                        .is_none()
+                );
+                id
+            }
+        }
+    }
 
-	pub fn get_export_fn_id(&self, entity_type: &str, fn_name: &str) -> Result<ExportFnId, Error> {
-		if !self.mod_api.entities().contains_key(entity_type) {
-			return Err(Error::new(
-				ErrorKind::INIT_ERROR,
-				"",
-				"".as_ref(),
-				"",
-				SourceSpan{offset: 0, line: 0},
-				format_args!("mod api does not define an entity named {}", entity_type),
-			));
-		}
-		for (i, on_fn_entry) in self.export_functions.iter().enumerate() {
-			if on_fn_entry.entity_type() == entity_type && on_fn_entry.fn_name() == fn_name {
-				return Ok(ExportFnId(i as u64))
-			}
-		}
-		return Err(Error::new(
-			ErrorKind::INIT_ERROR,
-			"",
-			"".as_ref(),
-			"",
-			SourceSpan{offset: 0, line: 0},
-			format_args!("'{}' does not export a function named '{}'", entity_type, fn_name),
-		));
-	}
-	
-	pub fn get_export_fn_name(&self, fn_id: ExportFnId) -> Option<&str> {
-		self.export_functions.get(fn_id.0 as usize).map(|entry| entry.fn_name())
-	}
+    pub fn mods_dir_path(&self) -> &OsStr {
+        self.mods_dir_path.as_ref()
+    }
 
-	pub fn get_export_fns(&self) -> &[ExportFnEntry<'_>] {
-		&self.export_functions
-	}
+    pub fn get_export_fn_id(&self, entity_type: &str, fn_name: &str) -> Result<ExportFnId, Error> {
+        if !self.mod_api.entities().contains_key(entity_type) {
+            return Err(Error::new(
+                ErrorKind::INIT_ERROR,
+                "",
+                "".as_ref(),
+                "",
+                SourceSpan { offset: 0, line: 0 },
+                format_args!("mod api does not define an entity named {}", entity_type),
+            ));
+        }
+        for (i, on_fn_entry) in self.export_functions.iter().enumerate() {
+            if on_fn_entry.entity_type() == entity_type && on_fn_entry.fn_name() == fn_name {
+                return Ok(ExportFnId(i as u64));
+            }
+        }
+        return Err(Error::new(
+            ErrorKind::INIT_ERROR,
+            "",
+            "".as_ref(),
+            "",
+            SourceSpan { offset: 0, line: 0 },
+            format_args!(
+                "'{}' does not export a function named '{}'",
+                entity_type, fn_name
+            ),
+        ));
+    }
 
-	pub fn get_entity_export_functions(&self, entity_type: &str) -> Result<&[ExportFnEntry<'_>], Error> {
-		if !self.mod_api.entities().contains_key(entity_type) {
-			return Err(Error::new(
-				ErrorKind::INIT_ERROR,
-				"",
-				"".as_ref(),
-				"",
-				SourceSpan{offset: 0, line: 0},
-				format_args!("mod api does not define an entity named {}", entity_type),
-			));
-		}
-		let mut start = 0;
-		while start != self.export_functions.len() && self.export_functions[start].entity_type() != entity_type {
-			start += 1;
-		}
-		let mut end = start;
-		while end != self.export_functions.len() && self.export_functions[end].entity_type() == entity_type {
-			end += 1;
-		}
-		Ok(&self.export_functions[start..end])
-	}
+    pub fn get_export_fn_name(&self, fn_id: ExportFnId) -> Option<&str> {
+        self.export_functions
+            .get(fn_id.0 as usize)
+            .map(|entry| entry.fn_name())
+    }
 
-	// This should only happen during an error so its okay if its slow
-	pub fn get_script_path_rel(&self, script_id: FileId) -> Option<&OsStr> {
-		let string = Ref::filter_map(self.path_to_script_ids.borrow(), |inner|
-			inner.values().find(|(_, v)| *v == script_id).map(|x| &*x.0)
-		).ok()?;
-		// SAFETY: a path is never replaced once it is inserted into the map;
-		let string: &OsStr = unsafe{&*(&*string as *const OsStr)};
-		Some(string)
-	}
+    pub fn get_export_fns(&self) -> &[ExportFnEntry<'_>] {
+        &self.export_functions
+    }
 
-	pub fn all_host_fns_registered(&self) -> Result<(), Error> {
-		// Check all normal host functions
-		for (host_fn_name, host_fn) in self.mod_api.host_fns() {
-			if host_fn.fn_ptr.is_none() {
-				return Err(Error::new(
-					ErrorKind::INIT_ERROR,
-					"",
-					"".as_ref(),
-					"",
-					SourceSpan{offset: 0, line: 0},
-					format_args!("host function '{host_fn_name}' has not been registered"),
-				));
-			}
-		}
-		// check all methods
-		for (class_name, class) in self.mod_api.classes() {
-			for (method_name, method) in &*class.methods {
-				if method.fn_ptr.is_none() {
-					return Err(Error::new(
-						ErrorKind::INIT_ERROR,
-						"",
-						"".as_ref(),
-						"",
-						SourceSpan{offset: 0, line: 0},
-						format_args!("method '{method_name}' in class '{class_name}' has not been registered"),
-					));
-				}
-			}
-		}
-		Ok(())
-	}
+    pub fn get_entity_export_functions(
+        &self,
+        entity_type: &str,
+    ) -> Result<&[ExportFnEntry<'_>], Error> {
+        if !self.mod_api.entities().contains_key(entity_type) {
+            return Err(Error::new(
+                ErrorKind::INIT_ERROR,
+                "",
+                "".as_ref(),
+                "",
+                SourceSpan { offset: 0, line: 0 },
+                format_args!("mod api does not define an entity named {}", entity_type),
+            ));
+        }
+        let mut start = 0;
+        while start != self.export_functions.len()
+            && self.export_functions[start].entity_type() != entity_type
+        {
+            start += 1;
+        }
+        let mut end = start;
+        while end != self.export_functions.len()
+            && self.export_functions[end].entity_type() == entity_type
+        {
+            end += 1;
+        }
+        Ok(&self.export_functions[start..end])
+    }
 
-	pub(crate) fn get_next_script_id(&self) -> FileId {
-		Id::new(self.next_script_id.fetch_add(1, Ordering::Relaxed))
-	}
+    // This should only happen during an error so its okay if its slow
+    pub fn get_script_path_rel(&self, script_id: FileId) -> Option<&OsStr> {
+        let string = Ref::filter_map(self.path_to_script_ids.borrow(), |inner| {
+            inner.values().find(|(_, v)| *v == script_id).map(|x| &*x.0)
+        })
+        .ok()?;
+        // SAFETY: a path is never replaced once it is inserted into the map;
+        let string: &OsStr = unsafe { &*(&*string as *const OsStr) };
+        Some(string)
+    }
 
-	pub fn get_next_entity_id(&self) -> Id {
-		Id::new(self.next_entity_id.fetch_add(1, Ordering::Relaxed))
-	}
+    pub fn all_host_fns_registered(&self) -> Result<(), Error> {
+        // Check all normal host functions
+        for (host_fn_name, host_fn) in self.mod_api.host_fns() {
+            if host_fn.fn_ptr.is_none() {
+                return Err(Error::new(
+                    ErrorKind::INIT_ERROR,
+                    "",
+                    "".as_ref(),
+                    "",
+                    SourceSpan { offset: 0, line: 0 },
+                    format_args!("host function '{host_fn_name}' has not been registered"),
+                ));
+            }
+        }
+        // check all methods
+        for (class_name, class) in self.mod_api.classes() {
+            for (method_name, method) in &*class.methods {
+                if method.fn_ptr.is_none() {
+                    return Err(Error::new(
+                        ErrorKind::INIT_ERROR,
+                        "",
+                        "".as_ref(),
+                        "",
+                        SourceSpan { offset: 0, line: 0 },
+                        format_args!(
+                            "method '{method_name}' in class '{class_name}' has not been registered"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 
-	/// # Safety
-	/// There is no memory safety issue here. 
-	/// But this may cause older entities to be replaced 
-	/// by newer ones with no warning if the ids start overlapping
-	pub unsafe fn set_next_entity_id(&self, next_id: u64) {
-		self.next_entity_id.store(next_id, Ordering::Relaxed);
-	}
+    pub(crate) fn get_next_script_id(&self) -> FileId {
+        Id::new(self.next_script_id.fetch_add(1, Ordering::Relaxed))
+    }
 
-	/// Create a new entity from the input file id
-	pub fn create_entity(&self, file_id: FileId) -> Option<GrugEntityHandle<'_>> {
+    pub fn get_next_entity_id(&self) -> Id {
+        Id::new(self.next_entity_id.fetch_add(1, Ordering::Relaxed))
+    }
 
-		let entity = self.entities.insert(unsafe{GrugEntity::new_uninit(self.get_next_entity_id(), file_id)});
-		let entity = unsafe{GrugEntityHandle::new(entity)};
-		let success = self.backend.init_entity(self, &entity);
+    /// # Safety
+    /// There is no memory safety issue here.
+    /// But this may cause older entities to be replaced
+    /// by newer ones with no warning if the ids start overlapping
+    pub unsafe fn set_next_entity_id(&self, next_id: u64) {
+        self.next_entity_id.store(next_id, Ordering::Relaxed);
+    }
 
-		if success {
-			self.script_entities.borrow_mut().get_mut(file_id.to_inner() as usize)
-				.expect("script must already exist")
-				.push(NonNull::from_ref(&*entity));
-			Some(entity)
-		} else {
-			unsafe{self.entities.delete(entity.into_inner());}
-			None
-		}
-	}
+    /// Create a new entity from the input file id
+    pub fn create_entity(&self, file_id: FileId) -> Option<GrugEntityHandle<'_>> {
+        let entity = self
+            .entities
+            .insert(unsafe { GrugEntity::new_uninit(self.get_next_entity_id(), file_id) });
+        let entity = unsafe { GrugEntityHandle::new(entity) };
+        let success = self.backend.init_entity(self, &entity);
 
-	/// Destroys the entity passed in _if_ the entity was allocated from self
-	///
-	/// Returns true if the entity was allocated from this State, false
-	/// otherwise. This is mostly meant as a safety check. User code must
-	/// ensure entites are passed to the correct state
-	pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) -> bool {
-		if self.entities.contains(entity.0) {
-			// SAFETY: We take ownership of the entity so we cannot call this function on the same entity twice.
-			// Also we make sure new entities and reloaded entities are always initialized 
-			unsafe{self.backend.destroy_entity_data(&entity);}
+        if success {
+            self.script_entities
+                .borrow_mut()
+                .get_mut(file_id.to_inner() as usize)
+                .expect("script must already exist")
+                .push(NonNull::from_ref(&*entity));
+            Some(entity)
+        } else {
+            unsafe {
+                self.entities.delete(entity.into_inner());
+            }
+            None
+        }
+    }
 
-			self.script_entities.borrow_mut().get_mut(entity.file_id.to_inner() as usize)
-				.expect("script must already exist")
-				.extract_if(.., |item| {
-					*item == NonNull::from_ref(&*entity)
-				}).for_each(|_| {});
+    /// Destroys the entity passed in _if_ the entity was allocated from self
+    ///
+    /// Returns true if the entity was allocated from this State, false
+    /// otherwise. This is mostly meant as a safety check. User code must
+    /// ensure entites are passed to the correct state
+    pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) -> bool {
+        if self.entities.contains(entity.0) {
+            // SAFETY: We take ownership of the entity so we cannot call this function on the same entity twice.
+            // Also we make sure new entities and reloaded entities are always initialized
+            unsafe {
+                self.backend.destroy_entity_data(&entity);
+            }
 
-			// SAFETY: entities.contains returned true
-			unsafe{self.entities.delete(entity.into_inner())};
-			true
-		} else {
-			false
-		}
-	}
+            self.script_entities
+                .borrow_mut()
+                .get_mut(entity.file_id.to_inner() as usize)
+                .expect("script must already exist")
+                .extract_if(.., |item| *item == NonNull::from_ref(&*entity))
+                .for_each(|_| {});
 
-	/// Destroy all entities 
-	pub fn clear_entities(&mut self) {
-		self.backend.clear_entities();
-		self.script_entities.borrow_mut().clear();
-		self.entities.clear();
-	}
+            // SAFETY: entities.contains returned true
+            unsafe { self.entities.delete(entity.into_inner()) };
+            true
+        } else {
+            false
+        }
+    }
 
-	/// Clear any currently active errors
-	pub fn clear_error(&self) {
-		self.is_errorring.set(false);
-	}
+    /// Destroy all entities
+    pub fn clear_entities(&mut self) {
+        self.backend.clear_entities();
+        self.script_entities.borrow_mut().clear();
+        self.entities.clear();
+    }
 
-	/// get the index of the export function within its entity
-	fn get_export_fn_index(&self, id: ExportFnId) -> usize {
-		self.export_functions[id.0 as usize].index
-	}
+    /// Clear any currently active errors
+    pub fn clear_error(&self) {
+        self.is_errorring.set(false);
+    }
 
-	pub fn set_host_fn_error(&self, message: &str) {
-		self.backend.raise_runtime_error(self, message);
-	}
+    /// get the index of the export function within its entity
+    fn get_export_fn_index(&self, id: ExportFnId) -> usize {
+        self.export_functions[id.0 as usize].index
+    }
+
+    pub fn set_host_fn_error(&self, message: &str) {
+        self.backend.raise_runtime_error(self, message);
+    }
 }
 
 // Registration functions
 impl GrugState {
-	/// Register a non generic host function
-	pub unsafe fn register_host_fn<const N: usize>(&mut self, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
-		unsafe{self.register_host_fn_internal(None, fn_name, func)}
-	}
+    /// Register a non generic host function
+    pub unsafe fn register_host_fn<const N: usize>(
+        &mut self,
+        fn_name: &str,
+        func: HostFnWithState<N, Self>,
+    ) -> Result<(), Error> {
+        unsafe { self.register_host_fn_internal(None, fn_name, func) }
+    }
 
-	/// Register a non generic host method
-	pub unsafe fn register_method<const N: usize>(&mut self, class_name: &str, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
-		unsafe{self.register_host_fn_internal(Some(class_name), fn_name, func)}
-	}
+    /// Register a non generic host method
+    pub unsafe fn register_method<const N: usize>(
+        &mut self,
+        class_name: &str,
+        fn_name: &str,
+        func: HostFnWithState<N, Self>,
+    ) -> Result<(), Error> {
+        unsafe { self.register_host_fn_internal(Some(class_name), fn_name, func) }
+    }
 
-	unsafe fn register_host_fn_internal<const N: usize>(&mut self, class_name: Option<&str>, fn_name: &str, func: HostFnWithState<N, Self>) -> Result<(), Error> {
-		// SAFETY: This Arc is shared between the state and all the compiler
-		// threads.  Because we have a &mut self, we assume that all compiler
-		// threads are parked waiting to receive more compile commands. This
-		// means that they cannot have an active reference to the mod_api data
-		// during this call to get_mut_unchecked
+    unsafe fn register_host_fn_internal<const N: usize>(
+        &mut self,
+        class_name: Option<&str>,
+        fn_name: &str,
+        func: HostFnWithState<N, Self>,
+    ) -> Result<(), Error> {
+        // SAFETY: This Arc is shared between the state and all the compiler
+        // threads.  Because we have a &mut self, we assume that all compiler
+        // threads are parked waiting to receive more compile commands. This
+        // means that they cannot have an active reference to the mod_api data
+        // during this call to get_mut_unchecked
 
-		// Note: We dont want to use interior mutability here because that would
-		// technically allow the compiler threads to modify the data too.
-		// 
-		// In that case, there would actually be a thread safety issue with
-		// this
-		
-		// Note: This is the same as the unstable get_mut_unchecked on Arc;
-		// Once that is stabilized, this can be replaced
-		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
-		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
-		unsafe{(&mut *mod_api).register_fn(class_name, fn_name, func)}
-	}
+        // Note: We dont want to use interior mutability here because that would
+        // technically allow the compiler threads to modify the data too.
+        //
+        // In that case, there would actually be a thread safety issue with
+        // this
 
-	/// Register a dummy function for each game function defined in the mod_api
-	///
-	/// # Safety
-	///
-	/// It is immediate UB to run any grug script created with this grug_state afterwards.
-	///
-	/// You are only allowed to compile scripts from this state.
-	/// This function only exists to allow the cli compiler to function.
-	pub unsafe fn register_dummies(&mut self) {
-		// SAFETY: This Arc is shared between the state and all the compiler
-		// threads.  Because we have a &mut self, we assume that all compiler
-		// threads are parked waiting to receive more compile commands. This
-		// means that they cannot have an active reference to the mod_api data
-		// during this call to get_mut_unchecked
-		
-		// Note: This is the same as the unstable get_mut_unchecked on Arc;
-		// Once that is stabilized, this can be replaced
-		let mod_api = *unsafe{std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api)};
-		let mod_api = unsafe{mod_api.byte_add(16).cast::<ModApi>()};
-		unsafe{(&mut *mod_api).register_dummies()}
-	}
+        // Note: This is the same as the unstable get_mut_unchecked on Arc;
+        // Once that is stabilized, this can be replaced
+        let mod_api =
+            *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
+        let mod_api = unsafe { mod_api.byte_add(16).cast::<ModApi>() };
+        unsafe { (&mut *mod_api).register_fn(class_name, fn_name, func) }
+    }
+
+    /// Register a dummy function for each game function defined in the mod_api
+    ///
+    /// # Safety
+    ///
+    /// It is immediate UB to run any grug script created with this grug_state afterwards.
+    ///
+    /// You are only allowed to compile scripts from this state.
+    /// This function only exists to allow the cli compiler to function.
+    pub unsafe fn register_dummies(&mut self) {
+        // SAFETY: This Arc is shared between the state and all the compiler
+        // threads.  Because we have a &mut self, we assume that all compiler
+        // threads are parked waiting to receive more compile commands. This
+        // means that they cannot have an active reference to the mod_api data
+        // during this call to get_mut_unchecked
+
+        // Note: This is the same as the unstable get_mut_unchecked on Arc;
+        // Once that is stabilized, this can be replaced
+        let mod_api =
+            *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
+        let mod_api = unsafe { mod_api.byte_add(16).cast::<ModApi>() };
+        unsafe { (&mut *mod_api).register_dummies() }
+    }
 }
 
 // Runner functions
 impl GrugState {
-	/// # SAFETY 
-	/// `values` must point to an array of values with length equal to
-	/// the number of arguments expected by `function_name`. If there are no arguments, 
-	/// `values` may be null
-	#[must_use]
-	pub unsafe fn call_export_fn_raw(&self, entity: &GrugEntity, fn_id: ExportFnId, values: *const Value) -> bool {
-		let ret_val = unsafe {
-			self.backend.call_on_function_raw(self, entity, self.get_export_fn_index(fn_id), values)
-		};
+    /// # SAFETY
+    /// `values` must point to an array of values with length equal to
+    /// the number of arguments expected by `function_name`. If there are no arguments,
+    /// `values` may be null
+    #[must_use]
+    pub unsafe fn call_export_fn_raw(
+        &self,
+        entity: &GrugEntity,
+        fn_id: ExportFnId,
+        values: *const Value,
+    ) -> bool {
+        let ret_val = unsafe {
+            self.backend
+                .call_on_function_raw(self, entity, self.get_export_fn_index(fn_id), values)
+        };
 
-		ret_val
-	}
+        ret_val
+    }
 
-	#[must_use]
-	pub fn call_export_fn(&self, entity: &GrugEntity, fn_id: ExportFnId, values: &[Value]) -> bool {
-		let ret_val = self.backend.call_on_function(self, entity, self.get_export_fn_index(fn_id), values);
+    #[must_use]
+    pub fn call_export_fn(&self, entity: &GrugEntity, fn_id: ExportFnId, values: &[Value]) -> bool {
+        let ret_val =
+            self.backend
+                .call_on_function(self, entity, self.get_export_fn_index(fn_id), values);
 
-		ret_val
-	}
+        ret_val
+    }
 }
 
 // TODO: This should be moved to gruggers-core
 pub struct ExportFnEntry<'a> {
-	entity_type   : NTStrPtr<'a>,
-	fn_name : NTStrPtr<'a>,
-	pub index      : usize,
+    entity_type: NTStrPtr<'a>,
+    fn_name: NTStrPtr<'a>,
+    pub index: usize,
 }
 
 impl<'a> ExportFnEntry<'a> {
-	/// Turns the null terminated string representing the entity name into a [`&str`]
-	pub fn entity_type(&self) -> &str {
-		self.entity_type.to_str()
-	}
-	/// Turns the null terminated string representing the event function name into a [`&str`]
-	pub fn fn_name(&self) -> &str {
-		self.fn_name.to_str()
-	}
+    /// Turns the null terminated string representing the entity name into a [`&str`]
+    pub fn entity_type(&self) -> &str {
+        self.entity_type.to_str()
+    }
+    /// Turns the null terminated string representing the event function name into a [`&str`]
+    pub fn fn_name(&self) -> &str {
+        self.fn_name.to_str()
+    }
 }
 
-const _: () = const{
-	// The C interop with Rust assumes that slice pointers have a layout like this
-	// #[repr(C)]
-	// struct Slice<T> {
-	// 		data: NonNull<T>,
-	// 		len : usize,
-	// }
-	// 
-	// The rust compiler currently does not guarantee the layout of slice pointer.
-	// These assertions ensure that if the assumption is broken, we get a
-	// compile error instead of random crashes
-	let x: &[ExportFnEntry] = &[];
-	unsafe{assert!(x.len() == (&x as *const _ as *const usize).add(1).read());}
+const _: () = const {
+    // The C interop with Rust assumes that slice pointers have a layout like this
+    // #[repr(C)]
+    // struct Slice<T> {
+    // 		data: NonNull<T>,
+    // 		len : usize,
+    // }
+    //
+    // The rust compiler currently does not guarantee the layout of slice pointer.
+    // These assertions ensure that if the assumption is broken, we get a
+    // compile error instead of random crashes
+    let x: &[ExportFnEntry] = &[];
+    unsafe {
+        assert!(x.len() == (&x as *const _ as *const usize).add(1).read());
+    }
 };
 
 /// A pointer to a grug entity. Only allows shared access to the data and does
@@ -697,208 +803,243 @@ const _: () = const{
 pub struct GrugEntityHandle<'a>(XarHandle<'a, GrugEntity>);
 
 impl<'a> GrugEntityHandle<'a> {
-	/// # SAFETY
-	/// inner can only be deleted by deleting the returned value
-	/// `GrugEntityHandle` is `Deref<Target> = GrugEntity`, so
-	/// the returned value is allowed to create a shared reference to the data at any time 
-	pub unsafe fn new(inner: XarHandle<'a, GrugEntity>) -> Self {
-		Self(inner)
-	}
+    /// # SAFETY
+    /// inner can only be deleted by deleting the returned value
+    /// `GrugEntityHandle` is `Deref<Target> = GrugEntity`, so
+    /// the returned value is allowed to create a shared reference to the data at any time
+    pub unsafe fn new(inner: XarHandle<'a, GrugEntity>) -> Self {
+        Self(inner)
+    }
 
-	pub fn into_inner(self) -> XarHandle<'a, GrugEntity> {
-		self.0
-	}
+    pub fn into_inner(self) -> XarHandle<'a, GrugEntity> {
+        self.0
+    }
 }
 
 impl<'a> AsRef<GrugEntity> for GrugEntityHandle<'a> {
-	fn as_ref(&self) -> &GrugEntity {
-		unsafe{self.0.get_ref()}
-	}
+    fn as_ref(&self) -> &GrugEntity {
+        unsafe { self.0.get_ref() }
+    }
 }
 
 impl<'a> std::ops::Deref for GrugEntityHandle<'a> {
-	type Target = GrugEntity;
-	fn deref(&self) -> &Self::Target {
-		unsafe{self.0.get_ref()}
-	}
+    type Target = GrugEntity;
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.0.get_ref() }
+    }
 }
 
 mod files {
-	use crate::own_ptr::OwnPtr;
-	use crate::arena::Arena;
-	use crate::ntstring::{NTBytes, NTStrPtr};
-	use crate::types::FileId;
-	use crate::error::GrugError;
-	use crate::state::INVALID_GRUG_FILE_ID;
+    use crate::arena::Arena;
+    use crate::error::GrugError;
+    use crate::ntstring::{NTBytes, NTStrPtr};
+    use crate::own_ptr::OwnPtr;
+    use crate::state::INVALID_GRUG_FILE_ID;
+    use crate::types::FileId;
 
-	use std::ffi::OsStr;
-	use std::path::Path;
-	use std::mem::MaybeUninit;
+    use std::ffi::OsStr;
+    use std::mem::MaybeUninit;
+    use std::path::Path;
 
-	pub struct Files {
-		/// Fuck man, we just need 'unsafe already
-		pub(crate) inner: OwnPtr<'static, [FileInfo<'static>]>,
-		pub(crate) _arena: Arena,
-	}
+    pub struct Files {
+        /// Fuck man, we just need 'unsafe already
+        pub(crate) inner: OwnPtr<'static, [FileInfo<'static>]>,
+        pub(crate) _arena: Arena,
+    }
 
-	impl std::fmt::Debug for Files {
-		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-			self.files().fmt(f)
-		}
-	}
+    impl std::fmt::Debug for Files {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            self.files().fmt(f)
+        }
+    }
 
-	impl Files {
-		pub fn empty() -> Self {
-			Self {
-				inner: (Box::new([]) as Box<[_]>).into(),
-				_arena: Arena::new(),
-			}
-		}
+    impl Files {
+        pub fn empty() -> Self {
+            Self {
+                inner: (Box::new([]) as Box<[_]>).into(),
+                _arena: Arena::new(),
+            }
+        }
 
-		/// Get the list of files that were compiled or recompiled
-		pub fn files<'a>(&'a self) -> &'a [FileInfo<'a>] {
-			&*self.inner
-		}
-	}
+        /// Get the list of files that were compiled or recompiled
+        pub fn files<'a>(&'a self) -> &'a [FileInfo<'a>] {
+            &*self.inner
+        }
+    }
 
-	// Test struct for c api
-	// Eventually replace FileInfo with this
-	#[derive(Debug, Clone, Copy)]
-	#[repr(C)]
-	pub struct FileInfo<'a> {
-		/// Full path to the file relative to the mods directory
-		pub(crate) path: NTBytes<'a>,
-		/// Filename component of the path
-		pub(crate) file_name: NTBytes<'a>,
-		/// first level directory within the mods directory
-		// TODO: Check that mods directly within the mods directory (i.e, mods with an empty mod_name) don't
-		// cause problems. This is technically disallowed by grug but grugc
-		// uses this behavior
-		pub(crate) mod_name: NTBytes<'a>,
-		/// Portion of the filename between the '-' and '.'
-		pub(crate) entity_type: NTStrPtr<'a>,
-		/// Portion of the filename before the '-'
-		pub(crate) entity_name: NTBytes<'a>,
-		/// These two files are actually a Result<FileId, GrugError<'a>>
-		/// Err case is when file_id === INVALID_GRUG_FILE_ID
-		pub(crate) file_id: FileId,
-		pub(crate) error: MaybeUninit<GrugError<'a>>,
-	}
+    // Test struct for c api
+    // Eventually replace FileInfo with this
+    #[derive(Debug, Clone, Copy)]
+    #[repr(C)]
+    pub struct FileInfo<'a> {
+        /// Full path to the file relative to the mods directory
+        pub(crate) path: NTBytes<'a>,
+        /// Filename component of the path
+        pub(crate) file_name: NTBytes<'a>,
+        /// first level directory within the mods directory
+        // TODO: Check that mods directly within the mods directory (i.e, mods with an empty mod_name) don't
+        // cause problems. This is technically disallowed by grug but grugc
+        // uses this behavior
+        pub(crate) mod_name: NTBytes<'a>,
+        /// Portion of the filename between the '-' and '.'
+        pub(crate) entity_type: NTStrPtr<'a>,
+        /// Portion of the filename before the '-'
+        pub(crate) entity_name: NTBytes<'a>,
+        /// These two files are actually a Result<FileId, GrugError<'a>>
+        /// Err case is when file_id === INVALID_GRUG_FILE_ID
+        pub(crate) file_id: FileId,
+        pub(crate) error: MaybeUninit<GrugError<'a>>,
+    }
 
-	impl<'a> FileInfo<'a> {
-		pub(crate) fn new_in(path: &OsStr, file_name: &OsStr, mod_name: &OsStr, entity_type: &str, entity_name: &OsStr, result: Result<FileId, GrugError>, arena: &'a Arena) -> Self {
-			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-			let path = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(path.as_encoded_bytes()))};
-			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-			let file_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(file_name.as_encoded_bytes()))};
-			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-			let mod_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(mod_name.as_encoded_bytes()))};
-			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice,
-			// and the returned slice is utf8 encoded because it comes from a
-			// str
-			let entity_type = arena.copy_str_into_nt(entity_type).as_ntstrptr();
-			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-			let entity_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(entity_name.as_encoded_bytes()))};
-			let (file_id, error) = match result {
-				Ok(id) => (id, MaybeUninit::uninit()),
-				Err(err) => (INVALID_GRUG_FILE_ID, MaybeUninit::new(err.copy_into(arena)))
-			};
-			FileInfo {
-				path,
-				file_name,
-				mod_name,
-				entity_type,
-				entity_name,
-				file_id,
-				error
-			}
-		}
-		pub fn copy_into<'b>(&self, arena: &'b Arena) -> FileInfo<'b> {
-			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-			let path = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.path.to_bytes()))};
-			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-			let file_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.file_name.to_bytes()))};
-			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-			let mod_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.mod_name.to_bytes()))};
-			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice,
-			// and the returned slice is utf8 encoded because it comes from a
-			// str
-			let entity_type = arena.copy_str_into_nt(self.entity_type.to_str()).as_ntstrptr();
-			// Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-			let entity_name = unsafe{NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.entity_name.to_bytes()))};
-			let (file_id, error) = if self.file_id == INVALID_GRUG_FILE_ID {
-				// SAFETY: self.error is intialized if self.file_id == INVALID_GRUG_FILE_ID
-				(INVALID_GRUG_FILE_ID, MaybeUninit::new(unsafe{self.error.assume_init()}.copy_into(arena)))
-			} else {
-				(self.file_id, MaybeUninit::uninit())
-			};
-			FileInfo {
-				path,
-				file_name,
-				mod_name,
-				entity_type,
-				entity_name,
-				file_id,
-				error
-			}
-		}
-		pub fn path (&self) -> &Path {
-			OsStr::as_ref(unsafe{OsStr::from_encoded_bytes_unchecked(self.path.to_bytes())})
-		}
-		pub fn file_name (&self) -> &OsStr {
-			unsafe{OsStr::from_encoded_bytes_unchecked(self.file_name.to_bytes())}
-		}
-		pub fn mod_name (&self) -> &OsStr {
-			unsafe{OsStr::from_encoded_bytes_unchecked(self.mod_name.to_bytes())}
-		}
-		pub fn entity_type (&self) -> &str {
-			self.entity_type.to_str()
-		}
-		pub fn entity_name (&self) -> &OsStr {
-			unsafe{OsStr::from_encoded_bytes_unchecked(self.entity_name.to_bytes())}
-		}
-		pub fn result (&self) -> Result<FileId, GrugError<'_>> {
-			if self.file_id == INVALID_GRUG_FILE_ID {unsafe{Err(*self.error.assume_init_ref())}}
-			else {Ok(self.file_id)}
-		}
-	}
+    impl<'a> FileInfo<'a> {
+        pub(crate) fn new_in(
+            path: &OsStr,
+            file_name: &OsStr,
+            mod_name: &OsStr,
+            entity_type: &str,
+            entity_name: &OsStr,
+            result: Result<FileId, GrugError>,
+            arena: &'a Arena,
+        ) -> Self {
+            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+            let path = unsafe {
+                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(path.as_encoded_bytes()))
+            };
+            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+            let file_name = unsafe {
+                NTBytes::from_bytes_unchecked(
+                    arena.copy_bytes_into_nt(file_name.as_encoded_bytes()),
+                )
+            };
+            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+            let mod_name = unsafe {
+                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(mod_name.as_encoded_bytes()))
+            };
+            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice,
+            // and the returned slice is utf8 encoded because it comes from a
+            // str
+            let entity_type = arena.copy_str_into_nt(entity_type).as_ntstrptr();
+            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+            let entity_name = unsafe {
+                NTBytes::from_bytes_unchecked(
+                    arena.copy_bytes_into_nt(entity_name.as_encoded_bytes()),
+                )
+            };
+            let (file_id, error) = match result {
+                Ok(id) => (id, MaybeUninit::uninit()),
+                Err(err) => (INVALID_GRUG_FILE_ID, MaybeUninit::new(err.copy_into(arena))),
+            };
+            FileInfo {
+                path,
+                file_name,
+                mod_name,
+                entity_type,
+                entity_name,
+                file_id,
+                error,
+            }
+        }
+        pub fn copy_into<'b>(&self, arena: &'b Arena) -> FileInfo<'b> {
+            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+            let path = unsafe {
+                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.path.to_bytes()))
+            };
+            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+            let file_name = unsafe {
+                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.file_name.to_bytes()))
+            };
+            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+            let mod_name = unsafe {
+                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.mod_name.to_bytes()))
+            };
+            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice,
+            // and the returned slice is utf8 encoded because it comes from a
+            // str
+            let entity_type = arena
+                .copy_str_into_nt(self.entity_type.to_str())
+                .as_ntstrptr();
+            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
+            let entity_name = unsafe {
+                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.entity_name.to_bytes()))
+            };
+            let (file_id, error) = if self.file_id == INVALID_GRUG_FILE_ID {
+                // SAFETY: self.error is intialized if self.file_id == INVALID_GRUG_FILE_ID
+                (
+                    INVALID_GRUG_FILE_ID,
+                    MaybeUninit::new(unsafe { self.error.assume_init() }.copy_into(arena)),
+                )
+            } else {
+                (self.file_id, MaybeUninit::uninit())
+            };
+            FileInfo {
+                path,
+                file_name,
+                mod_name,
+                entity_type,
+                entity_name,
+                file_id,
+                error,
+            }
+        }
+        pub fn path(&self) -> &Path {
+            OsStr::as_ref(unsafe { OsStr::from_encoded_bytes_unchecked(self.path.to_bytes()) })
+        }
+        pub fn file_name(&self) -> &OsStr {
+            unsafe { OsStr::from_encoded_bytes_unchecked(self.file_name.to_bytes()) }
+        }
+        pub fn mod_name(&self) -> &OsStr {
+            unsafe { OsStr::from_encoded_bytes_unchecked(self.mod_name.to_bytes()) }
+        }
+        pub fn entity_type(&self) -> &str {
+            self.entity_type.to_str()
+        }
+        pub fn entity_name(&self) -> &OsStr {
+            unsafe { OsStr::from_encoded_bytes_unchecked(self.entity_name.to_bytes()) }
+        }
+        pub fn result(&self) -> Result<FileId, GrugError<'_>> {
+            if self.file_id == INVALID_GRUG_FILE_ID {
+                unsafe { Err(*self.error.assume_init_ref()) }
+            } else {
+                Ok(self.file_id)
+            }
+        }
+    }
 
-	/// The paths (relative to the mods directory) of every non-`.grug` file
-	/// within the mods directory that was detected as changed by the most
-	/// recent call to [`super::GrugState::update_files`].
-	///
-	/// Unlike `.grug` scripts, grug does not know how to reload whatever
-	/// lives at these paths itself; the host is expected to do so (e.g. by
-	/// reloading a texture, a `.lang` file, or some JSON data).
-	///
-	/// A path appears here regardless of whether any `.grug` script actually
-	/// refers to it with a `resource` string: `resource` strings are only
-	/// used to validate that a resource exists at compile time, they no
-	/// longer register a file watch.
-	pub struct ResourcePaths {
-		pub(crate) inner: OwnPtr<'static, [NTBytes<'static>]>,
-		pub(crate) _arena: Arena,
-	}
+    /// The paths (relative to the mods directory) of every non-`.grug` file
+    /// within the mods directory that was detected as changed by the most
+    /// recent call to [`super::GrugState::update_files`].
+    ///
+    /// Unlike `.grug` scripts, grug does not know how to reload whatever
+    /// lives at these paths itself; the host is expected to do so (e.g. by
+    /// reloading a texture, a `.lang` file, or some JSON data).
+    ///
+    /// A path appears here regardless of whether any `.grug` script actually
+    /// refers to it with a `resource` string: `resource` strings are only
+    /// used to validate that a resource exists at compile time, they no
+    /// longer register a file watch.
+    pub struct ResourcePaths {
+        pub(crate) inner: OwnPtr<'static, [NTBytes<'static>]>,
+        pub(crate) _arena: Arena,
+    }
 
-	impl std::fmt::Debug for ResourcePaths {
-		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-			self.paths().fmt(f)
-		}
-	}
+    impl std::fmt::Debug for ResourcePaths {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            self.paths().fmt(f)
+        }
+    }
 
-	impl ResourcePaths {
-		pub fn empty() -> Self {
-			Self {
-				inner: (Box::new([]) as Box<[_]>).into(),
-				_arena: Arena::new(),
-			}
-		}
+    impl ResourcePaths {
+        pub fn empty() -> Self {
+            Self {
+                inner: (Box::new([]) as Box<[_]>).into(),
+                _arena: Arena::new(),
+            }
+        }
 
-		/// Get the paths of every updated resource
-		pub fn paths<'a>(&'a self) -> &'a [NTBytes<'a>] {
-			&*self.inner
-		}
-	}
-
+        /// Get the paths of every updated resource
+        pub fn paths<'a>(&'a self) -> &'a [NTBytes<'a>] {
+            &*self.inner
+        }
+    }
 }
 pub use files::*;

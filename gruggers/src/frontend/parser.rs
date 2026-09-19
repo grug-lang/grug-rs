@@ -1,1226 +1,1385 @@
-use super::tokenizer::{Token, TokenType};
-use crate::ast::{
-	Type, HelperFunction, Statement, OnFunction, Parameter,
-	MemberVariable, Expr, ExprData, UnaryOperator,
-	BinaryOperator, 
-};
 use super::GlobalStatement;
-use crate::ntstring::NTStr;
+use super::tokenizer::{Token, TokenType};
 use crate::arena::Arena;
+use crate::ast::{
+    BinaryOperator, Expr, ExprData, HelperFunction, MemberVariable, OnFunction, Parameter,
+    Statement, Type, UnaryOperator,
+};
+use crate::ntstring::NTStr;
 
 use crate::error::{Error, ErrorKind, SourceSpan};
 
 use std::ffi::OsStr;
 
-use allocator_api2::vec::Vec;
 use allocator_api2::boxed::Box;
+use allocator_api2::vec::Vec;
 
 #[allow(unused)]
 #[derive(Debug)]
 /// Lightweight error for structural parsing error
 enum ParserError<'a> {
-	GrugError(Error),
-	// grug_error("Unexpected token '%s' on line %zu", token.str, get_token_line_number(i));
-	UnexpectedToken {
-		token: Token<'a>,
-	},
-	UnexpectedEof {
-		expected: TokenType,
-	},
-	GotWrongToken {
-		expected: TokenType,
-		got: Token<'a>,
-	},
-	ExpectedSpace {
-		got: Token<'a>
-	},
-	OutOfTokensError,
-	ExceededMaxParsingDepth,
-	IndentationMismatch{
-		expected_spaces: usize,
-		token: Token<'a>,
-	},
-	ExpectedIndentation{
-		got: Token<'a>,
-	},
+    GrugError(Error),
+    // grug_error("Unexpected token '%s' on line %zu", token.str, get_token_line_number(i));
+    UnexpectedToken {
+        token: Token<'a>,
+    },
+    UnexpectedEof {
+        expected: TokenType,
+    },
+    GotWrongToken {
+        expected: TokenType,
+        got: Token<'a>,
+    },
+    ExpectedSpace {
+        got: Token<'a>,
+    },
+    OutOfTokensError,
+    ExceededMaxParsingDepth,
+    IndentationMismatch {
+        expected_spaces: usize,
+        token: Token<'a>,
+    },
+    ExpectedIndentation {
+        got: Token<'a>,
+    },
 }
 
 impl<'a> ParserError<'a> {
-	fn into_grug_error(self, parser: &Parser) -> Error {
-		match self {
-			Self::GrugError(err) => err,
-			// grug_error("Unexpected token '%s' on line %zu", token.str, get_token_line_number(i));
-			Self::UnexpectedToken {
-				token,
-			} => Error::new(
-				ErrorKind::PARSER_ERROR,
-				parser.current_function,
-				parser.file_path,
-				parser.file_text,
-				token.span,
-				format_args!("Unexpected token '{}' on line {}", token.value, token.span.line),
-			),
-			Self::UnexpectedEof {
-				expected,
-			} => Error::new(
-				ErrorKind::PARSER_ERROR,
-				parser.current_function,
-				parser.file_path,
-				parser.file_text,
-				parser.last_token_span,
-				format_args!("Expected {} but got end of file", expected),
-			),
-			Self::GotWrongToken {
-				expected,
-				got,
-			} => Error::new(
-				ErrorKind::PARSER_ERROR,
-				parser.current_function,
-				parser.file_path,
-				parser.file_text,
-				got.span,
-				format_args!("Expected {} but got {}", expected, got.ty),
-			),
-			Self::ExpectedSpace {
-				got
-			} => Error::new(
-				ErrorKind::PARSER_ERROR,
-				parser.current_function,
-				parser.file_path,
-				parser.file_text,
-				got.span,
-				format_args!("Expected space (' '), but got {} at line {}", got.ty, got.span.line),
-			),
-			Self::OutOfTokensError => Error::new(
-				ErrorKind::PARSER_ERROR,
-				parser.current_function,
-				parser.file_path,
-				parser.file_text,
-				parser.last_token_span,
-				format_args!("unexpected end of file"),
-			),
-			Self::ExceededMaxParsingDepth => Error::new(
-				ErrorKind::PARSER_ERROR,
-				parser.current_function,
-				parser.file_path,
-				parser.file_text,
-				parser.last_token_span,
-				format_args!("There is a function that contains more than {} levels of nested expressions", MAX_PARSING_DEPTH),
-			),
-			Self::IndentationMismatch{
-				expected_spaces,
-				token,
-			} => Error::new(
-				ErrorKind::PARSER_ERROR,
-				parser.current_function,
-				parser.file_path,
-				parser.file_text,
-				token.span,
-				format_args!("Expected {} spaces, but got {} spaces", expected_spaces, token.value.len())
-			),
-			Self::ExpectedIndentation{
-				got,
-			} => Error::new(
-				ErrorKind::PARSER_ERROR,
-				parser.current_function,
-				parser.file_path,
-				parser.file_text,
-				got.span,
-				format_args!("Expected indentation, line break, or '}}' but got '{}'", got.value),
-			),
-		}
-	}
+    fn into_grug_error(self, parser: &Parser) -> Error {
+        match self {
+            Self::GrugError(err) => err,
+            // grug_error("Unexpected token '%s' on line %zu", token.str, get_token_line_number(i));
+            Self::UnexpectedToken { token } => Error::new(
+                ErrorKind::PARSER_ERROR,
+                parser.current_function,
+                parser.file_path,
+                parser.file_text,
+                token.span,
+                format_args!(
+                    "Unexpected token '{}' on line {}",
+                    token.value, token.span.line
+                ),
+            ),
+            Self::UnexpectedEof { expected } => Error::new(
+                ErrorKind::PARSER_ERROR,
+                parser.current_function,
+                parser.file_path,
+                parser.file_text,
+                parser.last_token_span,
+                format_args!("Expected {} but got end of file", expected),
+            ),
+            Self::GotWrongToken { expected, got } => Error::new(
+                ErrorKind::PARSER_ERROR,
+                parser.current_function,
+                parser.file_path,
+                parser.file_text,
+                got.span,
+                format_args!("Expected {} but got {}", expected, got.ty),
+            ),
+            Self::ExpectedSpace { got } => Error::new(
+                ErrorKind::PARSER_ERROR,
+                parser.current_function,
+                parser.file_path,
+                parser.file_text,
+                got.span,
+                format_args!(
+                    "Expected space (' '), but got {} at line {}",
+                    got.ty, got.span.line
+                ),
+            ),
+            Self::OutOfTokensError => Error::new(
+                ErrorKind::PARSER_ERROR,
+                parser.current_function,
+                parser.file_path,
+                parser.file_text,
+                parser.last_token_span,
+                format_args!("unexpected end of file"),
+            ),
+            Self::ExceededMaxParsingDepth => Error::new(
+                ErrorKind::PARSER_ERROR,
+                parser.current_function,
+                parser.file_path,
+                parser.file_text,
+                parser.last_token_span,
+                format_args!(
+                    "There is a function that contains more than {} levels of nested expressions",
+                    MAX_PARSING_DEPTH
+                ),
+            ),
+            Self::IndentationMismatch {
+                expected_spaces,
+                token,
+            } => Error::new(
+                ErrorKind::PARSER_ERROR,
+                parser.current_function,
+                parser.file_path,
+                parser.file_text,
+                token.span,
+                format_args!(
+                    "Expected {} spaces, but got {} spaces",
+                    expected_spaces,
+                    token.value.len()
+                ),
+            ),
+            Self::ExpectedIndentation { got } => Error::new(
+                ErrorKind::PARSER_ERROR,
+                parser.current_function,
+                parser.file_path,
+                parser.file_text,
+                got.span,
+                format_args!(
+                    "Expected indentation, line break, or '}}' but got '{}'",
+                    got.value
+                ),
+            ),
+        }
+    }
 }
 
 const MAX_PARSING_DEPTH: usize = 100;
 
 pub(crate) struct Ast<'arena> {
-	pub global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
-	pub local_fn_signatures: &'arena [(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>]))],
-	pub export_fn_signatures: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
+    pub global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
+    pub local_fn_signatures: &'arena [(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>]))],
+    pub export_fn_signatures: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
 }
 
 struct Parser<'arena> {
-	// needed for error reporting
-	pub(crate) file_text: &'arena str,
-	// needed for error reporting
-	pub(crate) file_path: &'arena OsStr,
-	// needed to report `out of tokens errors`
-	pub(crate) last_token_span: SourceSpan,
-	// needed to report error location
-	pub(crate) current_function: &'arena str,
-	pub(crate) global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
-	pub(crate) called_local_functions: Vec<&'arena str, &'arena Arena>, 
-	pub(crate) local_fn_signatures: Vec<(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>])), &'arena Arena>,
-	pub(crate) export_fn_signatures: Vec<(&'arena str, &'arena [Parameter<'arena>]), &'arena Arena>,
+    // needed for error reporting
+    pub(crate) file_text: &'arena str,
+    // needed for error reporting
+    pub(crate) file_path: &'arena OsStr,
+    // needed to report `out of tokens errors`
+    pub(crate) last_token_span: SourceSpan,
+    // needed to report error location
+    pub(crate) current_function: &'arena str,
+    pub(crate) global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
+    pub(crate) called_local_functions: Vec<&'arena str, &'arena Arena>,
+    pub(crate) local_fn_signatures:
+        Vec<(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>])), &'arena Arena>,
+    pub(crate) export_fn_signatures: Vec<(&'arena str, &'arena [Parameter<'arena>]), &'arena Arena>,
 }
 
-pub(crate) fn parse<'a>(tokens: &'a [Token], arena: &'a Arena, file_text: &'a str, file_path: &'a OsStr) -> Result<Ast<'a>, Error> {
-	let final_token_span = tokens.last().map(|token| token.span).unwrap_or(SourceSpan{offset: 0, line: 1});
-	let mut parser = Parser::new_in(final_token_span, file_text, file_path, arena);
-	let mut seen_helper_fn = false;
+pub(crate) fn parse<'a>(
+    tokens: &'a [Token],
+    arena: &'a Arena,
+    file_text: &'a str,
+    file_path: &'a OsStr,
+) -> Result<Ast<'a>, Error> {
+    let final_token_span = tokens
+        .last()
+        .map(|token| token.span)
+        .unwrap_or(SourceSpan { offset: 0, line: 1 });
+    let mut parser = Parser::new_in(final_token_span, file_text, file_path, arena);
+    let mut seen_helper_fn = false;
 
-	let mut seen_on_fn = false;
-	let mut newline_allowed = false;
-	let mut newline_seen = false;
-	let mut newline_required = false;
-	let mut last_newline_token_span = SourceSpan{offset: 0, line: 0};
+    let mut seen_on_fn = false;
+    let mut newline_allowed = false;
+    let mut newline_seen = false;
+    let mut newline_required = false;
+    let mut last_newline_token_span = SourceSpan { offset: 0, line: 0 };
 
-	let mut tokens = tokens.iter();
+    let mut tokens = tokens.iter();
 
-	let result = (|parser: &mut Parser<'a>| -> Result<(), ParserError<'a>> {
-		while let Ok(token) = peek_next_token(&tokens) {
-			if let Ok([name_token, _]) = consume_next_token_types(&mut tokens, &[TokenType::Word, TokenType::Colon]) {
-				if seen_on_fn {
-					return parser.new_error(
-						name_token.span,
-						format_args!("Cannot declare member variables after on_ functions")
-					);
-				}
+    let result = (|parser: &mut Parser<'a>| -> Result<(), ParserError<'a>> {
+        while let Ok(token) = peek_next_token(&tokens) {
+            if let Ok([name_token, _]) =
+                consume_next_token_types(&mut tokens, &[TokenType::Word, TokenType::Colon])
+            {
+                if seen_on_fn {
+                    return parser.new_error(
+                        name_token.span,
+                        format_args!("Cannot declare member variables after on_ functions"),
+                    );
+                }
 
-				let global_name = name_token.value; 
+                let global_name = name_token.value;
 
-				if global_name == "me" {
-					return parser.new_error(
-						name_token.span,
-						format_args!("variable cannot be named 'me'")
-					);
-				}
-				consume_space(&mut tokens)?;
+                if global_name == "me" {
+                    return parser.new_error(
+                        name_token.span,
+                        format_args!("variable cannot be named 'me'"),
+                    );
+                }
+                consume_space(&mut tokens)?;
 
-				let (global_type, global_type_span) = parser.parse_type(&mut tokens, arena)?;
-				if type_contains_resource(global_type) {
-					return parser.new_error(
-						global_type_span,
-						format_args!("The global variable '{}' can't contain 'resource' in its type", global_name)
-					);
-				}
-				if type_contains_entity(global_type) {
-					return parser.new_error(
-						global_type_span,
-						format_args!("The global variable '{}' can't contain 'entity' in its type", global_name)
-					);
-				}
+                let (global_type, global_type_span) = parser.parse_type(&mut tokens, arena)?;
+                if type_contains_resource(global_type) {
+                    return parser.new_error(
+                        global_type_span,
+                        format_args!(
+                            "The global variable '{}' can't contain 'resource' in its type",
+                            global_name
+                        ),
+                    );
+                }
+                if type_contains_entity(global_type) {
+                    return parser.new_error(
+                        global_type_span,
+                        format_args!(
+                            "The global variable '{}' can't contain 'entity' in its type",
+                            global_name
+                        ),
+                    );
+                }
 
-				// TODO: I think this will error on this line
-				// `x: number =25`
-				//
-				// The error message is not going to be helpful in that case
-				match get_next_token(&mut tokens)? {
-					Token{ty: TokenType::Space, ..} => (),
-					Token{span, ..} => return parser.new_error(
-						*span,
-						format_args!("The global variable '{}' was not assigned a value", global_name)
-					),
-				}
+                // TODO: I think this will error on this line
+                // `x: number =25`
+                //
+                // The error message is not going to be helpful in that case
+                match get_next_token(&mut tokens)? {
+                    Token {
+                        ty: TokenType::Space,
+                        ..
+                    } => (),
+                    Token { span, .. } => {
+                        return parser.new_error(
+                            *span,
+                            format_args!(
+                                "The global variable '{}' was not assigned a value",
+                                global_name
+                            ),
+                        );
+                    }
+                }
 
-				consume_next_token_types(&mut tokens, &[TokenType::Equal])?;
+                consume_next_token_types(&mut tokens, &[TokenType::Equal])?;
 
-				consume_space(&mut tokens)?;
-				
-				let assignment_expr = parser.parse_expression(&mut tokens, 0, 0., arena)?;
-				
-				parser.global_statements.push(GlobalStatement::Variable(MemberVariable{
-					name: Box::leak(NTStr::box_from_str_in(global_name, arena)).as_ntstrptr(),
-					ty: global_type,
-					type_span: global_type_span,
-					assignment_expr,
-					span: name_token.span
-				}));
+                consume_space(&mut tokens)?;
 
-				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+                let assignment_expr = parser.parse_expression(&mut tokens, 0, 0., arena)?;
 
-				newline_allowed = true;
-				newline_required = true;
-			// export fn -> "export" + " " + name + "(" + arguments? + ")" + statements 
-			} else if let Ok([_, _]) = consume_next_token_types(&mut tokens, &[TokenType::Export, TokenType::Space]) {
-				let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
-				let fn_name = name_token.value;
-				
-				// expect newline after each item
-				if newline_required {
-					return parser.new_error(
-						name_token.span,
-						format_args!("Expected an empty line")
-					);
-				}
+                parser
+                    .global_statements
+                    .push(GlobalStatement::Variable(MemberVariable {
+                        name: Box::leak(NTStr::box_from_str_in(global_name, arena)).as_ntstrptr(),
+                        ty: global_type,
+                        type_span: global_type_span,
+                        assignment_expr,
+                        span: name_token.span,
+                    }));
 
-				parser.current_function = fn_name;
+                consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
 
-				// Cannot have global function after helper function
-				if seen_helper_fn {
-					return parser.new_error(
-						name_token.span,
-						format_args!("{}() must be defined before all local functions", fn_name)
-					);
-				}
-				consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
+                newline_allowed = true;
+                newline_required = true;
+            // export fn -> "export" + " " + name + "(" + arguments? + ")" + statements
+            } else if let Ok([_, _]) =
+                consume_next_token_types(&mut tokens, &[TokenType::Export, TokenType::Space])
+            {
+                let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
+                let fn_name = name_token.value;
 
-				let parameters = if assert_next_token_types(&tokens, &[TokenType::Word]).is_ok() {
-					parser.parse_parameters(&mut tokens, arena)?
-				} else {
-					&[]
-				};
-				consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
-				
-				let body_statements = parser.parse_statements(&mut tokens, 0, 1, arena)?;
+                // expect newline after each item
+                if newline_required {
+                    return parser
+                        .new_error(name_token.span, format_args!("Expected an empty line"));
+                }
 
-				if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
-					return parser.new_error(
-						name_token.span,
-						format_args!("{}() can't be empty", fn_name),
-					);
-				}
+                parser.current_function = fn_name;
 
-				let on_fn = OnFunction{
-					name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
-					parameters,
-					body_statements,
-					span: name_token.span
-				};
+                // Cannot have global function after helper function
+                if seen_helper_fn {
+                    return parser.new_error(
+                        name_token.span,
+                        format_args!("{}() must be defined before all local functions", fn_name),
+                    );
+                }
+                consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
 
-				if parser.export_fn_signatures.iter().any(|(name, _)| *name == fn_name) {
-					return parser.new_error(
-						name_token.span,
-						format_args!("The function '{}' was defined several times in the same file", fn_name),
-					);
-				}
-				parser.current_function = "member scope";
-				
-				parser.export_fn_signatures.push((fn_name, on_fn.parameters));
-				parser.global_statements.push(GlobalStatement::OnFunction(on_fn));
+                let parameters = if assert_next_token_types(&tokens, &[TokenType::Word]).is_ok() {
+                    parser.parse_parameters(&mut tokens, arena)?
+                } else {
+                    &[]
+                };
+                consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
 
-				seen_on_fn = true;
+                let body_statements = parser.parse_statements(&mut tokens, 0, 1, arena)?;
 
-				newline_allowed = true;
-				newline_seen = false;
-				newline_required = true;
+                if body_statements
+                    .iter()
+                    .all(|x| matches!(x, Statement::Comment { .. } | Statement::EmptyLine))
+                {
+                    return parser.new_error(
+                        name_token.span,
+                        format_args!("{}() can't be empty", fn_name),
+                    );
+                }
 
-				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
-			// local fn -> "local" + " " + name + "(" + arguments? + ")" + type + statements 
-			} else if let Ok([_, _]) = consume_next_token_types(&mut tokens, &[TokenType::Local, TokenType::Space]) {
-				let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
-				if !name_token.value.starts_with("_") {
-					parser.current_function = name_token.value;
-					return parser.new_error(
-						name_token.span,
-						format_args!("Local function name must begin with '_'")
-					);
-				}
-				let fn_name = name_token.value;
-				// expect newline after each item
-				if newline_required {
-					return parser.new_error(
-						name_token.span,
-						format_args!("Expected an empty line")
-					);
-				}
+                let on_fn = OnFunction {
+                    name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
+                    parameters,
+                    body_statements,
+                    span: name_token.span,
+                };
 
-				parser.current_function = fn_name;
+                if parser
+                    .export_fn_signatures
+                    .iter()
+                    .any(|(name, _)| *name == fn_name)
+                {
+                    return parser.new_error(
+                        name_token.span,
+                        format_args!(
+                            "The function '{}' was defined several times in the same file",
+                            fn_name
+                        ),
+                    );
+                }
+                parser.current_function = "member scope";
 
-				if !parser.called_local_functions.contains(&fn_name) {
-					return parser.new_error(
-						name_token.span,
-						format_args!("{}() is defined before the first time it gets called", fn_name)
-					);
-				}
+                parser
+                    .export_fn_signatures
+                    .push((fn_name, on_fn.parameters));
+                parser
+                    .global_statements
+                    .push(GlobalStatement::OnFunction(on_fn));
 
-				consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
+                seen_on_fn = true;
 
-				let parameters = if assert_next_token_types(&tokens, &[TokenType::Word]).is_ok() {
-					parser.parse_parameters(&mut tokens, arena)?
-				} else {
-					&[]
-				};
-				consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
+                newline_allowed = true;
+                newline_seen = false;
+                newline_required = true;
 
-				// return type
-				let (return_type, return_type_span) = if let Ok([_, _]) = assert_next_token_types(&tokens, &[TokenType::Space, TokenType::Word]) {
-					consume_space(&mut tokens).unwrap();
-					let (return_type, return_type_span) = parser.parse_type(&mut tokens, arena)?;
-					if type_contains_resource(return_type) {
-						return parser.new_error(
-							return_type_span,
-							format_args!("The function '{}' can't contain 'resource' in its return type", fn_name)
-						);
-					}
-					if type_contains_entity(return_type) {
-						return parser.new_error(
-							return_type_span,
-							format_args!("The function '{}' can't contain 'entity' in its return type", fn_name)
-						);
-					}
-					(return_type, return_type_span)
-				} else {
-					(Type::Void, name_token.span)
-				};
-				
-				let body_statements = parser.parse_statements(&mut tokens, 0, 1, arena)?;
+                consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+            // local fn -> "local" + " " + name + "(" + arguments? + ")" + type + statements
+            } else if let Ok([_, _]) =
+                consume_next_token_types(&mut tokens, &[TokenType::Local, TokenType::Space])
+            {
+                let [name_token] = consume_next_token_types(&mut tokens, &[TokenType::Word])?;
+                if !name_token.value.starts_with("_") {
+                    parser.current_function = name_token.value;
+                    return parser.new_error(
+                        name_token.span,
+                        format_args!("Local function name must begin with '_'"),
+                    );
+                }
+                let fn_name = name_token.value;
+                // expect newline after each item
+                if newline_required {
+                    return parser
+                        .new_error(name_token.span, format_args!("Expected an empty line"));
+                }
 
-				if body_statements.iter().all(|x| matches!(x, Statement::Comment{..} | Statement::EmptyLine)) {
-					return parser.new_error(
-						name_token.span,
-						format_args!("{}() can't be empty", fn_name),
-					);
-				}
+                parser.current_function = fn_name;
 
-				let helper_fn = HelperFunction{
-					name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
-					parameters,
-					body_statements,
-					return_type,
-					return_type_span,
-					span: name_token.span,
-				};
+                if !parser.called_local_functions.contains(&fn_name) {
+                    return parser.new_error(
+                        name_token.span,
+                        format_args!(
+                            "{}() is defined before the first time it gets called",
+                            fn_name
+                        ),
+                    );
+                }
 
-				seen_helper_fn = true;
+                consume_next_token_types(&mut tokens, &[TokenType::OpenParenthesis])?;
 
-				if parser.local_fn_signatures.iter().any(|(name, _)| *name == fn_name) {
-					return parser.new_error(
-						name_token.span,
-						format_args!("The function '{}' was defined several times in the same file", fn_name),
-					);
-				}
-				parser.current_function = "member scope";
+                let parameters = if assert_next_token_types(&tokens, &[TokenType::Word]).is_ok() {
+                    parser.parse_parameters(&mut tokens, arena)?
+                } else {
+                    &[]
+                };
+                consume_next_token_types(&mut tokens, &[TokenType::CloseParenthesis])?;
 
-				parser.local_fn_signatures.push((fn_name, (helper_fn.return_type, helper_fn.parameters)));
-				parser.global_statements.push(GlobalStatement::HelperFunction(helper_fn));
+                // return type
+                let (return_type, return_type_span) = if let Ok([_, _]) =
+                    assert_next_token_types(&tokens, &[TokenType::Space, TokenType::Word])
+                {
+                    consume_space(&mut tokens).unwrap();
+                    let (return_type, return_type_span) = parser.parse_type(&mut tokens, arena)?;
+                    if type_contains_resource(return_type) {
+                        return parser.new_error(
+                            return_type_span,
+                            format_args!(
+                                "The function '{}' can't contain 'resource' in its return type",
+                                fn_name
+                            ),
+                        );
+                    }
+                    if type_contains_entity(return_type) {
+                        return parser.new_error(
+                            return_type_span,
+                            format_args!(
+                                "The function '{}' can't contain 'entity' in its return type",
+                                fn_name
+                            ),
+                        );
+                    }
+                    (return_type, return_type_span)
+                } else {
+                    (Type::Void, name_token.span)
+                };
 
-				newline_allowed = true;
-				newline_seen = false;
-				newline_required = true;
+                let body_statements = parser.parse_statements(&mut tokens, 0, 1, arena)?;
 
-				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
-			} else if let Ok([token]) = consume_next_token_types(&mut tokens, &[TokenType::NewLine]) {
-				if !newline_allowed {
-					return parser.new_error(
-						token.span,
-						format_args!("Unexpected empty line")
-					);
-				}
+                if body_statements
+                    .iter()
+                    .all(|x| matches!(x, Statement::Comment { .. } | Statement::EmptyLine))
+                {
+                    return parser.new_error(
+                        name_token.span,
+                        format_args!("{}() can't be empty", fn_name),
+                    );
+                }
 
-				// Disallow consecutive empty lines
-				newline_allowed = false;
-				newline_seen = true;
-				newline_required = false;
-				last_newline_token_span = token.span;
-				
-				parser.global_statements.push(GlobalStatement::EmptyLine);
-			} else if let Ok([comment_token]) = consume_next_token_types(&mut tokens, &[TokenType::Comment]) {
-				newline_allowed = true;
+                let helper_fn = HelperFunction {
+                    name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
+                    parameters,
+                    body_statements,
+                    return_type,
+                    return_type_span,
+                    span: name_token.span,
+                };
 
-				parser.global_statements.push(GlobalStatement::Comment{
-					value: Box::leak(NTStr::box_from_str_in(comment_token.value, arena)).as_ntstrptr(),
-				});
-				consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
-			} else {
-				Err(ParserError::UnexpectedToken{
-					token: *token
-				})?
-			}
-		}
+                seen_helper_fn = true;
 
-		if !newline_allowed && newline_seen {
-			// a newline has been seen so the line number will be incremented by one
-			// but we want the line number of the previous line
-			return parser.new_error(
-				last_newline_token_span,
-				format_args!("Unexpected empty line")
-			);
-		}
-		Ok(())
-	})(&mut parser);
-	match result {
-		Ok(()) => Ok(Ast{
-			global_statements: parser.global_statements,
-			local_fn_signatures: parser.local_fn_signatures.leak(),
-			export_fn_signatures: parser.export_fn_signatures.leak(),
-		}),
-		Err(err) => Err(err.into_grug_error(&parser))
-	}
+                if parser
+                    .local_fn_signatures
+                    .iter()
+                    .any(|(name, _)| *name == fn_name)
+                {
+                    return parser.new_error(
+                        name_token.span,
+                        format_args!(
+                            "The function '{}' was defined several times in the same file",
+                            fn_name
+                        ),
+                    );
+                }
+                parser.current_function = "member scope";
+
+                parser
+                    .local_fn_signatures
+                    .push((fn_name, (helper_fn.return_type, helper_fn.parameters)));
+                parser
+                    .global_statements
+                    .push(GlobalStatement::HelperFunction(helper_fn));
+
+                newline_allowed = true;
+                newline_seen = false;
+                newline_required = true;
+
+                consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+            } else if let Ok([token]) = consume_next_token_types(&mut tokens, &[TokenType::NewLine])
+            {
+                if !newline_allowed {
+                    return parser.new_error(token.span, format_args!("Unexpected empty line"));
+                }
+
+                // Disallow consecutive empty lines
+                newline_allowed = false;
+                newline_seen = true;
+                newline_required = false;
+                last_newline_token_span = token.span;
+
+                parser.global_statements.push(GlobalStatement::EmptyLine);
+            } else if let Ok([comment_token]) =
+                consume_next_token_types(&mut tokens, &[TokenType::Comment])
+            {
+                newline_allowed = true;
+
+                parser.global_statements.push(GlobalStatement::Comment {
+                    value: Box::leak(NTStr::box_from_str_in(comment_token.value, arena))
+                        .as_ntstrptr(),
+                });
+                consume_next_token_types(&mut tokens, &[TokenType::NewLine])?;
+            } else {
+                Err(ParserError::UnexpectedToken { token: *token })?
+            }
+        }
+
+        if !newline_allowed && newline_seen {
+            // a newline has been seen so the line number will be incremented by one
+            // but we want the line number of the previous line
+            return parser.new_error(
+                last_newline_token_span,
+                format_args!("Unexpected empty line"),
+            );
+        }
+        Ok(())
+    })(&mut parser);
+    match result {
+        Ok(()) => Ok(Ast {
+            global_statements: parser.global_statements,
+            local_fn_signatures: parser.local_fn_signatures.leak(),
+            export_fn_signatures: parser.export_fn_signatures.leak(),
+        }),
+        Err(err) => Err(err.into_grug_error(&parser)),
+    }
 }
 
 impl<'a> Parser<'a> {
-	fn new_in(last_token_span: SourceSpan, file_text: &'a str, file_path: &'a OsStr, arena: &'a Arena) -> Self {
-		Self {
-			file_text,
-			file_path,
-			last_token_span,
-			current_function: "member scope",
-			global_statements: Vec::new_in(arena),
-			called_local_functions: Vec::new_in(arena),
-			local_fn_signatures: Vec::new_in(arena),
-			export_fn_signatures: Vec::new_in(arena),
-		}
-	}
+    fn new_in(
+        last_token_span: SourceSpan,
+        file_text: &'a str,
+        file_path: &'a OsStr,
+        arena: &'a Arena,
+    ) -> Self {
+        Self {
+            file_text,
+            file_path,
+            last_token_span,
+            current_function: "member scope",
+            global_statements: Vec::new_in(arena),
+            called_local_functions: Vec::new_in(arena),
+            local_fn_signatures: Vec::new_in(arena),
+            export_fn_signatures: Vec::new_in(arena),
+        }
+    }
 
-	#[track_caller]
-	#[inline]
-	fn new_error<T>(&self, span: SourceSpan, args: std::fmt::Arguments) -> Result<T, ParserError<'static>> {
-		Err(ParserError::GrugError(Error::new(
-			ErrorKind::PARSER_ERROR,
-			self.current_function,
-			self.file_path,
-			self.file_text,
-			span,
-			args
-		)))
-	}
+    #[track_caller]
+    #[inline]
+    fn new_error<T>(
+        &self,
+        span: SourceSpan,
+        args: std::fmt::Arguments,
+    ) -> Result<T, ParserError<'static>> {
+        Err(ParserError::GrugError(Error::new(
+            ErrorKind::PARSER_ERROR,
+            self.current_function,
+            self.file_path,
+            self.file_text,
+            span,
+            args,
+        )))
+    }
 
-	// parameters -> parameter + ("," + parameter)*;
-	fn parse_parameters(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<&'a [Parameter<'a>], ParserError<'a>> {
-		let mut arguments = Vec::new_in(arena);
-		loop {
-			// parse_arg
-			let name_token = get_next_token(tokens)?;
-			let arg_name = name_token.value;
-			consume_next_token_types(tokens, &[TokenType::Colon, TokenType::Space])?;
+    // parameters -> parameter + ("," + parameter)*;
+    fn parse_parameters(
+        &mut self,
+        tokens: &mut std::slice::Iter<'a, Token<'a>>,
+        arena: &'a Arena,
+    ) -> Result<&'a [Parameter<'a>], ParserError<'a>> {
+        let mut arguments = Vec::new_in(arena);
+        loop {
+            // parse_arg
+            let name_token = get_next_token(tokens)?;
+            let arg_name = name_token.value;
+            consume_next_token_types(tokens, &[TokenType::Colon, TokenType::Space])?;
 
-			let (param_type, type_span) = self.parse_type(tokens, arena)?;
+            let (param_type, type_span) = self.parse_type(tokens, arena)?;
 
-			if type_contains_resource(param_type) {
-				return self.new_error(
-					type_span,
-					format_args!("The argument '{}' can't contain 'resource' in its type", arg_name)
-				);
-			}
-			if type_contains_entity(param_type) {
-				return self.new_error(
-					type_span,
-					format_args!("The argument '{}' can't contain 'entity' in its type", arg_name)
-				);
-			}
-			arguments.push(Parameter{
-				name: Box::leak(NTStr::box_from_str_in(arg_name, arena)).as_ntstrptr(),
-				ty: param_type,
-				name_span: name_token.span,
-				type_span,
-			});
-			
-			if consume_next_token_types(tokens, &[TokenType::Comma]).is_err() {
-				break;
-			}
-			
-			consume_space(tokens)?;
-		}
-		Ok(arguments.leak())
-	}
+            if type_contains_resource(param_type) {
+                return self.new_error(
+                    type_span,
+                    format_args!(
+                        "The argument '{}' can't contain 'resource' in its type",
+                        arg_name
+                    ),
+                );
+            }
+            if type_contains_entity(param_type) {
+                return self.new_error(
+                    type_span,
+                    format_args!(
+                        "The argument '{}' can't contain 'entity' in its type",
+                        arg_name
+                    ),
+                );
+            }
+            arguments.push(Parameter {
+                name: Box::leak(NTStr::box_from_str_in(arg_name, arena)).as_ntstrptr(),
+                ty: param_type,
+                name_span: name_token.span,
+                type_span,
+            });
 
-	fn parse_statements(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<&'a mut [Statement<'a>], ParserError<'a>> {
-		assert_parsing_depth(parsing_depth)?;
-		let &[_, _, mut last_new_line] = consume_next_token_types(tokens, &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine])?;
+            if consume_next_token_types(tokens, &[TokenType::Comma]).is_err() {
+                break;
+            }
 
-		let mut newline_allowed = false;
-		let mut newline_seen = false;
+            consume_space(tokens)?;
+        }
+        Ok(arguments.leak())
+    }
 
-		let mut statements = Vec::new_in(arena);
+    fn parse_statements(
+        &mut self,
+        tokens: &mut std::slice::Iter<'a, Token<'a>>,
+        parsing_depth: usize,
+        indentation: usize,
+        arena: &'a Arena,
+    ) -> Result<&'a mut [Statement<'a>], ParserError<'a>> {
+        assert_parsing_depth(parsing_depth)?;
+        let &[_, _, mut last_new_line] = consume_next_token_types(
+            tokens,
+            &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine],
+        )?;
 
-		while !is_end_of_block(tokens, indentation)? {
-			// newlines
-			if let Ok([indentation_token, _]) = consume_next_token_types(tokens, &[TokenType::Indentation, TokenType::NewLine]) {
-				return self.new_error(
-					indentation_token.span,
-					format_args!("Empty line cannot have indentation")
-				);
-			} else if let Ok([token]) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
-				last_new_line = *token;
-				if !newline_allowed {
-					return self.new_error(
-						token.span,
-						format_args!("Unexpected empty line")
-					);
-				}
-				// cannot have consecutive newlines
-				newline_allowed = false;
-				newline_seen = true;
+        let mut newline_allowed = false;
+        let mut newline_seen = false;
 
-				statements.push(Statement::EmptyLine);
-			} else {
-				newline_allowed = true;
-				newline_seen = false;
-				consume_indentation(tokens, indentation)?;
+        let mut statements = Vec::new_in(arena);
 
-				statements.push(self.parse_statement(tokens, parsing_depth + 1, indentation, arena)?);
-				consume_next_token_types(tokens, &[TokenType::NewLine])?;
-			}
-		}
+        while !is_end_of_block(tokens, indentation)? {
+            // newlines
+            if let Ok([indentation_token, _]) =
+                consume_next_token_types(tokens, &[TokenType::Indentation, TokenType::NewLine])
+            {
+                return self.new_error(
+                    indentation_token.span,
+                    format_args!("Empty line cannot have indentation"),
+                );
+            } else if let Ok([token]) = consume_next_token_types(tokens, &[TokenType::NewLine]) {
+                last_new_line = *token;
+                if !newline_allowed {
+                    return self.new_error(token.span, format_args!("Unexpected empty line"));
+                }
+                // cannot have consecutive newlines
+                newline_allowed = false;
+                newline_seen = true;
 
-		if !newline_allowed && newline_seen {
-			// a newline has been seen so the line number will be incremented by one
-			// but we want the line number of the previous line
-			return self.new_error(
-				last_new_line.span,
-				format_args!("Unexpected empty line")
-			);
-		}
+                statements.push(Statement::EmptyLine);
+            } else {
+                newline_allowed = true;
+                newline_seen = false;
+                consume_indentation(tokens, indentation)?;
 
-		if indentation != 1 {
-			consume_indentation(tokens, indentation - 1)?;
-		}
-		consume_next_token_types(tokens, &[TokenType::CloseBrace])?;
+                statements.push(self.parse_statement(
+                    tokens,
+                    parsing_depth + 1,
+                    indentation,
+                    arena,
+                )?);
+                consume_next_token_types(tokens, &[TokenType::NewLine])?;
+            }
+        }
 
-		Ok(statements.leak())
-	}
+        if !newline_allowed && newline_seen {
+            // a newline has been seen so the line number will be incremented by one
+            // but we want the line number of the previous line
+            return self.new_error(last_new_line.span, format_args!("Unexpected empty line"));
+        }
 
-	// stmt -> variable_stmt | if_stmt | return_stmt | while_stmt | ;
-	fn parse_statement(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, indentation: usize, arena: &'a Arena) -> Result<Statement<'a>, ParserError<'a>> {
-		let next_tokens = peek_next_tokens::<2>(tokens)?;
-		match next_tokens[0].ty {
-			TokenType::Word => {
-				match next_tokens[1].ty {
-					TokenType::OpenParenthesis | TokenType::Dot => {
-						Ok(Statement::Call(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?))
-					}
-					TokenType::Colon | TokenType::Space => {
-						self.parse_local_variable(tokens, parsing_depth + 1, arena)
-					}
-					_ => {
-						self.new_error(
-							next_tokens[1].span,
-							format_args!("Expected '(', or ':', or ' =' after the word '{}' on line {}", next_tokens[0].value, next_tokens[0].span.line),
-						)
-					}
-				}
-			}
-			TokenType::If => {
-				// if condition and block
-				let mut ifs = Vec::new();
-				loop {
-					consume_next_token_types(tokens, &[TokenType::If, TokenType::Space])?;
+        if indentation != 1 {
+            consume_indentation(tokens, indentation - 1)?;
+        }
+        consume_next_token_types(tokens, &[TokenType::CloseBrace])?;
 
-					let condition = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
-					let if_block = self.parse_statements(tokens, parsing_depth + 1, indentation + 1, arena)?;
+        Ok(statements.leak())
+    }
 
-					// else block 
-					
-					let is_chained;
-					let else_block;
+    // stmt -> variable_stmt | if_stmt | return_stmt | while_stmt | ;
+    fn parse_statement(
+        &mut self,
+        tokens: &mut std::slice::Iter<'a, Token<'a>>,
+        parsing_depth: usize,
+        indentation: usize,
+        arena: &'a Arena,
+    ) -> Result<Statement<'a>, ParserError<'a>> {
+        let next_tokens = peek_next_tokens::<2>(tokens)?;
+        match next_tokens[0].ty {
+            TokenType::Word => match next_tokens[1].ty {
+                TokenType::OpenParenthesis | TokenType::Dot => Ok(Statement::Call(
+                    self.parse_expression(tokens, parsing_depth + 1, 0., arena)?,
+                )),
+                TokenType::Colon | TokenType::Space => {
+                    self.parse_local_variable(tokens, parsing_depth + 1, arena)
+                }
+                _ => self.new_error(
+                    next_tokens[1].span,
+                    format_args!(
+                        "Expected '(', or ':', or ' =' after the word '{}' on line {}",
+                        next_tokens[0].value, next_tokens[0].span.line
+                    ),
+                ),
+            },
+            TokenType::If => {
+                // if condition and block
+                let mut ifs = Vec::new();
+                loop {
+                    consume_next_token_types(tokens, &[TokenType::If, TokenType::Space])?;
 
-					if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else]).is_ok() {
-						let [space_token, if_token] = peek_next_tokens(tokens)?;
-						if TokenType::Space == space_token.ty && TokenType::If == if_token.ty {
-							is_chained = true;
-							consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
-							ifs.push((
-								condition,
-								is_chained,
-								if_block,
-								&mut [] as &mut [Statement],
-							));
-							continue;
-						} else {
-							is_chained = false;
-							else_block = self.parse_statements(tokens, parsing_depth, indentation + 1, arena)?;
-						}
-					} else {
-						is_chained = false;
-						else_block = &mut [];
-					}
-					ifs.push((
-						condition,
-						is_chained,
-						if_block,
-						else_block,
-					));
-					break;
-				}
-				let mut current = ifs.pop().expect("We have parsed at least a single if statement");
-				for statement in ifs.into_iter().rev() {
-					let else_block = std::slice::from_mut(Box::leak(Box::new_in(
-						Statement::If{
-							condition: current.0,
-							is_chained: current.1,
-							if_block: current.2,
-							else_block: current.3,
-						}, arena,
-					)));
-					current = statement;
-					current.3 = else_block;
-				}
-				Ok(Statement::If{
-					condition: current.0,
-					is_chained: current.1,
-					if_block: current.2,
-					else_block: current.3,
-				})
-			}
-			TokenType::Return => {
-				tokens.next();
-				let expr = if let TokenType::NewLine = next_tokens[1].ty {
-					None
-				} else {
-					consume_space(tokens)?;
-					Some(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?)
-				};
-				Ok(Statement::Return{ 
-					return_span: next_tokens[0].span,
-					expr: expr.map(|expr| Box::leak(Box::new_in(expr, arena)))
-				})
-			}
-			TokenType::While => {
-				assert_parsing_depth(parsing_depth)?;
-				consume_next_token_types(tokens, &[TokenType::While, TokenType::Space])?;
+                    let condition = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
+                    let if_block =
+                        self.parse_statements(tokens, parsing_depth + 1, indentation + 1, arena)?;
 
-				let condition = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
-				let block = self.parse_statements(tokens, parsing_depth + 1, indentation + 1, arena)?;
+                    // else block
 
-				Ok(Statement::While{
-					condition,
-					block,
-				})
-			}
-			TokenType::Break => {
-				tokens.next();
-				Ok(Statement::Break(next_tokens[0].span))
-			}
-			TokenType::Continue => {
-				tokens.next();
-				Ok(Statement::Continue(next_tokens[0].span))
-			}
-			TokenType::Comment => {
-				tokens.next();
-				Ok(Statement::Comment{
-					comment_span: next_tokens[0].span,
-					value: Box::leak(NTStr::box_from_str_in(next_tokens[0].value, arena)).as_ntstrptr()
-				})
-			}
-			got_token => {
-				self.new_error(
-					next_tokens[0].span,
-					format_args!("Expected a statement token, but got {} on line {}", got_token, next_tokens[0].span.line)
-				)
-			},
-		}
-	}
+                    let is_chained;
+                    let else_block;
 
-	// local_variable -> word + (":" + type)? + "=" + " " + expr
-	fn parse_local_variable(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, arena: &'a Arena) -> Result<Statement<'a>, ParserError<'a>> {
-		assert_parsing_depth(parsing_depth)?;
-		let name_token = get_next_token(tokens)?;
-		let local_name = name_token.value; 
+                    if consume_next_token_types(tokens, &[TokenType::Space, TokenType::Else])
+                        .is_ok()
+                    {
+                        let [space_token, if_token] = peek_next_tokens(tokens)?;
+                        if TokenType::Space == space_token.ty && TokenType::If == if_token.ty {
+                            is_chained = true;
+                            consume_next_token_types(tokens, &[TokenType::Space]).unwrap();
+                            ifs.push((
+                                condition,
+                                is_chained,
+                                if_block,
+                                &mut [] as &mut [Statement],
+                            ));
+                            continue;
+                        } else {
+                            is_chained = false;
+                            else_block = self.parse_statements(
+                                tokens,
+                                parsing_depth,
+                                indentation + 1,
+                                arena,
+                            )?;
+                        }
+                    } else {
+                        is_chained = false;
+                        else_block = &mut [];
+                    }
+                    ifs.push((condition, is_chained, if_block, else_block));
+                    break;
+                }
+                let mut current = ifs
+                    .pop()
+                    .expect("We have parsed at least a single if statement");
+                for statement in ifs.into_iter().rev() {
+                    let else_block = std::slice::from_mut(Box::leak(Box::new_in(
+                        Statement::If {
+                            condition: current.0,
+                            is_chained: current.1,
+                            if_block: current.2,
+                            else_block: current.3,
+                        },
+                        arena,
+                    )));
+                    current = statement;
+                    current.3 = else_block;
+                }
+                Ok(Statement::If {
+                    condition: current.0,
+                    is_chained: current.1,
+                    if_block: current.2,
+                    else_block: current.3,
+                })
+            }
+            TokenType::Return => {
+                tokens.next();
+                let expr = if let TokenType::NewLine = next_tokens[1].ty {
+                    None
+                } else {
+                    consume_space(tokens)?;
+                    Some(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?)
+                };
+                Ok(Statement::Return {
+                    return_span: next_tokens[0].span,
+                    expr: expr.map(|expr| Box::leak(Box::new_in(expr, arena))),
+                })
+            }
+            TokenType::While => {
+                assert_parsing_depth(parsing_depth)?;
+                consume_next_token_types(tokens, &[TokenType::While, TokenType::Space])?;
 
-		let (ty, type_span) = if consume_next_token_types(tokens, &[TokenType::Colon]).is_ok() {
-			if local_name == "me" {
-				return self.new_error(
-					name_token.span,
-					format_args!("variable cannot be named 'me'"),
-				);
-			}
-			consume_space(tokens)?;
-			let (ty, type_span) = self.parse_type(tokens, arena)?;
+                let condition = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
+                let block =
+                    self.parse_statements(tokens, parsing_depth + 1, indentation + 1, arena)?;
 
-			if type_contains_resource(ty) {
-				return self.new_error(
-					type_span,
-					format_args!("The variable '{}' can't contain 'resource' in its type", local_name)
-				);
-			}
-			if type_contains_entity(ty) {
-				return self.new_error(
-					type_span,
-					format_args!("The variable '{}' can't contain 'entity' in its type", local_name)
-				);
-			}
-			(Some(ty), type_span)
-		} else {
-			(None, name_token.span)
-		};
-		// TODO: This error should just be folded into ExpectedSpace but it has
-		// to be different to match the required error message
-		match get_next_token(tokens)? {
-			Token{ty: TokenType::Space, ..} => (),
-			Token{span, ..} => return self.new_error(
-				*span,
-				format_args!("Variable '{}' was not assigned a value", local_name)
-			),
-		}
+                Ok(Statement::While { condition, block })
+            }
+            TokenType::Break => {
+                tokens.next();
+                Ok(Statement::Break(next_tokens[0].span))
+            }
+            TokenType::Continue => {
+                tokens.next();
+                Ok(Statement::Continue(next_tokens[0].span))
+            }
+            TokenType::Comment => {
+                tokens.next();
+                Ok(Statement::Comment {
+                    comment_span: next_tokens[0].span,
+                    value: Box::leak(NTStr::box_from_str_in(next_tokens[0].value, arena))
+                        .as_ntstrptr(),
+                })
+            }
+            got_token => self.new_error(
+                next_tokens[0].span,
+                format_args!(
+                    "Expected a statement token, but got {} on line {}",
+                    got_token, next_tokens[0].span.line
+                ),
+            ),
+        }
+    }
 
-		if local_name == "me" {
-			return self.new_error(
-				name_token.span,
-				// TODO: "Cannot assign to 'me'"
-				format_args!("Assigning a new value to the entity's 'me' variable is not allowed"),
-			);
-		}
+    // local_variable -> word + (":" + type)? + "=" + " " + expr
+    fn parse_local_variable(
+        &mut self,
+        tokens: &mut std::slice::Iter<'a, Token<'a>>,
+        parsing_depth: usize,
+        arena: &'a Arena,
+    ) -> Result<Statement<'a>, ParserError<'a>> {
+        assert_parsing_depth(parsing_depth)?;
+        let name_token = get_next_token(tokens)?;
+        let local_name = name_token.value;
 
-		consume_next_token_types(tokens, &[TokenType::Equal])?;
+        let (ty, type_span) = if consume_next_token_types(tokens, &[TokenType::Colon]).is_ok() {
+            if local_name == "me" {
+                return self.new_error(
+                    name_token.span,
+                    format_args!("variable cannot be named 'me'"),
+                );
+            }
+            consume_space(tokens)?;
+            let (ty, type_span) = self.parse_type(tokens, arena)?;
 
-		consume_space(tokens)?;
-		let assignment_expr = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
-		Ok(Statement::Variable{
-			name: Box::leak(NTStr::box_from_str_in(local_name, arena)).as_ntstrptr(),
-			ty: ty.map(|ty| &*Box::leak(Box::new_in(ty, arena))),
-			type_span,
-			assignment_expr,
-			name_span: name_token.span,
-		})
-	}
+            if type_contains_resource(ty) {
+                return self.new_error(
+                    type_span,
+                    format_args!(
+                        "The variable '{}' can't contain 'resource' in its type",
+                        local_name
+                    ),
+                );
+            }
+            if type_contains_entity(ty) {
+                return self.new_error(
+                    type_span,
+                    format_args!(
+                        "The variable '{}' can't contain 'entity' in its type",
+                        local_name
+                    ),
+                );
+            }
+            (Some(ty), type_span)
+        } else {
+            (None, name_token.span)
+        };
+        // TODO: This error should just be folded into ExpectedSpace but it has
+        // to be different to match the required error message
+        match get_next_token(tokens)? {
+            Token {
+                ty: TokenType::Space,
+                ..
+            } => (),
+            Token { span, .. } => {
+                return self.new_error(
+                    *span,
+                    format_args!("Variable '{}' was not assigned a value", local_name),
+                );
+            }
+        }
 
-	fn parse_expression(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, parsing_depth: usize, min_precedence: f32, arena: &'a Arena) -> Result<Expr<'a>, ParserError<'a>> {
-		assert_parsing_depth(parsing_depth)?;
-		let mut current: Expr = {
-			let Token{ty, span, value} = get_next_token(tokens)?;
-			match ty {
-				TokenType::OpenParenthesis => {
-					let expr = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
-					let _ = &consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?[0];
+        if local_name == "me" {
+            return self.new_error(
+                name_token.span,
+                // TODO: "Cannot assign to 'me'"
+                format_args!("Assigning a new value to the entity's 'me' variable is not allowed"),
+            );
+        }
 
-					Expr{
-						data: ExprData::Parenthesized(Box::leak(Box::new_in(expr, arena))),
-						result_type: None,
-						span: *span,
-					}
-				}
-				TokenType::True => {
-					Expr{
-						data: ExprData::True,
-						result_type: None,
-						span: *span,
-					}
-				}
-				TokenType::False => {
-					Expr{
-						data: ExprData::False,
-						result_type: None,
-						span: *span,
-					}
-				}
-				TokenType::String => {
-					Expr{
-						data: ExprData::String(Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr()),
-						result_type: None,
-						span: *span,
-					}
-				}
-				TokenType::Resource => {
-					Expr{
-						data: ExprData::Resource(Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr()),
-						result_type: None,
-						span: *span,
-					}
-				}
-				TokenType::Entity => {
-					Expr{
-						data: ExprData::Entity(Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr()),
-						result_type: None,
-						span: *span,
-					}
-				}
-				TokenType::Word => {
-					let value: &'a NTStr  = Box::leak(NTStr::box_from_str_in(value, arena));
-					// a word token can actually be a function call
-					if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenParenthesis]) {
-						if value.as_str().starts_with("_")
-							&& !self.called_local_functions.contains(&value.as_str())
-						{
-							self.called_local_functions.push(value);
-						}
-						
-						// immediate ")" | (expr + ("," + " " + expr)*) + ")"
-						
-						if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
-							Expr{
-								data: ExprData::Call {
-									receiver: None,
-									name: value.as_ntstrptr(),
-									args: Vec::new().leak(),
-									ptr : None,
-									name_span: *span,
-									generics: &[],
-								},
-								result_type: None,
-								span: *span,
-							}
-						} else {
-							let mut arguments = Vec::new_in(arena);
-							loop {
-								arguments.push(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?);
-								if let Ok([_, _]) = consume_next_token_types(tokens, &[TokenType::Comma, TokenType::Space]) {
-									
-								} else {
-									let [_] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
-									break Expr {
-										data: ExprData::Call {
-											receiver: None,
-											name: value.as_ntstrptr(),
-											args: arguments.leak(),
-											ptr : None,
-											name_span: *span,
-											generics: &[],
-										},
-										result_type: None,
-										span: *span,
-									};
-								}
-							}
-						}
-					} else {
-						Expr{
-							data: ExprData::Identifier(value.as_ntstrptr()),
-							result_type: None,
-							span: *span,
-						}
-					}
-				}
-				TokenType::Int32 => {
-					Expr{
-						data: ExprData::Number(
-							value.parse::<i64>().unwrap_or(f64::MAX as i64) as f64,
-							Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
-						),
-						result_type: None,
-						span: *span,
-					}
-				}
-				TokenType::Float32 => {
-					let number = value.parse::<f64>().unwrap();
-					if number > f64::MAX {
-						return self.new_error(
-							*span,
-							format_args!("The number {} is too big", value)
-						);
-					} else if (number != 0. && number < f64::MIN_POSITIVE) 
-						   || (number == 0. && value.contains(['1', '2', '3', '4', '5', '6', '7', '8', '9'])) {
-						return self.new_error(
-							*span,
-							format_args!("The number {} is too close to zero", value)
-						);
-					}
+        consume_next_token_types(tokens, &[TokenType::Equal])?;
 
-					Expr{
-						data: ExprData::Number(
-							number,
-							Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
-						),
-						result_type: None,
-						span: *span,
-					}
-				}
-				TokenType::Minus | TokenType::Not => {
-					let unary_op = match ty {
-						TokenType::Minus => UnaryOperator::Minus,
-						TokenType::Not => {consume_space(tokens)?; UnaryOperator::Not},
-						_ => unreachable!(),
-					};
-					let ((), r_bp) = Self::get_prefix_precedence(unary_op);
-					let expr = self.parse_expression(tokens, parsing_depth + 1, r_bp, arena)?;
-					Expr {
-						result_type: None,
-						data: ExprData::Unary{
-							op: unary_op,
-							expr: Box::leak(Box::new_in(expr, arena)),
-							op_span: *span,
-						},
-						span: *span,
-					}
-				}
-				_ =>  {
-					return self.new_error(
-						*span,
-						format_args!("Expected a primary expression token but got {}", ty)
-					);
-				}
-			}
-		};
-		while let Ok([space, op]) = peek_next_tokens(tokens) {
-			// Actually a method call
-			// TODO: Consume the dot and word token separately
-			// TODO: add a test to verify that a call can be a receiver 
-			// `_return_vec().push(25)` 
-			if let Ok([_, name]) = consume_next_token_types(tokens, &[TokenType::Dot, TokenType::Word]) {
-				let receiver = current;
-				let name_span = name.span;
-				let name: &'a NTStr  = arena.copy_str_into_nt(name.value);
-				// a word token can actually be a function call
-				let next_token = get_next_token(tokens)?;
-				if next_token.ty == TokenType::OpenParenthesis {
-					// immediate ")" | (expr + ("," + " " + expr)*) + ")"
-					
-					current = if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::CloseParenthesis]) {
-						Expr{
-							span: receiver.span,
-							data: ExprData::Call {
-								receiver: Some(arena.alloc_into(receiver)),
-								name: name.as_ntstrptr(),
-								args: Vec::new().leak(),
-								ptr : None,
-								name_span,
-								generics: &[],
-							},
-							result_type: None,
-						}
-					} else {
-						let mut arguments = Vec::new_in(arena);
-						loop {
-							arguments.push(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?);
-							if let Ok([_, _]) = consume_next_token_types(tokens, &[TokenType::Comma, TokenType::Space]) {
-								
-							} else {
-								let [_] = consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?;
-								break Expr {
-									span: receiver.span,
-									data: ExprData::Call {
-										receiver: Some(arena.alloc_into(receiver)),
-										name: name.as_ntstrptr(),
-										args: arguments.leak(),
-										ptr : None,
-										name_span,
-										generics: &[],
-									},
-									result_type: None,
-								}
-							}
-						}
-					};
-				} else {
-					// Reserved for struct field accesses
-					return self.new_error(
-						next_token.span,
-						format_args!("Method call expected '('")
-					);
-				}
-				continue;
-			}
-			// normal expresions must have a space
-			let TokenType::Space = space.ty else {
-				break;
-			};
-			let bin_op = match op.ty {
-				TokenType::Or => {
-					BinaryOperator::Or
-				}
-				TokenType::And => {
-					BinaryOperator::And
-				}
-				TokenType::DoubleEquals => {
-					BinaryOperator::DoubleEquals
-				}
-				TokenType::NotEquals => {
-					BinaryOperator::NotEquals
-				}
-				TokenType::Greater => {
-					BinaryOperator::Greater
-				}
-				TokenType::GreaterEquals => {
-					BinaryOperator::GreaterEquals
-				}
-				TokenType::Less => {
-					BinaryOperator::Less
-				}
-				TokenType::LessEquals => {
-					BinaryOperator::LessEquals
-				}
-				TokenType::Plus => {
-					BinaryOperator::Plus
-				}
-				TokenType::Minus => {
-					BinaryOperator::Minus
-				}
-				TokenType::Star => {
-					BinaryOperator::Multiply
-				}
-				TokenType::ForwardSlash => {
-					BinaryOperator::Division
-				}
-				_ => break,
-			};
-			let (l_bp, r_bp) = Self::get_infix_precedence(bin_op);
-			if l_bp < min_precedence {
-				break;
-			}
-			consume_space(tokens)?;
-			_ = get_next_token(tokens)?;
-			consume_space(tokens)?;
-			let next = self.parse_expression(tokens, parsing_depth + 1, r_bp, arena)?;
+        consume_space(tokens)?;
+        let assignment_expr = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
+        Ok(Statement::Variable {
+            name: Box::leak(NTStr::box_from_str_in(local_name, arena)).as_ntstrptr(),
+            ty: ty.map(|ty| &*Box::leak(Box::new_in(ty, arena))),
+            type_span,
+            assignment_expr,
+            name_span: name_token.span,
+        })
+    }
 
-			current = Expr {
-				span: current.span,
-				result_type: None,
-				data: ExprData::Binary {
-					op: bin_op,
-					left : Box::leak(Box::new_in(current, arena)),
-					right: Box::leak(Box::new_in(next   , arena)),
-					op_span: op.span,
-				},
-			};
-		}
-		Ok(current)
-	}
+    fn parse_expression(
+        &mut self,
+        tokens: &mut std::slice::Iter<'a, Token<'a>>,
+        parsing_depth: usize,
+        min_precedence: f32,
+        arena: &'a Arena,
+    ) -> Result<Expr<'a>, ParserError<'a>> {
+        assert_parsing_depth(parsing_depth)?;
+        let mut current: Expr = {
+            let Token { ty, span, value } = get_next_token(tokens)?;
+            match ty {
+                TokenType::OpenParenthesis => {
+                    let expr = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
+                    let _ = &consume_next_token_types(tokens, &[TokenType::CloseParenthesis])?[0];
 
-	fn get_prefix_precedence(op: UnaryOperator) -> ((), f32) {
-		match op {
-			UnaryOperator::Minus => ((), 7.0),
-			UnaryOperator::Not   => ((), 8.0),
-		}
-	}
+                    Expr {
+                        data: ExprData::Parenthesized(Box::leak(Box::new_in(expr, arena))),
+                        result_type: None,
+                        span: *span,
+                    }
+                }
+                TokenType::True => Expr {
+                    data: ExprData::True,
+                    result_type: None,
+                    span: *span,
+                },
+                TokenType::False => Expr {
+                    data: ExprData::False,
+                    result_type: None,
+                    span: *span,
+                },
+                TokenType::String => Expr {
+                    data: ExprData::String(
+                        Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
+                    ),
+                    result_type: None,
+                    span: *span,
+                },
+                TokenType::Resource => Expr {
+                    data: ExprData::Resource(
+                        Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
+                    ),
+                    result_type: None,
+                    span: *span,
+                },
+                TokenType::Entity => Expr {
+                    data: ExprData::Entity(
+                        Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
+                    ),
+                    result_type: None,
+                    span: *span,
+                },
+                TokenType::Word => {
+                    let value: &'a NTStr = Box::leak(NTStr::box_from_str_in(value, arena));
+                    // a word token can actually be a function call
+                    if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenParenthesis])
+                    {
+                        if value.as_str().starts_with("_")
+                            && !self.called_local_functions.contains(&value.as_str())
+                        {
+                            self.called_local_functions.push(value);
+                        }
 
-	fn get_infix_precedence(op: BinaryOperator) -> (f32, f32) {
-		match op {
-			BinaryOperator::Or            => (1.0, 1.1),
-			BinaryOperator::And           => (2.0, 2.1),
-			BinaryOperator::DoubleEquals  => (3.0, 3.1),
-			BinaryOperator::NotEquals     => (3.0, 3.1),
-			BinaryOperator::Greater       => (4.0, 4.1),
-			BinaryOperator::GreaterEquals => (4.0, 4.1),
-			BinaryOperator::Less          => (4.0, 4.1),
-			BinaryOperator::LessEquals    => (4.0, 4.1),
-			BinaryOperator::Plus          => (5.0, 5.1),
-			BinaryOperator::Minus         => (5.0, 5.1),
-			BinaryOperator::Multiply      => (6.0, 6.1),
-			BinaryOperator::Division      => (6.0, 6.1),
-		}
-	}
+                        // immediate ")" | (expr + ("," + " " + expr)*) + ")"
 
-	fn parse_type(&mut self, tokens: &mut std::slice::Iter<'a, Token<'a>>, arena: &'a Arena) -> Result<(Type<'a>, SourceSpan), ParserError<'a>> {
-		let [type_token] = consume_next_token_types(tokens, &[TokenType::Word])?;
-		if type_token.ty != TokenType::Word {
-			return self.new_error(
-				type_token.span,
-				format_args!("Expected word but got {}", type_token.ty)
-			);
-		}
-		Ok((match type_token.value {
-			"bool"     => Type::Bool,
-			"number"   => Type::Number,
-			"string"   => Type::String,
-			"resource" => Type::Resource{
-				extension: Box::leak(NTStr::box_from_str_in("", arena)).as_ntstrptr(),
-			},
-			"entity"   => Type::Entity {
-				entity_type: None,
-			},
-			type_name => {
-				let generics = if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenBracket]) {
-					let mut generics = Vec::new_in(arena);
-					generics.push(self.parse_type(tokens, arena)?.0);
-					
-					while let Ok([_]) = consume_next_token_types(tokens, &[TokenType::Comma]) {
-						consume_space(tokens)?;
-						generics.push(self.parse_type(tokens, arena)?.0);
-					}
-					consume_next_token_types(tokens, &[TokenType::CloseBracket])?;
-					&*generics.leak()
-				} else {
-					&[]
-				};
-				Type::Id {
-					name: arena.copy_str_into_nt(type_name).as_ntstrptr(),
-					generics,
-				}
-			}
-		}, type_token.span))
-	}
+                        if let Ok([_]) =
+                            consume_next_token_types(tokens, &[TokenType::CloseParenthesis])
+                        {
+                            Expr {
+                                data: ExprData::Call {
+                                    receiver: None,
+                                    name: value.as_ntstrptr(),
+                                    args: Vec::new().leak(),
+                                    ptr: None,
+                                    name_span: *span,
+                                    generics: &[],
+                                },
+                                result_type: None,
+                                span: *span,
+                            }
+                        } else {
+                            let mut arguments = Vec::new_in(arena);
+                            loop {
+                                arguments.push(self.parse_expression(
+                                    tokens,
+                                    parsing_depth + 1,
+                                    0.,
+                                    arena,
+                                )?);
+                                if let Ok([_, _]) = consume_next_token_types(
+                                    tokens,
+                                    &[TokenType::Comma, TokenType::Space],
+                                ) {
+                                } else {
+                                    let [_] = consume_next_token_types(
+                                        tokens,
+                                        &[TokenType::CloseParenthesis],
+                                    )?;
+                                    break Expr {
+                                        data: ExprData::Call {
+                                            receiver: None,
+                                            name: value.as_ntstrptr(),
+                                            args: arguments.leak(),
+                                            ptr: None,
+                                            name_span: *span,
+                                            generics: &[],
+                                        },
+                                        result_type: None,
+                                        span: *span,
+                                    };
+                                }
+                            }
+                        }
+                    } else {
+                        Expr {
+                            data: ExprData::Identifier(value.as_ntstrptr()),
+                            result_type: None,
+                            span: *span,
+                        }
+                    }
+                }
+                TokenType::Int32 => Expr {
+                    data: ExprData::Number(
+                        value.parse::<i64>().unwrap_or(f64::MAX as i64) as f64,
+                        Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
+                    ),
+                    result_type: None,
+                    span: *span,
+                },
+                TokenType::Float32 => {
+                    let number = value.parse::<f64>().unwrap();
+                    if number > f64::MAX {
+                        return self
+                            .new_error(*span, format_args!("The number {} is too big", value));
+                    } else if (number != 0. && number < f64::MIN_POSITIVE)
+                        || (number == 0.
+                            && value.contains(['1', '2', '3', '4', '5', '6', '7', '8', '9']))
+                    {
+                        return self.new_error(
+                            *span,
+                            format_args!("The number {} is too close to zero", value),
+                        );
+                    }
+
+                    Expr {
+                        data: ExprData::Number(
+                            number,
+                            Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
+                        ),
+                        result_type: None,
+                        span: *span,
+                    }
+                }
+                TokenType::Minus | TokenType::Not => {
+                    let unary_op = match ty {
+                        TokenType::Minus => UnaryOperator::Minus,
+                        TokenType::Not => {
+                            consume_space(tokens)?;
+                            UnaryOperator::Not
+                        }
+                        _ => unreachable!(),
+                    };
+                    let ((), r_bp) = Self::get_prefix_precedence(unary_op);
+                    let expr = self.parse_expression(tokens, parsing_depth + 1, r_bp, arena)?;
+                    Expr {
+                        result_type: None,
+                        data: ExprData::Unary {
+                            op: unary_op,
+                            expr: Box::leak(Box::new_in(expr, arena)),
+                            op_span: *span,
+                        },
+                        span: *span,
+                    }
+                }
+                _ => {
+                    return self.new_error(
+                        *span,
+                        format_args!("Expected a primary expression token but got {}", ty),
+                    );
+                }
+            }
+        };
+        while let Ok([space, op]) = peek_next_tokens(tokens) {
+            // Actually a method call
+            // TODO: Consume the dot and word token separately
+            // TODO: add a test to verify that a call can be a receiver
+            // `_return_vec().push(25)`
+            if let Ok([_, name]) =
+                consume_next_token_types(tokens, &[TokenType::Dot, TokenType::Word])
+            {
+                let receiver = current;
+                let name_span = name.span;
+                let name: &'a NTStr = arena.copy_str_into_nt(name.value);
+                // a word token can actually be a function call
+                let next_token = get_next_token(tokens)?;
+                if next_token.ty == TokenType::OpenParenthesis {
+                    // immediate ")" | (expr + ("," + " " + expr)*) + ")"
+
+                    current = if let Ok([_]) =
+                        consume_next_token_types(tokens, &[TokenType::CloseParenthesis])
+                    {
+                        Expr {
+                            span: receiver.span,
+                            data: ExprData::Call {
+                                receiver: Some(arena.alloc_into(receiver)),
+                                name: name.as_ntstrptr(),
+                                args: Vec::new().leak(),
+                                ptr: None,
+                                name_span,
+                                generics: &[],
+                            },
+                            result_type: None,
+                        }
+                    } else {
+                        let mut arguments = Vec::new_in(arena);
+                        loop {
+                            arguments.push(self.parse_expression(
+                                tokens,
+                                parsing_depth + 1,
+                                0.,
+                                arena,
+                            )?);
+                            if let Ok([_, _]) = consume_next_token_types(
+                                tokens,
+                                &[TokenType::Comma, TokenType::Space],
+                            ) {
+                            } else {
+                                let [_] = consume_next_token_types(
+                                    tokens,
+                                    &[TokenType::CloseParenthesis],
+                                )?;
+                                break Expr {
+                                    span: receiver.span,
+                                    data: ExprData::Call {
+                                        receiver: Some(arena.alloc_into(receiver)),
+                                        name: name.as_ntstrptr(),
+                                        args: arguments.leak(),
+                                        ptr: None,
+                                        name_span,
+                                        generics: &[],
+                                    },
+                                    result_type: None,
+                                };
+                            }
+                        }
+                    };
+                } else {
+                    // Reserved for struct field accesses
+                    return self
+                        .new_error(next_token.span, format_args!("Method call expected '('"));
+                }
+                continue;
+            }
+            // normal expresions must have a space
+            let TokenType::Space = space.ty else {
+                break;
+            };
+            let bin_op = match op.ty {
+                TokenType::Or => BinaryOperator::Or,
+                TokenType::And => BinaryOperator::And,
+                TokenType::DoubleEquals => BinaryOperator::DoubleEquals,
+                TokenType::NotEquals => BinaryOperator::NotEquals,
+                TokenType::Greater => BinaryOperator::Greater,
+                TokenType::GreaterEquals => BinaryOperator::GreaterEquals,
+                TokenType::Less => BinaryOperator::Less,
+                TokenType::LessEquals => BinaryOperator::LessEquals,
+                TokenType::Plus => BinaryOperator::Plus,
+                TokenType::Minus => BinaryOperator::Minus,
+                TokenType::Star => BinaryOperator::Multiply,
+                TokenType::ForwardSlash => BinaryOperator::Division,
+                _ => break,
+            };
+            let (l_bp, r_bp) = Self::get_infix_precedence(bin_op);
+            if l_bp < min_precedence {
+                break;
+            }
+            consume_space(tokens)?;
+            _ = get_next_token(tokens)?;
+            consume_space(tokens)?;
+            let next = self.parse_expression(tokens, parsing_depth + 1, r_bp, arena)?;
+
+            current = Expr {
+                span: current.span,
+                result_type: None,
+                data: ExprData::Binary {
+                    op: bin_op,
+                    left: Box::leak(Box::new_in(current, arena)),
+                    right: Box::leak(Box::new_in(next, arena)),
+                    op_span: op.span,
+                },
+            };
+        }
+        Ok(current)
+    }
+
+    fn get_prefix_precedence(op: UnaryOperator) -> ((), f32) {
+        match op {
+            UnaryOperator::Minus => ((), 7.0),
+            UnaryOperator::Not => ((), 8.0),
+        }
+    }
+
+    fn get_infix_precedence(op: BinaryOperator) -> (f32, f32) {
+        match op {
+            BinaryOperator::Or => (1.0, 1.1),
+            BinaryOperator::And => (2.0, 2.1),
+            BinaryOperator::DoubleEquals => (3.0, 3.1),
+            BinaryOperator::NotEquals => (3.0, 3.1),
+            BinaryOperator::Greater => (4.0, 4.1),
+            BinaryOperator::GreaterEquals => (4.0, 4.1),
+            BinaryOperator::Less => (4.0, 4.1),
+            BinaryOperator::LessEquals => (4.0, 4.1),
+            BinaryOperator::Plus => (5.0, 5.1),
+            BinaryOperator::Minus => (5.0, 5.1),
+            BinaryOperator::Multiply => (6.0, 6.1),
+            BinaryOperator::Division => (6.0, 6.1),
+        }
+    }
+
+    fn parse_type(
+        &mut self,
+        tokens: &mut std::slice::Iter<'a, Token<'a>>,
+        arena: &'a Arena,
+    ) -> Result<(Type<'a>, SourceSpan), ParserError<'a>> {
+        let [type_token] = consume_next_token_types(tokens, &[TokenType::Word])?;
+        if type_token.ty != TokenType::Word {
+            return self.new_error(
+                type_token.span,
+                format_args!("Expected word but got {}", type_token.ty),
+            );
+        }
+        Ok((
+            match type_token.value {
+                "bool" => Type::Bool,
+                "number" => Type::Number,
+                "string" => Type::String,
+                "resource" => Type::Resource {
+                    extension: Box::leak(NTStr::box_from_str_in("", arena)).as_ntstrptr(),
+                },
+                "entity" => Type::Entity { entity_type: None },
+                type_name => {
+                    let generics = if let Ok([_]) =
+                        consume_next_token_types(tokens, &[TokenType::OpenBracket])
+                    {
+                        let mut generics = Vec::new_in(arena);
+                        generics.push(self.parse_type(tokens, arena)?.0);
+
+                        while let Ok([_]) = consume_next_token_types(tokens, &[TokenType::Comma]) {
+                            consume_space(tokens)?;
+                            generics.push(self.parse_type(tokens, arena)?.0);
+                        }
+                        consume_next_token_types(tokens, &[TokenType::CloseBracket])?;
+                        &*generics.leak()
+                    } else {
+                        &[]
+                    };
+                    Type::Id {
+                        name: arena.copy_str_into_nt(type_name).as_ntstrptr(),
+                        generics,
+                    }
+                }
+            },
+            type_token.span,
+        ))
+    }
 }
 
 fn type_contains_resource(ty: Type) -> bool {
-	match ty {
-		Type::Resource{..} => true,
-		Type::Id{generics, name: _} => {
-			generics.iter().copied().any(type_contains_resource)
-		}
-		_ => false,
-	}
+    match ty {
+        Type::Resource { .. } => true,
+        Type::Id { generics, name: _ } => generics.iter().copied().any(type_contains_resource),
+        _ => false,
+    }
 }
 
 fn type_contains_entity(ty: Type) -> bool {
-	match ty {
-		Type::Entity{..} => true,
-		Type::Id{generics, name: _} => {
-			generics.iter().copied().any(type_contains_entity)
-		}
-		_ => false,
-	}
+    match ty {
+        Type::Entity { .. } => true,
+        Type::Id { generics, name: _ } => generics.iter().copied().any(type_contains_entity),
+        _ => false,
+    }
 }
 
-fn is_end_of_block<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, indentation: usize) -> Result<bool, ParserError<'a>> {
-	use super::SPACES_PER_INDENT;
+fn is_end_of_block<'a>(
+    tokens: &mut std::slice::Iter<'a, Token<'a>>,
+    indentation: usize,
+) -> Result<bool, ParserError<'a>> {
+    use super::SPACES_PER_INDENT;
 
-	assert!(indentation != 0);
-	let next_token = peek_next_token(tokens)?;
-	match next_token.ty {
-		TokenType::CloseBrace => Ok(true),
-		TokenType::NewLine => Ok(false),
-		TokenType::Indentation => {
-			Ok(next_token.value.len() == (indentation - 1) * SPACES_PER_INDENT)
-		}
-		_ => Err(ParserError::ExpectedIndentation {
-			got: *next_token,
-		})
-	}
+    assert!(indentation != 0);
+    let next_token = peek_next_token(tokens)?;
+    match next_token.ty {
+        TokenType::CloseBrace => Ok(true),
+        TokenType::NewLine => Ok(false),
+        TokenType::Indentation => {
+            Ok(next_token.value.len() == (indentation - 1) * SPACES_PER_INDENT)
+        }
+        _ => Err(ParserError::ExpectedIndentation { got: *next_token }),
+    }
 }
 
 // Checks if the passed in parsing_depth is allowed
 #[track_caller]
 fn assert_parsing_depth(parsing_depth: usize) -> Result<(), ParserError<'static>> {
-	if parsing_depth > MAX_PARSING_DEPTH {
-		Err(ParserError::ExceededMaxParsingDepth)
-	} else {
-		Ok(())
-	}
+    if parsing_depth > MAX_PARSING_DEPTH {
+        Err(ParserError::ExceededMaxParsingDepth)
+    } else {
+        Ok(())
+    }
 }
 
 // checks whether the next few tokens match the expected tokens without consuming the input
 #[track_caller]
-fn assert_next_token_types<'a, const N: usize>(tokens: &std::slice::Iter<'a, Token<'a>>, expected: &[TokenType; N]) -> Result<&'a [Token<'a>;N], ParserError<'a>> {
-	if tokens.len() < expected.len() {
-		return Err(ParserError::UnexpectedEof{expected: expected[tokens.len()]});
-	}
-	for (got, expected) in tokens.clone().zip(expected) {
-		if got.ty != *expected {
-			return Err(ParserError::GotWrongToken{
-				expected: *expected,
-				got: *got,
-			});
-		}
-	}
-	Ok(unsafe{&*(tokens.as_slice().as_ptr() as *const [Token; N])})
+fn assert_next_token_types<'a, const N: usize>(
+    tokens: &std::slice::Iter<'a, Token<'a>>,
+    expected: &[TokenType; N],
+) -> Result<&'a [Token<'a>; N], ParserError<'a>> {
+    if tokens.len() < expected.len() {
+        return Err(ParserError::UnexpectedEof {
+            expected: expected[tokens.len()],
+        });
+    }
+    for (got, expected) in tokens.clone().zip(expected) {
+        if got.ty != *expected {
+            return Err(ParserError::GotWrongToken {
+                expected: *expected,
+                got: *got,
+            });
+        }
+    }
+    Ok(unsafe { &*(tokens.as_slice().as_ptr() as *const [Token; N]) })
 }
 
 // consumes the next few tokens if they match the given types, otherwise leaves the input unchanged
 #[track_caller]
-fn consume_next_token_types<'a, const N: usize>(tokens: &mut std::slice::Iter<'a, Token<'a>>, expected: &'_ [TokenType; N]) -> Result<&'a [Token<'a>; N], ParserError<'a>> {
-	let ret_val = assert_next_token_types(tokens, expected)?;
-	*tokens = tokens.as_slice()[expected.len()..].iter();
-	Ok(ret_val)
+fn consume_next_token_types<'a, const N: usize>(
+    tokens: &mut std::slice::Iter<'a, Token<'a>>,
+    expected: &'_ [TokenType; N],
+) -> Result<&'a [Token<'a>; N], ParserError<'a>> {
+    let ret_val = assert_next_token_types(tokens, expected)?;
+    *tokens = tokens.as_slice()[expected.len()..].iter();
+    Ok(ret_val)
 }
 
 #[track_caller]
-fn get_next_token<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError<'static>> {
-	tokens.next().ok_or(ParserError::OutOfTokensError)
+fn get_next_token<'a>(
+    tokens: &mut std::slice::Iter<'a, Token<'a>>,
+) -> Result<&'a Token<'a>, ParserError<'static>> {
+    tokens.next().ok_or(ParserError::OutOfTokensError)
 }
 
 #[track_caller]
-fn peek_next_token<'a>(tokens: &std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError<'static>> {
-	tokens.as_slice().first().ok_or(ParserError::OutOfTokensError)
+fn peek_next_token<'a>(
+    tokens: &std::slice::Iter<'a, Token<'a>>,
+) -> Result<&'a Token<'a>, ParserError<'static>> {
+    tokens
+        .as_slice()
+        .first()
+        .ok_or(ParserError::OutOfTokensError)
 }
 
 #[track_caller]
-fn peek_next_tokens<'a, const N: usize> (tokens: &std::slice::Iter<'a, Token<'a>>) -> Result<&'a [Token<'a>; N], ParserError<'static>> {
-	Ok(unsafe{&*(tokens.as_slice().get(..N).ok_or(ParserError::OutOfTokensError)? as *const _ as * const _)})
+fn peek_next_tokens<'a, const N: usize>(
+    tokens: &std::slice::Iter<'a, Token<'a>>,
+) -> Result<&'a [Token<'a>; N], ParserError<'static>> {
+    Ok(unsafe {
+        &*(tokens
+            .as_slice()
+            .get(..N)
+            .ok_or(ParserError::OutOfTokensError)? as *const _ as *const _)
+    })
 }
 
 #[track_caller]
-fn consume_space<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>) -> Result<&'a Token<'a>, ParserError<'a>> {
-	let token = get_next_token(tokens)?;
-	
-	if token.ty != TokenType::Space {
-		return Err(ParserError::ExpectedSpace{got: *token});
-	}
-	Ok(token)
+fn consume_space<'a>(
+    tokens: &mut std::slice::Iter<'a, Token<'a>>,
+) -> Result<&'a Token<'a>, ParserError<'a>> {
+    let token = get_next_token(tokens)?;
+
+    if token.ty != TokenType::Space {
+        return Err(ParserError::ExpectedSpace { got: *token });
+    }
+    Ok(token)
 }
 
 #[track_caller]
-fn consume_indentation<'a>(tokens: &mut std::slice::Iter<'a, Token<'a>>, indentation: usize) -> Result<&'a Token<'a>, ParserError<'a>> {
-	use super::SPACES_PER_INDENT;
-	
-	let [token] = consume_next_token_types(tokens, &[TokenType::Indentation])?;
-	let spaces = token.value.len();
-	if spaces != indentation * SPACES_PER_INDENT {
-		return Err(ParserError::IndentationMismatch{
-			expected_spaces: indentation * SPACES_PER_INDENT,
-			token: *token,
-		});
-	}
-	Ok(token)
-}
+fn consume_indentation<'a>(
+    tokens: &mut std::slice::Iter<'a, Token<'a>>,
+    indentation: usize,
+) -> Result<&'a Token<'a>, ParserError<'a>> {
+    use super::SPACES_PER_INDENT;
 
+    let [token] = consume_next_token_types(tokens, &[TokenType::Indentation])?;
+    let spaces = token.value.len();
+    if spaces != indentation * SPACES_PER_INDENT {
+        return Err(ParserError::IndentationMismatch {
+            expected_spaces: indentation * SPACES_PER_INDENT,
+            token: *token,
+        });
+    }
+    Ok(token)
+}

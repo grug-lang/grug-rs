@@ -1,40 +1,65 @@
 #![deny(warnings)]
+use gruggers::nt;
 use gruggers::state::{GrugInitSettings, GrugState};
 use gruggers::types::Value;
-use gruggers::nt;
 
 use std::time::Duration;
 
 mod game_fns {
-	use super::*;
-	use gruggers::ast::Type;
-	pub extern "C" fn print_string<'a>(_state: &'a GrugState, arguments: *const Value, _: &[Type;0]) -> Value {
-		unsafe {
-			let string = (*arguments).string.to_str();
-			println!("{}", string);
-		}
-		Value{void: ()}
-	}
+    use super::*;
+    use gruggers::ast::Type;
+    pub extern "C" fn print_string<'a>(
+        _state: &'a GrugState,
+        arguments: *const Value,
+        _: &[Type; 0],
+    ) -> Value {
+        unsafe {
+            let string = (*arguments).string.to_str();
+            println!("{}", string);
+        }
+        Value { void: () }
+    }
 }
 use game_fns::*;
 
-fn main () {
-	let mut state = GrugInitSettings::new()
-		.set_mods_dir("gruggers/examples/minimal/mods")
-		.set_mod_api_path("gruggers/examples/minimal/mod_api.json")
-		.build_state().unwrap();
-	unsafe{state.register_host_fn("print_string", print_string).unwrap()};
-	state.all_host_fns_registered().unwrap();
+fn main() {
+    let mut state = GrugInitSettings::new()
+        .set_mods_dir("gruggers/examples/minimal/mods")
+        .set_mod_api_path("gruggers/examples/minimal/mod_api.json")
+        .build_state()
+        .unwrap();
+    unsafe {
+        state
+            .register_host_fn("print_string", print_string)
+            .unwrap()
+    };
+    state.all_host_fns_registered().unwrap();
 
-	let files = state.compile_all_files();
-	let id = *files.files()[0].result().as_ref().unwrap();
-	let dog = state.create_entity(id).unwrap();
-	let on_bark_id = state.get_export_fn_id("Dog", "bark").unwrap();
+    let files = state.compile_all_files();
+    let id = *files.files()[0].result().as_ref().unwrap();
+    let dog = state.create_entity(id).unwrap();
+    let on_bark_id = state.get_export_fn_id("Dog", "bark").unwrap();
 
-	loop {
-		_ = state.update_files();
-		if !state.call_export_fn(&*dog, on_bark_id, &[Value{string: nt!("woof").as_ntstrptr()}]) {panic!()};
-		if !state.call_export_fn(&*dog, on_bark_id, &[Value{string: nt!("arf").as_ntstrptr()}]) {panic!()};
-		std::thread::sleep(Duration::from_secs(1));
-	}
+    loop {
+        _ = state.update_files();
+        if !state.call_export_fn(
+            &*dog,
+            on_bark_id,
+            &[Value {
+                string: nt!("woof").as_ntstrptr(),
+            }],
+        ) {
+            panic!()
+        };
+        if !state.call_export_fn(
+            &*dog,
+            on_bark_id,
+            &[Value {
+                string: nt!("arf").as_ntstrptr(),
+            }],
+        ) {
+            panic!()
+        };
+        std::thread::sleep(Duration::from_secs(1));
+    }
 }

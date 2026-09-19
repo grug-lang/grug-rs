@@ -11,6 +11,6 @@ use crate::runtime_error::RuntimeError;
 /// passed in as through a generic parameter). The backend is expected to store
 /// the function as a function pointer.
 pub trait State: Sized {
-	/// Tell the state to call the runtime error handler with this runtime error struct.
-	fn handle_runtime_error(&self, error: &RuntimeError);
+    /// Tell the state to call the runtime error handler with this runtime error struct.
+    fn handle_runtime_error(&self, error: &RuntimeError);
 }
