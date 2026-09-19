@@ -72,6 +72,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::Duration;
 
 /// Called by the
 #[repr(C)]
@@ -135,14 +136,7 @@ pub struct GrugInitSettings<'a> {
     mods_dir_path: Option<NonNull<u8>>,
     mods_dir_path_len: usize,
     runtime_error_handler: Option<RuntimeErrorHandler>,
-    /// How often the background file watcher rescans the mods directory
-    /// for changes, on platforms that don't have a native change
-    /// notification API to fall back to (see [`crate::watcher`]). Defaults
-    /// to 1 second. Most hosts have no reason to change this; it's mainly
-    /// useful for shrinking well below the default in automated tests, so
-    /// they don't have to wait out someone else's timer to observe a
-    /// change.
-    poll_interval: Option<std::time::Duration>,
+    poll_interval_ms: u64,
 
     backend: Option<ErasedBackend<GrugState>>,
 }
@@ -162,7 +156,7 @@ impl<'a> GrugInitSettings<'a> {
             mods_dir_path: None,
             mods_dir_path_len: 0,
             runtime_error_handler: None,
-            poll_interval: None,
+            poll_interval_ms: 0,
             backend: None,
         }
     }
@@ -205,7 +199,7 @@ impl<'a> GrugInitSettings<'a> {
     /// for changes, on platforms without a native change notification API
     /// to fall back to. Defaults to 1 second if never called.
     pub fn set_poll_interval(mut self, interval: std::time::Duration) -> Self {
-        self.poll_interval = Some(interval);
+        self.poll_interval_ms = interval.as_millis() as u64;
         self
     }
 
@@ -222,8 +216,8 @@ impl<'a> GrugInitSettings<'a> {
             mods_dir_path,
             self.runtime_error_handler
                 .unwrap_or_else(RuntimeErrorHandler::new_default),
-            self.poll_interval
-                .unwrap_or(std::time::Duration::from_secs(1)),
+            if self.poll_interval_ms == 0 {Duration::from_secs(1)} 
+			else {Duration::from_millis(self.poll_interval_ms)},
             self.backend
                 .unwrap_or_else(|| BytecodeBackend::new().into()),
         )
@@ -256,7 +250,7 @@ impl<'a> GrugInitSettings<'a> {
     }
 }
 
-impl Default for GrugInitSettings<'static> {
+impl<'a> Default for GrugInitSettings<'a> {
     fn default() -> Self {
         Self::new()
     }
@@ -827,14 +821,13 @@ impl<'a> std::ops::Deref for GrugEntityHandle<'a> {
 mod files {
     use crate::arena::Arena;
     use crate::error::GrugError;
-    use crate::ntstring::{NTBytes, NTStrPtr};
+    use crate::ntstring::{NTOsStrPtr, NTStrPtr};
     use crate::own_ptr::OwnPtr;
     use crate::state::INVALID_GRUG_FILE_ID;
     use crate::types::FileId;
 
     use std::ffi::OsStr;
     use std::mem::MaybeUninit;
-    use std::path::Path;
 
     pub struct Files {
         /// Fuck man, we just need 'unsafe already
@@ -868,18 +861,18 @@ mod files {
     #[repr(C)]
     pub struct FileInfo<'a> {
         /// Full path to the file relative to the mods directory
-        pub(crate) path: NTBytes<'a>,
+        pub(crate) path: NTOsStrPtr<'a>,
         /// Filename component of the path
-        pub(crate) file_name: NTBytes<'a>,
+        pub(crate) file_name: NTOsStrPtr<'a>,
         /// first level directory within the mods directory
         // TODO: Check that mods directly within the mods directory (i.e, mods with an empty mod_name) don't
         // cause problems. This is technically disallowed by grug but grugc
         // uses this behavior
-        pub(crate) mod_name: NTBytes<'a>,
+        pub(crate) mod_name: NTOsStrPtr<'a>,
         /// Portion of the filename between the '-' and '.'
         pub(crate) entity_type: NTStrPtr<'a>,
         /// Portion of the filename before the '-'
-        pub(crate) entity_name: NTBytes<'a>,
+        pub(crate) entity_name: NTOsStrPtr<'a>,
         /// These two files are actually a Result<FileId, GrugError<'a>>
         /// Err case is when file_id === INVALID_GRUG_FILE_ID
         pub(crate) file_id: FileId,
@@ -896,30 +889,12 @@ mod files {
             result: Result<FileId, GrugError>,
             arena: &'a Arena,
         ) -> Self {
-            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-            let path = unsafe {
-                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(path.as_encoded_bytes()))
-            };
-            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-            let file_name = unsafe {
-                NTBytes::from_bytes_unchecked(
-                    arena.copy_bytes_into_nt(file_name.as_encoded_bytes()),
-                )
-            };
-            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-            let mod_name = unsafe {
-                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(mod_name.as_encoded_bytes()))
-            };
-            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice,
-            // and the returned slice is utf8 encoded because it comes from a
-            // str
+			let path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
+			let file_name = arena.copy_osstr_into_nt(file_name).as_ntosstrptr();
+			let mod_name = arena.copy_osstr_into_nt(mod_name).as_ntosstrptr();
             let entity_type = arena.copy_str_into_nt(entity_type).as_ntstrptr();
-            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-            let entity_name = unsafe {
-                NTBytes::from_bytes_unchecked(
-                    arena.copy_bytes_into_nt(entity_name.as_encoded_bytes()),
-                )
-            };
+			let entity_name = arena.copy_osstr_into_nt(entity_name).as_ntosstrptr();
+
             let (file_id, error) = match result {
                 Ok(id) => (id, MaybeUninit::uninit()),
                 Err(err) => (INVALID_GRUG_FILE_ID, MaybeUninit::new(err.copy_into(arena))),
@@ -935,28 +910,13 @@ mod files {
             }
         }
         pub fn copy_into<'b>(&self, arena: &'b Arena) -> FileInfo<'b> {
-            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-            let path = unsafe {
-                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.path.to_bytes()))
-            };
-            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-            let file_name = unsafe {
-                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.file_name.to_bytes()))
-            };
-            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-            let mod_name = unsafe {
-                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.mod_name.to_bytes()))
-            };
-            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice,
-            // and the returned slice is utf8 encoded because it comes from a
-            // str
+			let path = arena.copy_osstr_into_nt(self.path.to_osstr()).as_ntosstrptr();
+			let file_name = arena.copy_osstr_into_nt(self.file_name.to_osstr()).as_ntosstrptr();
+			let mod_name = arena.copy_osstr_into_nt(self.mod_name.to_osstr()).as_ntosstrptr();
             let entity_type = arena
                 .copy_str_into_nt(self.entity_type.to_str())
                 .as_ntstrptr();
-            // Safety: `copy_bytes_into_nt` returns a null terminated byte slice
-            let entity_name = unsafe {
-                NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(self.entity_name.to_bytes()))
-            };
+			let entity_name = arena.copy_osstr_into_nt(self.entity_name.to_osstr()).as_ntosstrptr();
             let (file_id, error) = if self.file_id == INVALID_GRUG_FILE_ID {
                 // SAFETY: self.error is intialized if self.file_id == INVALID_GRUG_FILE_ID
                 (
@@ -975,21 +935,6 @@ mod files {
                 file_id,
                 error,
             }
-        }
-        pub fn path(&self) -> &Path {
-            OsStr::as_ref(unsafe { OsStr::from_encoded_bytes_unchecked(self.path.to_bytes()) })
-        }
-        pub fn file_name(&self) -> &OsStr {
-            unsafe { OsStr::from_encoded_bytes_unchecked(self.file_name.to_bytes()) }
-        }
-        pub fn mod_name(&self) -> &OsStr {
-            unsafe { OsStr::from_encoded_bytes_unchecked(self.mod_name.to_bytes()) }
-        }
-        pub fn entity_type(&self) -> &str {
-            self.entity_type.to_str()
-        }
-        pub fn entity_name(&self) -> &OsStr {
-            unsafe { OsStr::from_encoded_bytes_unchecked(self.entity_name.to_bytes()) }
         }
         pub fn result(&self) -> Result<FileId, GrugError<'_>> {
             if self.file_id == INVALID_GRUG_FILE_ID {
@@ -1013,7 +958,7 @@ mod files {
     /// used to validate that a resource exists at compile time, they no
     /// longer register a file watch.
     pub struct ResourcePaths {
-        pub(crate) inner: OwnPtr<'static, [NTBytes<'static>]>,
+        pub(crate) inner: OwnPtr<'static, [NTOsStrPtr<'static>]>,
         pub(crate) _arena: Arena,
     }
 
@@ -1032,7 +977,7 @@ mod files {
         }
 
         /// Get the paths of every updated resource
-        pub fn paths<'a>(&'a self) -> &'a [NTBytes<'a>] {
+        pub fn paths<'a>(&'a self) -> &'a [NTOsStrPtr<'a>] {
             &self.inner
         }
     }

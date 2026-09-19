@@ -7,22 +7,19 @@ mod test_bindings {
     use gruggers::arena::Arena;
     use gruggers::backend::{BytecodeBackend, StubBackend};
     use gruggers::nt;
-    use gruggers::ntstring::{NTBytes, NTStr, NTStrPtr};
+    use gruggers::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
     use gruggers::serde;
     use gruggers::state::{GrugEntityHandle, GrugInitSettings, GrugState};
     use gruggers::types::{FileId, Value};
 
-    use std::ffi::OsStr;
     use std::path::Path;
 
     type CState = (GrugState, Arena);
 
-    pub extern "C" fn parse_mod_api(mod_api_path: NTBytes) -> Option<NTBytes<'static>> {
+    pub extern "C" fn parse_mod_api(mod_api_path: NTOsStrPtr) -> Option<NTStrPtr<'static>> {
         let state = GrugInitSettings::new()
-            .set_mod_api_path(unsafe {
-                OsStr::from_encoded_bytes_unchecked(mod_api_path.to_bytes())
-            })
-            .set_mods_dir(unsafe { OsStr::from_encoded_bytes_unchecked(b".") })
+			.set_mod_api_path(mod_api_path.to_osstr())
+            .set_mods_dir(".")
             .set_backend(StubBackend)
             .build_state();
         match state {
@@ -36,15 +33,13 @@ mod test_bindings {
     }
 
     pub extern "C" fn create_grug_state<'a>(
-        mod_api_path: NTBytes<'a>,
-        mods_dir_path: NTBytes<'a>,
+        mod_api_path: NTOsStrPtr<'a>,
+        mods_dir_path: NTOsStrPtr<'a>,
         _unsafe_mode: bool,
     ) -> Option<Box<CState>> {
         let mut state = GrugInitSettings::new()
-            .set_mod_api_path(unsafe {
-                OsStr::from_encoded_bytes_unchecked(mod_api_path.to_bytes())
-            })
-            .set_mods_dir(unsafe { OsStr::from_encoded_bytes_unchecked(mods_dir_path.to_bytes()) })
+			.set_mod_api_path(mod_api_path.to_osstr())
+			.set_mods_dir(mods_dir_path.to_osstr())
             .set_poll_interval(std::time::Duration::from_millis(20))
             .set_runtime_error_handler(|error| {
                 unsafe {
@@ -83,14 +78,13 @@ mod test_bindings {
 
     pub extern "C" fn compile_grug_file<'a>(
         cstate: &'a CState,
-        path: NTBytes<'_>,
+        path: NTOsStrPtr<'_>,
         err_out: &'_ mut Option<NTStrPtr<'a>>,
     ) -> FileId {
-        let path = path.to_bytes();
         let (state, arena) = cstate;
 
         // SAFETY: Bite me
-        match state.compile_grug_file(unsafe { OsStr::from_encoded_bytes_unchecked(path) }) {
+        match state.compile_grug_file(path.to_osstr()) {
             Ok(id) => {
                 *err_out = None;
                 id
@@ -281,15 +275,15 @@ mod test_bindings {
     #[allow(non_camel_case_types)]
     // pub type c_size_t = u64;
     #[allow(non_camel_case_types)]
-    pub type parse_mod_api_t = for<'a> extern "C" fn(NTBytes<'a>) -> Option<NTBytes<'static>>;
+    pub type parse_mod_api_t = for<'a> extern "C" fn(NTOsStrPtr<'a>) -> Option<NTStrPtr<'static>>;
     #[allow(non_camel_case_types)]
     pub type create_grug_state_t =
-        for<'a> extern "C" fn(NTBytes<'a>, NTBytes<'a>, bool) -> Option<Box<CState>>;
+        for<'a> extern "C" fn(NTOsStrPtr<'a>, NTOsStrPtr<'a>, bool) -> Option<Box<CState>>;
     #[allow(non_camel_case_types)]
     pub type destroy_grug_state_t = extern "C" fn(Box<CState>);
     #[allow(non_camel_case_types)]
     pub type compile_grug_file_t =
-        for<'a> extern "C" fn(&'a CState, NTBytes<'_>, &mut Option<NTStrPtr<'a>>) -> FileId;
+        for<'a> extern "C" fn(&'a CState, NTOsStrPtr<'_>, &mut Option<NTStrPtr<'a>>) -> FileId;
     #[allow(non_camel_case_types)]
     pub type destroy_grug_file_t = extern "C" fn(&'_ CState, FileId);
     #[allow(non_camel_case_types)]
@@ -362,7 +356,7 @@ mod test_bindings {
             reason: NTStrPtr<'a>,
             ty: i32,
             on_fn_name: NTStrPtr<'a>,
-            on_fn_path: NTBytes<'a>,
+            on_fn_path: NTOsStrPtr<'a>,
         );
         #[allow(improper_ctypes)]
         pub fn grug_tests_run(
