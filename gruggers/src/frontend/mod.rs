@@ -182,7 +182,7 @@ impl GrugState {
                 &self.mod_api,
                 &arena,
                 &arena,
-                &mut *self.type_storage.borrow_mut(),
+                &mut self.type_storage.borrow_mut(),
             )?;
             let id = self.get_or_insert_script_id(path.as_ref());
             self.backend.insert_file(id, &file);
@@ -211,7 +211,7 @@ impl GrugState {
     /// system apis if available on the current platform
     pub fn compile_all_files(&self) -> Files {
         // iterate over all files and get all valid paths
-        let arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
+        let arena = self.arenas.borrow_mut().pop().unwrap_or_default();
 
         let mut file_paths = Vec::new_in(&arena);
         let mut files = std::vec::Vec::new();
@@ -275,7 +275,7 @@ impl GrugState {
         let mut recv_count = 0;
         // Chunk into FILES_PER_THREAD sized blocks
         for chunk in file_paths.chunks(Self::FILES_PER_THREAD) {
-            let cur_arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
+            let cur_arena = self.arenas.borrow_mut().pop().unwrap_or_default();
 
             // We need to allocate the paths into the new arena to ensure panic safety
             //
@@ -383,7 +383,7 @@ impl GrugState {
     /// script: those strings are only used to validate that a resource
     /// exists at compile time, they no longer register a file watch.
     pub fn update_files(&self) -> (ResourcePaths, Files) {
-        let arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
+        let arena = self.arenas.borrow_mut().pop().unwrap_or_default();
         let mut file_paths = Vec::new_in(&arena);
         let mut updated_resources = std::vec::Vec::new();
 
@@ -407,7 +407,7 @@ impl GrugState {
         let mut recv_count = 0;
         // Chunk into FILES_PER_THREAD sized blocks
         for chunk in file_paths.chunks(Self::FILES_PER_THREAD) {
-            let cur_arena = self.arenas.borrow_mut().pop().unwrap_or_else(Arena::new);
+            let cur_arena = self.arenas.borrow_mut().pop().unwrap_or_default();
 
             // We need to allocate the paths into the new arena to ensure panic safety
             //
@@ -543,7 +543,7 @@ impl GrugState {
         let mod_name = get_mod_name(path);
         let entity_type = get_entity_type(path)?;
 
-        if file_text.len() == 0 {
+        if file_text.is_empty() {
             return Err(Error::new(
                 ErrorKind::EMPTY_FILE,
                 "",

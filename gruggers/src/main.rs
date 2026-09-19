@@ -3,7 +3,7 @@ use std::path::Path;
 use gruggers::backend::StubBackend;
 use gruggers::state::{GrugInitSettings, GrugState};
 
-const BIN_NAME: &'static str = "grugc";
+const BIN_NAME: &str = "grugc";
 // '
 
 type Result<T> = core::result::Result<T, Error>;
@@ -22,7 +22,7 @@ fn main() -> Result<()> {
         Err(err) => {
             println!("{}", err);
             print_basic_usage();
-            return Err(Box::from("")).into();
+            return Err(Box::from(""));
         }
     };
 
@@ -53,7 +53,7 @@ fn main() -> Result<()> {
     }
 
     if has_error {
-        return Err(Box::from("Compilation failed")).into();
+        return Err(Box::from("Compilation failed"));
     }
     println!("No Errors found in input paths");
     Ok(())
@@ -69,7 +69,7 @@ fn compile_files<P: AsRef<Path>>(state: &GrugState, path: P) -> bool {
     let result: Result<()> = (|| {
         if metadata.is_dir() {
             for dir_entry in std::fs::read_dir(path)? {
-                has_error |= compile_files(state, &dir_entry?.path());
+                has_error |= compile_files(state, dir_entry?.path());
             }
         } else if let Some(extension) = path.as_ref().extension()
             && extension == "grug"
@@ -92,7 +92,7 @@ fn compile_files<P: AsRef<Path>>(state: &GrugState, path: P) -> bool {
             has_error = true;
         }
     }
-    return has_error;
+    has_error
 }
 
 fn search_mod_api_path() -> Result<String> {
@@ -130,27 +130,27 @@ fn parse_args() -> Result<CliArgs> {
                 Err("Mod api path can only appear once in the arguments")?;
             }
             let Some(actual_path) = args.next() else {
-                return Err(Box::from("Expected path to mod api after '-m'")).into();
+                return Err(Box::from("Expected path to mod api after '-m'"));
             };
-            mod_api_path = Some(String::from(actual_path));
+            mod_api_path = Some(actual_path);
         } else if next_arg == "-i" {
             let Some(actual_path) = args.next() else {
-                return Err(Box::from("Expected path to file after '-i'")).into();
+                return Err(Box::from("Expected path to file after '-i'"));
             };
-            files_to_compile.push(String::from(actual_path));
+            files_to_compile.push(actual_path);
         } else if next_arg == "-d" {
             let Some(actual_path) = args.next() else {
-                return Err(Box::from("Expected mods directory after '-d'")).into();
+                return Err(Box::from("Expected mods directory after '-d'"));
             };
             mods_dir = Some(actual_path);
         } else if next_arg.starts_with("-") {
-            return Err(Box::from("Unexpected switch in arguments")).into();
+            return Err(Box::from("Unexpected switch in arguments"));
         } else {
-            files_to_compile.push(String::from(next_arg));
+            files_to_compile.push(next_arg);
         }
     }
     if files_to_compile.is_empty() {
-        return Err(Box::from("Expected at least one file to compile")).into();
+        return Err(Box::from("Expected at least one file to compile"));
     }
     Ok(CliArgs {
         files_to_compile,

@@ -8,7 +8,7 @@ use crate::ntstring::{NTStr, NTStrError};
 
 /// Allocates a buffer for the file aligned to 4096 bytes with space for a
 /// null terminator
-fn allocate_buffer_for_file<'a>(file: &File, arena: &'a Arena) -> NonNull<[u8]> {
+fn allocate_buffer_for_file(file: &File, arena: &Arena) -> NonNull<[u8]> {
     // get file size, add 1 byte for null byte
     let size = file
         .metadata()
