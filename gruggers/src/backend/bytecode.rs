@@ -1269,7 +1269,7 @@ struct Instructions {
 impl Instructions {
     fn new(path: &OsStr, file_text: &str) -> Self {
         let arena = Arena::new();
-		let path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
+        let path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
         let file_text = arena.copy_str_into_nt(file_text);
         Self {
             path: unsafe { std::mem::transmute::<NTOsStrPtr, NTOsStrPtr<'static>>(path) },

@@ -57,10 +57,7 @@ fn main() {
     loop {
         let (resources, files) = state.update_files();
         for resource in resources.paths() {
-            print!(
-                "{}, ",
-				resource.display()
-            );
+            print!("{}, ", resource.display());
         }
         println!();
         for file in files.files() {

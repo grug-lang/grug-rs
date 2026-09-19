@@ -289,13 +289,10 @@ mod fallback {
                 unsafe { std::slice::from_raw_parts_mut(buf.cast::<u8>().as_ptr(), size as usize) };
 
             match file.read(buf) {
-                Ok(bytes_read) => files_data.push(super::verify_file_data(
-                    &buf[..bytes_read + 1],
-                    path,
-                )),
-                Err(err) => {
-                    files_data.push(Err(Error::from_io_error(err, path)))
+                Ok(bytes_read) => {
+                    files_data.push(super::verify_file_data(&buf[..bytes_read + 1], path))
                 }
+                Err(err) => files_data.push(Err(Error::from_io_error(err, path))),
             }
         }
 
