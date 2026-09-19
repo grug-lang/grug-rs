@@ -18,7 +18,7 @@ mod test_bindings {
 
     pub extern "C" fn parse_mod_api(mod_api_path: NTOsStrPtr) -> Option<NTStrPtr<'static>> {
         let state = GrugInitSettings::new()
-			.set_mod_api_path(mod_api_path.to_osstr())
+            .set_mod_api_path(mod_api_path.to_osstr())
             .set_mods_dir(".")
             .set_backend(StubBackend)
             .build_state();
@@ -38,8 +38,8 @@ mod test_bindings {
         _unsafe_mode: bool,
     ) -> Option<Box<CState>> {
         let mut state = GrugInitSettings::new()
-			.set_mod_api_path(mod_api_path.to_osstr())
-			.set_mods_dir(mods_dir_path.to_osstr())
+            .set_mod_api_path(mod_api_path.to_osstr())
+            .set_mods_dir(mods_dir_path.to_osstr())
             .set_poll_interval(std::time::Duration::from_millis(20))
             .set_runtime_error_handler(|error| {
                 unsafe {

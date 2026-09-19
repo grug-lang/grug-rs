@@ -23,7 +23,7 @@ type CState = (
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_default_settings() -> GrugInitSettings<'static> {
-	GrugInitSettings::default()
+    GrugInitSettings::default()
 }
 
 #[unsafe(no_mangle)]
@@ -31,7 +31,6 @@ pub extern "C" fn grug_init(
     settings: GrugInitSettings,
     out_err: &mut MaybeUninit<GrugError<'static>>,
 ) -> Option<Box<CState>> {
-
     match settings.build_state() {
         Ok(state) => Some(Box::new((
             state,

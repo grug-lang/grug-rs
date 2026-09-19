@@ -635,8 +635,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 name_span: _,
                 generics: _,
             } => {
-				// This is fine even if it is a static method
-				self.check_global_expr(receiver, name)?;
+                // This is fine even if it is a static method
+                self.check_global_expr(receiver, name)?;
                 args.iter()
                     .map(|argument| self.check_global_expr(argument, name))
                     .collect::<Result<Vec<_>, _>>()?;

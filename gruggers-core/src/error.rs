@@ -1,6 +1,6 @@
 //! Contains types related to compile time error reporting.
 use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
-use crate::utils::{copy_str, copy_osstr_as_ntosstr, copy_str_as_ntstr};
+use crate::utils::{copy_osstr_as_ntosstr, copy_str, copy_str_as_ntstr};
 use allocator_api2::alloc::Allocator;
 use allocator_api2::boxed::Box;
 use allocator_api2::vec::Vec;
@@ -342,7 +342,7 @@ impl<'a> GrugError<'a> {
             unsafe { std::mem::transmute::<&mut [u8], &'static str>(slice) }
         };
         // SAFETY: We never give out a `'static` pointer to this string from safe code
-		let file_path = copy_osstr_as_ntosstr(file_path, alloc).as_ntosstrptr();
+        let file_path = copy_osstr_as_ntosstr(file_path, alloc).as_ntosstrptr();
 
         // let source = unsafe{Box::leak(NTStr::box_from_str_in(source_text, &alloc)).as_ntstrptr().detach_lifetime()};
 
