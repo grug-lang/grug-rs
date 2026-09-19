@@ -1,8 +1,8 @@
 //! Defines types necessary for handling runtime errors
 
 use crate::error::SourceSpan;
-use crate::ntstring::{NTBytes, NTStr, NTStrPtr};
-use crate::utils::{copy_bytes_as_nt, copy_str, copy_str_as_ntstr};
+use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
+use crate::utils::{copy_str, copy_str_as_ntstr, copy_osstr_as_ntosstr};
 use allocator_api2::alloc::Allocator;
 use allocator_api2::vec::Vec;
 use std::ffi::OsStr;
@@ -57,7 +57,7 @@ pub struct RuntimeError<'a> {
     pub export_fn_name: NTStrPtr<'a>,
     /// The script path of the last export function that was called.
     /// Must be valid to convert to an OsStr.
-    pub script_path: NTBytes<'a>,
+    pub script_path: NTOsStrPtr<'a>,
     /// The location the error occurred at
     pub err_span: SourceSpan,
     /// The source line where the error occurred
@@ -104,9 +104,7 @@ impl<'a> RuntimeError<'a> {
                             error_string,
                             "    called from {} ({}:{}:{})",
                             stack_frame.fn_name.to_str(),
-                            unsafe {
-                                OsStr::from_encoded_bytes_unchecked(file_path.to_bytes()).display()
-                            },
+							file_path.display(),
                             stack_frame.span.line,
                             stack_frame.span.get_col(stack_frame.file_text.to_str()),
                         )
@@ -135,7 +133,7 @@ impl<'a> RuntimeError<'a> {
         };
 
         let export_fn_name = copy_str_as_ntstr(export_fn_name, a).as_ntstrptr();
-        let script_path = copy_bytes_as_nt(script_path.as_encoded_bytes(), a);
+        let script_path = copy_osstr_as_ntosstr(script_path, a).as_ntosstrptr();
 
         Self {
             kind,
@@ -148,17 +146,11 @@ impl<'a> RuntimeError<'a> {
             error_string,
         }
     }
-
-    /// Get the script_path field as an OsStr instead of an NTBytes.
-    pub fn script_path_as_osstr(&self) -> &'a OsStr {
-        // SAFETY: self.script_path is valid to convert to an OsStr
-        unsafe { OsStr::from_encoded_bytes_unchecked(self.script_path.to_bytes()) }
-    }
 }
 
 /// Provides information about a single stack frame in a grug execution
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct StackFrame<'a> {
     /// The name of the function being executed
     pub fn_name: NTStrPtr<'a>,
@@ -166,25 +158,9 @@ pub struct StackFrame<'a> {
     ///
     /// file_path == None (null in c) indicates that this is a host fn frame.
     /// if file_path is none, the span and file text is the span within the last grug script.
-    pub file_path: Option<NTBytes<'a>>,
+    pub file_path: Option<NTOsStrPtr<'a>>,
     /// The location in code where another function was called
     pub span: SourceSpan,
     /// The entire text of the file where the frame occurred
     pub file_text: NTStrPtr<'a>,
-}
-
-impl<'a> std::fmt::Debug for StackFrame<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("StackFrame")
-            .field("fn_name", &self.fn_name.to_str())
-            .field(
-                "file_path",
-                &self.file_path.map(|file_path| unsafe {
-                    OsStr::from_encoded_bytes_unchecked(file_path.to_bytes())
-                }),
-            )
-            .field("span", &self.span)
-            .field("file_text", &self.file_text.to_str())
-            .finish()
-    }
 }

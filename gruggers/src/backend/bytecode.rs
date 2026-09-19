@@ -7,7 +7,7 @@ use crate::backend::Backend;
 use crate::error::SourceSpan;
 use crate::frontend::type_propagation::TypeListDisplay;
 use crate::nt;
-use crate::ntstring::{NTBytes, NTStr, NTStrPtr};
+use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
 use crate::shared_vec::SharedVec;
 use crate::types::{FileId, GrugEntity, HostFn, Value};
 use crate::xar::{ErasedPtr, ErasedXar};
@@ -921,7 +921,7 @@ impl BytecodeBackend {
             .next()
             .expect("must have at least one grug stack frame");
 
-        let script_path = unsafe { OsStr::from_encoded_bytes_unchecked(script_path.to_bytes()) };
+        let script_path = script_path.to_osstr();
         let error = RuntimeError::new_error_in(
             kind,
             &call_stack[..call_stack.len() - 1],
@@ -945,7 +945,7 @@ impl Default for BytecodeBackend {
 impl Backend for BytecodeBackend {
     #[inline]
     fn insert_file(&self, id: FileId, file: &GrugAst) {
-        let path = file.file_path();
+        let path = file.file_path.to_osstr();
         let compiled_file = Compiler::compile(file, path);
         let mut files = self.files.borrow_mut();
         if let Some(old_file) = files.get_mut(id.0 as usize) {
@@ -1247,7 +1247,7 @@ union ConstantData<'a> {
 struct Instructions {
     // TODO: Maybe this should be hoisted up to CompiledFile
     /// Can be converted into an OsStr
-    path: NTBytes<'static>,
+    path: NTOsStrPtr<'static>,
     // TODO: same here
     file_text: &'static NTStr,
     stream: Vec<Op>,
@@ -1269,12 +1269,10 @@ struct Instructions {
 impl Instructions {
     fn new(path: &OsStr, file_text: &str) -> Self {
         let arena = Arena::new();
-        let path = unsafe {
-            NTBytes::from_bytes_unchecked(arena.copy_bytes_into_nt(path.as_encoded_bytes()))
-        };
+		let path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
         let file_text = arena.copy_str_into_nt(file_text);
         Self {
-            path: unsafe { std::mem::transmute::<NTBytes, NTBytes<'static>>(path) },
+            path: unsafe { std::mem::transmute::<NTOsStrPtr, NTOsStrPtr<'static>>(path) },
             file_text: unsafe { std::mem::transmute::<&NTStr, &'static NTStr>(file_text) },
             stream: Vec::new(),
             debug_info: Vec::new(),
@@ -1289,12 +1287,6 @@ impl Instructions {
             // jumps_end: HashMap::new(),
             _arena: arena,
         }
-    }
-
-    #[allow(unused)]
-    fn path(&self) -> &OsStr {
-        // SAFETY: self.path is compatible with OsStr
-        unsafe { OsStr::from_encoded_bytes_unchecked(self.path.to_bytes()) }
     }
 
     fn push_ins(&mut self, ins: Op, source_location: Option<SourceSpan>) {

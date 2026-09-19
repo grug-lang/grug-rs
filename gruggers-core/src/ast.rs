@@ -10,10 +10,8 @@
 //! deallocates them automatically after the call to [`Backend::insert_file`](crate::backend::Backend::insert_file).
 //! This may be changed in a later release
 use crate::error::SourceSpan;
-use crate::ntstring::{NTBytes, NTStr, NTStrPtr};
+use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
 use crate::types::HostFn;
-
-use std::ffi::OsStr;
 
 /// Represents the type of a value in grug
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -826,16 +824,7 @@ pub struct GrugAst<'a> {
     /// A string that contains the entire file text. Used for Debug info.
     pub file_text: NTStrPtr<'a>,
     /// Path to the file relative to the mods directory. Must be compatible with OsStr
-    pub file_path: NTBytes<'a>,
-}
-
-impl<'a> GrugAst<'a> {
-    /// Gets the file path as an OsStr instead of NTBytes.
-    /// This function is safe assuming the file path was originally created from an OsStr
-    pub fn file_path(&self) -> &'a OsStr {
-        // SAFETY: file_path is compatible with an OsStr
-        unsafe { OsStr::from_encoded_bytes_unchecked(self.file_path.to_bytes()) }
-    }
+    pub file_path: NTOsStrPtr<'a>,
 }
 
 const _: () = const {

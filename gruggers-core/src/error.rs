@@ -1,6 +1,6 @@
 //! Contains types related to compile time error reporting.
-use crate::ntstring::{NTBytes, NTStr, NTStrPtr, copy_box_nt_bytes_in};
-use crate::utils::{copy_bytes_nt, copy_str, copy_str_nt};
+use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
+use crate::utils::{copy_str, copy_osstr_as_ntosstr, copy_str_as_ntstr};
 use allocator_api2::alloc::Allocator;
 use allocator_api2::boxed::Box;
 use allocator_api2::vec::Vec;
@@ -201,7 +201,7 @@ impl Eq for ErrorKind {}
 #[allow(non_camel_case_types)]
 #[allow(dead_code)]
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct GrugError<'a> {
     /// A unique integer identifier for the error that represents the
     /// kind of error that occurred and which specific error
@@ -213,7 +213,7 @@ pub struct GrugError<'a> {
     /// for the error kind
     pub function_name: NTStrPtr<'a>,
     /// Path to the file with the error
-    pub file_path: NTBytes<'a>,
+    pub file_path: NTOsStrPtr<'a>,
     /// Source line that contains the error
     pub source_line: &'a str,
     /// Location of the error. This span may point to (0, 0) if the error is
@@ -224,28 +224,6 @@ pub struct GrugError<'a> {
     /// A string that can be directly printed to the screen. The format of the
     /// error depends on the exact error kind.
     pub error_string: NTStrPtr<'a>,
-}
-
-impl<'a> std::fmt::Debug for GrugError<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        f.debug_struct("Error")
-            .field("errorkind", &self.error_kind)
-            .field("function_name", &self.function_name)
-            .field("file_path", &self.file_path_as_os_str().display())
-            .field("source_line", &self.source_line)
-            .field("line", &self.span.line)
-            .field("offset", &self.span.offset)
-            .field("error_message", &self.error_message)
-            .field("error_string", &self.error_string)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<'a> GrugError<'a> {
-    /// The path to the file with the error
-    pub fn file_path_as_os_str(&self) -> &OsStr {
-        unsafe { OsStr::from_encoded_bytes_unchecked(self.file_path.to_bytes()) }
-    }
 }
 
 impl<'a> GrugError<'a> {
@@ -364,13 +342,7 @@ impl<'a> GrugError<'a> {
             unsafe { std::mem::transmute::<&mut [u8], &'static str>(slice) }
         };
         // SAFETY: We never give out a `'static` pointer to this string from safe code
-        let file_path = unsafe {
-            NTBytes::from_bytes_unchecked(Box::leak(copy_box_nt_bytes_in(
-                file_path.as_encoded_bytes(),
-                &alloc,
-            )))
-            .detach_lifetime()
-        };
+		let file_path = copy_osstr_as_ntosstr(file_path, alloc).as_ntosstrptr();
 
         // let source = unsafe{Box::leak(NTStr::box_from_str_in(source_text, &alloc)).as_ntstrptr().detach_lifetime()};
 
@@ -410,14 +382,14 @@ impl<'a> GrugError<'a> {
     pub fn copy_into<'b, A: Allocator>(&self, alloc: &'b A) -> GrugError<'b> {
         GrugError {
             error_kind: self.error_kind,
-            function_name: copy_str_nt(self.function_name.to_ntstr(), alloc).as_ntstrptr(),
+            function_name: copy_str_as_ntstr(self.function_name.to_str(), alloc).as_ntstrptr(),
 
-            file_path: copy_bytes_nt(self.file_path, alloc),
+            file_path: copy_osstr_as_ntosstr(self.file_path.to_osstr(), alloc).as_ntosstrptr(),
 
             source_line: copy_str(self.source_line, alloc),
             span: self.span,
-            error_message: copy_str_nt(self.error_message.to_ntstr(), alloc).as_ntstrptr(),
-            error_string: copy_str_nt(self.error_string.to_ntstr(), alloc).as_ntstrptr(),
+            error_message: copy_str_as_ntstr(self.error_message.to_str(), alloc).as_ntstrptr(),
+            error_string: copy_str_as_ntstr(self.error_string.to_str(), alloc).as_ntstrptr(),
         }
     }
 }

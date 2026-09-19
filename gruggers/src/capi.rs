@@ -4,7 +4,7 @@
 //! functions in state.rs
 #![allow(improper_ctypes_definitions)]
 use crate::error::{Error, GrugError};
-use crate::ntstring::{NTBytes, NTStrPtr};
+use crate::ntstring::{NTOsStrPtr, NTStrPtr};
 use crate::state::{
     ExportFnEntry, FileInfo, Files, GrugEntityHandle, GrugInitSettings, GrugState, ResourcePaths,
 };
@@ -21,108 +21,18 @@ type CState = (
     /* resources from last update */ UnsafeCell<ResourcePaths>,
 );
 
-#[repr(C)]
-pub struct CGrugRuntimeErrorHandler {
-    pub user_data: *mut std::ffi::c_void,
-    pub drop_fn: Option<extern "C" fn(*mut std::ffi::c_void)>,
-    pub handler_fn: Option<
-        extern "C" fn(
-            data: *mut std::ffi::c_void,
-            err_kind: u32,
-            reason_str: *mut std::ffi::c_char,
-            reason_len: usize,
-            export_fn_name: *mut std::ffi::c_char,
-            export_fn_name_len: usize,
-            script_path: *mut std::ffi::c_char,
-            script_path_len: usize,
-        ),
-    >,
-}
-
-#[repr(C)]
-pub struct CGrugBackend {
-    pub obj: *mut std::ffi::c_void,
-    pub vtable: *mut std::ffi::c_void,
-}
-
-#[repr(C)]
-pub struct CGrugInitSettings {
-    pub mod_api_path: *const u8,
-    pub mod_api_path_len: usize,
-    pub mods_dir_path: *const u8,
-    pub mods_dir_path_len: usize,
-    pub runtime_error_handler: CGrugRuntimeErrorHandler,
-    pub backend: CGrugBackend,
-}
-
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_default_settings() -> CGrugInitSettings {
-    CGrugInitSettings {
-        mod_api_path: std::ptr::null(),
-        mod_api_path_len: 0,
-        mods_dir_path: std::ptr::null(),
-        mods_dir_path_len: 0,
-        runtime_error_handler: CGrugRuntimeErrorHandler {
-            user_data: std::ptr::null_mut(),
-            drop_fn: None,
-            handler_fn: None,
-        },
-        backend: CGrugBackend {
-            obj: std::ptr::null_mut(),
-            vtable: std::ptr::null_mut(),
-        },
-    }
+pub extern "C" fn grug_default_settings() -> GrugInitSettings<'static> {
+	GrugInitSettings::default()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_init(
-    c_settings: CGrugInitSettings,
+    settings: GrugInitSettings,
     out_err: &mut MaybeUninit<GrugError<'static>>,
 ) -> Option<Box<CState>> {
-    // Because C passed the exact lengths, we don't need to leak or duplicate the strings!
-    // The lifetimes of these OsStrs only need to survive until build_state() completes.
-    let mod_api_path = unsafe {
-        std::ffi::OsStr::from_encoded_bytes_unchecked(std::slice::from_raw_parts(
-            c_settings.mod_api_path,
-            c_settings.mod_api_path_len,
-        ))
-    };
-    let mods_dir_path = unsafe {
-        std::ffi::OsStr::from_encoded_bytes_unchecked(std::slice::from_raw_parts(
-            c_settings.mods_dir_path,
-            c_settings.mods_dir_path_len,
-        ))
-    };
 
-    let mut rust_settings = GrugInitSettings::new()
-        .set_mod_api_path(mod_api_path)
-        .set_mods_dir(mods_dir_path);
-
-    // Safely wrap the C function pointer into a Rust closure
-    if let Some(c_handler_fn) = c_settings.runtime_error_handler.handler_fn {
-        let c_user_data = c_settings.runtime_error_handler.user_data as usize;
-
-        rust_settings = rust_settings.set_runtime_error_handler(
-            move |error: &gruggers_core::runtime_error::RuntimeError| {
-                let user_data_ptr = c_user_data as *mut std::ffi::c_void;
-                let error_message = error.error_message.to_str();
-                let export_fn_name = error.export_fn_name.to_str();
-                let script_path = error.script_path.to_bytes();
-                c_handler_fn(
-                    user_data_ptr,
-                    error.kind as u32,
-                    error_message.as_ptr() as *mut std::ffi::c_char,
-                    error_message.len(),
-                    export_fn_name.as_ptr() as *mut std::ffi::c_char,
-                    export_fn_name.len(),
-                    script_path.as_ptr() as *mut std::ffi::c_char,
-                    script_path.len(),
-                );
-            },
-        );
-    }
-
-    match rust_settings.build_state() {
+    match settings.build_state() {
         Ok(state) => Some(Box::new((
             state,
             UnsafeCell::new(None),
@@ -202,7 +112,7 @@ pub extern "C" fn grug_update(state: &CState) -> &[FileInfo<'_>] {
 ///
 /// The returned slice is only valid until the next call to [`grug_update`].
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_get_updated_resources(state: &CState) -> &[NTBytes<'_>] {
+pub extern "C" fn grug_get_updated_resources(state: &CState) -> &[NTOsStrPtr<'_>] {
     unsafe { &*state.3.get() }.paths()
 }
 
