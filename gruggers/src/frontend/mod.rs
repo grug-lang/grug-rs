@@ -46,9 +46,6 @@ impl GrugState {
                     &'static OsStr,
                 )],
             >,
-            // Resources
-            // These paths are relative
-            &'static [&'static OsStr],
         )>,
         // path is absolute
         mods_dir_path: PathBuf,
@@ -61,7 +58,6 @@ impl GrugState {
 
             for (arena, files) in receiver.iter() {
                 temp_arena.clear();
-                let mut resources = Vec::new_in(&arena);
                 // This is the actual lifetime of the data but it has to be erased to send across the channel
                 fn combine_lifetimes<'a>(
                     _: &'a Arena,
@@ -100,7 +96,7 @@ impl GrugState {
                         };
 
                         // compile the file
-                        let (ast, current_resources) = match Self::compile_inner(
+                        let ast = match Self::compile_inner(
                             path,
                             file_text,
                             mods_dir_path.as_ref(),
@@ -112,8 +108,6 @@ impl GrugState {
                             Ok(data) => data,
                             Err(err) => return (Err(err), path),
                         };
-                        // add resource paths
-                        resources.extend_from_slice(current_resources);
                         // collect errors and resources
                         (Ok(ast), path)
                     },
@@ -126,10 +120,7 @@ impl GrugState {
                         OwnPtr<'static, [(Result<GrugAst<'static>, Error>, &'static OsStr)]>,
                     >(results.into_boxed_slice().into())
                 };
-                let resources = unsafe {
-                    std::mem::transmute::<&[&OsStr], &'static [&'static OsStr]>(resources.leak())
-                };
-                let Ok(()) = sender.send((arena, results, resources)) else {
+                let Ok(()) = sender.send((arena, results)) else {
                     break;
                 };
             }
@@ -175,7 +166,7 @@ impl GrugState {
         let file_text = verify_file_data(file_text, path)?;
         // immediately invoked closure so we get try {} finally {}
         let id = (|| {
-            let (file, _resources) = Self::compile_inner(
+            let file = Self::compile_inner(
                 path,
                 file_text,
                 &self.mods_dir_path,
@@ -301,7 +292,7 @@ impl GrugState {
 
         // Send to backend while recieving
         while recv_count < sent_count {
-            let (mut current_arena, results, _resources) = self.compiler_receiver.recv().unwrap();
+            let (mut current_arena, results) = self.compiler_receiver.recv().unwrap();
             recv_count += results.len();
 
             for (result, path) in results {
@@ -433,7 +424,7 @@ impl GrugState {
 
         // Send to backend while recieving
         while recv_count < sent_count {
-            let (mut current_arena, results, _resources) = self.compiler_receiver.recv().unwrap();
+            let (mut current_arena, results) = self.compiler_receiver.recv().unwrap();
             recv_count += results.len();
 
             for (result, path) in results {
@@ -535,7 +526,7 @@ impl GrugState {
         arena: &'arena Arena,
         temp_arena: &'_ Arena,
         type_storage: &mut TypeStorage,
-    ) -> Result<(GrugAst<'arena>, &'arena [&'arena OsStr]), Error> {
+    ) -> Result<GrugAst<'arena>, Error> {
         let mod_name = get_mod_name(path);
         let entity_type = get_entity_type(path)?;
 
@@ -568,7 +559,7 @@ impl GrugState {
 			))?;
 
         // type check
-        let (ast, resources) = TypePropagator::fill_result_types(
+        let ast = TypePropagator::fill_result_types(
             entity,
             mod_api,
             mod_name,
@@ -612,7 +603,7 @@ impl GrugState {
             file_text: file_text.as_ntstrptr(),
             file_path,
         };
-        Ok((file, resources))
+        Ok(file)
     }
 }
 

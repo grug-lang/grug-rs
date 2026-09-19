@@ -134,7 +134,7 @@ impl ModApi {
                 "",
                 SourceSpan { offset: 0, line: 0 },
                 format_args!(
-                    "Class with name '{}' does not contain method with name '{}'",
+                    "Entity with name '{}' does not contain method with name '{}'",
                     type_name, fn_name
                 ),
             ));
@@ -146,7 +146,7 @@ impl ModApi {
             "",
             SourceSpan { offset: 0, line: 0 },
             format_args!(
-                "Class with name '{}' is not found in mod_api.json",
+                "Class or Entity with name '{}' is not found in mod_api.json",
                 type_name
             ),
         ))

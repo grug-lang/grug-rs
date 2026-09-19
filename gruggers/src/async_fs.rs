@@ -262,7 +262,7 @@ mod fallback {
     }
 
     pub fn read_files_async<'a, 'b>(
-        files: impl IntoIterator<Item = &'b File>,
+        files: impl IntoIterator<Item = (&'b File, &'b OsStr)>,
         arena: &'a Arena,
     ) -> Vec<Result<&'a NTStr, Error>, &'a Arena> {
         let mut files = {
@@ -271,7 +271,7 @@ mod fallback {
             temp
         };
         let mut files_data = Vec::with_capacity_in(files.len(), arena);
-        for file in files.iter_mut() {
+        for (file, path) in files.iter_mut() {
             let size = file
                 .metadata()
                 .expect("metadata always succeeds on windows")
@@ -291,10 +291,10 @@ mod fallback {
             match file.read(buf) {
                 Ok(bytes_read) => files_data.push(super::verify_file_data(
                     &buf[..bytes_read + 1],
-                    "file_unknown (ig)".as_ref(),
+                    path,
                 )),
                 Err(err) => {
-                    files_data.push(Err(Error::from_io_error(err, "file_unknown (ig)".as_ref())))
+                    files_data.push(Err(Error::from_io_error(err, path)))
                 }
             }
         }
