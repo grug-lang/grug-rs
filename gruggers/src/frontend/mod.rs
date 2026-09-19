@@ -470,17 +470,17 @@ impl GrugState {
 
                 let entity_type = get_entity_type(path.as_os_str()).unwrap_or("");
                 let file_prefix = path.file_prefix().unwrap().to_str().unwrap_or("");
-                let dash_suffix = format!("-{}", entity_type);
                 let entity_name = file_prefix
-                    .strip_suffix(&dash_suffix)
-                    .unwrap_or(file_prefix);
+                    .split_once('-')
+                    .unwrap_or((file_prefix, "// ignored"))
+                    .0;
 
                 let info = FileInfo::new_in(
                     path.as_os_str(),
                     path.file_name().unwrap(),
                     mod_dir_path,
                     entity_type,
-                    arena.copy_str_into(entity_name).as_ref(),
+					entity_name.as_ref(),
                     result,
                     &arena,
                 );
