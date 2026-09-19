@@ -27,7 +27,6 @@ pub(super) struct TypePropagator<'mod_api, 'arena: 'temp, 'temp> {
     mods_dir_path: &'mod_api OsStr,
     local_fns: &'arena [(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>]))],
     export_fns: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
-    resources: Vec<&'arena OsStr, &'arena Arena>,
     global_variables: HashMap<&'arena str, Type<'arena>>,
     local_variables: Vec<HashMap<&'arena str, Type<'arena>>>,
     num_while_loops_deep: usize,
@@ -84,7 +83,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             mods_dir_path,
             local_fns,
             export_fns,
-            resources: Vec::new_in(arena),
             global_variables: HashMap::new(),
             local_variables: Vec::new(),
             num_while_loops_deep: 0,
@@ -127,7 +125,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         // It may be cleared as soon as this function returns
         temp_arena: &'temp Arena,
         type_storage: &'temp mut TypeStorage,
-    ) -> Result<(Ast<'arena>, &'arena [&'arena OsStr]), Error> {
+    ) -> Result<Ast<'arena>, Error> {
         let mut type_propagator = Self::new(
             file_text,
             file_path,
@@ -355,7 +353,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 GlobalStatement::Comment { .. } => (),
             }
         }
-        Ok((ast, type_propagator.resources.leak()))
+        Ok(ast)
     }
 
     fn verify_generics(&self, ty: Type, err_span: SourceSpan) -> Result<(), Error> {
@@ -1324,8 +1322,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         if !std::fs::exists(&full_path).is_ok_and(std::convert::identity) {
             Err(self.new_error(span, format_args!("resource '{}' does not exist", value)))
         } else {
-            self.resources
-                .push(self.arena.copy_str_into(resource_str).as_ref());
             Ok(resource_str)
         }
     }

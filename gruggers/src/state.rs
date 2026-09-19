@@ -286,7 +286,6 @@ pub struct GrugState {
     pub(crate) compiler_receiver: Receiver<(
         Arena,
         OwnPtr<'static, [(Result<GrugAst<'static>, Error>, &'static OsStr)]>,
-        &'static [&'static OsStr],
     )>,
     /// SAFETY: The strings within the `export_functions` field is allocated within
     /// `mod_api`. So any reference given out to this field must have the 'self
