@@ -89,7 +89,7 @@ impl GrugState {
                 }
                 // read the contents of files that can be read
                 let ok_files_data =
-                    read_files_async(ok_files.iter().map(|(file, _path)| file), &arena);
+                    read_files_async(ok_files.iter().map(|(file, path)| (file, *path)), &arena);
                 // compile files one by one and collect errors, asts and resources
                 results.extend(ok_files_data.into_iter().zip(&ok_files).map(
                     |(data, (_, path))| {

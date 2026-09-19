@@ -76,11 +76,6 @@ impl ModApi {
         None
     }
 
-    /// Whether `type_name` names a class or an entity declared in mod_api.json.
-    pub(crate) fn declares_type(&self, type_name: &str) -> bool {
-        self.classes.contains_key(type_name) || self.entities.contains_key(type_name)
-    }
-
     /// The method or static method `type_name.fn_name` names.
     ///
     /// A name identifies at most one of them, because a class that declares
