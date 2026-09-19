@@ -474,7 +474,7 @@ impl GrugState {
                 return Ok(ExportFnId(i as u64));
             }
         }
-        return Err(Error::new(
+        Err(Error::new(
             ErrorKind::INIT_ERROR,
             "",
             "".as_ref(),
@@ -484,7 +484,7 @@ impl GrugState {
                 "'{}' does not export a function named '{}'",
                 entity_type, fn_name
             ),
-        ));
+        ))
     }
 
     pub fn get_export_fn_name(&self, fn_id: ExportFnId) -> Option<&str> {
@@ -744,21 +744,20 @@ impl GrugState {
         fn_id: ExportFnId,
         values: *const Value,
     ) -> bool {
-        let ret_val = unsafe {
+        
+
+        unsafe {
             self.backend
                 .call_on_function_raw(self, entity, self.get_export_fn_index(fn_id), values)
-        };
-
-        ret_val
+        }
     }
 
     #[must_use]
     pub fn call_export_fn(&self, entity: &GrugEntity, fn_id: ExportFnId, values: &[Value]) -> bool {
-        let ret_val =
-            self.backend
-                .call_on_function(self, entity, self.get_export_fn_index(fn_id), values);
+        
 
-        ret_val
+        self.backend
+                .call_on_function(self, entity, self.get_export_fn_index(fn_id), values)
     }
 }
 
@@ -863,7 +862,7 @@ mod files {
 
         /// Get the list of files that were compiled or recompiled
         pub fn files<'a>(&'a self) -> &'a [FileInfo<'a>] {
-            &*self.inner
+            &self.inner
         }
     }
 
@@ -1038,7 +1037,7 @@ mod files {
 
         /// Get the paths of every updated resource
         pub fn paths<'a>(&'a self) -> &'a [NTBytes<'a>] {
-            &*self.inner
+            &self.inner
         }
     }
 }

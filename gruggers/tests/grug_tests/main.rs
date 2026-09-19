@@ -93,7 +93,7 @@ mod test_bindings {
         match state.compile_grug_file(unsafe { OsStr::from_encoded_bytes_unchecked(path) }) {
             Ok(id) => {
                 *err_out = None;
-                return id;
+                id
             }
             Err(err) => {
                 *err_out = Some(
@@ -101,7 +101,7 @@ mod test_bindings {
                         .copy_str_into_nt(err.inner().error_string.to_str())
                         .as_ntstrptr(),
                 );
-                return FileId::new(u64::MAX);
+                FileId::new(u64::MAX)
             }
         }
     }
@@ -220,7 +220,7 @@ mod test_bindings {
         } else {
             unsafe { std::slice::from_raw_parts(args, args_count) }
         };
-        _ = state.call_export_fn(&*entity, fn_id, args);
+        _ = state.call_export_fn(&entity, fn_id, args);
     }
 
     #[allow(unused_variables)]

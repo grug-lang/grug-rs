@@ -100,9 +100,9 @@ impl<'a> RuntimeError<'a> {
             for stack_frame in call_stack {
                 match stack_frame.file_path {
                     Some(file_path) => {
-                        write!(
+                        writeln!(
                             error_string,
-                            "    called from {} ({}:{}:{})\n",
+                            "    called from {} ({}:{}:{})",
                             stack_frame.fn_name.to_str(),
                             unsafe {
                                 OsStr::from_encoded_bytes_unchecked(file_path.to_bytes()).display()
@@ -113,16 +113,16 @@ impl<'a> RuntimeError<'a> {
                         .expect("Writing into a Vec can never fail");
                     }
                     None => {
-                        write!(
+                        writeln!(
                             error_string,
-                            "    called from {}\n",
+                            "    called from {}",
                             stack_frame.fn_name.to_str(),
                         )
                         .expect("Writing into a Vec can never fail");
                     }
                 }
             }
-            write!(error_string, "Runtime Error: {}\n", error_message)
+            writeln!(error_string, "Runtime Error: {}", error_message)
                 .expect("Writing into a Vec can never fail");
 
             write!(error_string, "{} $ {}\0", err_span.line, source_line)

@@ -7,8 +7,8 @@ mod game_fns {
     use super::GrugState;
     use super::*;
     use gruggers::ast::Type;
-    pub extern "C" fn print_number<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn print_number(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -18,8 +18,8 @@ mod game_fns {
         }
         Value { void: () }
     }
-    pub extern "C" fn print_string<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn print_string(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -29,8 +29,8 @@ mod game_fns {
         }
         Value { void: () }
     }
-    pub extern "C" fn list_number<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn list_number(
+        _state: &GrugState,
         _arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -42,8 +42,8 @@ mod game_fns {
             Value { id }
         }
     }
-    pub extern "C" fn list_number_insert<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn list_number_insert(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -60,8 +60,8 @@ mod game_fns {
         }
         Value { void: () }
     }
-    pub extern "C" fn list_number_remove<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn list_number_remove(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -77,8 +77,8 @@ mod game_fns {
             Value { number: ret_val }
         }
     }
-    pub extern "C" fn list_number_push<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn list_number_push(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -94,8 +94,8 @@ mod game_fns {
         }
         Value { void: () }
     }
-    pub extern "C" fn list_number_pop<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn list_number_pop(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -111,8 +111,8 @@ mod game_fns {
             Value { number: ret_val }
         }
     }
-    pub extern "C" fn list_number_len<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn list_number_len(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -129,8 +129,8 @@ mod game_fns {
             }
         }
     }
-    pub extern "C" fn list_number_get<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn list_number_get(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -147,8 +147,8 @@ mod game_fns {
             Value { number: ret_val }
         }
     }
-    pub extern "C" fn list_number_set<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn list_number_set(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -166,8 +166,8 @@ mod game_fns {
         }
         Value { void: () }
     }
-    pub extern "C" fn print_list_number<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn print_list_number(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -274,7 +274,7 @@ fn main() {
 
         println!("Naive implementation");
         for i in 0..10 {
-            if !STATE.call_export_fn(&*script, naive_id, &[Value { number: i as f64 }]) {
+            if !STATE.call_export_fn(&script, naive_id, &[Value { number: i as f64 }]) {
                 break;
             };
         }
@@ -282,7 +282,7 @@ fn main() {
         println!("iterative implementation");
         for i in 0..10 {
             print!("{i} : ");
-            if !STATE.call_export_fn(&*script, iterative_id, &[Value { number: i as f64 }]) {
+            if !STATE.call_export_fn(&script, iterative_id, &[Value { number: i as f64 }]) {
                 break;
             };
         }
@@ -290,12 +290,12 @@ fn main() {
         println!("memoized implementation");
         for i in 0..10 {
             // print!("{i} : ");
-            if !STATE.call_export_fn(&*script, memo_id, &[Value { number: i as f64 }]) {
+            if !STATE.call_export_fn(&script, memo_id, &[Value { number: i as f64 }]) {
                 break;
             };
         }
 
-        if !STATE.call_export_fn(&*script, memo_print_id, &[]) {
+        if !STATE.call_export_fn(&script, memo_print_id, &[]) {
             panic!()
         };
     }
