@@ -325,25 +325,29 @@ impl GrugState {
                 let path = <OsStr as AsRef<Path>>::as_ref(path);
                 let mod_dir_path = path
                     .parent()
-                    .expect("must have at least component in path")
+                    .expect("must have at least one component in path")
                     .components()
                     .next()
                     .unwrap()
                     .as_os_str();
 
-                let entity_type = get_entity_type(path.as_os_str()).unwrap_or("");
-                let file_prefix = path.file_prefix().unwrap().to_str().unwrap_or("");
-                let dash_suffix = format!("-{}", entity_type);
+                let entity_type = get_entity_type(path.as_os_str()).unwrap_or("".as_ref());
+                let file_prefix = path
+                    .file_prefix()
+                    .unwrap()
+                    .to_str()
+                    .expect("non utf8 file name");
                 let entity_name = file_prefix
-                    .strip_suffix(&dash_suffix)
-                    .unwrap_or(file_prefix);
+                    .split_once('-')
+                    .unwrap_or((file_prefix, "// ignored"))
+                    .0;
 
                 let info = FileInfo::new_in(
                     path.as_os_str(),
                     path.file_name().unwrap(),
                     mod_dir_path,
                     entity_type,
-                    arena.copy_str_into(entity_name).as_ref(),
+                    entity_name.as_ref(),
                     result,
                     &arena,
                 );
@@ -503,7 +507,7 @@ impl GrugState {
         let resource_arena = Arena::new();
         let resource_paths: std::vec::Vec<NTOsStrPtr<'_>> = updated_resources
             .iter()
-			.map(|path| resource_arena.copy_osstr_into_nt(path).as_ntosstrptr())
+            .map(|path| resource_arena.copy_osstr_into_nt(path).as_ntosstrptr())
             .collect();
         let resource_paths = ResourcePaths {
             inner: unsafe {
@@ -595,7 +599,7 @@ impl GrugState {
 
         // SAFETY: copy_bytes_into_nt ensures the slice has a single null byte
         // at the end of the string
-		let file_path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
+        let file_path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
         let file = GrugAst {
             members: member_variables.leak(),
             on_functions: on_functions.leak(),

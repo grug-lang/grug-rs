@@ -216,8 +216,11 @@ impl<'a> GrugInitSettings<'a> {
             mods_dir_path,
             self.runtime_error_handler
                 .unwrap_or_else(RuntimeErrorHandler::new_default),
-            if self.poll_interval_ms == 0 {Duration::from_secs(1)} 
-			else {Duration::from_millis(self.poll_interval_ms)},
+            if self.poll_interval_ms == 0 {
+                Duration::from_secs(1)
+            } else {
+                Duration::from_millis(self.poll_interval_ms)
+            },
             self.backend
                 .unwrap_or_else(|| BytecodeBackend::new().into()),
         )
@@ -888,11 +891,11 @@ mod files {
             result: Result<FileId, GrugError>,
             arena: &'a Arena,
         ) -> Self {
-			let path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
-			let file_name = arena.copy_osstr_into_nt(file_name).as_ntosstrptr();
-			let mod_name = arena.copy_osstr_into_nt(mod_name).as_ntosstrptr();
+            let path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
+            let file_name = arena.copy_osstr_into_nt(file_name).as_ntosstrptr();
+            let mod_name = arena.copy_osstr_into_nt(mod_name).as_ntosstrptr();
             let entity_type = arena.copy_str_into_nt(entity_type).as_ntstrptr();
-			let entity_name = arena.copy_osstr_into_nt(entity_name).as_ntosstrptr();
+            let entity_name = arena.copy_osstr_into_nt(entity_name).as_ntosstrptr();
 
             let (file_id, error) = match result {
                 Ok(id) => (id, MaybeUninit::uninit()),
@@ -909,13 +912,21 @@ mod files {
             }
         }
         pub fn copy_into<'b>(&self, arena: &'b Arena) -> FileInfo<'b> {
-			let path = arena.copy_osstr_into_nt(self.path.to_osstr()).as_ntosstrptr();
-			let file_name = arena.copy_osstr_into_nt(self.file_name.to_osstr()).as_ntosstrptr();
-			let mod_name = arena.copy_osstr_into_nt(self.mod_name.to_osstr()).as_ntosstrptr();
+            let path = arena
+                .copy_osstr_into_nt(self.path.to_osstr())
+                .as_ntosstrptr();
+            let file_name = arena
+                .copy_osstr_into_nt(self.file_name.to_osstr())
+                .as_ntosstrptr();
+            let mod_name = arena
+                .copy_osstr_into_nt(self.mod_name.to_osstr())
+                .as_ntosstrptr();
             let entity_type = arena
                 .copy_str_into_nt(self.entity_type.to_str())
                 .as_ntstrptr();
-			let entity_name = arena.copy_osstr_into_nt(self.entity_name.to_osstr()).as_ntosstrptr();
+            let entity_name = arena
+                .copy_osstr_into_nt(self.entity_name.to_osstr())
+                .as_ntosstrptr();
             let (file_id, error) = if self.file_id == INVALID_GRUG_FILE_ID {
                 // SAFETY: self.error is intialized if self.file_id == INVALID_GRUG_FILE_ID
                 (

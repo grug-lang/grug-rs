@@ -2,7 +2,7 @@
 
 use crate::error::SourceSpan;
 use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
-use crate::utils::{copy_str, copy_str_as_ntstr, copy_osstr_as_ntosstr};
+use crate::utils::{copy_osstr_as_ntosstr, copy_str, copy_str_as_ntstr};
 use allocator_api2::alloc::Allocator;
 use allocator_api2::vec::Vec;
 use std::ffi::OsStr;
@@ -104,7 +104,7 @@ impl<'a> RuntimeError<'a> {
                             error_string,
                             "    called from {} ({}:{}:{})",
                             stack_frame.fn_name.to_str(),
-							file_path.display(),
+                            file_path.display(),
                             stack_frame.span.line,
                             stack_frame.span.get_col(stack_frame.file_text.to_str()),
                         )
