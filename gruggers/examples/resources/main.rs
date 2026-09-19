@@ -7,8 +7,8 @@ use std::time::Duration;
 mod game_fns {
     use super::*;
     use gruggers::ast::Type;
-    pub extern "C" fn print_string<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn print_string(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -18,8 +18,8 @@ mod game_fns {
         }
         Value { void: () }
     }
-    pub extern "C" fn print_file<'a>(
-        _state: &'a GrugState,
+    pub extern "C" fn print_file(
+        _state: &GrugState,
         arguments: *const Value,
         _: &[Type; 0],
     ) -> Value {
@@ -62,14 +62,14 @@ fn main() {
                 std::str::from_utf8(resource.to_bytes()).unwrap_or_default()
             );
         }
-        println!("");
+        println!();
         for file in files.files() {
             if let Err(err) = file.result() {
                 println!("{}, ", err)
             }
         }
         println!("{:?}", state.update_files());
-        if !state.call_export_fn(&*dog, on_bark_id, &[]) {
+        if !state.call_export_fn(&dog, on_bark_id, &[]) {
             panic!()
         };
         std::thread::sleep(Duration::from_secs(1));

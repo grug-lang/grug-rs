@@ -168,7 +168,7 @@ mod page_alloc {
         pub struct PageAllocator;
 
         pub static PAGE_SIZE: std::sync::LazyLock<u32> =
-            std::sync::LazyLock::new(|| PageAllocator::page_size());
+            std::sync::LazyLock::new(PageAllocator::page_size);
 
         impl PageAllocator {
             pub const fn page_size() -> u32 {
@@ -621,7 +621,7 @@ mod arena_impl {
         #[test]
         fn arena_test() {
             let x = Arena::new();
-            assert!(x.current.get() == std::ptr::null_mut());
+            assert!(x.current.get().is_null());
             x.free();
 
             let y = Arena::new();
@@ -1092,7 +1092,7 @@ mod mt_arena {
         #[test]
         fn arena_test() {
             let x = MTArena::new();
-            assert!(x.current.load(Ordering::Relaxed) == std::ptr::null_mut());
+            assert!(x.current.load(Ordering::Relaxed).is_null());
             x.free();
 
             let y = MTArena::new();

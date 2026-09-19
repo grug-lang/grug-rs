@@ -847,13 +847,13 @@ impl BytecodeBackend {
                     };
                     // update the last stack frame to point at the current location
                     self.call_stack.push(StackFrame {
-                        span: unsafe { *instructions.debug_info.get_unchecked(offset as usize) },
+                        span: unsafe { *instructions.debug_info.get_unchecked(offset) },
                         // SAFETY: We always push a value to the call stack before entering this function
                         ..unsafe { self.call_stack.pop().unwrap_unchecked() }
                     });
                     // push the next stack frame
                     self.call_stack.push(StackFrame {
-                        span: unsafe { *instructions.debug_info.get_unchecked(offset as usize) },
+                        span: unsafe { *instructions.debug_info.get_unchecked(offset) },
                         fn_name: name.as_ntstrptr(),
                         file_path: None,
                         file_text: instructions.file_text.as_ntstrptr(),
@@ -909,9 +909,7 @@ impl BytecodeBackend {
         let fn_name = call_stack
             .iter()
             .rev()
-            .flat_map(|frame| frame.file_path.map(|_| frame.fn_name))
-            .filter(|fn_name| !fn_name.to_str().starts_with("_"))
-            .next()
+            .flat_map(|frame| frame.file_path.map(|_| frame.fn_name)).find(|fn_name| !fn_name.to_str().starts_with("_"))
             .expect("must have at least one export function call")
             .to_str();
         let span = last_frame.span;
@@ -1477,10 +1475,10 @@ impl std::fmt::Display for Instructions {
                 }
                 _ => (),
             }
-            if let Some(name) = self.fn_labels.get(&(addr as usize)) {
+            if let Some(name) = self.fn_labels.get(&{ addr }) {
                 writeln!(f, "{}:", name)?;
             }
-            if let Some(label) = jumps_end.get(&(addr as usize)) {
+            if let Some(label) = jumps_end.get(&{ addr }) {
                 writeln!(f, "L_{}: ", label)?;
             }
 

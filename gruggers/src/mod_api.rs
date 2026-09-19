@@ -220,10 +220,10 @@ impl ModApi {
         ) -> Value {
             Value { void: () }
         }
-        for (_, host_fn) in &mut self.host_fns {
+        for host_fn in self.host_fns.values_mut() {
             host_fn.fn_ptr = const { Some(HostFn::from_erased_ptr(dummy_host_fn)) };
         }
-        for (_, class) in &mut self.classes {
+        for class in self.classes.values_mut() {
             for (_, host_fn) in &mut *class.methods {
                 host_fn.fn_ptr = const { Some(HostFn::from_erased_ptr(dummy_host_fn)) };
             }
@@ -231,7 +231,7 @@ impl ModApi {
                 host_fn.fn_ptr = const { Some(HostFn::from_erased_ptr(dummy_host_fn)) };
             }
         }
-        for (_, entity) in &mut self.entities {
+        for entity in self.entities.values_mut() {
             for (_, host_fn) in &mut *entity.static_methods {
                 host_fn.fn_ptr = const { Some(HostFn::from_erased_ptr(dummy_host_fn)) };
             }
@@ -356,7 +356,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 
     fn new_error(&self, message: &str) -> Error {
         let mut location = Vec::new_in(self.arena);
-        write!(location, "{}", &self.json_path).expect("writing into a vec can never fail");
+        write!(location, "{}", self.json_path).expect("writing into a vec can never fail");
         let location = unsafe { std::str::from_utf8_unchecked(location.leak()) };
         Error::new(
             ErrorKind::MOD_API_ERROR,
@@ -371,7 +371,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
     #[track_caller]
     fn new_fmt_error(&self, message: std::fmt::Arguments) -> Error {
         let mut location = Vec::new_in(self.arena);
-        write!(location, "{}", &self.json_path).expect("writing into a vec can never fail");
+        write!(location, "{}", self.json_path).expect("writing into a vec can never fail");
         let location = unsafe { std::str::from_utf8_unchecked(location.leak()) };
         Error::new(
             ErrorKind::MOD_API_ERROR,
@@ -497,10 +497,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
             // required "type" string
             let ty = self.get_key(param_values, "type")?;
             let ty = self.parse_type(ty, generics, arena)?;
-            match &ty {
-                Type::Void => return Err(self.new_error("cannot be void")),
-                _ => (),
-            }
+            if ty == Type::Void { return Err(self.new_error("cannot be void")) }
             self.pop_path();
 
             self.pop_path();
@@ -702,9 +699,9 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                     .get(idx)
                     .expect("existential should always point to a valid generic")
                     .traits()
-                    .into_iter()
+                    .iter()
                     .all(|tr| {
-                        tr.implementors.into_iter().any(|imp| {
+                        tr.implementors.iter().any(|imp| {
                             type_matches_implementor((ty, actual.1), (imp.ty, imp.generics))
                         })
                     }),
@@ -721,98 +718,95 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                 _ => false,
             }
         }
-        match ty {
-            Type::Id { name, generics } => {
-                // If the type is found, then check if the number of generics
-                // match and also recursively check types
-                self.push_path(JsonPathComponent::ObjectKey("generics"));
-                if let Some((_, constraints)) = known_types
-                    .iter()
-                    .find(|(ty_name, _)| *ty_name == name.to_str())
+        if let Type::Id { name, generics } = ty {
+            // If the type is found, then check if the number of generics
+            // match and also recursively check types
+            self.push_path(JsonPathComponent::ObjectKey("generics"));
+            if let Some((_, constraints)) = known_types
+                .iter()
+                .find(|(ty_name, _)| *ty_name == name.to_str())
+            {
+                if constraints.len() != generics.len() {
+                    return Err(self.new_error(self.arena.fmt_into(format_args!(
+                        ": {} was declared to have {} generics but here it has {}",
+                        name,
+                        constraints.len(),
+                        generics.len()
+                    ))));
+                }
+                for (i, (generic, constraint)) in generics.iter().zip(*constraints).enumerate()
                 {
-                    if constraints.len() != generics.len() {
-                        return Err(self.new_error(self.arena.fmt_into(format_args!(
-                            ": {} was declared to have {} generics but here it has {}",
-                            name,
-                            constraints.len(),
-                            generics.len()
-                        ))));
-                    }
-                    for (i, (generic, constraint)) in generics.iter().zip(*constraints).enumerate()
-                    {
-                        self.push_path(JsonPathComponent::ArrayIdx(i));
-                        match *generic {
-                            Type::Resource { .. } => {
-                                return Err(
-                                    self.new_error("resource strings cannot be used in generics")
-                                );
-                            }
-                            Type::Entity { .. } => {
-                                return Err(
-                                    self.new_error("entity strings cannot be used in generics")
-                                );
-                            }
-                            _ => {
-                                for tr in constraint.traits() {
-                                    // If the type is already an existential,
-                                    // then check if it already implements the
-                                    // constraint. If not, then go for the
-                                    // other check.
-                                    let is_existential_that_implements_constraint =
-                                        if let Type::Existential { idx } = generic {
-                                            let act_traits = used_generics[*idx].traits();
-                                            act_traits
-                                                .iter()
-                                                .any(|&act_trait| std::ptr::eq(act_trait, *tr))
-                                        } else {
-                                            false
-                                        };
-                                    let is_type_that_matches_a_trait_implementor =
-                                        tr.implementors.into_iter().any(|imp| {
-                                            type_matches_implementor(
-                                                (*generic, used_generics),
-                                                (imp.ty, imp.generics),
-                                            )
-                                        });
-                                    if !is_existential_that_implements_constraint
-                                        && !is_type_that_matches_a_trait_implementor
-                                    {
-                                        if let Type::Existential { idx } = generic {
-                                            return Err(self.new_error(self.arena.fmt_into(
-                                                format_args!(
-                                                    "type '{}' must implement constraint '{}'",
-                                                    used_generics[*idx].name, tr.name
-                                                ),
-                                            )));
-                                        } else {
-                                            return Err(self.new_error(self.arena.fmt_into(
-                                                format_args!(
-                                                    "type '{}' must implement constraint '{}'",
-                                                    generic, tr.name
-                                                ),
-                                            )));
-                                        }
+                    self.push_path(JsonPathComponent::ArrayIdx(i));
+                    match *generic {
+                        Type::Resource { .. } => {
+                            return Err(
+                                self.new_error("resource strings cannot be used in generics")
+                            );
+                        }
+                        Type::Entity { .. } => {
+                            return Err(
+                                self.new_error("entity strings cannot be used in generics")
+                            );
+                        }
+                        _ => {
+                            for tr in constraint.traits() {
+                                // If the type is already an existential,
+                                // then check if it already implements the
+                                // constraint. If not, then go for the
+                                // other check.
+                                let is_existential_that_implements_constraint =
+                                    if let Type::Existential { idx } = generic {
+                                        let act_traits = used_generics[*idx].traits();
+                                        act_traits
+                                            .iter()
+                                            .any(|&act_trait| std::ptr::eq(act_trait, *tr))
+                                    } else {
+                                        false
+                                    };
+                                let is_type_that_matches_a_trait_implementor =
+                                    tr.implementors.iter().any(|imp| {
+                                        type_matches_implementor(
+                                            (*generic, used_generics),
+                                            (imp.ty, imp.generics),
+                                        )
+                                    });
+                                if !is_existential_that_implements_constraint
+                                    && !is_type_that_matches_a_trait_implementor
+                                {
+                                    if let Type::Existential { idx } = generic {
+                                        return Err(self.new_error(self.arena.fmt_into(
+                                            format_args!(
+                                                "type '{}' must implement constraint '{}'",
+                                                used_generics[*idx].name, tr.name
+                                            ),
+                                        )));
+                                    } else {
+                                        return Err(self.new_error(self.arena.fmt_into(
+                                            format_args!(
+                                                "type '{}' must implement constraint '{}'",
+                                                generic, tr.name
+                                            ),
+                                        )));
                                     }
                                 }
-                                self.validate_type(*generic, used_generics, known_types)?;
                             }
+                            self.validate_type(*generic, used_generics, known_types)?;
                         }
-                        self.pop_path();
                     }
-                // TODO: Change the mod api format so this always throws an
-                // error
-                // if not found, number of generics MUST be 0
-                } else {
-                    if generics.len() != 0 {
-                        return Err(self.new_error(self.arena.fmt_into(format_args!(
-                            ": {} was not declared in \"classes\", so it cannot have generics",
-                            name
-                        ))));
-                    }
+                    self.pop_path();
                 }
-                self.pop_path();
+            // TODO: Change the mod api format so this always throws an
+            // error
+            // if not found, number of generics MUST be 0
+            } else {
+                if !generics.is_empty() {
+                    return Err(self.new_error(self.arena.fmt_into(format_args!(
+                        ": {} was not declared in \"classes\", so it cannot have generics",
+                        name
+                    ))));
+                }
             }
-            _ => (),
+            self.pop_path();
         }
         Ok(())
     }
@@ -1029,7 +1023,7 @@ pub(crate) fn get_mod_api_from_text(
                 unsafe { &mut *data }.implementors = implementors;
 
                 let data = unsafe { &*data };
-                return Ok((data.name, data));
+                Ok((data.name, data))
             })
             .collect::<Result<HashMap<_, _>>>()?;
 
@@ -1181,7 +1175,7 @@ pub(crate) fn get_mod_api_from_text(
     } else {
         HashMap::new()
     };
-    assert_eq!(0, context.json_path.0.len(), "{}", &context.json_path);
+    assert_eq!(0, context.json_path.0.len(), "{}", context.json_path);
 
     // "classes" object
     let classes = if let Some(classes) = mod_api_root.get("classes") {
@@ -1308,7 +1302,7 @@ pub(crate) fn get_mod_api_from_text(
         HashMap::new()
     };
 
-    assert_eq!(0, context.json_path.0.len(), "{}", &context.json_path);
+    assert_eq!(0, context.json_path.0.len(), "{}", context.json_path);
 
     let mut known_types = Vec::with_capacity_in(entities.len() + classes.len(), &arena);
     // Collect all entities as types with no generics

@@ -123,7 +123,7 @@ mod ser {
                 };
                 if !generics.is_empty() {
                     object["generics"] = generics
-                        .into_iter()
+                        .iter()
                         .map(|generic| serialize_type(generic))
                         .collect::<Vec<_>>()
                         .into();

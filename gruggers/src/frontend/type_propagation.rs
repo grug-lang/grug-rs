@@ -134,8 +134,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             mod_api,
             mod_name,
             mods_dir_path,
-            &ast.local_fn_signatures,
-            &ast.export_fn_signatures,
+            ast.local_fn_signatures,
+            ast.export_fn_signatures,
             arena,
             temp_arena,
             type_storage,
@@ -567,8 +567,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         ));
                     }
                 }
-                Statement::Continue(span) => {
-                    if self.num_while_loops_deep == 0 {
+                Statement::Continue(span)
+                    if self.num_while_loops_deep == 0 => {
                         return Err(self.new_error(
                             *span,
                             format_args!(
@@ -576,7 +576,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             ),
                         ));
                     }
-                }
                 _ => (),
             }
         }
@@ -744,7 +743,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         if let Some(expected_type) = expected_type {
             ty_ctx.add_constraint(expr.span, expected_type, expr_type)?;
         }
-        let substitutions = ty_ctx.substitute(&mut self.type_storage, self.arena)?;
+        let substitutions = ty_ctx.substitute(self.type_storage, self.arena)?;
         let substitutions = self.type_storage.insert_type_list(substitutions);
         // Clear the typing context for the second pass.
         // This time, the type context is only used to keep track of the number
@@ -1320,7 +1319,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             if let Type::Resource { extension } = param.ty
                 && let ExprData::Resource(ref mut value) = arg.data
             {
-                if let Some(_) = substitutions {
+                if substitutions.is_some() {
                     *value = self
                         .validate_and_fix_resource_string(
                             value.to_str(),
@@ -1334,7 +1333,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             } else if let Type::Entity { entity_type: _ } = param.ty
                 && let ExprData::Entity(ref mut value) = arg.data
             {
-                if let Some(_) = substitutions {
+                if substitutions.is_some() {
                     self.validate_and_fix_entity_string(value, arg.span, arena)?;
                 }
             // argument is a literal string but resource is expected
@@ -1354,7 +1353,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					format_args!("The host function '{}' expects an entity string, so put an 'e' in front of string \"{}\"", function_name, string)
 				));
             // if argument is void
-            } else if &arg_result_ty == &Type::Void {
+            } else if arg_result_ty == Type::Void {
                 return Err(self.new_error(
 					arg.span,
 					format_args!("Function call '{}' expected the type {} for argument '{}', but got a function call that doesn't return anything", function_name, param.ty, param.name)
@@ -1817,7 +1816,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 (Type::Existential { idx: left_idx }, Type::Existential { idx: right_idx })
                     if left_idx == right_idx =>
                 {
-                    ()
+                    
                 }
                 // At least one side is an existential
                 // This part *is* recursive. The error should contain the new types
@@ -1867,8 +1866,8 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 if let Type::Existential { idx } = self.substitutions[idx] {
                     return Type::Existential { idx };
                 }
-                let return_type = unsafe { self.copy_type_into(self.substitutions[idx], arena) };
-                return_type
+                
+                unsafe { self.copy_type_into(self.substitutions[idx], arena) }
             }
             Type::Id { name, generics } => Type::Id {
                 name: arena.copy_str_into_nt(name.to_str()).as_ntstrptr(),
@@ -1982,10 +1981,10 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                     .get(idx)
                     .expect("existential should always point to a valid generic")
                     .traits()
-                    .into_iter()
+                    .iter()
                     .all(|tr| {
                         tr.implementors
-                            .into_iter()
+                            .iter()
                             .any(|imp| type_matches_implementor(ty, imp.ty, imp.generics))
                     }),
                 (Type::Void, Type::Void) => true,
@@ -2004,7 +2003,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         for tr in traits {
             if !tr
                 .implementors
-                .into_iter()
+                .iter()
                 .any(|imp| type_matches_implementor(ty, imp.ty, imp.generics))
             {
                 return Err(self.new_error(err_span, format_args!("host function '{}' expects type '{}' to implement constraint '{}' but it doesn't", function_name, ty, tr.name)));

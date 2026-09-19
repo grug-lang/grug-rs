@@ -108,16 +108,13 @@ impl TypeStorage {
 
     pub fn insert_string(&mut self, str: &str) -> &'static NTStr {
         match self.strings.get(str) {
-            Some(str) => return str,
+            Some(str) => str,
             None => {
                 {
                     let global_storage = GLOBAL_TYPE_STORAGE.read().unwrap();
-                    match global_storage.strings.get(str) {
-                        Some(str) => {
-                            self.strings.insert(str);
-                            return str;
-                        }
-                        None => (),
+                    if let Some(str) = global_storage.strings.get(str) {
+                        self.strings.insert(str);
+                        return str;
                     }
                 }
                 {
@@ -125,7 +122,7 @@ impl TypeStorage {
                     let mut global_storage = GLOBAL_TYPE_STORAGE.write().unwrap();
                     global_storage.strings.insert(str);
                     self.strings.insert(str);
-                    return str;
+                    str
                 }
             }
         }
@@ -140,10 +137,10 @@ impl TypeStorage {
                 self.type_lists
                     .insert(TypeWrapper::cast_slice_from_type(generics));
 
-                return Id {
+                Id {
                     name: name.as_ntstrptr(),
                     generics,
-                };
+                }
             }
             Resource { extension } => Resource {
                 extension: self.insert_string(extension.to_str()).as_ntstrptr(),
@@ -178,29 +175,26 @@ impl TypeStorage {
                         list,
                     )
                 };
-                return TypeWrapper::cast_slice_to_type(list);
+                TypeWrapper::cast_slice_to_type(list)
             }
             None => {
                 {
                     let global_storage = GLOBAL_TYPE_STORAGE.read().unwrap();
-                    match global_storage.type_lists.get::<&[TypeWrapper]>(&list) {
-                        Some(list) => {
-                            // SAFETY: The returned list is actually a
-                            // `&'static [TypeWrapper<'static>]` but it gets
-                            // returned as a &'_ [TypeWrapper<'_>] because of
-                            // a trait solver limitation.
-                            //
-                            // We just transmute it back to it's actual type
-                            let list: &'static [TypeWrapper<'static>] = unsafe {
-                                std::mem::transmute::<
-                                    &'a [TypeWrapper<'b>],
-                                    &'static [TypeWrapper<'static>],
-                                >(list)
-                            };
-                            self.type_lists.insert(list);
-                            return TypeWrapper::cast_slice_to_type(list);
-                        }
-                        None => (),
+                    if let Some(list) = global_storage.type_lists.get::<&[TypeWrapper]>(&list) {
+                        // SAFETY: The returned list is actually a
+                        // `&'static [TypeWrapper<'static>]` but it gets
+                        // returned as a &'_ [TypeWrapper<'_>] because of
+                        // a trait solver limitation.
+                        //
+                        // We just transmute it back to it's actual type
+                        let list: &'static [TypeWrapper<'static>] = unsafe {
+                            std::mem::transmute::<
+                                &'a [TypeWrapper<'b>],
+                                &'static [TypeWrapper<'static>],
+                            >(list)
+                        };
+                        self.type_lists.insert(list);
+                        return TypeWrapper::cast_slice_to_type(list);
                     }
                 }
                 {
@@ -213,21 +207,18 @@ impl TypeStorage {
                         Some(list) => return TypeWrapper::cast_slice_to_type(list),
                         None => {
                             let global_storage = GLOBAL_TYPE_STORAGE.read().unwrap();
-                            match global_storage.type_lists.get(&*list) {
-                                Some(list) => {
-                                    self.type_lists.insert(list);
-                                    return TypeWrapper::cast_slice_to_type(list);
-                                }
-                                None => (),
+                            if let Some(list) = global_storage.type_lists.get(&*list) {
+                                self.type_lists.insert(list);
+                                return TypeWrapper::cast_slice_to_type(list);
                             }
                         }
                     }
 
-                    let list = GLOBAL_TYPE_ARENA.slice_from_iter(list.into_iter());
+                    let list = GLOBAL_TYPE_ARENA.slice_from_iter(list);
                     let mut global_storage = GLOBAL_TYPE_STORAGE.write().unwrap();
                     global_storage.type_lists.insert(list);
                     self.type_lists.insert(list);
-                    return TypeWrapper::cast_slice_to_type(list);
+                    TypeWrapper::cast_slice_to_type(list)
                 }
             }
         }
