@@ -24,24 +24,24 @@ jobs:
       - run: cmake --build ./gruggers/src/grug-tests/build
       - run: cmake -S gruggers/src/grug-bench/ -B ./gruggers/src/grug-bench/build/ -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build ./gruggers/src/grug-bench/build
-      
+
       - name: Check formatting
         run: cargo fmt --all -- --check
-        
+
       - name: Lint with clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-      
+
       - name: Build
         run: cargo build --verbose
-        
+
       - name: Run unit tests
         run: cargo test --verbose --lib --bins
-        
+
       - name: Run doc tests
         run: cargo test --verbose --doc
-        
+
       - name: Run grug_bench
         run: cargo test --verbose --test grug_bench
-        
+
       - name: Run grug_tests integration suite
         run: cargo test --verbose --test grug_tests -- --continue-on-fail
