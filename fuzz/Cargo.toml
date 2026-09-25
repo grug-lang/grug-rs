@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
 gruggers = {path = "../gruggers"}
 gruggers-core = {path = "../gruggers-core"}
 allocator-api2 = "0.4.0"
+arbitrary = "1.4.2"
 
 [[bin]]
 name = "fuzz_target_1"

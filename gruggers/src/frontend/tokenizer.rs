@@ -255,54 +255,52 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                 let mut is_escaped = false;
 
                 let mut allocated = Vec::new_in(arena);
-                let mut copied_len = 0;
+				let mut finished = false;
 
-                while i < file_text.len() && file_text[i] != b'"' && !is_escaped {
-                    if is_escaped {
-                        is_escaped = false;
-                        // TODO: Wait for response
-                        // [https://github.com/grug-lang/grug-tests/issues/64]
-                        let next_char = match file_text[i] {
-                            b't' => b'\t',
-                            b'n' => b'\n',
-                            b'r' => b'\r',
-                            x => x,
-                        };
-                        allocated.push(next_char);
-                        copied_len = i - start_index;
-                        // only normal strings can be escaped
-                    } else if file_text[i] == b'\\' && ty == TokenType::String {
-                        is_escaped = true;
-                        allocated.extend_from_slice(&file_text[(start_index + copied_len)..i]);
-                        copied_len = i - start_index;
-                    }
-                    if file_text[i] == b'\0' {
-                        return Err(new_tokenizer_error!(
-                            (i, cur_line) =>
-                            "Unexpected null byte on line {}", cur_line
-                        ));
-                    }
-                    if i + 2 < file_text.len()
-                        && is_escaped
-                        && (&file_text[i..=(i + 2)] == b"\\\r\n"
-                            || &file_text[i..=(i + 1)] == b"\\\n")
-                    {
-                        return Err(new_tokenizer_error!(
-                            (i, cur_line) =>
-                            "Unexpected line break in string on line {}", cur_line
-                        ));
-                    }
-                    if file_text[i] == b'\n' {
-                        cur_line += 1;
-                    }
-                    i += 1;
-                }
-                if i >= file_text.len() {
+				let mut chars = file_text_str[i..].chars();
+				while let Some(char) = chars.next() {
+					match char {
+						'"' if !is_escaped => {
+							finished = true;
+							break;
+						},
+						't' if is_escaped => allocated.push(b'\t'),
+						'n' if is_escaped => allocated.push(b'\n'),
+						'r' if is_escaped => allocated.push(b'\r'),
+						'\\' if !is_escaped && ty == TokenType::String => {
+							is_escaped = true;
+						}
+						'\r' | '\n' if is_escaped => {
+							return Err(new_tokenizer_error!(
+								(file_text_str.len() - chars.as_str().len() - 2, cur_line) =>
+								"Unexpected line break in string on line {}", cur_line
+							));
+						}
+						'\0' => {
+							return Err(new_tokenizer_error!(
+								(file_text_str.len() - chars.as_str().len(), cur_line) =>
+								"Unexpected null byte on line {}", cur_line
+							));
+						}
+						'\n' => {
+							cur_line += 1;
+							allocated.push(b'\n');
+						}
+						x => {
+							is_escaped = false;
+							let mut bytes = [0;4];
+							let char_utf8 = x.encode_utf8(&mut bytes).as_bytes();
+							allocated.extend_from_slice(char_utf8);
+						}
+					}
+				}
+				if !finished {
                     return Err(new_tokenizer_error!(
                         (quote_start_index, start_line) =>
                         "Unclosed \" on line {}", start_line
                     ));
-                }
+				}
+
                 let value = if !allocated.is_empty() {
                     unsafe { str::from_utf8_unchecked(allocated.leak()) }
                 } else {
@@ -317,7 +315,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                         line: start_line,
                     },
                 });
-                i += 1;
+				i = file_text.len() - chars.as_str().len();
                 continue 'outer;
             }
         }
