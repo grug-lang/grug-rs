@@ -1219,6 +1219,7 @@ impl<'a> Parser<'a> {
                 "string" => Type::String,
                 "resource" => Type::Resource {
                     extension: Box::leak(NTStr::box_from_str_in("", arena)).as_ntstrptr(),
+                    optional: false,
                 },
                 "entity" => Type::Entity { entity_type: None },
                 type_name => {

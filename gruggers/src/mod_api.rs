@@ -387,8 +387,22 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                 // "resource_extension" string
                 let extension = self.get_str(object, "resource_extension")?;
                 self.pop_path();
+
+                // optional "optional" bool, defaulting to false
+                let optional = if let Some(optional) = object.get("optional") {
+                    self.push_path(JsonPathComponent::ObjectKey("optional"));
+                    let optional = optional
+                        .as_bool()
+                        .ok_or_else(|| self.new_error("is not a boolean"))?;
+                    self.pop_path();
+                    optional
+                } else {
+                    false
+                };
+
                 Type::Resource {
                     extension: arena.copy_str_into_nt(extension).as_ntstrptr(),
+                    optional,
                 }
             }
             generic if generic.starts_with("$") => {
