@@ -236,7 +236,7 @@ fn copy_type<'arena>(ty: Type<'_>, arena: &'arena Arena) -> Type<'arena> {
 		Type::Number => Type::Number,
 		Type::String => Type::String,
 		Type::Entity{entity_type: None} => Type::Entity{entity_type: None},
-		Type::Resource{extension} => Type::Resource{extension: copy_string(extension, arena)},
+		Type::Resource{extension, optional} => Type::Resource{extension: copy_string(extension, arena), optional},
 		Type::Id{name, generics} => Type::Id{
 			name: copy_string(name, arena),
 			generics: {

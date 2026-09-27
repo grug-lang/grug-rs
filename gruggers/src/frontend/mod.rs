@@ -480,7 +480,7 @@ impl GrugState {
                     path.file_name().unwrap(),
                     mod_dir_path,
                     entity_type,
-					entity_name.as_ref(),
+                    entity_name.as_ref(),
                     result,
                     &arena,
                 );
