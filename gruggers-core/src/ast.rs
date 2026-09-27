@@ -64,6 +64,9 @@ pub enum Type<'a> {
         /// This value ensures that only file paths with particular extensions
         /// can be passed to host functions
         extension: NTStrPtr<'a>,
+        /// If true, the path does not have to exist when the program is compiled. A host function can
+        /// use this for a path that is created later, like a screenshot reference on its first run.
+        optional: bool,
     },
     /// Type of an entity string
     ///
@@ -112,9 +115,11 @@ impl<'a> Type<'a> {
             (
                 Resource {
                     extension: extension_1,
+                    ..
                 },
                 Resource {
                     extension: extension_2,
+                    ..
                 },
             ) => extension_1 == extension_2,
             (Resource { .. }, _) => false,
@@ -148,7 +153,7 @@ impl<'a> std::fmt::Display for Type<'a> {
                 }
                 Ok(())
             }
-            Self::Resource { extension: _ } => write!(f, "resource"),
+            Self::Resource { .. } => write!(f, "resource"),
             Self::Entity {
                 entity_type: Some(name),
             } => write!(f, "{}", name),

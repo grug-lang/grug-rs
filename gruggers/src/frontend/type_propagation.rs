@@ -778,6 +778,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             ExprData::String { .. } => Type::String,
             ExprData::Resource { .. } => Type::Resource {
                 extension: nt!("").as_ntstrptr(),
+                optional: false,
             },
             ExprData::Entity { .. } => Type::Entity { entity_type: None },
             ExprData::Identifier(name) => {
@@ -1150,7 +1151,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         for (param, arg) in signature.iter().zip(arguments) {
             let arg_result_ty = self.fill_expr(ty_ctx, substitutions, arg, arena)?;
             // If argument is resource
-            if let Type::Resource { extension } = param.ty
+            if let Type::Resource {
+                extension,
+                optional,
+            } = param.ty
                 && let ExprData::Resource(ref mut value) = arg.data
             {
                 if substitutions.is_some() {
@@ -1158,6 +1162,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         .validate_and_fix_resource_string(
                             value.to_str(),
                             extension.to_str(),
+                            optional,
                             arg.span,
                             arena,
                         )?
@@ -1220,6 +1225,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         &mut self,
         value: &str,
         extension: &str,
+        optional: bool,
         span: SourceSpan,
         arena: &'a Arena,
     ) -> Result<&'a NTStr, Error> {
@@ -1289,8 +1295,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         // check if resource exists
         let mut full_path = PathBuf::from(self.mods_dir_path);
         full_path.push(resource_str.as_str());
+        // An optional resource is allowed to not exist yet: the host function accepts a path it will
+        // create later, like a screenshot reference on its first run.
         // we can't do `Ok(true) == std::fs::exists(&full_path)` because std::io::Error is not PartialEq
-        if !std::fs::exists(&full_path).is_ok_and(std::convert::identity) {
+        if !optional && !std::fs::exists(&full_path).is_ok_and(std::convert::identity) {
             Err(self.new_error(span, format_args!("resource '{}' does not exist", value)))
         } else {
             Ok(resource_str)
@@ -1683,8 +1691,12 @@ impl<'a, 'err> TyCtx<'a, 'err> {
     // If there are any non-trivial loops, this will result in a stack overflow
     unsafe fn copy_type_into<'arena>(&self, ty: Type<'a>, arena: &'arena Arena) -> Type<'arena> {
         match ty {
-            Type::Resource { extension } => Type::Resource {
+            Type::Resource {
+                extension,
+                optional,
+            } => Type::Resource {
                 extension: arena.copy_str_into_nt(extension.to_str()).as_ntstrptr(),
+                optional,
             },
             Type::Entity {
                 entity_type: Some(entity_type),

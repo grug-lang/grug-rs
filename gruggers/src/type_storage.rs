@@ -33,11 +33,13 @@ impl<'a> PartialEq for TypeWrapper<'a> {
             (
                 Resource {
                     extension: extension_1,
+                    optional: optional_1,
                 },
                 Resource {
                     extension: extension_2,
+                    optional: optional_2,
                 },
-            ) => extension_1.ptr_eq(extension_2),
+            ) => extension_1.ptr_eq(extension_2) && optional_1 == optional_2,
             (Entity { entity_type: ty_1 }, Entity { entity_type: ty_2 }) => match (ty_1, ty_2) {
                 (None, None) => true,
                 (Some(ty_1), Some(ty_2)) => ty_1.ptr_eq(ty_2),
@@ -58,9 +60,13 @@ impl<'a> std::hash::Hash for TypeWrapper<'a> {
                 hasher.write_usize(name.as_ptr() as usize);
                 hasher.write_usize(generics as *const _ as *const Type as usize);
             }
-            Resource { extension } => {
+            Resource {
+                extension,
+                optional,
+            } => {
                 "Type".hash(hasher);
                 hasher.write_usize(extension.as_ptr() as usize);
+                optional.hash(hasher);
             }
             Entity {
                 entity_type: Some(ty),
@@ -142,8 +148,12 @@ impl TypeStorage {
                     generics,
                 }
             }
-            Resource { extension } => Resource {
+            Resource {
+                extension,
+                optional,
+            } => Resource {
                 extension: self.insert_string(extension.to_str()).as_ntstrptr(),
+                optional,
             },
             Entity {
                 entity_type: Some(ty),
