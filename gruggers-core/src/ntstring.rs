@@ -804,7 +804,7 @@ mod osstr {
             unsafe { NTOsStr::from_osstr_unchecked(slice) }
         }
 
-        /// Returns a [`&OsStr`] to the string excluding the null byte
+        /// Returns a [`OsStr`] to the string excluding the null byte
         pub fn to_osstr(self) -> &'a OsStr {
             self.to_ntosstr().as_osstr()
         }
