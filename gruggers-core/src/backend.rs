@@ -39,13 +39,13 @@ pub trait Backend {
     fn clear_entities(&mut self);
     /// Deinitialize the data associated with `entity`.
     ///
-    /// # Safety:
+    /// # Safety
     /// This function must not be called on an uninitialized entity.
     /// An entity is considered uninitialized if
-    /// 	- It has just been created and [`Backend::init_entity`] hasn't been called on it.
-    /// 	- The file an entity belongs to has be reloaded and [`Backend::init_entity`]
-    /// 	hasn't been called on it.
-    /// 	- This function has been called on the entity
+    ///     - It has just been created and [`Backend::init_entity`] hasn't been called on it.
+    ///     - The file an entity belongs to has be reloaded and [`Backend::init_entity`]
+    ///     hasn't been called on it.
+    ///     - This function has been called on the entity
     unsafe fn destroy_entity_data(&self, entity: &GrugEntity);
     /// Run the on function at index `on_fn_index` of the script associated
     /// with `entity`.
@@ -155,6 +155,8 @@ impl<GrugState: State> ErasedBackend<GrugState> {
         (self.vtable.clear_entities)(self.data)
     }
     /// See [`Backend::destroy_entity_data`]
+	/// # Safety
+	///     same as [`Backend::destroy_entity_data`]
     #[inline]
     pub unsafe fn destroy_entity_data(&self, entity: &GrugEntity) {
         unsafe { (self.vtable.destroy_entity_data)(self.data, entity) }

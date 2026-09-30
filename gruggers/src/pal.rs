@@ -1,5 +1,6 @@
 #[cfg(target_os = "windows")]
 pub mod windows {
+	#![expect(clippy::upper_case_acronyms)]
     #![allow(non_camel_case_types)]
     #![allow(non_snake_case)]
 

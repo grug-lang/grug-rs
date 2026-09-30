@@ -41,12 +41,10 @@ fn build_tests() {
         if let Ok(true) = std::fs::exists(&test_source_path) {
             println!("cargo::rerun-if-changed={}", test_source_path);
             let tests_dll_out_path = archive_path.clone() + "/tests.dll";
-            for optional_path in ["tests.dll"] {
-                _ = std::fs::copy(
-                    test_source_path.clone() + optional_path,
-                    &tests_dll_out_path,
-                );
-            }
+			_ = std::fs::copy(
+				test_source_path.clone() + "tests.dll",
+				&tests_dll_out_path,
+			);
             let tests_lib_out_path = archive_path.clone() + "/tests.lib";
             for optional_path in ["tests.lib", "libtests.dll.a"] {
                 _ = std::fs::copy(

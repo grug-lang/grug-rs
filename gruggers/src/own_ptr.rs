@@ -12,9 +12,9 @@
 //!
 //! ```rs
 //! struct Foo {
-//! 	bar: Box<str, &'static Arena>,
-//! 	bax: Box<[u8], &'static Arena>,
-//! 	_arena: Arena,
+//!     bar: Box<str, &'static Arena>,
+//!     bax: Box<[u8], &'static Arena>,
+//!     _arena: Arena,
 //! }
 //! ```
 //!
@@ -27,9 +27,9 @@
 //!
 //! ```rs
 //! struct Foo {
-//! 	bar: OwnPtr<'static, str>,
-//! 	bax: OwnPtr<'static, [u8]>,
-//! 	_arena: Arena,
+//!     bar: OwnPtr<'static, str>,
+//!     bax: OwnPtr<'static, [u8]>,
+//!     _arena: Arena,
 //! }
 //! ```
 

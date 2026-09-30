@@ -45,12 +45,12 @@
 //! some JSON data, etc) is left up to the host.
 
 use crate::arena::Arena;
+use crate::frontend::{CompileRequest, CompileResponse};
 use crate::backend::{Backend, BytecodeBackend, ErasedBackend};
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::nt;
 use crate::ntstring::NTStrPtr;
-use crate::own_ptr::OwnPtr;
 use crate::type_storage::TypeStorage;
 use crate::types::{
     ErasedHostFn, ErasedRegFn, ExportFnId, FileId, GrugEntity, HostFn, INVALID_GRUG_FILE_ID, Id,
@@ -283,14 +283,11 @@ pub struct GrugState {
     pub(crate) script_entities: RefCell<Vec<Vec<NonNull<GrugEntity>>>>,
     pub(crate) entities: Xar<GrugEntity>,
     /// Send an arena and a slice of filepaths to compile (allocated within the arena)
-    pub(crate) compiler_senders: Vec<Sender<(Arena, &'static [&'static OsStr])>>,
+    pub(crate) compiler_senders: Vec<Sender<CompileRequest>>,
     /// Receive the arena and a slice of ASTs and the corresponding filepaths,
     /// and a list of resources used by these files
     /// (all allocated within the same arena)
-    pub(crate) compiler_receiver: Receiver<(
-        Arena,
-        OwnPtr<'static, [(Result<GrugAst<'static>, Error>, &'static OsStr)]>,
-    )>,
+    pub(crate) compiler_receiver: Receiver<CompileResponse>,
     /// SAFETY: The strings within the `export_functions` field is allocated within
     /// `mod_api`. So any reference given out to this field must have the 'self
     /// lifetime
@@ -675,6 +672,10 @@ impl GrugState {
 // Registration functions
 impl GrugState {
     /// Register a generic host function
+	///
+	/// # Safety
+	/// 
+	/// The grug arguments this function expects must match the mod_api
     pub unsafe fn register_reg_fn<const N: usize>(
         &mut self,
         fn_name: &str,
@@ -684,6 +685,10 @@ impl GrugState {
     }
 
     /// Register a non generic host method
+	///
+	/// # Safety
+	/// 
+	/// The grug arguments this function expects must match the mod_api
     pub unsafe fn register_reg_method<const N: usize>(
         &mut self,
         class_name: &str,
@@ -720,6 +725,10 @@ impl GrugState {
     }
 
     /// Register a non generic host function
+	///
+	/// # Safety
+	/// 
+	/// The grug arguments this function expects must match the mod_api
     pub unsafe fn register_host_fn<const N: usize>(
         &mut self,
         fn_name: &str,
@@ -729,6 +738,10 @@ impl GrugState {
     }
 
     /// Register a non generic host method
+	///
+	/// # Safety
+	/// 
+	/// The grug arguments this function expects must match the mod_api
     pub unsafe fn register_method<const N: usize>(
         &mut self,
         class_name: &str,

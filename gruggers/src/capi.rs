@@ -177,6 +177,10 @@ pub extern "C" fn grug_compile_file(state: &CState, file_path: NTStrPtr<'_>) -> 
     }
 }
 
+/// # Safety
+/// There is no memory safety issue here.
+/// But this may cause older entities to be replaced
+/// by newer ones with no warning if the ids start overlapping
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn grug_set_next_entity_id(state: &CState, next_id: u64) {
     unsafe { state.0.set_next_entity_id(next_id) };
@@ -243,7 +247,7 @@ pub unsafe extern "C" fn grug_call_export_fn(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_set_runtime_error(state: &CState, message: NTStrPtr) {
+pub extern "C" fn grug_set_runtime_error(state: &CState, message: NTStrPtr) {
     state.0.set_host_fn_error(message.to_str());
 }
 

@@ -72,6 +72,7 @@ pub struct RuntimeError<'a> {
 impl<'a> RuntimeError<'a> {
     /// The call_stack must have already been allocated within `a`
     #[track_caller]
+	#[expect(clippy::too_many_arguments)]
     pub fn new_error_in<A: Allocator>(
         kind: RuntimeErrorKind,
         call_stack: &'a [StackFrame<'a>],

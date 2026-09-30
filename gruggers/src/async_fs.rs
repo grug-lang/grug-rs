@@ -178,6 +178,8 @@ mod windows {
             }
         }
 
+		// clippy doesn't know the values are being mutated
+		#[expect(clippy::while_immutable_condition)]
         // wait for all apcs to complete
         while num_apcs_queued != num_apcs_finished {
             // sleep for a maximum of 500ms to read files
@@ -217,13 +219,13 @@ mod windows {
             unsafe {
                 *file_text
                     .cast::<u8>()
-                    .add(iosb.information as usize)
+                    .add(iosb.information)
                     .as_ptr() = b'\0'
             };
             let new_ptr = unsafe {
                 NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(
                     file_text.cast::<u8>().as_ptr(),
-                    iosb.information as usize + 1,
+                    iosb.information + 1,
                 ))
             };
             *file_text = new_ptr;
@@ -231,11 +233,10 @@ mod windows {
 
         let mut ret_val = Vec::with_capacity_in(files.len(), arena);
         ret_val.extend(files_data.into_iter().map(|data| {
-            data.map(|(ptr, path)| {
+            data.and_then(|(ptr, path)| {
                 let slice = unsafe { &*ptr.as_ptr() };
                 super::verify_file_data(slice, path)
             })
-            .flatten()
         }));
 
         ret_val

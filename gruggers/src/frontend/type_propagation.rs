@@ -61,6 +61,7 @@ impl<'a> From<Error> for TypeInferenceError<'a> {
 
 impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 'temp> {
     // TODO: This should only be called within fill_result_types
+	#[expect(clippy::too_many_arguments)]
     pub fn new(
         file_text: &'arena str,
         file_path: &'arena OsStr,
@@ -105,6 +106,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         )
     }
 
+	#[expect(clippy::too_many_arguments)]
     pub fn fill_result_types(
         entity_export_fns: &'mod_api [(&'mod_api NTStr, ModApiExportFn<'mod_api>)],
         mod_api: &'mod_api ModApi,
@@ -543,18 +545,16 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 								format_args!("Function '{}' is supposed to return {}, not {}", self.current_fn_name.unwrap(), mismatch.diff, mismatch.diff.swapped())
 							),
 						})?;
-                    } else {
-                        if *expected_return_type != Type::Void {
-                            return Err(self.new_error(
-                                *return_span,
-                                format_args!(
-                                    "Function '{}' is supposed to return a value of type {}",
-                                    self.current_fn_name.unwrap(),
-                                    expected_return_type
-                                ),
-                            ));
-                        }
-                    }
+                    } else if *expected_return_type != Type::Void {
+						return Err(self.new_error(
+							*return_span,
+							format_args!(
+								"Function '{}' is supposed to return a value of type {}",
+								self.current_fn_name.unwrap(),
+								expected_return_type
+							),
+						));
+					}
                 }
                 Statement::Break(span) => {
                     if self.num_while_loops_deep == 0 {
@@ -682,19 +682,19 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     ///
     /// 1. Create a new typing context,
     /// 2. Walk the expression tree once
-    /// 	- For each call to a generic host function, create new existential
-    /// 	  types for the generics used by that host function.
-    /// 	- Emit constraints for the expressions.
-    /// 		- For function calls, add a constraint between the expected
-    /// 		  type of the parameter (which may or may not be generic) and the
-    /// 		  actual type of the expression (which may or may not be generic).
-    /// 	- For each constraint check if it is consistent with the preexisting constraints.
-    /// 		- Return an error if not.
+    ///     - For each call to a generic host function, create new existential
+    ///       types for the generics used by that host function.
+    ///     - Emit constraints for the expressions.
+    ///         - For function calls, add a constraint between the expected
+    ///           type of the parameter (which may or may not be generic) and the
+    ///           actual type of the expression (which may or may not be generic).
+    ///     - For each constraint check if it is consistent with the preexisting constraints.
+    ///         - Return an error if not.
     /// 3. Recursively substitute all existentials with their actual types in the type context.
     /// 4. Walk the expression tree a second time in the exact same order.
-    /// 	- Create the new existentials again, but this time, substitute the
-    /// 	  calculated types from the previous steps as soon as the
-    /// 	  existentials are created.
+    ///     - Create the new existentials again, but this time, substitute the
+    ///       calculated types from the previous steps as soon as the
+    ///       existentials are created.
     ///
     /// see
     /// (this)[https://smallcultfollowing.com/babysteps/blog/2017/03/25/unification-in-chalk-part-1/]
@@ -1003,47 +1003,45 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             receiver_info = Some((actual_receiver_ty, class.ty));
                             host_fn
                         }
-                    } else {
-                        if let Some((_, (return_ty, sig_arguments))) =
-                            self.local_fns.iter().find(|(fn_name, _)| *fn_name == name)
-                        {
-                            self.fill_arguments(
-                                name,
-                                ty_ctx,
-                                substitutions,
-                                *name_span,
-                                sig_arguments,
-                                args,
-                                arena,
-                            )?;
-                            break 'outer *return_ty;
-                        } else if let Some(host_fn) = self.mod_api.host_fns().get(name) {
-                            host_fn
-                        } else if name.starts_with("_") {
-                            return Err(self.new_error(
-                                *name_span,
-                                format_args!(
-                                    "The local function '{}' was not defined by this grug file",
-                                    name
-                                ),
-                            ));
-                        } else if self.export_fns.iter().any(|(fn_name, _)| *fn_name == name) {
-                            return Err(self.new_error(
-                                *name_span,
-                                format_args!(
-                                    "Mods aren't allowed to call their own export functions"
-                                ),
-                            ));
-                        } else {
-                            return Err(self.new_error(
-                                *name_span,
-                                format_args!(
-                                    "The game function '{}' was not declared by mod_api.json",
-                                    name
-                                ),
-                            ));
-                        }
-                    };
+                    } else if let Some((_, (return_ty, sig_arguments))) =
+						self.local_fns.iter().find(|(fn_name, _)| *fn_name == name)
+					{
+						self.fill_arguments(
+							name,
+							ty_ctx,
+							substitutions,
+							*name_span,
+							sig_arguments,
+							args,
+							arena,
+						)?;
+						break 'outer *return_ty;
+					} else if let Some(host_fn) = self.mod_api.host_fns().get(name) {
+						host_fn
+					} else if name.starts_with("_") {
+						return Err(self.new_error(
+							*name_span,
+							format_args!(
+								"The local function '{}' was not defined by this grug file",
+								name
+							),
+						));
+					} else if self.export_fns.iter().any(|(fn_name, _)| *fn_name == name) {
+						return Err(self.new_error(
+							*name_span,
+							format_args!(
+								"Mods aren't allowed to call their own export functions"
+							),
+						));
+					} else {
+						return Err(self.new_error(
+							*name_span,
+							format_args!(
+								"The game function '{}' was not declared by mod_api.json",
+								name
+							),
+						));
+					};
 
                     // Create the actual types to represent generics
                     let generics = if let Some(substitutions) = substitutions {
@@ -1113,6 +1111,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         Ok(result_ty)
     }
 
+	#[expect(clippy::too_many_arguments)]
     fn fill_arguments<'a>(
         &mut self,
         function_name: &str,
