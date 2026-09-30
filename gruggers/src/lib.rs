@@ -3,32 +3,32 @@
 // #![deny(missing_docs)]
 #![allow(clippy::single_char_add_str, clippy::bool_comparison)]
 
-mod frontend;
 pub mod backend;
+mod frontend;
 
 mod mod_api;
 pub mod serde;
 pub mod state;
 
+pub mod arena;
 pub mod capi;
 mod xar;
-pub mod arena;
 
-mod cachemap;
-mod watcher;
 mod async_fs;
-mod own_ptr;
-mod type_storage;
-mod shared_vec;
+mod cachemap;
 pub mod error;
+mod own_ptr;
+mod shared_vec;
+mod type_storage;
+mod watcher;
 
 mod pal;
 
-pub use gruggers_core::types;
 pub use gruggers_core::ast;
+pub use gruggers_core::types;
 
-pub use gruggers_core::ntstring;
 pub use gruggers_core::nt;
+pub use gruggers_core::ntstring;
 
 const HAS_CONSTRAINTS: bool = true;
 
@@ -41,12 +41,12 @@ const HAS_CONSTRAINTS: bool = true;
 // 		- Box
 // 		- HashMap
 // TODO: replace quotes (') in errors with backticks (`)
-// TODO: (WIP) ModsDir struct 
+// TODO: (WIP) ModsDir struct
 // TODO: (WIP) README and docs for gruggers
 // TODO: (WIP) Debug info to backends
 
 // MIT LICENSE
-// 
+//
 // Copyright (c) 2026 NikhilNathanael
 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of

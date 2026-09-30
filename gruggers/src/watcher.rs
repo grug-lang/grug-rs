@@ -2,295 +2,357 @@ pub use inner::*;
 use std::ffi::{OsStr, OsString};
 
 #[allow(unused)]
-pub fn poll_watch_changes(mods_dir: impl AsRef<OsStr>, poll_interval: std::time::Duration, mut f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error>{
-	use std::collections::HashMap;
-	let mods_dir = OsString::from(mods_dir.as_ref());
-	let mods_dir_len = if mods_dir.as_encoded_bytes().last().is_some_and(|x| *x != b'\\' && *x != b'/') {mods_dir.len() + 1} else {mods_dir.len()};
+pub fn poll_watch_changes(
+    mods_dir: impl AsRef<OsStr>,
+    poll_interval: std::time::Duration,
+    mut f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static,
+) -> Result<(), std::io::Error> {
+    use std::collections::HashMap;
+    let mods_dir = OsString::from(mods_dir.as_ref());
+    let mods_dir_len = if mods_dir
+        .as_encoded_bytes()
+        .last()
+        .is_some_and(|x| *x != b'\\' && *x != b'/')
+    {
+        mods_dir.len() + 1
+    } else {
+        mods_dir.len()
+    };
 
-	let mut files = HashMap::new();
-	
-	let mut dirs_to_check = vec![mods_dir.clone()];
-	
-	while let Some(dir) = dirs_to_check.pop() {
-		for entry in std::fs::read_dir(dir)? {
-			let entry = entry?;
-			let path = entry.path();
-			let metadata = entry.metadata()?;
-			if metadata.file_type().is_dir() {dirs_to_check.push(path.clone().into_os_string());}
-			files.insert(path, metadata.modified()?);
-		}
-	}
-	std::thread::spawn(move || {
-		fn is_newer_than(first: std::time::SystemTime, second: std::time::SystemTime) -> bool {
-			matches!(first.duration_since(second), Ok(diff) if diff != std::time::Duration::ZERO)
-		}
-		loop {
-			// Replacement for try blocks
-			match (|| -> Result<(), std::io::Error>{
-				let mut dirs_to_check = vec![mods_dir.clone()];
-				while let Some(dir) = dirs_to_check.pop() {
-					for entry in std::fs::read_dir(dir)? {
-						let entry = entry?;
-						let entry_path = entry.path();
-						let metadata = entry.metadata()?;
-						let m_time = metadata.modified()?;
-						let is_dir = metadata.file_type().is_dir();
-						if is_dir {dirs_to_check.push(entry_path.clone().into_os_string());}
-						
-						match files.get_mut(&entry_path) {
-							Some(old_m_time) if is_newer_than(m_time, *old_m_time) => {
-								let rel_path = &entry_path.as_os_str().as_encoded_bytes()[mods_dir_len..];
-								let rel_path = unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)};
-								if !f(Ok(OsString::from(rel_path))) {return Ok(())};
-								*old_m_time = m_time;
-							}
-							None => {
-								// A brand new file that appears while we're
-								// already watching is reported directly,
-								// since this is the only way the host can
-								// discover it exists at all: unlike a
-								// modification, there's no prior baseline
-								// to compare against. Directories are
-								// exempt, since their new leaf descendants
-								// are already individually reported by this
-								// same recursive walk; reporting the
-								// directory too would just be redundant
-								// noise on top of that.
-								if !is_dir {
-									let rel_path = &entry_path.as_os_str().as_encoded_bytes()[mods_dir_len..];
-									let rel_path = unsafe{OsStr::from_encoded_bytes_unchecked(rel_path)};
-									if !f(Ok(OsString::from(rel_path))) {return Ok(())};
-								}
-								files.insert(entry_path, m_time);
-							}
-							_ => (),
-						}
-					}
-				}
-				
-				Ok(())
-			})() {
-				Ok(()) => (),
-				Err(err) => if !f(Err(err)) {return;},
-			}
-			
-			std::thread::sleep(poll_interval);
-		}
-	});
-	Ok(())
+    let mut files = HashMap::new();
+
+    let mut dirs_to_check = vec![mods_dir.clone()];
+
+    while let Some(dir) = dirs_to_check.pop() {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = entry.metadata()?;
+            if metadata.file_type().is_dir() {
+                dirs_to_check.push(path.clone().into_os_string());
+            }
+            files.insert(path, metadata.modified()?);
+        }
+    }
+    std::thread::spawn(move || {
+        fn is_newer_than(first: std::time::SystemTime, second: std::time::SystemTime) -> bool {
+            matches!(first.duration_since(second), Ok(diff) if diff != std::time::Duration::ZERO)
+        }
+        loop {
+            // Replacement for try blocks
+            match (|| -> Result<(), std::io::Error> {
+                let mut dirs_to_check = vec![mods_dir.clone()];
+                while let Some(dir) = dirs_to_check.pop() {
+                    for entry in std::fs::read_dir(dir)? {
+                        let entry = entry?;
+                        let entry_path = entry.path();
+                        let metadata = entry.metadata()?;
+                        let m_time = metadata.modified()?;
+                        let is_dir = metadata.file_type().is_dir();
+                        if is_dir {
+                            dirs_to_check.push(entry_path.clone().into_os_string());
+                        }
+
+                        match files.get_mut(&entry_path) {
+                            Some(old_m_time) if is_newer_than(m_time, *old_m_time) => {
+                                let rel_path =
+                                    &entry_path.as_os_str().as_encoded_bytes()[mods_dir_len..];
+                                let rel_path =
+                                    unsafe { OsStr::from_encoded_bytes_unchecked(rel_path) };
+                                if !f(Ok(OsString::from(rel_path))) {
+                                    return Ok(());
+                                };
+                                *old_m_time = m_time;
+                            }
+                            None => {
+                                // A brand new file that appears while we're
+                                // already watching is reported directly,
+                                // since this is the only way the host can
+                                // discover it exists at all: unlike a
+                                // modification, there's no prior baseline
+                                // to compare against. Directories are
+                                // exempt, since their new leaf descendants
+                                // are already individually reported by this
+                                // same recursive walk; reporting the
+                                // directory too would just be redundant
+                                // noise on top of that.
+                                if !is_dir {
+                                    let rel_path =
+                                        &entry_path.as_os_str().as_encoded_bytes()[mods_dir_len..];
+                                    let rel_path =
+                                        unsafe { OsStr::from_encoded_bytes_unchecked(rel_path) };
+                                    if !f(Ok(OsString::from(rel_path))) {
+                                        return Ok(());
+                                    };
+                                }
+                                files.insert(entry_path, m_time);
+                            }
+                            _ => (),
+                        }
+                    }
+                }
+
+                Ok(())
+            })() {
+                Ok(()) => (),
+                Err(err) => {
+                    if !f(Err(err)) {
+                        return;
+                    }
+                }
+            }
+
+            std::thread::sleep(poll_interval);
+        }
+    });
+    Ok(())
 }
 
-#[cfg(target_os="windows")]
+#[cfg(target_os = "windows")]
 mod inner {
-	use crate::pal::windows::*;
-	use std::ffi::{OsStr, OsString};
-	use std::mem::MaybeUninit;
-	use std::os::windows::ffi::OsStringExt;
+    use crate::pal::windows::*;
+    use std::ffi::{OsStr, OsString};
+    use std::mem::MaybeUninit;
+    use std::os::windows::ffi::OsStringExt;
 
-	#[link(name = "kernel32")]
-	unsafe extern "system" {
-		fn ReadDirectoryChangesW(
-			directory: HANDLE,
-			buffer: *mut MaybeUninit<u32>,
-			buffer_len: DWORD,
-			watch_subtree: BOOL,
-			notify_filter: DWORD,
-			bytes_returned: Option<&mut DWORD>,
-			overlapped: Option<&mut Overlapped>,
-			completion_routine: Option<OverlappedCompletionRoutine>
-		) -> BOOL;
-	}
-	type OverlappedCompletionRoutine = extern "C" fn(DWORD, DWORD, &mut Overlapped);
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn ReadDirectoryChangesW(
+            directory: HANDLE,
+            buffer: *mut MaybeUninit<u32>,
+            buffer_len: DWORD,
+            watch_subtree: BOOL,
+            notify_filter: DWORD,
+            bytes_returned: Option<&mut DWORD>,
+            overlapped: Option<&mut Overlapped>,
+            completion_routine: Option<OverlappedCompletionRoutine>,
+        ) -> BOOL;
+    }
+    type OverlappedCompletionRoutine = extern "C" fn(DWORD, DWORD, &mut Overlapped);
 
-	struct NotifyFilter;
-	impl NotifyFilter {
-		const CHANGE_FILE_NAME  : DWORD = 0x00000001;
-		const CHANGE_DIR_NAME   : DWORD = 0x00000002;
-		// const CHANGE_ATTRIBUTES : DWORD = 0x00000004;
-		// const CHANGE_SIZE       : DWORD = 0x00000008;
-		const CHANGE_LAST_WRITE : DWORD = 0x00000010;
-		// const CHANGE_LAST_ACCESS: DWORD = 0x00000020;
-		// const CHANGE_CREATION   : DWORD = 0x00000040;
-		// const CHANGE_SECURITY   : DWORD = 0x00000100;
-	}
+    struct NotifyFilter;
+    impl NotifyFilter {
+        const CHANGE_FILE_NAME: DWORD = 0x00000001;
+        const CHANGE_DIR_NAME: DWORD = 0x00000002;
+        // const CHANGE_ATTRIBUTES : DWORD = 0x00000004;
+        // const CHANGE_SIZE       : DWORD = 0x00000008;
+        const CHANGE_LAST_WRITE: DWORD = 0x00000010;
+        // const CHANGE_LAST_ACCESS: DWORD = 0x00000020;
+        // const CHANGE_CREATION   : DWORD = 0x00000040;
+        // const CHANGE_SECURITY   : DWORD = 0x00000100;
+    }
 
-	#[repr(C)]
-	struct Overlapped {
-		internal: ULONG_PTR,
-		internal_high: ULONG_PTR,
-		offset: [DWORD;2],
-		event: HANDLE,
-	}
+    #[repr(C)]
+    struct Overlapped {
+        internal: ULONG_PTR,
+        internal_high: ULONG_PTR,
+        offset: [DWORD; 2],
+        event: HANDLE,
+    }
 
-	#[repr(u32)]
-	#[derive(Debug)]
-	pub enum FileAction {
-		Added = 0x1,
-		Removed = 0x2,
-		Modified = 0x3,
-		RenamedOldName = 0x4,
-		RenamedNewName = 0x5,
-	}
+    #[repr(u32)]
+    #[derive(Debug)]
+    pub enum FileAction {
+        Added = 0x1,
+        Removed = 0x2,
+        Modified = 0x3,
+        RenamedOldName = 0x4,
+        RenamedNewName = 0x5,
+    }
 
-	#[repr(C)]
-	pub struct FileNotifyInformation {
-		next_entry_offset: DWORD,
-		pub action: FileAction,
-		file_name_len: DWORD,
-		file_name: [u16],
-	}
+    #[repr(C)]
+    pub struct FileNotifyInformation {
+        next_entry_offset: DWORD,
+        pub action: FileAction,
+        file_name_len: DWORD,
+        file_name: [u16],
+    }
 
-	impl std::fmt::Debug for FileNotifyInformation {
-		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-			f.debug_struct("FileNotifyInformation")
-				.field("action", &self.action)
-				.field("file_name", &self.file_name())
-				.finish()
-		}
-	}
+    impl std::fmt::Debug for FileNotifyInformation {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.debug_struct("FileNotifyInformation")
+                .field("action", &self.action)
+                .field("file_name", &self.file_name())
+                .finish()
+        }
+    }
 
-	impl FileNotifyInformation {
-		pub fn file_name(&self) -> OsString {
-			OsString::from_wide(&self.file_name)
-		}
-	}
+    impl FileNotifyInformation {
+        pub fn file_name(&self) -> OsString {
+            OsString::from_wide(&self.file_name)
+        }
+    }
 
-	pub struct DirChanges {
-		buffer: Box<[MaybeUninit<DWORD>]>,
-	}
-	unsafe impl Send for DirChanges {}
-	unsafe impl Sync for DirChanges {}
+    pub struct DirChanges {
+        buffer: Box<[MaybeUninit<DWORD>]>,
+    }
+    unsafe impl Send for DirChanges {}
+    unsafe impl Sync for DirChanges {}
 
-	impl DirChanges {
-		/// SAFETY: buffer must be initialized with a call to ReadDirectoryChangesW
-		unsafe fn new(buffer: Box<[MaybeUninit<u32>]>) -> Self {
-			Self {buffer}
-		}
+    impl DirChanges {
+        /// SAFETY: buffer must be initialized with a call to ReadDirectoryChangesW
+        unsafe fn new(buffer: Box<[MaybeUninit<u32>]>) -> Self {
+            Self { buffer }
+        }
 
-		fn iter(&self) -> DirChangesIter<'_> {
-			self.into_iter()
-		}
-	}
+        fn iter(&self) -> DirChangesIter<'_> {
+            self.into_iter()
+        }
+    }
 
-	impl<'a> IntoIterator for &'a DirChanges {
-		type IntoIter = DirChangesIter<'a>;
-		type Item = &'a FileNotifyInformation;
-		fn into_iter(self) -> Self::IntoIter {
-			DirChangesIter {
-				_buffer: &self.buffer,
-				current: self.buffer.as_ptr().cast::<u32>(),
-			}
-		}
-	}
+    impl<'a> IntoIterator for &'a DirChanges {
+        type IntoIter = DirChangesIter<'a>;
+        type Item = &'a FileNotifyInformation;
+        fn into_iter(self) -> Self::IntoIter {
+            DirChangesIter {
+                _buffer: &self.buffer,
+                current: self.buffer.as_ptr().cast::<u32>(),
+            }
+        }
+    }
 
-	pub struct DirChangesIter<'a> {
-		_buffer: &'a [MaybeUninit<DWORD>],
-		current: *const DWORD,
-	}
+    pub struct DirChangesIter<'a> {
+        _buffer: &'a [MaybeUninit<DWORD>],
+        current: *const DWORD,
+    }
 
-	impl<'a> Iterator for DirChangesIter<'a> {
-		type Item = &'a FileNotifyInformation;
-		fn next(&mut self) -> Option<Self::Item> {
-			use std::ptr;
-			use std::mem::transmute;
-			if self.current.is_null() {return None;}
+    impl<'a> Iterator for DirChangesIter<'a> {
+        type Item = &'a FileNotifyInformation;
+        fn next(&mut self) -> Option<Self::Item> {
+            use std::mem::transmute;
+            use std::ptr;
+            if self.current.is_null() {
+                return None;
+            }
 
-			// SAFETY: 
-			// 	alignment: FileNotifyInformation is 4 byte aligned and
-			// 	ReadDirectoryChangesW guarantees FileNotifyInformation is aligned
-			// 	to 4 bytes
-			// 	len: len of 0 is always valid for slices
-			let current = unsafe{transmute::<*const [DWORD], &FileNotifyInformation>(ptr::slice_from_raw_parts(self.current, 0))};
-			let next_offset = current.next_entry_offset as usize;
-			// SAFETY: 
-			// 	alignment: FileNotifyInformation is 4 byte aligned and
-			// 	ReadDirectoryChangesW guarantees FileNotifyInformation is aligned
-			// 	to 4 bytes
-			// 	len: len is guaranteed by ReadDirectoryChangesW
-			let current = unsafe{transmute::<*const [DWORD], &FileNotifyInformation>(ptr::slice_from_raw_parts(self.current, current.file_name_len as usize / 2))};
+            // SAFETY:
+            // 	alignment: FileNotifyInformation is 4 byte aligned and
+            // 	ReadDirectoryChangesW guarantees FileNotifyInformation is aligned
+            // 	to 4 bytes
+            // 	len: len of 0 is always valid for slices
+            let current = unsafe {
+                transmute::<*const [DWORD], &FileNotifyInformation>(ptr::slice_from_raw_parts(
+                    self.current,
+                    0,
+                ))
+            };
+            let next_offset = current.next_entry_offset as usize;
+            // SAFETY:
+            // 	alignment: FileNotifyInformation is 4 byte aligned and
+            // 	ReadDirectoryChangesW guarantees FileNotifyInformation is aligned
+            // 	to 4 bytes
+            // 	len: len is guaranteed by ReadDirectoryChangesW
+            let current = unsafe {
+                transmute::<*const [DWORD], &FileNotifyInformation>(ptr::slice_from_raw_parts(
+                    self.current,
+                    current.file_name_len as usize / 2,
+                ))
+            };
 
-			self.current = if next_offset == 0 {std::ptr::null()} else {unsafe{self.current.byte_add(next_offset)}};
-			Some(current)
-		}
-	}
+            self.current = if next_offset == 0 {
+                std::ptr::null()
+            } else {
+                unsafe { self.current.byte_add(next_offset) }
+            };
+            Some(current)
+        }
+    }
 
-	/// SAFETY: path should be null terminated
-	unsafe fn open_dir (path: &[u8]) -> Result<OwnedHandle, std::io::Error> {
-		let handle = unsafe {
-			CreateFileA(
-				path.as_ptr(),
-				AccessMask::GENERIC_READ,
-				ShareMode::FILE_SHARE_READ,
-				None,
-				CreateDisposition::OPEN_EXISTING,
-				FlagsAndAttributes::FILE_ATTRIBUTE_NORMAL |
-				FlagsAndAttributes::FILE_FLAG_OVERLAPPED |
-				FlagsAndAttributes::FILE_FLAG_BACKUP_SEMANTICS,
-				std::ptr::null_mut(),
-			)
-		};
-		if handle == INVALID_HANDLE_VALUE {
-			return Err(std::io::Error::last_os_error());
-		}
-		// SAFETY: CreateFileA with FILE_FLAG_BACKUP_SEMANTICS flag creates a directory handle
-		Ok(unsafe{OwnedHandle::new(handle)})
-	}
+    /// SAFETY: path should be null terminated
+    unsafe fn open_dir(path: &[u8]) -> Result<OwnedHandle, std::io::Error> {
+        let handle = unsafe {
+            CreateFileA(
+                path.as_ptr(),
+                AccessMask::GENERIC_READ,
+                ShareMode::FILE_SHARE_READ,
+                None,
+                CreateDisposition::OPEN_EXISTING,
+                FlagsAndAttributes::FILE_ATTRIBUTE_NORMAL
+                    | FlagsAndAttributes::FILE_FLAG_OVERLAPPED
+                    | FlagsAndAttributes::FILE_FLAG_BACKUP_SEMANTICS,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: CreateFileA with FILE_FLAG_BACKUP_SEMANTICS flag creates a directory handle
+        Ok(unsafe { OwnedHandle::new(handle) })
+    }
 
-	fn read_changes(handle: &OwnedHandle) -> Result<DirChanges, std::io::Error> {
-		use std::mem::size_of;
-		let mut buffer = Vec::with_capacity(1024 * 16);
-		loop {
-			let mut bytes_returned = 0;
-			let ret_val = unsafe{ReadDirectoryChangesW (
-				handle.0,
-				buffer.as_mut_ptr(),
-				(buffer.capacity() * size_of::<DWORD>()) as u32,
-				TRUE,
-				NotifyFilter::CHANGE_FILE_NAME | NotifyFilter::CHANGE_DIR_NAME | NotifyFilter::CHANGE_LAST_WRITE,
-				Some(&mut bytes_returned),
-				None,
-				None,
-			)};
-			if ret_val == 0 {
-				return Err(std::io::Error::last_os_error());
-			}
-			if bytes_returned != 0 {
-				unsafe{buffer.set_len((bytes_returned as usize - 1) / size_of::<DWORD>() + 1)};
-				let buffer: Box<[MaybeUninit<DWORD>]> = buffer.into();
-				return Ok(unsafe{DirChanges::new(buffer)});
-			}
-			buffer.reserve(buffer.len())
-		}
-	}
+    fn read_changes(handle: &OwnedHandle) -> Result<DirChanges, std::io::Error> {
+        use std::mem::size_of;
+        let mut buffer = Vec::with_capacity(1024 * 16);
+        loop {
+            let mut bytes_returned = 0;
+            let ret_val = unsafe {
+                ReadDirectoryChangesW(
+                    handle.0,
+                    buffer.as_mut_ptr(),
+                    (buffer.capacity() * size_of::<DWORD>()) as u32,
+                    TRUE,
+                    NotifyFilter::CHANGE_FILE_NAME
+                        | NotifyFilter::CHANGE_DIR_NAME
+                        | NotifyFilter::CHANGE_LAST_WRITE,
+                    Some(&mut bytes_returned),
+                    None,
+                    None,
+                )
+            };
+            if ret_val == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if bytes_returned != 0 {
+                unsafe { buffer.set_len((bytes_returned as usize - 1) / size_of::<DWORD>() + 1) };
+                let buffer: Box<[MaybeUninit<DWORD>]> = buffer.into();
+                return Ok(unsafe { DirChanges::new(buffer) });
+            }
+            buffer.reserve(buffer.len())
+        }
+    }
 
-	pub fn watch_changes(path: impl AsRef<OsStr>, poll_interval: std::time::Duration, mut f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error>{
-		// Windows uses ReadDirectoryChangesW, a native OS-level change
-		// notification API, instead of polling, so there's no interval to
-		// configure here.
-		let _ = poll_interval;
-		let mut path = Vec::from(path.as_ref().as_encoded_bytes());
-		path.push(b'\0');
-		let handle = unsafe{open_dir(&path)?};
-		std::thread::spawn(move || {
-			loop {
-				match read_changes(&handle) {
-					Ok(changes) => {
-						for change in changes.iter() {
-							if !f(Ok(change.file_name())) {return;}
-						}
-					},
-					Err(err) => if !f(Err(err)) {return;},
-				}
-			}
-		});
-		Ok(())
-	}
+    pub fn watch_changes(
+        path: impl AsRef<OsStr>,
+        poll_interval: std::time::Duration,
+        mut f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static,
+    ) -> Result<(), std::io::Error> {
+        // Windows uses ReadDirectoryChangesW, a native OS-level change
+        // notification API, instead of polling, so there's no interval to
+        // configure here.
+        let _ = poll_interval;
+        let mut path = Vec::from(path.as_ref().as_encoded_bytes());
+        path.push(b'\0');
+        let handle = unsafe { open_dir(&path)? };
+        std::thread::spawn(move || {
+            loop {
+                match read_changes(&handle) {
+                    Ok(changes) => {
+                        for change in changes.iter() {
+                            if !f(Ok(change.file_name())) {
+                                return;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        if !f(Err(err)) {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        Ok(())
+    }
 }
 
-#[cfg(target_os="linux")]
+#[cfg(target_os = "linux")]
 mod inner {
-	use std::ffi::{OsStr, OsString};
-	pub fn watch_changes(mods_dir: impl AsRef<OsStr>, poll_interval: std::time::Duration, f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static) -> Result<(), std::io::Error> {
-		super::poll_watch_changes(mods_dir, poll_interval, f)
-	}
+    use std::ffi::{OsStr, OsString};
+    pub fn watch_changes(
+        mods_dir: impl AsRef<OsStr>,
+        poll_interval: std::time::Duration,
+        f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static,
+    ) -> Result<(), std::io::Error> {
+        super::poll_watch_changes(mods_dir, poll_interval, f)
+    }
 }

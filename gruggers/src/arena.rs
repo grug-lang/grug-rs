@@ -1,1053 +1,1122 @@
 // TODO: Try adding scoped arenas
 mod page_alloc {
-	#![allow(non_snake_case)]
-	// directly use VirtualAlloc and VirtualFree on windows
-	#[cfg(all(not(miri), windows))]
-	pub mod windows {
-		use crate::pal::windows::*;
-		use std::ptr::NonNull;
-		use allocator_api2::alloc::AllocError;
-		pub static PAGE_SIZE: std::sync::LazyLock<u32> = std::sync::LazyLock::new(PageAllocator::page_size);
-		pub struct PageAllocator;
+    #![allow(non_snake_case)]
+    // directly use VirtualAlloc and VirtualFree on windows
+    #[cfg(all(not(miri), windows))]
+    pub mod windows {
+        use crate::pal::windows::*;
+        use allocator_api2::alloc::AllocError;
+        use std::ptr::NonNull;
+        pub static PAGE_SIZE: std::sync::LazyLock<u32> =
+            std::sync::LazyLock::new(PageAllocator::page_size);
+        pub struct PageAllocator;
 
-		impl PageAllocator {
-			pub fn page_size () -> u32 {
-				#[repr(C)]
-				struct DUMMYSTRUCTNAME {
-					ProcessorArchitecture: WORD,
-					Reserved: WORD,
-				}
-				#[repr(C)]
-				struct SYSTEM_INFO {
-					dummy: DUMMYSTRUCTNAME,
-					dwPageSize: DWORD,
-					lpMinimumApplicationAddress: LPVOID,
-					lpMaximumApplicationAddress: LPVOID,
-					dwActiveProcessorMask: DWORD_PTR,
-					dwNumberOfProcessors: DWORD,
-					dwProcessorType: DWORD,
-					dwAllocationGranularity: DWORD,
-					wProcessorLevel: WORD,
-					wProcessorRevision: WORD,
-				}
-				unsafe extern "system" {
-					fn GetSystemInfo(SystemInfo: *mut SYSTEM_INFO);
-				}
-				let mut sys_info = std::mem::MaybeUninit::uninit();
-				unsafe {
-					GetSystemInfo(sys_info.as_mut_ptr());
-				}
-				unsafe {
-					sys_info.assume_init().dwPageSize
-				}
-			}
+        impl PageAllocator {
+            pub fn page_size() -> u32 {
+                #[repr(C)]
+                struct DUMMYSTRUCTNAME {
+                    ProcessorArchitecture: WORD,
+                    Reserved: WORD,
+                }
+                #[repr(C)]
+                struct SYSTEM_INFO {
+                    dummy: DUMMYSTRUCTNAME,
+                    dwPageSize: DWORD,
+                    lpMinimumApplicationAddress: LPVOID,
+                    lpMaximumApplicationAddress: LPVOID,
+                    dwActiveProcessorMask: DWORD_PTR,
+                    dwNumberOfProcessors: DWORD,
+                    dwProcessorType: DWORD,
+                    dwAllocationGranularity: DWORD,
+                    wProcessorLevel: WORD,
+                    wProcessorRevision: WORD,
+                }
+                unsafe extern "system" {
+                    fn GetSystemInfo(SystemInfo: *mut SYSTEM_INFO);
+                }
+                let mut sys_info = std::mem::MaybeUninit::uninit();
+                unsafe {
+                    GetSystemInfo(sys_info.as_mut_ptr());
+                }
+                unsafe { sys_info.assume_init().dwPageSize }
+            }
 
-			pub fn alloc_pages(num_pages: usize) -> Result<NonNull<[u8]>, AllocError> {
-				let ptr = unsafe {
-					VirtualAllocEx(
-						GetCurrentProcess(),
-						std::ptr::null_mut(),
-						num_pages * (*PAGE_SIZE as usize),
-						MEM_COMMIT | MEM_RESERVE,
-						PAGE_READ_WRITE,
-					)
-				};
-				// TODO: replace with NonNull::new().ok_or();
-				if ptr.is_null() {
-					Err(AllocError)
-				} else {
-					unsafe {
-						Ok(NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(ptr.cast(), num_pages * (*PAGE_SIZE as usize))))
-					}
-				}
-			}
+            pub fn alloc_pages(num_pages: usize) -> Result<NonNull<[u8]>, AllocError> {
+                let ptr = unsafe {
+                    VirtualAllocEx(
+                        GetCurrentProcess(),
+                        std::ptr::null_mut(),
+                        num_pages * (*PAGE_SIZE as usize),
+                        MEM_COMMIT | MEM_RESERVE,
+                        PAGE_READ_WRITE,
+                    )
+                };
+                // TODO: replace with NonNull::new().ok_or();
+                if ptr.is_null() {
+                    Err(AllocError)
+                } else {
+                    unsafe {
+                        Ok(NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(
+                            ptr.cast(),
+                            num_pages * (*PAGE_SIZE as usize),
+                        )))
+                    }
+                }
+            }
 
-			// pub fn reserve_pages(num_pages: usize) -> Result<NonNull<[u8]>, AllocError> {
-			// 	let ptr = unsafe {
-			// 		VirtualAllocEx(
-			// 			GetCurrentProcess(),
-			// 			std::ptr::null_mut(),
-			// 			num_pages * (*PAGE_SIZE as usize),
-			// 			MEM_RESERVE,
-			// 			PAGE_NO_ACCESS,
-			// 		)
-			// 	};
-			// 	if ptr.is_null() {
-			// 		Err(AllocError)
-			// 	} else {
-			// 		unsafe {
-			// 			Ok(NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(ptr.cast(), num_pages * (*PAGE_SIZE as usize))))
-			// 		}
-			// 	}
-			// }
-			// pub unsafe fn commit_pages(start_ptr: NonNull<u8>, num_pages: usize) -> Result<(), AllocError> {
-			// 	let ptr = unsafe {
-			// 		VirtualAllocEx(
-			// 			GetCurrentProcess(),
-			// 			start_ptr.as_ptr().cast(),
-			// 			num_pages * (*PAGE_SIZE as usize),
-			// 			MEM_COMMIT,
-			// 			PAGE_READ_WRITE,
-			// 		)
-			// 	};
-			// 	if ptr.is_null() {
-			// 		Err(AllocError)
-			// 	} else {
-			// 		Ok(())
-			// 	}
-			// }
+            // pub fn reserve_pages(num_pages: usize) -> Result<NonNull<[u8]>, AllocError> {
+            // 	let ptr = unsafe {
+            // 		VirtualAllocEx(
+            // 			GetCurrentProcess(),
+            // 			std::ptr::null_mut(),
+            // 			num_pages * (*PAGE_SIZE as usize),
+            // 			MEM_RESERVE,
+            // 			PAGE_NO_ACCESS,
+            // 		)
+            // 	};
+            // 	if ptr.is_null() {
+            // 		Err(AllocError)
+            // 	} else {
+            // 		unsafe {
+            // 			Ok(NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(ptr.cast(), num_pages * (*PAGE_SIZE as usize))))
+            // 		}
+            // 	}
+            // }
+            // pub unsafe fn commit_pages(start_ptr: NonNull<u8>, num_pages: usize) -> Result<(), AllocError> {
+            // 	let ptr = unsafe {
+            // 		VirtualAllocEx(
+            // 			GetCurrentProcess(),
+            // 			start_ptr.as_ptr().cast(),
+            // 			num_pages * (*PAGE_SIZE as usize),
+            // 			MEM_COMMIT,
+            // 			PAGE_READ_WRITE,
+            // 		)
+            // 	};
+            // 	if ptr.is_null() {
+            // 		Err(AllocError)
+            // 	} else {
+            // 		Ok(())
+            // 	}
+            // }
 
-			#[allow(dead_code)]
-			pub unsafe fn free_pages(start_ptr: NonNull<u8>, _num_pages: usize) -> Result<(), AllocError>{
-				if unsafe {
-					VirtualFreeEx (
-						GetCurrentProcess(),
-						start_ptr.as_ptr().cast(),
-						0,
-						MEM_RELEASE,
-					)
-				} == 0 {
-					Err(AllocError)
-				} else {
-					Ok(())
-				}
-			}
-			
-			#[allow(dead_code)]
-			pub unsafe fn decommit_pages(start_ptr: NonNull<u8>, num_pages: usize) -> Result<(), AllocError>{
-				if unsafe {
-					VirtualProtectEx (
-						GetCurrentProcess(),
-						start_ptr.as_ptr().cast(),
-						(num_pages as u32) * *PAGE_SIZE,
-						PAGE_NOACCESS,
-						&mut 0,
-					)
-				} == 0 {
-					Err(AllocError)
-				} else {
-					Ok(())
-				}
-			}
-		}
+            #[allow(dead_code)]
+            pub unsafe fn free_pages(
+                start_ptr: NonNull<u8>,
+                _num_pages: usize,
+            ) -> Result<(), AllocError> {
+                if unsafe {
+                    VirtualFreeEx(
+                        GetCurrentProcess(),
+                        start_ptr.as_ptr().cast(),
+                        0,
+                        MEM_RELEASE,
+                    )
+                } == 0
+                {
+                    Err(AllocError)
+                } else {
+                    Ok(())
+                }
+            }
 
-		#[cfg(test)]
-		mod tests {
-			use super::*;
+            #[allow(dead_code)]
+            pub unsafe fn decommit_pages(
+                start_ptr: NonNull<u8>,
+                num_pages: usize,
+            ) -> Result<(), AllocError> {
+                if unsafe {
+                    VirtualProtectEx(
+                        GetCurrentProcess(),
+                        start_ptr.as_ptr().cast(),
+                        (num_pages as u32) * *PAGE_SIZE,
+                        PAGE_NOACCESS,
+                        &mut 0,
+                    )
+                } == 0
+                {
+                    Err(AllocError)
+                } else {
+                    Ok(())
+                }
+            }
+        }
 
-			#[test]
-			fn page_alloc_test() {
-				unsafe {
-					let ptr_1 = PageAllocator::alloc_pages(2)
-						.expect("Allocating Pages Failed");
-					PageAllocator::free_pages(ptr_1.cast(), 2)
-						.expect("Freeing Pages Failed");
-				}
-			}
-		}
-	}
-	#[cfg(all(not(miri), windows))]
-	pub use windows::*;
+        #[cfg(test)]
+        mod tests {
+            use super::*;
 
-	// use normal allocator with miri and as a fallback
-	#[cfg(any(miri, not(windows)))]
-	pub mod otherwise {
-		use std::ptr::NonNull;
-		use std::alloc::Layout;
+            #[test]
+            fn page_alloc_test() {
+                unsafe {
+                    let ptr_1 = PageAllocator::alloc_pages(2).expect("Allocating Pages Failed");
+                    PageAllocator::free_pages(ptr_1.cast(), 2).expect("Freeing Pages Failed");
+                }
+            }
+        }
+    }
+    #[cfg(all(not(miri), windows))]
+    pub use windows::*;
 
-		use allocator_api2::alloc::AllocError;
+    // use normal allocator with miri and as a fallback
+    #[cfg(any(miri, not(windows)))]
+    pub mod otherwise {
+        use std::alloc::Layout;
+        use std::ptr::NonNull;
 
-		pub struct PageAllocator;
+        use allocator_api2::alloc::AllocError;
 
-		pub static PAGE_SIZE: std::sync::LazyLock<u32> = std::sync::LazyLock::new(|| PageAllocator::page_size());
+        pub struct PageAllocator;
 
-		impl PageAllocator {
-			pub const fn page_size () -> u32 {
-				4096
-			}
-			pub fn alloc_pages(num_pages: usize) -> Result<NonNull<[u8]>, AllocError> {
-				if num_pages == 0 {
-					unsafe{return Ok(NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(NonNull::dangling().as_ptr(), 0)))};
-				}
-				let layout = Layout::from_size_align(num_pages * Self::page_size() as usize, 4096).map_err(|_| AllocError)?;
-				let ptr = unsafe{std::alloc::alloc(layout)};
-				let ptr = std::ptr::slice_from_raw_parts_mut(ptr, num_pages * Self::page_size() as usize);
-				NonNull::new(ptr).ok_or(AllocError)
-			}
-			pub unsafe fn free_pages(start_ptr: NonNull<u8>, num_pages: usize) -> Result<(), AllocError>{
-				if num_pages == 0 {
-					return Ok(());
-				}
-				let layout = Layout::from_size_align(num_pages * Self::page_size() as usize, 4096).map_err(|_| AllocError)?;
-				unsafe{std::alloc::dealloc(start_ptr.as_ptr(), layout)};
-				Ok(())
-			}
-		}
+        pub static PAGE_SIZE: std::sync::LazyLock<u32> =
+            std::sync::LazyLock::new(|| PageAllocator::page_size());
 
-		#[cfg(test)]
-		mod tests {
-			use super::*;
+        impl PageAllocator {
+            pub const fn page_size() -> u32 {
+                4096
+            }
+            pub fn alloc_pages(num_pages: usize) -> Result<NonNull<[u8]>, AllocError> {
+                if num_pages == 0 {
+                    unsafe {
+                        return Ok(NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(
+                            NonNull::dangling().as_ptr(),
+                            0,
+                        )));
+                    };
+                }
+                let layout = Layout::from_size_align(num_pages * Self::page_size() as usize, 4096)
+                    .map_err(|_| AllocError)?;
+                let ptr = unsafe { std::alloc::alloc(layout) };
+                let ptr =
+                    std::ptr::slice_from_raw_parts_mut(ptr, num_pages * Self::page_size() as usize);
+                NonNull::new(ptr).ok_or(AllocError)
+            }
+            pub unsafe fn free_pages(
+                start_ptr: NonNull<u8>,
+                num_pages: usize,
+            ) -> Result<(), AllocError> {
+                if num_pages == 0 {
+                    return Ok(());
+                }
+                let layout = Layout::from_size_align(num_pages * Self::page_size() as usize, 4096)
+                    .map_err(|_| AllocError)?;
+                unsafe { std::alloc::dealloc(start_ptr.as_ptr(), layout) };
+                Ok(())
+            }
+        }
 
-			#[test]
-			fn page_alloc_test() {
-				unsafe {
-					let ptr_1 = PageAllocator::alloc_pages(2)
-						.expect("Allocating Pages Failed");
-					PageAllocator::free_pages(ptr_1.cast(), 2)
-						.expect("Freeing Pages Failed");
-				}
-			}
-		}
-	}
-	#[cfg(any(miri, not(windows)))]
-	pub use otherwise::*;
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+
+            #[test]
+            fn page_alloc_test() {
+                unsafe {
+                    let ptr_1 = PageAllocator::alloc_pages(2).expect("Allocating Pages Failed");
+                    PageAllocator::free_pages(ptr_1.cast(), 2).expect("Freeing Pages Failed");
+                }
+            }
+        }
+    }
+    #[cfg(any(miri, not(windows)))]
+    pub use otherwise::*;
 }
 
 mod arena_impl {
-	use crate::ntstring::NTStr;
+    use crate::ntstring::NTStr;
 
-	use std::alloc::Layout;
-	use std::ptr::NonNull;
-	use std::cell::Cell;
-	use std::ffi::OsStr;
-	use super::page_alloc::{PageAllocator, PAGE_SIZE};
+    use super::page_alloc::{PAGE_SIZE, PageAllocator};
+    use std::alloc::Layout;
+    use std::cell::Cell;
+    use std::ffi::OsStr;
+    use std::ptr::NonNull;
 
-	use allocator_api2::alloc::{Allocator, AllocError};
-	use allocator_api2::vec::Vec;
+    use allocator_api2::alloc::{AllocError, Allocator};
+    use allocator_api2::vec::Vec;
 
-	use std::io::Write;
+    use std::io::Write;
 
-	pub struct Arena {
-		// current points to the block where the next allocation will be attempted
-		current: Cell<*mut ArenaHeader>,
-	}
+    pub struct Arena {
+        // current points to the block where the next allocation will be attempted
+        current: Cell<*mut ArenaHeader>,
+    }
 
-	// SAFETY: We do not use any thread local data nor do we give out
-	// references to !Sync data
-	unsafe impl Send for Arena {}
+    // SAFETY: We do not use any thread local data nor do we give out
+    // references to !Sync data
+    unsafe impl Send for Arena {}
 
-	struct ArenaHeader {
-		// start is stored implicitly
-		/* start  : *mut u8, */
-		current: Cell<*mut u8>,
-		end    : *mut u8,
-		prev   : *mut ArenaHeader,
-	}
+    struct ArenaHeader {
+        // start is stored implicitly
+        /* start  : *mut u8, */
+        current: Cell<*mut u8>,
+        end: *mut u8,
+        prev: *mut ArenaHeader,
+    }
 
-	impl ArenaHeader {
-		/// SAFETY: location must point to the start of a block allocated from PageAllocator::alloc_pages
-		/// SAFETY: size_bytes is the total size of the allocation created in bytes
-		/// prev may be null if there is no previous
-		unsafe fn write_into(location: *mut Self, prev: *mut Self, size_bytes: usize) {
-			unsafe {
-				let current = location.cast::<u8>().add(std::mem::size_of::<Self>());
-				let end = location.cast::<u8>().add(size_bytes);
-				*location = Self {
-					current: Cell::new(current),
-					end,
-					prev,
-				}
-			}
-		}
+    impl ArenaHeader {
+        /// SAFETY: location must point to the start of a block allocated from PageAllocator::alloc_pages
+        /// SAFETY: size_bytes is the total size of the allocation created in bytes
+        /// prev may be null if there is no previous
+        unsafe fn write_into(location: *mut Self, prev: *mut Self, size_bytes: usize) {
+            unsafe {
+                let current = location.cast::<u8>().add(std::mem::size_of::<Self>());
+                let end = location.cast::<u8>().add(size_bytes);
+                *location = Self {
+                    current: Cell::new(current),
+                    end,
+                    prev,
+                }
+            }
+        }
 
-		fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			let align_offset = self.current.get().align_offset(layout.align());
-			let space_required = align_offset + layout.size();
+        fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            let align_offset = self.current.get().align_offset(layout.align());
+            let space_required = align_offset + layout.size();
 
-			if space_required > self.remaining_space() {
-				Err(AllocError)
-			} else {
-				let ret_val = unsafe {NonNull::new_unchecked(
-					std::ptr::slice_from_raw_parts_mut(
-						self.current.get().add(align_offset),
-						layout.size(),
-					)
-				)};
-				self.current.set(unsafe{self.current.get().add(space_required)});
-				Ok(ret_val)
-			}
-		}
+            if space_required > self.remaining_space() {
+                Err(AllocError)
+            } else {
+                let ret_val = unsafe {
+                    NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(
+                        self.current.get().add(align_offset),
+                        layout.size(),
+                    ))
+                };
+                self.current
+                    .set(unsafe { self.current.get().add(space_required) });
+                Ok(ret_val)
+            }
+        }
 
-		// Returns a pointer with the same address as self but with provenance over the entire block
-		fn start(&self) -> *mut u8 {
-			self.current.get().with_addr((self as *const Self).addr() + std::mem::size_of::<Self>())
-		}
+        // Returns a pointer with the same address as self but with provenance over the entire block
+        fn start(&self) -> *mut u8 {
+            self.current
+                .get()
+                .with_addr((self as *const Self).addr() + std::mem::size_of::<Self>())
+        }
 
-		fn remaining_space(&self) -> usize {
-			// SAFETY: end is always >= current
-			unsafe {
-				self.end.cast_const().offset_from_unsigned(self.current.get().cast_const())
-			}
-		}
+        fn remaining_space(&self) -> usize {
+            // SAFETY: end is always >= current
+            unsafe {
+                self.end
+                    .cast_const()
+                    .offset_from_unsigned(self.current.get().cast_const())
+            }
+        }
 
-		#[allow(unused)]
-		fn total_space(&self) -> usize {
-			// SAFETY: end is always >= start
-			unsafe {
-				self.end.offset_from_unsigned(self.start())
-			}
-		}
+        #[allow(unused)]
+        fn total_space(&self) -> usize {
+            // SAFETY: end is always >= start
+            unsafe { self.end.offset_from_unsigned(self.start()) }
+        }
 
-		// number of pages taken by the current block
-		fn cur_block_size(&self) -> usize {
-			let st = self.current.get().with_addr((self as *const Self).addr());
-			(unsafe {
-				self.end.offset_from_unsigned(st)
-			}) / (*PAGE_SIZE as usize)
-		}
+        // number of pages taken by the current block
+        fn cur_block_size(&self) -> usize {
+            let st = self.current.get().with_addr((self as *const Self).addr());
+            (unsafe { self.end.offset_from_unsigned(st) }) / (*PAGE_SIZE as usize)
+        }
 
-		/// SAFETY: All pointers into this block are invalidated after this call
-		/// This function cannot even take &mut self because self is allocated
-		/// into the memory which is freed here
-		/// ptr must point to the start of a block allocated from PageAllocator::alloc_pages
-		unsafe fn free(ptr: *mut Self) {
-			// SAFETY: precondition states that ptr must be valid to pass into
-			// free_pages which means it must be non-null
-			let result = unsafe {
-				PageAllocator::free_pages(NonNull::new_unchecked(ptr.cast()), (&*ptr).cur_block_size()).is_ok()
-				// PageAllocator::decommit_pages(NonNull::new_unchecked(ptr.cast()), (&*ptr).cur_block_size()).is_ok()
-			};
-			debug_assert!(result);
-		}
-	}
+        /// SAFETY: All pointers into this block are invalidated after this call
+        /// This function cannot even take &mut self because self is allocated
+        /// into the memory which is freed here
+        /// ptr must point to the start of a block allocated from PageAllocator::alloc_pages
+        unsafe fn free(ptr: *mut Self) {
+            // SAFETY: precondition states that ptr must be valid to pass into
+            // free_pages which means it must be non-null
+            let result = unsafe {
+                PageAllocator::free_pages(
+                    NonNull::new_unchecked(ptr.cast()),
+                    (&*ptr).cur_block_size(),
+                )
+                .is_ok()
+                // PageAllocator::decommit_pages(NonNull::new_unchecked(ptr.cast()), (&*ptr).cur_block_size()).is_ok()
+            };
+            debug_assert!(result);
+        }
+    }
 
-	impl Arena {
-		pub const fn new () -> Self {
-			Self {
-				current: Cell::new(std::ptr::null_mut()),
-			}
-		}
+    impl Arena {
+        pub const fn new() -> Self {
+            Self {
+                current: Cell::new(std::ptr::null_mut()),
+            }
+        }
 
-		#[expect(clippy::mut_from_ref)]
-		fn alloc_new_block(&self, min_size_bytes: usize) -> &mut ArenaHeader {
-			// at least 1 page is allocated
-			let page_size = *PAGE_SIZE as usize;
-			let mut num_pages = if self.current.get().is_null() {1} else {
-				unsafe { (&*self.current.get()).cur_block_size() * 2}
-			};
-			while num_pages * page_size < min_size_bytes {
-				num_pages *= 2;
-			}
-			let block = PageAllocator::alloc_pages(num_pages)
-				.expect("Could not allocate pages");
-			debug_assert!(block.as_ptr().addr().is_multiple_of(4096));
-			
-			// SAFETY: Block was just successfully allocated and the start of a
-			// block is where an ArenaHeader should be written to 
-			unsafe {
-				ArenaHeader::write_into(
-					block.as_ptr() as *mut ArenaHeader, 
-					self.current.get(), 
-					block.len(),
-				);
-			}
-			self.current.set(block.as_ptr().cast());
-			// SAFETY: Just properly allocated and wrote to self.current
-			unsafe {
-				&mut *(self.current.get().cast())
-			}
-		}
+        #[expect(clippy::mut_from_ref)]
+        fn alloc_new_block(&self, min_size_bytes: usize) -> &mut ArenaHeader {
+            // at least 1 page is allocated
+            let page_size = *PAGE_SIZE as usize;
+            let mut num_pages = if self.current.get().is_null() {
+                1
+            } else {
+                unsafe { (&*self.current.get()).cur_block_size() * 2 }
+            };
+            while num_pages * page_size < min_size_bytes {
+                num_pages *= 2;
+            }
+            let block = PageAllocator::alloc_pages(num_pages).expect("Could not allocate pages");
+            debug_assert!(block.as_ptr().addr().is_multiple_of(4096));
 
-		pub fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			let current = match self.current_block() {
-				None => {
-					self.alloc_new_block(layout.size() * 2)
-				}
-				Some(x) => x,
-			};
-			Ok(match current.alloc(layout) {
-				Err(_) => {
-					let current = self.alloc_new_block(layout.size() * 2);
-					current.alloc(layout)
-						.expect("Just allocated enough space to fit layout")
-				}
-				Ok(x) => x,
-			})
-		}
+            // SAFETY: Block was just successfully allocated and the start of a
+            // block is where an ArenaHeader should be written to
+            unsafe {
+                ArenaHeader::write_into(
+                    block.as_ptr() as *mut ArenaHeader,
+                    self.current.get(),
+                    block.len(),
+                );
+            }
+            self.current.set(block.as_ptr().cast());
+            // SAFETY: Just properly allocated and wrote to self.current
+            unsafe { &mut *(self.current.get().cast()) }
+        }
 
-		/// Copies the memory pointed to by `old_ptr` with layout `old_layout`,
-		/// and copies it to a new allocation with layout `new_layout`.
-		///
-		/// Unlike a more general realloc function, it is valid to pass an
-		/// old_ptr and old_layout that were not allocated by this arena.
-		///
-		/// The pointer should still point to memory that is valid to read however
-		/// 
-		/// # SAFETY
-		///
-		/// `old_ptr` must point to memory that is valid to read for at least
-		/// `old_layout.size()` bytes
-		pub unsafe fn realloc(&self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			let ptr = self.alloc(new_layout)?;
-			// ptr from self.alloc is valid to write to for length new_layout.size()
-			// old_ptr is valid to read from for length old_layout.size()
-			if !old_ptr.is_null() { unsafe {
-				old_ptr.copy_from_nonoverlapping(ptr.as_ptr().cast(), std::cmp::min(old_layout.size(), new_layout.size()));
-			} }
-			Ok(ptr)
-		}
+        pub fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            let current = match self.current_block() {
+                None => self.alloc_new_block(layout.size() * 2),
+                Some(x) => x,
+            };
+            Ok(match current.alloc(layout) {
+                Err(_) => {
+                    let current = self.alloc_new_block(layout.size() * 2);
+                    current
+                        .alloc(layout)
+                        .expect("Just allocated enough space to fit layout")
+                }
+                Ok(x) => x,
+            })
+        }
 
-		pub fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			let ptr = self.alloc(layout)?;
-			unsafe{ (ptr.as_ptr() as *mut u8).write_bytes(0, layout.size()) };
-			Ok(ptr)
-		}
+        /// Copies the memory pointed to by `old_ptr` with layout `old_layout`,
+        /// and copies it to a new allocation with layout `new_layout`.
+        ///
+        /// Unlike a more general realloc function, it is valid to pass an
+        /// old_ptr and old_layout that were not allocated by this arena.
+        ///
+        /// The pointer should still point to memory that is valid to read however
+        ///
+        /// # SAFETY
+        ///
+        /// `old_ptr` must point to memory that is valid to read for at least
+        /// `old_layout.size()` bytes
+        pub unsafe fn realloc(
+            &self,
+            old_ptr: *mut u8,
+            old_layout: Layout,
+            new_layout: Layout,
+        ) -> Result<NonNull<[u8]>, AllocError> {
+            let ptr = self.alloc(new_layout)?;
+            // ptr from self.alloc is valid to write to for length new_layout.size()
+            // old_ptr is valid to read from for length old_layout.size()
+            if !old_ptr.is_null() {
+                unsafe {
+                    old_ptr.copy_from_nonoverlapping(
+                        ptr.as_ptr().cast(),
+                        std::cmp::min(old_layout.size(), new_layout.size()),
+                    );
+                }
+            }
+            Ok(ptr)
+        }
 
-		pub fn realloc_zeroed(&self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			let ptr = self.alloc_zeroed(new_layout)?;
-			unsafe{ (ptr.as_ptr() as *mut u8).write_bytes(0, new_layout.size()) };
-			unsafe {
-				old_ptr.copy_from_nonoverlapping(ptr.as_ptr().cast(), std::cmp::min(old_layout.size(), new_layout.size()));
-			}
-			Ok(ptr)
-		}
+        pub fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            let ptr = self.alloc(layout)?;
+            unsafe { (ptr.as_ptr() as *mut u8).write_bytes(0, layout.size()) };
+            Ok(ptr)
+        }
 
-		fn current_block_mut(&mut self) -> Option<&mut ArenaHeader> {
-			// SAFETY: self.current is always written to before being assigned 
-			unsafe {
-				self.current.get().as_mut()
-			}
-		}
+        pub fn realloc_zeroed(
+            &self,
+            old_ptr: *mut u8,
+            old_layout: Layout,
+            new_layout: Layout,
+        ) -> Result<NonNull<[u8]>, AllocError> {
+            let ptr = self.alloc_zeroed(new_layout)?;
+            unsafe { (ptr.as_ptr() as *mut u8).write_bytes(0, new_layout.size()) };
+            unsafe {
+                old_ptr.copy_from_nonoverlapping(
+                    ptr.as_ptr().cast(),
+                    std::cmp::min(old_layout.size(), new_layout.size()),
+                );
+            }
+            Ok(ptr)
+        }
 
-		fn current_block(&self) -> Option<&ArenaHeader> {
-			// SAFETY: self.current is always written to before being assigned 
-			unsafe {
-				self.current.get().as_ref()
-			}
-		}
+        fn current_block_mut(&mut self) -> Option<&mut ArenaHeader> {
+            // SAFETY: self.current is always written to before being assigned
+            unsafe { self.current.get().as_mut() }
+        }
 
-		/// Resets the memory allocated into this arena.
-		///
-		/// Does not free all memory requested from OS, the largest block will still be held.
-		///
-		/// use `[Self::free]` to free all held memory
-		pub fn clear(&mut self) {
-			if let Some(first_block) = self.current_block_mut() {
-				// SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
-				let mut current = first_block.prev;
-				first_block.prev = std::ptr::null_mut();
-				*first_block.current.get_mut() = first_block.start();
+        fn current_block(&self) -> Option<&ArenaHeader> {
+            // SAFETY: self.current is always written to before being assigned
+            unsafe { self.current.get().as_ref() }
+        }
 
-				while !current.is_null() {
-					// SAFETY: dereferencing current is safe because if it is non-null, it is initialized
-					let prev = unsafe {(*current).prev};
-					// SAFETY: precondition - all pointer are invalidated
-					// SAFETY: current is non-null so it is the start of a
-					// block recieved from PageAllocator::alloc_pages
-					unsafe { ArenaHeader::free(current) };
-					current = prev;
-				}
-			}
-		}
+        /// Resets the memory allocated into this arena.
+        ///
+        /// Does not free all memory requested from OS, the largest block will still be held.
+        ///
+        /// use `[Self::free]` to free all held memory
+        pub fn clear(&mut self) {
+            if let Some(first_block) = self.current_block_mut() {
+                // SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
+                let mut current = first_block.prev;
+                first_block.prev = std::ptr::null_mut();
+                *first_block.current.get_mut() = first_block.start();
 
-		/// Deallocates all memory held by this arena
-		pub fn free(self) { }
+                while !current.is_null() {
+                    // SAFETY: dereferencing current is safe because if it is non-null, it is initialized
+                    let prev = unsafe { (*current).prev };
+                    // SAFETY: precondition - all pointer are invalidated
+                    // SAFETY: current is non-null so it is the start of a
+                    // block recieved from PageAllocator::alloc_pages
+                    unsafe { ArenaHeader::free(current) };
+                    current = prev;
+                }
+            }
+        }
 
-		/// Copy a slice of bytes into the current arena and returns the new slice.
-		///
-		/// See [`Self::copy_osstr_into`] and [`Self::copy_str_into`] for more specific
-		/// versions of this function
-		pub fn copy_bytes_into(&self, bytes: &[u8]) -> &[u8] {
-			let ptr = self.alloc(Layout::array::<u8>(bytes.len())
-				.expect("invalid layout for slice"))
-				.expect("unable to allocate")
-				.cast::<u8>().as_ptr();
-			// SAFETY: allocation is of length `bytes.len()`
-			unsafe{ptr.copy_from(bytes.as_ptr(), bytes.len())};
-			// SAFETY: ptr is trivially aligned and valid to read for `bytes.len()` bytes
-			unsafe{std::slice::from_raw_parts(ptr, bytes.len())}
-		}
+        /// Deallocates all memory held by this arena
+        pub fn free(self) {}
 
-		/// Copy a slice of bytes into the current arena and returns the new
-		/// slice with a null byte appended
-		///
-		/// See [`Self::copy_osstr_into`]  and [`Self::copy_str_into`] for more specific
-		/// versions of this function
-		/// 
-		/// This function does not check if a null byte already exists within
-		/// the input bytes
-		pub fn copy_bytes_into_nt(&self, bytes: &[u8]) -> &[u8] {
-			let ptr = self.alloc(Layout::array::<u8>(bytes.len() + 1).expect("invalid layout for slice"))
-				.expect("unable to allocate")
-				.cast::<u8>().as_ptr();
-			// SAFETY: allocation is of length `bytes.len() + 1`
-			unsafe{ptr.copy_from(bytes.as_ptr(), bytes.len())};
-			unsafe{*ptr.add(bytes.len()) = b'\0'};
-			// SAFETY: ptr is trivially aligned and valid to read for `bytes.len() + 1` bytes
-			unsafe{std::slice::from_raw_parts(ptr, bytes.len() + 1)}
-		}
-		
-		/// Copy an `&OsStr` into the current arena and return the new OsStr
-		///
-		/// see [`Self::copy_bytes_into`] for a more general version of this function
-		pub fn copy_osstr_into(&self, bytes: &OsStr) -> &OsStr {
-			// SAFETY: input is an OsStr
-			unsafe{OsStr::from_encoded_bytes_unchecked(self.copy_bytes_into(bytes.as_encoded_bytes()))}
-		}
+        /// Copy a slice of bytes into the current arena and returns the new slice.
+        ///
+        /// See [`Self::copy_osstr_into`] and [`Self::copy_str_into`] for more specific
+        /// versions of this function
+        pub fn copy_bytes_into(&self, bytes: &[u8]) -> &[u8] {
+            let ptr = self
+                .alloc(Layout::array::<u8>(bytes.len()).expect("invalid layout for slice"))
+                .expect("unable to allocate")
+                .cast::<u8>()
+                .as_ptr();
+            // SAFETY: allocation is of length `bytes.len()`
+            unsafe { ptr.copy_from(bytes.as_ptr(), bytes.len()) };
+            // SAFETY: ptr is trivially aligned and valid to read for `bytes.len()` bytes
+            unsafe { std::slice::from_raw_parts(ptr, bytes.len()) }
+        }
 
-		/// Copy a `&str` into the current arena and return the new str
-		///
-		/// see [`Self::copy_bytes_into`] for a more general version of this function
-		pub fn copy_str_into(&self, bytes: &str) -> &str {
-			// SAFETY: input is a str
-			unsafe{std::str::from_utf8_unchecked(self.copy_bytes_into(bytes.as_ref()))}
-		}
-		
-		/// Copy a `&str` into the current arena and return the new str with a
-		/// null byte appended
-		///
-		/// see [`Self::copy_bytes_into`] for a more general version of this function
-		/// 
-		/// # Panics
-		///
-		/// if `bytes` contains a null byte
-		pub fn copy_str_into_nt(&self, bytes: &str) -> &NTStr {
-			assert!(!bytes.as_bytes().contains(&b'\0'));
-			let ptr = self.alloc(Layout::array::<u8>(bytes.len() + 1)
-				.expect("invalid layout for slice"))
-				.expect("unable to allocate")
-				.cast::<u8>().as_ptr();
-			
-			// SAFETY: allocation is of length `bytes.len() + 1`
-			unsafe{ptr.copy_from(bytes.as_ptr(), bytes.len())};
-			unsafe{ptr.add(bytes.len()).write(b'\0')};
-			// SAFETY: ptr is trivially aligned and valid to read for `bytes.len() + 1` bytes
-			let slice = unsafe{std::slice::from_raw_parts(ptr, bytes.len() + 1)};
+        /// Copy a slice of bytes into the current arena and returns the new
+        /// slice with a null byte appended
+        ///
+        /// See [`Self::copy_osstr_into`]  and [`Self::copy_str_into`] for more specific
+        /// versions of this function
+        ///
+        /// This function does not check if a null byte already exists within
+        /// the input bytes
+        pub fn copy_bytes_into_nt(&self, bytes: &[u8]) -> &[u8] {
+            let ptr = self
+                .alloc(Layout::array::<u8>(bytes.len() + 1).expect("invalid layout for slice"))
+                .expect("unable to allocate")
+                .cast::<u8>()
+                .as_ptr();
+            // SAFETY: allocation is of length `bytes.len() + 1`
+            unsafe { ptr.copy_from(bytes.as_ptr(), bytes.len()) };
+            unsafe { *ptr.add(bytes.len()) = b'\0' };
+            // SAFETY: ptr is trivially aligned and valid to read for `bytes.len() + 1` bytes
+            unsafe { std::slice::from_raw_parts(ptr, bytes.len() + 1) }
+        }
 
-			// SAFETY: input is a str
-			unsafe{NTStr::from_str_unchecked(std::str::from_utf8_unchecked(slice))}
-		}
+        /// Copy an `&OsStr` into the current arena and return the new OsStr
+        ///
+        /// see [`Self::copy_bytes_into`] for a more general version of this function
+        pub fn copy_osstr_into(&self, bytes: &OsStr) -> &OsStr {
+            // SAFETY: input is an OsStr
+            unsafe {
+                OsStr::from_encoded_bytes_unchecked(self.copy_bytes_into(bytes.as_encoded_bytes()))
+            }
+        }
 
-		/// Allocates a slice of items into `self` from an iterator
-		pub fn slice_from_iter<T>(&self, i: impl IntoIterator<Item = T>) -> &mut [T] {
-			let mut vec = Vec::new_in(self);
-			vec.extend(i);
-			vec.leak()
-		}
+        /// Copy a `&str` into the current arena and return the new str
+        ///
+        /// see [`Self::copy_bytes_into`] for a more general version of this function
+        pub fn copy_str_into(&self, bytes: &str) -> &str {
+            // SAFETY: input is a str
+            unsafe { std::str::from_utf8_unchecked(self.copy_bytes_into(bytes.as_ref())) }
+        }
 
-		/// Allocates space for and moves a value into the arena
-		pub fn alloc_into<T>(&self, value: T) -> &mut T {
-			let ptr = self.allocate(Layout::new::<T>()).unwrap().cast::<T>();
-			unsafe{ptr.write(value);}
-			unsafe{&mut *ptr.as_ptr()}
-		}
+        /// Copy a `&str` into the current arena and return the new str with a
+        /// null byte appended
+        ///
+        /// see [`Self::copy_bytes_into`] for a more general version of this function
+        ///
+        /// # Panics
+        ///
+        /// if `bytes` contains a null byte
+        pub fn copy_str_into_nt(&self, bytes: &str) -> &NTStr {
+            assert!(!bytes.as_bytes().contains(&b'\0'));
+            let ptr = self
+                .alloc(Layout::array::<u8>(bytes.len() + 1).expect("invalid layout for slice"))
+                .expect("unable to allocate")
+                .cast::<u8>()
+                .as_ptr();
 
-		pub fn fmt_into(&self, f: std::fmt::Arguments) -> &str {
-			let mut vec = Vec::new_in(self);
-			write!(vec, "{}", f).expect("writing into a vec cannot fail");
-			// SAFETY: format string outputs are always utf8
-			unsafe{std::str::from_utf8_unchecked(vec.leak())}
-		}
-	}
+            // SAFETY: allocation is of length `bytes.len() + 1`
+            unsafe { ptr.copy_from(bytes.as_ptr(), bytes.len()) };
+            unsafe { ptr.add(bytes.len()).write(b'\0') };
+            // SAFETY: ptr is trivially aligned and valid to read for `bytes.len() + 1` bytes
+            let slice = unsafe { std::slice::from_raw_parts(ptr, bytes.len() + 1) };
 
-	impl Drop for Arena {
-		fn drop (&mut self) {
-			// SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
-			let mut current = self.current.get();
-			while !current.is_null() {
-				// SAFETY: dereferencing current is safe because if it is non-null, it is initialized
-				let prev = unsafe {(*current).prev};
-				// SAFETY: precondition - all pointer are invalidated
-				// SAFETY: current is non-null so it is the start of a
-				// block recieved from PageAllocator::alloc_pages
-				unsafe { ArenaHeader::free(current) };
-				current = prev;
-			}
-		}
-	}
+            // SAFETY: input is a str
+            unsafe { NTStr::from_str_unchecked(std::str::from_utf8_unchecked(slice)) }
+        }
 
-	impl Default for Arena {
-		fn default () -> Self {
-			Self::new()
-		}
-	}
+        /// Allocates a slice of items into `self` from an iterator
+        pub fn slice_from_iter<T>(&self, i: impl IntoIterator<Item = T>) -> &mut [T] {
+            let mut vec = Vec::new_in(self);
+            vec.extend(i);
+            vec.leak()
+        }
 
-	unsafe impl Allocator for Arena {
-		fn allocate (&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			self.alloc(layout)
-		}
-		unsafe fn deallocate (&self, _ptr: NonNull<u8>, _layout: Layout) {}
-		// unsafe fn realloc (&mut self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-		// 	self.realloc(old_ptr, old_layout, new_layout)
-		// }
-	}
+        /// Allocates space for and moves a value into the arena
+        pub fn alloc_into<T>(&self, value: T) -> &mut T {
+            let ptr = self.allocate(Layout::new::<T>()).unwrap().cast::<T>();
+            unsafe {
+                ptr.write(value);
+            }
+            unsafe { &mut *ptr.as_ptr() }
+        }
 
-	#[cfg(test)]
-	mod test {
-		use super::*;
-		#[test]
-		fn arena_test () {
-			let x = Arena::new();
-			assert!(x.current.get() == std::ptr::null_mut());
-			x.free(); 
+        pub fn fmt_into(&self, f: std::fmt::Arguments) -> &str {
+            let mut vec = Vec::new_in(self);
+            write!(vec, "{}", f).expect("writing into a vec cannot fail");
+            // SAFETY: format string outputs are always utf8
+            unsafe { std::str::from_utf8_unchecked(vec.leak()) }
+        }
+    }
 
-			let y = Arena::new();
-			y.alloc(Layout::new::<[usize;25]>()).unwrap();
-			assert_eq!(
-				y.current_block()
-					.unwrap()
-					.total_space(),
-				(*PAGE_SIZE as usize) - std::mem::size_of::<ArenaHeader>()
-			);
-			
-			y.alloc(Layout::from_size_align(4096, 1).unwrap()).unwrap();
-			assert_eq!(
-				y.current_block()
-					.unwrap()
-					.total_space(),
-				(*PAGE_SIZE as usize) * 2 - std::mem::size_of::<ArenaHeader>()
-			);
+    impl Drop for Arena {
+        fn drop(&mut self) {
+            // SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
+            let mut current = self.current.get();
+            while !current.is_null() {
+                // SAFETY: dereferencing current is safe because if it is non-null, it is initialized
+                let prev = unsafe { (*current).prev };
+                // SAFETY: precondition - all pointer are invalidated
+                // SAFETY: current is non-null so it is the start of a
+                // block recieved from PageAllocator::alloc_pages
+                unsafe { ArenaHeader::free(current) };
+                current = prev;
+            }
+        }
+    }
 
-			y.alloc(Layout::from_size_align(4096, 1).unwrap()).unwrap();
-			assert_eq!(
-				y.current_block()
-					.unwrap()
-					.total_space(),
-				(*PAGE_SIZE as usize) * 4 - std::mem::size_of::<ArenaHeader>()
-			);
-			
-			y.free();
-		}
-	}
+    impl Default for Arena {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    unsafe impl Allocator for Arena {
+        fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            self.alloc(layout)
+        }
+        unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
+        // unsafe fn realloc (&mut self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        // 	self.realloc(old_ptr, old_layout, new_layout)
+        // }
+    }
+
+    #[cfg(test)]
+    mod test {
+        use super::*;
+        #[test]
+        fn arena_test() {
+            let x = Arena::new();
+            assert!(x.current.get() == std::ptr::null_mut());
+            x.free();
+
+            let y = Arena::new();
+            y.alloc(Layout::new::<[usize; 25]>()).unwrap();
+            assert_eq!(
+                y.current_block().unwrap().total_space(),
+                (*PAGE_SIZE as usize) - std::mem::size_of::<ArenaHeader>()
+            );
+
+            y.alloc(Layout::from_size_align(4096, 1).unwrap()).unwrap();
+            assert_eq!(
+                y.current_block().unwrap().total_space(),
+                (*PAGE_SIZE as usize) * 2 - std::mem::size_of::<ArenaHeader>()
+            );
+
+            y.alloc(Layout::from_size_align(4096, 1).unwrap()).unwrap();
+            assert_eq!(
+                y.current_block().unwrap().total_space(),
+                (*PAGE_SIZE as usize) * 4 - std::mem::size_of::<ArenaHeader>()
+            );
+
+            y.free();
+        }
+    }
 }
 
 mod mt_arena {
-	use crate::ntstring::NTStr;
+    use crate::ntstring::NTStr;
 
-	use std::alloc::Layout;
-	use std::ptr::NonNull;
-	use std::ffi::OsStr;
-	use std::sync::atomic::{AtomicPtr, Ordering};
-	use super::page_alloc::{PageAllocator, PAGE_SIZE};
+    use super::page_alloc::{PAGE_SIZE, PageAllocator};
+    use std::alloc::Layout;
+    use std::ffi::OsStr;
+    use std::ptr::NonNull;
+    use std::sync::atomic::{AtomicPtr, Ordering};
 
-	use allocator_api2::alloc::{Allocator, AllocError};
-	use allocator_api2::vec::Vec;
+    use allocator_api2::alloc::{AllocError, Allocator};
+    use allocator_api2::vec::Vec;
 
-	use std::io::Write;
+    use std::io::Write;
 
-	pub struct MTArena {
-		// current points to the block where the next allocation will be attempted
-		current: AtomicPtr<ArenaHeader>,
-	}
+    pub struct MTArena {
+        // current points to the block where the next allocation will be attempted
+        current: AtomicPtr<ArenaHeader>,
+    }
 
-	// SAFETY: We do not use any thread local data nor do we give out
-	// references to !Sync data
-	unsafe impl Send for MTArena {}
-	unsafe impl Sync for MTArena {}
+    // SAFETY: We do not use any thread local data nor do we give out
+    // references to !Sync data
+    unsafe impl Send for MTArena {}
+    unsafe impl Sync for MTArena {}
 
-	struct ArenaHeader {
-		// start is stored implicitly
-		/* start  : *mut u8, */
-		current: AtomicPtr<u8>,
-		end    : *mut u8,
-		prev   : *mut ArenaHeader,
-	}
+    struct ArenaHeader {
+        // start is stored implicitly
+        /* start  : *mut u8, */
+        current: AtomicPtr<u8>,
+        end: *mut u8,
+        prev: *mut ArenaHeader,
+    }
 
-	impl ArenaHeader {
-		/// SAFETY: location must point to the start of a block allocated from PageAllocator::alloc_pages
-		/// SAFETY: size_bytes is the total size of the allocation created in bytes
-		/// SAFETY: location must not have be visible to other threads yet
-		/// prev may be null if there is no previous
-		unsafe fn write_into(location: *mut Self, prev: *mut Self, size_bytes: usize) {
-			unsafe {
-				let current = location.cast::<u8>().add(std::mem::size_of::<Self>());
-				let end = location.cast::<u8>().add(size_bytes);
-				*location = Self {
-					current: AtomicPtr::new(current),
-					end,
-					prev,
-				}
-			}
-		}
+    impl ArenaHeader {
+        /// SAFETY: location must point to the start of a block allocated from PageAllocator::alloc_pages
+        /// SAFETY: size_bytes is the total size of the allocation created in bytes
+        /// SAFETY: location must not have be visible to other threads yet
+        /// prev may be null if there is no previous
+        unsafe fn write_into(location: *mut Self, prev: *mut Self, size_bytes: usize) {
+            unsafe {
+                let current = location.cast::<u8>().add(std::mem::size_of::<Self>());
+                let end = location.cast::<u8>().add(size_bytes);
+                *location = Self {
+                    current: AtomicPtr::new(current),
+                    end,
+                    prev,
+                }
+            }
+        }
 
-		fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			let mut current = self.current.load(Ordering::Relaxed);
+        fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            let mut current = self.current.load(Ordering::Relaxed);
 
-			loop {
-				let align_offset = current.align_offset(layout.align());
-				let space_required = align_offset + layout.size();
+            loop {
+                let align_offset = current.align_offset(layout.align());
+                let space_required = align_offset + layout.size();
 
-				if space_required > self.remaining_space_from(current) {
-					return Err(AllocError);
-				} else {
-					// SAFETY: Minimum space is present
-					let new = unsafe{current.byte_add(space_required)};
-					if let Err(new) = self.current.compare_exchange_weak(current, new, Ordering::Relaxed, Ordering::Relaxed) {
-						current = new;
-						continue;
-					} else {
-						let ret_val = unsafe {NonNull::new_unchecked(
-							std::ptr::slice_from_raw_parts_mut(
-								current.byte_add(align_offset),
-								layout.size(),
-							)
-						)};
-						return Ok(ret_val)
-					}
-				}
-			}
-		}
+                if space_required > self.remaining_space_from(current) {
+                    return Err(AllocError);
+                } else {
+                    // SAFETY: Minimum space is present
+                    let new = unsafe { current.byte_add(space_required) };
+                    if let Err(new) = self.current.compare_exchange_weak(
+                        current,
+                        new,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        current = new;
+                        continue;
+                    } else {
+                        let ret_val = unsafe {
+                            NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(
+                                current.byte_add(align_offset),
+                                layout.size(),
+                            ))
+                        };
+                        return Ok(ret_val);
+                    }
+                }
+            }
+        }
 
-		// Returns a pointer with the same address as self but with provenance over the entire block
-		fn start(&self) -> *mut u8 {
-			// We have to use self.end to get it's provenance
-			self.end.with_addr((self as *const Self).addr() + std::mem::size_of::<Self>())
-		}
+        // Returns a pointer with the same address as self but with provenance over the entire block
+        fn start(&self) -> *mut u8 {
+            // We have to use self.end to get it's provenance
+            self.end
+                .with_addr((self as *const Self).addr() + std::mem::size_of::<Self>())
+        }
 
-		fn remaining_space_from(&self, current: *mut u8) -> usize {
-			// SAFETY: end is always >= current
-			unsafe {
-				self.end.cast_const().offset_from_unsigned(current.cast_const())
-			}
-		}
+        fn remaining_space_from(&self, current: *mut u8) -> usize {
+            // SAFETY: end is always >= current
+            unsafe {
+                self.end
+                    .cast_const()
+                    .offset_from_unsigned(current.cast_const())
+            }
+        }
 
-		#[allow(unused)]
-		fn total_space(&self) -> usize {
-			// SAFETY: end is always >= start
-			unsafe {
-				self.end.offset_from_unsigned(self.start())
-			}
-		}
+        #[allow(unused)]
+        fn total_space(&self) -> usize {
+            // SAFETY: end is always >= start
+            unsafe { self.end.offset_from_unsigned(self.start()) }
+        }
 
-		// number of pages taken by the current block
-		fn cur_block_size(&self) -> usize {
-			let st = self.end.with_addr((self as *const Self).addr());
-			(unsafe {
-				self.end.offset_from_unsigned(st)
-			}) / (*PAGE_SIZE as usize)
-		}
+        // number of pages taken by the current block
+        fn cur_block_size(&self) -> usize {
+            let st = self.end.with_addr((self as *const Self).addr());
+            (unsafe { self.end.offset_from_unsigned(st) }) / (*PAGE_SIZE as usize)
+        }
 
-		/// SAFETY: All pointers into this block are invalidated after this call
-		/// This function cannot even take &mut self because self is allocated
-		/// into the memory which is freed here
-		/// ptr must point to the start of a block allocated from PageAllocator::alloc_pages
-		unsafe fn free(ptr: *mut Self) {
-			// SAFETY: precondition states that ptr must be valid to pass into
-			// free_pages which means it must be non-null
-			let result = unsafe {
-				PageAllocator::free_pages(NonNull::new_unchecked(ptr.cast()), (&*ptr).cur_block_size()).is_ok()
-				// PageAllocator::decommit_pages(NonNull::new_unchecked(ptr.cast()), (&*ptr).cur_block_size()).is_ok()
-			};
-			debug_assert!(result);
-		}
-	}
+        /// SAFETY: All pointers into this block are invalidated after this call
+        /// This function cannot even take &mut self because self is allocated
+        /// into the memory which is freed here
+        /// ptr must point to the start of a block allocated from PageAllocator::alloc_pages
+        unsafe fn free(ptr: *mut Self) {
+            // SAFETY: precondition states that ptr must be valid to pass into
+            // free_pages which means it must be non-null
+            let result = unsafe {
+                PageAllocator::free_pages(
+                    NonNull::new_unchecked(ptr.cast()),
+                    (&*ptr).cur_block_size(),
+                )
+                .is_ok()
+                // PageAllocator::decommit_pages(NonNull::new_unchecked(ptr.cast()), (&*ptr).cur_block_size()).is_ok()
+            };
+            debug_assert!(result);
+        }
+    }
 
-	impl MTArena {
-		pub const fn new () -> Self {
-			Self {
-				current: AtomicPtr::new(std::ptr::null_mut()),
-			}
-		}
+    impl MTArena {
+        pub const fn new() -> Self {
+            Self {
+                current: AtomicPtr::new(std::ptr::null_mut()),
+            }
+        }
 
-		#[expect(clippy::mut_from_ref)]
-		fn alloc_new_block(&self, current: Option<&ArenaHeader>, min_size_bytes: usize) -> &ArenaHeader {
-			// at least 1 page is allocated
-			let page_size = *PAGE_SIZE as usize;
-			let current: *mut ArenaHeader = current.map(|x| x as *const _ as _).unwrap_or_else(std::ptr::null_mut);
+        #[expect(clippy::mut_from_ref)]
+        fn alloc_new_block(
+            &self,
+            current: Option<&ArenaHeader>,
+            min_size_bytes: usize,
+        ) -> &ArenaHeader {
+            // at least 1 page is allocated
+            let page_size = *PAGE_SIZE as usize;
+            let current: *mut ArenaHeader = current
+                .map(|x| x as *const _ as _)
+                .unwrap_or_else(std::ptr::null_mut);
 
-			loop {
-				// First block is 1 page, then double the sizes
-				let mut num_pages = if current.is_null() {1} else {
-					unsafe { (&*current).cur_block_size() * 2}
-				};
-				while num_pages * page_size < min_size_bytes {
-					num_pages *= 2;
-				}
-				let new_block = PageAllocator::alloc_pages(num_pages)
-					.expect("Could not allocate pages")
-					.as_ptr().cast::<ArenaHeader>();
-				let new_block_len = num_pages * page_size;
-				debug_assert!(new_block.addr().is_multiple_of(4096));
-				
-				// SAFETY: Block was just successfully allocated and the start of a
-				// block is where an ArenaHeader should be written to. And since
-				// it was just allocated, no other thread can see this yet
-				unsafe {
-					ArenaHeader::write_into(
-						new_block, 
-						current, 
-						new_block_len,
-					);
-				}
-				
-				if let Err(next) = self.current.compare_exchange(current, new_block, Ordering::AcqRel, Ordering::Relaxed) {
-					// No other thread has access to this block because it was
-					// just allocated
-					unsafe{ArenaHeader::free(new_block)};
-					// SAFETY: next can never be NULL because we never reset
-					// it to null, and if this is the first allocation, then
-					// current is already NULL, so next cannot be NULL
-					let current = unsafe{&*next};
-					return current;
-				} else {
-					// SAFETY: we just allocated an initialized this block
-					return unsafe{&*new_block};
-				}
-			}
-		}
+            loop {
+                // First block is 1 page, then double the sizes
+                let mut num_pages = if current.is_null() {
+                    1
+                } else {
+                    unsafe { (&*current).cur_block_size() * 2 }
+                };
+                while num_pages * page_size < min_size_bytes {
+                    num_pages *= 2;
+                }
+                let new_block = PageAllocator::alloc_pages(num_pages)
+                    .expect("Could not allocate pages")
+                    .as_ptr()
+                    .cast::<ArenaHeader>();
+                let new_block_len = num_pages * page_size;
+                debug_assert!(new_block.addr().is_multiple_of(4096));
 
-		pub fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			let mut current = match self.current_block() {
-				None => {
-					self.alloc_new_block(None, layout.size() * 2)
-				}
-				Some(x) => x,
-			};
-			let mut alloc_result = current.alloc(layout);
-			loop {
-				match alloc_result {
-					Ok(x) => return Ok(x),
-					Err(_) => {
-						current = self.alloc_new_block(Some(current), layout.size() * 2);
-						alloc_result = current.alloc(layout);
-					}
-				}
-			}
-		}
+                // SAFETY: Block was just successfully allocated and the start of a
+                // block is where an ArenaHeader should be written to. And since
+                // it was just allocated, no other thread can see this yet
+                unsafe {
+                    ArenaHeader::write_into(new_block, current, new_block_len);
+                }
 
-		/// Copies the memory pointed to by `old_ptr` with layout `old_layout`,
-		/// and copies it to a new allocation with layout `new_layout`.
-		///
-		/// Unlike a more general realloc function, it is valid to pass an
-		/// old_ptr and old_layout that were not allocated by this arena.
-		///
-		/// The pointer should still point to memory that is valid to read however
-		/// 
-		/// # SAFETY
-		///
-		/// `old_ptr` must point to memory that is valid to read for at least
-		/// `old_layout.size()` bytes
-		pub unsafe fn realloc(&self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			let ptr = self.alloc(new_layout)?;
-			// ptr from self.alloc is valid to write to for length new_layout.size()
-			// old_ptr is valid to read from for length old_layout.size()
-			if !old_ptr.is_null() { unsafe {
-				old_ptr.copy_from_nonoverlapping(ptr.as_ptr().cast(), std::cmp::min(old_layout.size(), new_layout.size()));
-			} }
-			Ok(ptr)
-		}
+                if let Err(next) = self.current.compare_exchange(
+                    current,
+                    new_block,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                ) {
+                    // No other thread has access to this block because it was
+                    // just allocated
+                    unsafe { ArenaHeader::free(new_block) };
+                    // SAFETY: next can never be NULL because we never reset
+                    // it to null, and if this is the first allocation, then
+                    // current is already NULL, so next cannot be NULL
+                    let current = unsafe { &*next };
+                    return current;
+                } else {
+                    // SAFETY: we just allocated an initialized this block
+                    return unsafe { &*new_block };
+                }
+            }
+        }
 
-		pub fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			let ptr = self.alloc(layout)?;
-			unsafe{ (ptr.as_ptr() as *mut u8).write_bytes(0, layout.size()) };
-			Ok(ptr)
-		}
+        pub fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            let mut current = match self.current_block() {
+                None => self.alloc_new_block(None, layout.size() * 2),
+                Some(x) => x,
+            };
+            let mut alloc_result = current.alloc(layout);
+            loop {
+                match alloc_result {
+                    Ok(x) => return Ok(x),
+                    Err(_) => {
+                        current = self.alloc_new_block(Some(current), layout.size() * 2);
+                        alloc_result = current.alloc(layout);
+                    }
+                }
+            }
+        }
 
-		pub fn realloc_zeroed(&self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			let ptr = self.alloc_zeroed(new_layout)?;
-			unsafe{ (ptr.as_ptr() as *mut u8).write_bytes(0, new_layout.size()) };
-			unsafe {
-				old_ptr.copy_from_nonoverlapping(ptr.as_ptr().cast(), std::cmp::min(old_layout.size(), new_layout.size()));
-			}
-			Ok(ptr)
-		}
+        /// Copies the memory pointed to by `old_ptr` with layout `old_layout`,
+        /// and copies it to a new allocation with layout `new_layout`.
+        ///
+        /// Unlike a more general realloc function, it is valid to pass an
+        /// old_ptr and old_layout that were not allocated by this arena.
+        ///
+        /// The pointer should still point to memory that is valid to read however
+        ///
+        /// # SAFETY
+        ///
+        /// `old_ptr` must point to memory that is valid to read for at least
+        /// `old_layout.size()` bytes
+        pub unsafe fn realloc(
+            &self,
+            old_ptr: *mut u8,
+            old_layout: Layout,
+            new_layout: Layout,
+        ) -> Result<NonNull<[u8]>, AllocError> {
+            let ptr = self.alloc(new_layout)?;
+            // ptr from self.alloc is valid to write to for length new_layout.size()
+            // old_ptr is valid to read from for length old_layout.size()
+            if !old_ptr.is_null() {
+                unsafe {
+                    old_ptr.copy_from_nonoverlapping(
+                        ptr.as_ptr().cast(),
+                        std::cmp::min(old_layout.size(), new_layout.size()),
+                    );
+                }
+            }
+            Ok(ptr)
+        }
 
-		fn current_block_mut(&mut self) -> Option<&mut ArenaHeader> {
-			// SAFETY: self.current is always written to before being assigned 
-			unsafe {
-				self.current.get_mut().as_mut()
-			}
-		}
+        pub fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            let ptr = self.alloc(layout)?;
+            unsafe { (ptr.as_ptr() as *mut u8).write_bytes(0, layout.size()) };
+            Ok(ptr)
+        }
 
-		fn current_block(&self) -> Option<&ArenaHeader> {
-			// SAFETY: self.current is always written to before being assigned 
-			unsafe {
-				self.current.load(Ordering::Acquire).as_ref()
-			}
-		}
+        pub fn realloc_zeroed(
+            &self,
+            old_ptr: *mut u8,
+            old_layout: Layout,
+            new_layout: Layout,
+        ) -> Result<NonNull<[u8]>, AllocError> {
+            let ptr = self.alloc_zeroed(new_layout)?;
+            unsafe { (ptr.as_ptr() as *mut u8).write_bytes(0, new_layout.size()) };
+            unsafe {
+                old_ptr.copy_from_nonoverlapping(
+                    ptr.as_ptr().cast(),
+                    std::cmp::min(old_layout.size(), new_layout.size()),
+                );
+            }
+            Ok(ptr)
+        }
 
-		/// Resets the memory allocated into this arena.
-		///
-		/// Does not free all memory requested from OS, the largest block will still be held.
-		///
-		/// use `[Self::free]` to free all held memory
-		pub fn clear(&mut self) {
-			if let Some(first_block) = self.current_block_mut() {
-				// SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
-				let mut current = first_block.prev;
-				first_block.prev = std::ptr::null_mut();
-				*first_block.current.get_mut() = first_block.start();
+        fn current_block_mut(&mut self) -> Option<&mut ArenaHeader> {
+            // SAFETY: self.current is always written to before being assigned
+            unsafe { self.current.get_mut().as_mut() }
+        }
 
-				while !current.is_null() {
-					// SAFETY: dereferencing current is safe because if it is non-null, it is initialized
-					let prev = unsafe {(*current).prev};
-					// SAFETY: precondition - all pointer are invalidated
-					// SAFETY: current is non-null so it is the start of a
-					// block recieved from PageAllocator::alloc_pages
-					unsafe { ArenaHeader::free(current) };
-					current = prev;
-				}
-			}
-		}
+        fn current_block(&self) -> Option<&ArenaHeader> {
+            // SAFETY: self.current is always written to before being assigned
+            unsafe { self.current.load(Ordering::Acquire).as_ref() }
+        }
 
-		/// Deallocates all memory held by this arena
-		pub fn free(self) { }
+        /// Resets the memory allocated into this arena.
+        ///
+        /// Does not free all memory requested from OS, the largest block will still be held.
+        ///
+        /// use `[Self::free]` to free all held memory
+        pub fn clear(&mut self) {
+            if let Some(first_block) = self.current_block_mut() {
+                // SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
+                let mut current = first_block.prev;
+                first_block.prev = std::ptr::null_mut();
+                *first_block.current.get_mut() = first_block.start();
 
-		/// Copy a slice of bytes into the current arena and returns the new slice.
-		///
-		/// See [`Self::copy_osstr_into`] and [`Self::copy_str_into`] for more specific
-		/// versions of this function
-		pub fn copy_bytes_into(&self, bytes: &[u8]) -> &[u8] {
-			let ptr = self.alloc(Layout::array::<u8>(bytes.len())
-				.expect("invalid layout for slice"))
-				.expect("unable to allocate")
-				.cast::<u8>().as_ptr();
-			// SAFETY: allocation is of length `bytes.len()`
-			unsafe{ptr.copy_from(bytes.as_ptr(), bytes.len())};
-			// SAFETY: ptr is trivially aligned and valid to read for `bytes.len()` bytes
-			unsafe{std::slice::from_raw_parts(ptr, bytes.len())}
-		}
+                while !current.is_null() {
+                    // SAFETY: dereferencing current is safe because if it is non-null, it is initialized
+                    let prev = unsafe { (*current).prev };
+                    // SAFETY: precondition - all pointer are invalidated
+                    // SAFETY: current is non-null so it is the start of a
+                    // block recieved from PageAllocator::alloc_pages
+                    unsafe { ArenaHeader::free(current) };
+                    current = prev;
+                }
+            }
+        }
 
-		/// Copy a slice of bytes into the current arena and returns the new
-		/// slice with a null byte appended
-		///
-		/// See [`Self::copy_osstr_into`] and [`Self::copy_str_into`] for more specific
-		/// versions of this function
-		/// 
-		/// # Panics
-		///
-		/// if `bytes` contains a null byte
-		pub fn copy_bytes_into_nt(&self, bytes: &[u8]) -> &[u8] {
-			assert!(!bytes.contains(&b'\0'));
-			let ptr = self.alloc(Layout::array::<u8>(bytes.len() + 1).expect("invalid layout for slice"))
-				.expect("unable to allocate")
-				.cast::<u8>().as_ptr();
-			// SAFETY: allocation is of length `bytes.len() + 1`
-			unsafe{ptr.copy_from(bytes.as_ptr(), bytes.len())};
-			unsafe{*ptr.add(bytes.len()) = b'\0'};
-			// SAFETY: ptr is trivially aligned and valid to read for `bytes.len() + 1` bytes
-			unsafe{std::slice::from_raw_parts(ptr, bytes.len() + 1)}
-		}
-		
-		/// Copy an `&OsStr` into the current arena and return the new OsStr
-		///
-		/// see [`Self::copy_bytes_into`] for a more general version of this function
-		pub fn copy_osstr_into(&self, bytes: &OsStr) -> &OsStr {
-			// SAFETY: input is an OsStr
-			unsafe{OsStr::from_encoded_bytes_unchecked(self.copy_bytes_into(bytes.as_encoded_bytes()))}
-		}
+        /// Deallocates all memory held by this arena
+        pub fn free(self) {}
 
-		/// Copy a `&str` into the current arena and return the new str
-		///
-		/// see [`Self::copy_bytes_into`] for a more general version of this function
-		pub fn copy_str_into(&self, bytes: &str) -> &str {
-			// SAFETY: input is a str
-			unsafe{std::str::from_utf8_unchecked(self.copy_bytes_into(bytes.as_ref()))}
-		}
-		
-		/// Copy a `&str` into the current arena and return the new str with a
-		/// null byte appended
-		///
-		/// see [`Self::copy_bytes_into`] for a more general version of this function
-		/// 
-		/// # Panics
-		///
-		/// if `bytes` contains a null byte
-		pub fn copy_str_into_nt(&self, bytes: &str) -> &NTStr {
-			assert!(!bytes.as_bytes().contains(&b'\0'));
-			let ptr = self.alloc(Layout::array::<u8>(bytes.len() + 1)
-				.expect("invalid layout for slice"))
-				.expect("unable to allocate")
-				.cast::<u8>().as_ptr();
-			
-			// SAFETY: allocation is of length `bytes.len() + 1`
-			unsafe{ptr.copy_from(bytes.as_ptr(), bytes.len())};
-			unsafe{ptr.add(bytes.len()).write(b'\0')};
-			// SAFETY: ptr is trivially aligned and valid to read for `bytes.len() + 1` bytes
-			let slice = unsafe{std::slice::from_raw_parts(ptr, bytes.len() + 1)};
+        /// Copy a slice of bytes into the current arena and returns the new slice.
+        ///
+        /// See [`Self::copy_osstr_into`] and [`Self::copy_str_into`] for more specific
+        /// versions of this function
+        pub fn copy_bytes_into(&self, bytes: &[u8]) -> &[u8] {
+            let ptr = self
+                .alloc(Layout::array::<u8>(bytes.len()).expect("invalid layout for slice"))
+                .expect("unable to allocate")
+                .cast::<u8>()
+                .as_ptr();
+            // SAFETY: allocation is of length `bytes.len()`
+            unsafe { ptr.copy_from(bytes.as_ptr(), bytes.len()) };
+            // SAFETY: ptr is trivially aligned and valid to read for `bytes.len()` bytes
+            unsafe { std::slice::from_raw_parts(ptr, bytes.len()) }
+        }
 
-			// SAFETY: input is a str
-			unsafe{NTStr::from_str_unchecked(std::str::from_utf8_unchecked(slice))}
-		}
+        /// Copy a slice of bytes into the current arena and returns the new
+        /// slice with a null byte appended
+        ///
+        /// See [`Self::copy_osstr_into`] and [`Self::copy_str_into`] for more specific
+        /// versions of this function
+        ///
+        /// # Panics
+        ///
+        /// if `bytes` contains a null byte
+        pub fn copy_bytes_into_nt(&self, bytes: &[u8]) -> &[u8] {
+            assert!(!bytes.contains(&b'\0'));
+            let ptr = self
+                .alloc(Layout::array::<u8>(bytes.len() + 1).expect("invalid layout for slice"))
+                .expect("unable to allocate")
+                .cast::<u8>()
+                .as_ptr();
+            // SAFETY: allocation is of length `bytes.len() + 1`
+            unsafe { ptr.copy_from(bytes.as_ptr(), bytes.len()) };
+            unsafe { *ptr.add(bytes.len()) = b'\0' };
+            // SAFETY: ptr is trivially aligned and valid to read for `bytes.len() + 1` bytes
+            unsafe { std::slice::from_raw_parts(ptr, bytes.len() + 1) }
+        }
 
-		/// Allocates a slice of items into `self` from an iterator
-		pub fn slice_from_iter<T>(&self, i: impl IntoIterator<Item = T>) -> &mut [T] {
-			let mut vec = Vec::new_in(self);
-			vec.extend(i);
-			vec.leak()
-		}
+        /// Copy an `&OsStr` into the current arena and return the new OsStr
+        ///
+        /// see [`Self::copy_bytes_into`] for a more general version of this function
+        pub fn copy_osstr_into(&self, bytes: &OsStr) -> &OsStr {
+            // SAFETY: input is an OsStr
+            unsafe {
+                OsStr::from_encoded_bytes_unchecked(self.copy_bytes_into(bytes.as_encoded_bytes()))
+            }
+        }
 
-		/// Allocates space for and moves a value into the arena
-		pub fn alloc_into<T>(&self, value: T) -> &mut T {
-			let ptr = self.allocate(Layout::new::<T>()).unwrap().cast::<T>();
-			unsafe{ptr.write(value);}
-			unsafe{&mut *ptr.as_ptr()}
-		}
+        /// Copy a `&str` into the current arena and return the new str
+        ///
+        /// see [`Self::copy_bytes_into`] for a more general version of this function
+        pub fn copy_str_into(&self, bytes: &str) -> &str {
+            // SAFETY: input is a str
+            unsafe { std::str::from_utf8_unchecked(self.copy_bytes_into(bytes.as_ref())) }
+        }
 
-		pub fn fmt_into(&self, f: std::fmt::Arguments) -> &str {
-			let mut vec = Vec::new_in(self);
-			write!(vec, "{}", f).expect("writing into a vec cannot fail");
-			// SAFETY: format string outputs are always utf8
-			unsafe{std::str::from_utf8_unchecked(vec.leak())}
-		}
-	}
+        /// Copy a `&str` into the current arena and return the new str with a
+        /// null byte appended
+        ///
+        /// see [`Self::copy_bytes_into`] for a more general version of this function
+        ///
+        /// # Panics
+        ///
+        /// if `bytes` contains a null byte
+        pub fn copy_str_into_nt(&self, bytes: &str) -> &NTStr {
+            assert!(!bytes.as_bytes().contains(&b'\0'));
+            let ptr = self
+                .alloc(Layout::array::<u8>(bytes.len() + 1).expect("invalid layout for slice"))
+                .expect("unable to allocate")
+                .cast::<u8>()
+                .as_ptr();
 
-	impl Drop for MTArena {
-		fn drop (&mut self) {
-			// SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
-			let mut current = *self.current.get_mut();
-			while !current.is_null() {
-				// SAFETY: dereferencing current is safe because if it is non-null, it is initialized
-				let prev = unsafe {(*current).prev};
-				// SAFETY: precondition - all pointer are invalidated
-				// SAFETY: current is non-null so it is the start of a
-				// block recieved from PageAllocator::alloc_pages
-				unsafe { ArenaHeader::free(current) };
-				current = prev;
-			}
-		}
-	}
+            // SAFETY: allocation is of length `bytes.len() + 1`
+            unsafe { ptr.copy_from(bytes.as_ptr(), bytes.len()) };
+            unsafe { ptr.add(bytes.len()).write(b'\0') };
+            // SAFETY: ptr is trivially aligned and valid to read for `bytes.len() + 1` bytes
+            let slice = unsafe { std::slice::from_raw_parts(ptr, bytes.len() + 1) };
 
-	impl Default for MTArena {
-		fn default () -> Self {
-			Self::new()
-		}
-	}
+            // SAFETY: input is a str
+            unsafe { NTStr::from_str_unchecked(std::str::from_utf8_unchecked(slice)) }
+        }
 
-	unsafe impl Allocator for MTArena {
-		fn allocate (&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-			self.alloc(layout)
-		}
-		unsafe fn deallocate (&self, _ptr: NonNull<u8>, _layout: Layout) {}
-	}
+        /// Allocates a slice of items into `self` from an iterator
+        pub fn slice_from_iter<T>(&self, i: impl IntoIterator<Item = T>) -> &mut [T] {
+            let mut vec = Vec::new_in(self);
+            vec.extend(i);
+            vec.leak()
+        }
 
-	#[cfg(test)]
-	mod test {
-		use super::*;
-		#[test]
-		fn arena_test () {
-			let x = MTArena::new();
-			assert!(x.current.load(Ordering::Relaxed) == std::ptr::null_mut());
-			x.free(); 
+        /// Allocates space for and moves a value into the arena
+        pub fn alloc_into<T>(&self, value: T) -> &mut T {
+            let ptr = self.allocate(Layout::new::<T>()).unwrap().cast::<T>();
+            unsafe {
+                ptr.write(value);
+            }
+            unsafe { &mut *ptr.as_ptr() }
+        }
 
-			let y = MTArena::new();
-			y.alloc(Layout::new::<[usize;25]>()).unwrap();
-			assert_eq!(
-				y.current_block()
-					.unwrap()
-					.total_space(),
-				(*PAGE_SIZE as usize) - std::mem::size_of::<ArenaHeader>()
-			);
-			
-			y.alloc(Layout::from_size_align(4096, 1).unwrap()).unwrap();
-			assert_eq!(
-				y.current_block()
-					.unwrap()
-					.total_space(),
-				(*PAGE_SIZE as usize) * 2 - std::mem::size_of::<ArenaHeader>()
-			);
+        pub fn fmt_into(&self, f: std::fmt::Arguments) -> &str {
+            let mut vec = Vec::new_in(self);
+            write!(vec, "{}", f).expect("writing into a vec cannot fail");
+            // SAFETY: format string outputs are always utf8
+            unsafe { std::str::from_utf8_unchecked(vec.leak()) }
+        }
+    }
 
-			y.alloc(Layout::from_size_align(4096, 1).unwrap()).unwrap();
-			assert_eq!(
-				y.current_block()
-					.unwrap()
-					.total_space(),
-				(*PAGE_SIZE as usize) * 4 - std::mem::size_of::<ArenaHeader>()
-			);
-			
-			y.free();
-		}
-	}
+    impl Drop for MTArena {
+        fn drop(&mut self) {
+            // SAFETY: dereferencing self.current is safe because if it is non_null, it is initialized
+            let mut current = *self.current.get_mut();
+            while !current.is_null() {
+                // SAFETY: dereferencing current is safe because if it is non-null, it is initialized
+                let prev = unsafe { (*current).prev };
+                // SAFETY: precondition - all pointer are invalidated
+                // SAFETY: current is non-null so it is the start of a
+                // block recieved from PageAllocator::alloc_pages
+                unsafe { ArenaHeader::free(current) };
+                current = prev;
+            }
+        }
+    }
+
+    impl Default for MTArena {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    unsafe impl Allocator for MTArena {
+        fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            self.alloc(layout)
+        }
+        unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
+    }
+
+    #[cfg(test)]
+    mod test {
+        use super::*;
+        #[test]
+        fn arena_test() {
+            let x = MTArena::new();
+            assert!(x.current.load(Ordering::Relaxed) == std::ptr::null_mut());
+            x.free();
+
+            let y = MTArena::new();
+            y.alloc(Layout::new::<[usize; 25]>()).unwrap();
+            assert_eq!(
+                y.current_block().unwrap().total_space(),
+                (*PAGE_SIZE as usize) - std::mem::size_of::<ArenaHeader>()
+            );
+
+            y.alloc(Layout::from_size_align(4096, 1).unwrap()).unwrap();
+            assert_eq!(
+                y.current_block().unwrap().total_space(),
+                (*PAGE_SIZE as usize) * 2 - std::mem::size_of::<ArenaHeader>()
+            );
+
+            y.alloc(Layout::from_size_align(4096, 1).unwrap()).unwrap();
+            assert_eq!(
+                y.current_block().unwrap().total_space(),
+                (*PAGE_SIZE as usize) * 4 - std::mem::size_of::<ArenaHeader>()
+            );
+
+            y.free();
+        }
+    }
 }
 
 pub use arena_impl::Arena;

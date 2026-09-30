@@ -1,11 +1,11 @@
 //! Defines the types shared by all implementations of grug.h
-use std::ffi::c_double;
-use std::cell::Cell;
-use std::ptr::NonNull;
-use std::ffi::c_void;
+use crate::ast::Type;
 use crate::ntstring::NTStrPtr;
 use crate::state::State;
-use crate::ast::Type;
+use std::cell::Cell;
+use std::ffi::c_double;
+use std::ffi::c_void;
+use std::ptr::NonNull;
 
 /// A function pointer to a game function
 /// Game functions have one the following signature
@@ -14,9 +14,9 @@ use crate::ast::Type;
 /// ```
 ///
 /// This is the type erased version of [`HostFnWithState`] for use in the AST.
-/// 
+///
 /// Conversion from [`HostFnWithState`] is done using [`Self::from_ptr`]
-/// 
+///
 #[derive(Clone, Copy, Hash, Eq)]
 #[repr(transparent)]
 pub struct HostFn(ErasedHostFnPtr);
@@ -35,7 +35,8 @@ impl std::ops::Deref for HostFn {
 
 /// SAFETY: This function should only be called with the same state type and
 /// number of generics it was originally created for
-type ErasedHostFnPtr = unsafe extern "C" fn (*const c_void, *const Value, *const Type<'static>) -> Value;
+type ErasedHostFnPtr =
+    unsafe extern "C" fn(*const c_void, *const Value, *const Type<'static>) -> Value;
 // SAFETY: HostFn is always just a function pointer
 unsafe impl Send for HostFn {}
 unsafe impl Sync for HostFn {}
@@ -44,10 +45,11 @@ unsafe impl Sync for HostFn {}
 ///
 /// [`HostFn`] can be cast to use any state but it is UB to cast to any
 /// state other than the current state the pointer was recieved from.
-/// 
+///
 /// When Backends are running an export function, [`HostFnWithState`] should be
 /// cast to the same kind of state used in `call_on_function`.
-pub type HostFnWithState<const N: usize, GrugState> = extern "C" fn (&GrugState, *const Value, generics: &'static [Type<'static>; N]) -> Value;
+pub type HostFnWithState<const N: usize, GrugState> =
+    extern "C" fn(&GrugState, *const Value, generics: &'static [Type<'static>; N]) -> Value;
 
 impl HostFn {
     /// Type erases a [`HostFnWithState`]
@@ -55,8 +57,12 @@ impl HostFn {
         Self(value)
     }
     /// Type erases a [`HostFnWithState`]
-    pub const fn from_ptr<const N: usize, GrugState: State>(value: HostFnWithState<N, GrugState>) -> Self {
-        Self(unsafe{std::mem::transmute::<HostFnWithState<N, GrugState>, ErasedHostFnPtr>(value)})
+    pub const fn from_ptr<const N: usize, GrugState: State>(
+        value: HostFnWithState<N, GrugState>,
+    ) -> Self {
+        Self(unsafe {
+            std::mem::transmute::<HostFnWithState<N, GrugState>, ErasedHostFnPtr>(value)
+        })
     }
 }
 
@@ -72,7 +78,7 @@ impl std::fmt::Debug for HostFn {
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub struct Id(pub u64);
 
-/// An id that uniquely refers to a script path. 
+/// An id that uniquely refers to a script path.
 pub type FileId = Id;
 /// This id is used to indicate that a particular grug file had a compilation error
 pub const INVALID_GRUG_FILE_ID: FileId = FileId::new(u64::MAX);
@@ -96,7 +102,7 @@ impl Id {
 }
 
 /// Uniquely refers to a particular on function from a particular entity from
-/// the mod_api. 
+/// the mod_api.
 /// Two different entities will have unique ExportFnIds for all their on functions
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(transparent)]
@@ -132,14 +138,14 @@ pub union Value {
 pub struct GrugEntity {
     /// id of the `me` member variable in a grug_script
     pub id: Id,
-    /// File id of file this entity is created from 
+    /// File id of file this entity is created from
     pub file_id: FileId,
     /// Pointer to the entity's members stored by the backend
     pub members: Cell<NonNull<()>>,
 }
 
 impl GrugEntity {
-    /// # SAFETY 
+    /// # SAFETY
     /// The `members` field of the returned entity are uninitialized
     /// This data must be initialized by the backend before it is actually used
     /// as an entity

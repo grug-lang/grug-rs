@@ -11,7 +11,7 @@
 //! written in rust to seamlessly operate with bindings in other languages.
 //!
 //! [`mod@error`] contains the interface of compile time and initialization
-//! errors. 
+//! errors.
 //!
 //! [`mod@runtime_error`] contains the interface of runtime errors.
 //!
@@ -24,23 +24,23 @@
 //! [`GrugAst`](ast::GrugAst) contains ast nodes for various parts of the grug language. It
 //! contains both structs and enums and is fully compatible with equivalent c
 //! structs and tagged unions.
-//! 
+//!
 //! [`mod@types`] defines types that are likely to be used by lots of bindings'
-//! implementations. 
+//! implementations.
 #![deny(warnings)]
 #![warn(missing_docs)]
-pub mod types;
 pub mod ast;
 pub mod backend;
-pub mod state;
 pub mod error;
+pub mod state;
+pub mod types;
 
 pub mod ntstring;
 pub mod runtime_error;
 mod utils;
 
 // MIT LICENSE
-// 
+//
 // Copyright (c) 2026 NikhilNathanael
 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of
