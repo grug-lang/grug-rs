@@ -7,70 +7,59 @@ use std::ffi::c_double;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-/// A function pointer to a game function
-/// Game functions have one the following signature
+/// A Type erased version of [`RegFn`]
+pub type ErasedRegFn = unsafe extern "C" fn(*const Type<'static>) -> ErasedHostFn;
+
+/// A function pointer to a function that provides specialized versions of
+/// generic host functions
+///
+/// This function is called after type inference has determined all relevant
+/// generic types to obtain the actual host function pointer for the function
+/// call.
+///
+/// Grug implementations are allowed to cache the results of these function
+/// calls, so providers must ensure these functions are pure.
+///
+/// The argument is a pointer to an array of grug types. These types indicate
+/// the generic parameters associated with this specific host function call
+///
+/// The number of types provided is the number of generics for the function in
+/// the mod_api. For methods, if the method does not define any generics, then
+/// the parent's generics are inherited.
+pub type RegFn<const N: usize, State> = extern "C" fn(&[Type<'static>; N]) -> HostFn<N, State>;
+
+/// Type erases a registration function pointer
+pub fn erase_reg_fn<const N: usize, GrugState: State>(reg_fn: RegFn<N, GrugState>) -> ErasedRegFn {
+    unsafe { std::mem::transmute::<RegFn<N, GrugState>, ErasedRegFn>(reg_fn) }
+}
+
+/// A type erased function pointer to a host function
+/// Host functions have the following signature
 /// ```text
-/// extern "C" fn (&GrugState, *const Value) -> Value;
+/// extern "C" fn (&GrugState, *const Value, &[Type<'static>;N]) -> Value;
 /// ```
 ///
-/// This is the type erased version of [`HostFnWithState`] for use in the AST.
+/// This is the type erased version of [`HostFn`] for use in the AST.
 ///
-/// Conversion from [`HostFnWithState`] is done using [`Self::from_ptr`]
-///
-#[derive(Clone, Copy, Hash, Eq)]
-#[repr(transparent)]
-pub struct HostFn(ErasedHostFnPtr);
-
-impl PartialEq for HostFn {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 as usize == other.0 as usize
-    }
-}
-impl std::ops::Deref for HostFn {
-    type Target = ErasedHostFnPtr;
-    fn deref(&self) -> &ErasedHostFnPtr {
-        &self.0
-    }
-}
-
-/// SAFETY: This function should only be called with the same state type and
-/// number of generics it was originally created for
-type ErasedHostFnPtr =
+/// Conversion from [`HostFn`] is done using [`erase_host_fn`].
+pub type ErasedHostFn =
     unsafe extern "C" fn(*const c_void, *const Value, *const Type<'static>) -> Value;
-// SAFETY: HostFn is always just a function pointer
-unsafe impl Send for HostFn {}
-unsafe impl Sync for HostFn {}
-/// A Game fn pointer for a specific kind of state. Each implementor of
-/// [`State`] should register its own version of [`HostFnWithState`].
+
+/// Type erases a host function pointer
+pub fn erase_host_fn<const N: usize, GrugState: State>(
+    host_fn: HostFn<N, GrugState>,
+) -> ErasedHostFn {
+    unsafe { std::mem::transmute::<HostFn<N, GrugState>, ErasedHostFn>(host_fn) }
+}
+
+/// A Host fn pointer for a specific kind of state with a specific number of
+/// generics. Each implementor of [`State`] should register its own version of
+/// [`HostFn`].
 ///
 /// [`HostFn`] can be cast to use any state but it is UB to cast to any
 /// state other than the current state the pointer was recieved from.
-///
-/// When Backends are running an export function, [`HostFnWithState`] should be
-/// cast to the same kind of state used in `call_on_function`.
-pub type HostFnWithState<const N: usize, GrugState> =
+pub type HostFn<const N: usize, GrugState> =
     extern "C" fn(&GrugState, *const Value, generics: &'static [Type<'static>; N]) -> Value;
-
-impl HostFn {
-    /// Type erases a [`HostFnWithState`]
-    pub const fn from_erased_ptr(value: ErasedHostFnPtr) -> Self {
-        Self(value)
-    }
-    /// Type erases a [`HostFnWithState`]
-    pub const fn from_ptr<const N: usize, GrugState: State>(
-        value: HostFnWithState<N, GrugState>,
-    ) -> Self {
-        Self(unsafe {
-            std::mem::transmute::<HostFnWithState<N, GrugState>, ErasedHostFnPtr>(value)
-        })
-    }
-}
-
-impl std::fmt::Debug for HostFn {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
 
 /// Represents a handle to an object owned by grug
 /// Can refer to grug entities, grug files, on functions, or game objects

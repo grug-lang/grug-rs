@@ -822,8 +822,8 @@ pub fn main() {
     // Only treat args[1] as the whitelisted test name if it isn't itself a
     // flag; otherwise leave it in `args` so the loop below can pick it up.
     let mut whitelisted_test = None;
-    if args.len() >= 2 && !args[1].starts_with("--") {
-        let mut test = args.remove(1);
+    if args.len() >= 3 && !args[2].starts_with("--") {
+        let mut test = args.remove(2);
         test.push('\0');
         whitelisted_test =
             unsafe { Some(NTStr::from_str_unchecked(String::leak(test)).as_ntstrptr()) };
@@ -831,7 +831,7 @@ pub fn main() {
 
     let mut continue_on_fail = false;
     let mut results_json_path = None;
-    let mut i = 1;
+    let mut i = 2;
     while i < args.len() {
         if args[i] == "--continue-on-fail" {
             args.remove(i);

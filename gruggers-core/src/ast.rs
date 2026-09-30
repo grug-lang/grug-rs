@@ -11,7 +11,7 @@
 //! This may be changed in a later release
 use crate::error::SourceSpan;
 use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
-use crate::types::HostFn;
+use crate::types::ErasedHostFn;
 
 /// Represents the type of a value in grug
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -461,7 +461,7 @@ pub enum ExprData<'a> {
         /// Expressions for each of the arguments of the function call
         args: &'a mut [Expr<'a>],
         /// Pointer to the host function if this expression is a game function call
-        ptr: Option<HostFn>,
+        ptr: Option<ErasedHostFn>,
         /// Span of the function or method name,
         name_span: SourceSpan,
         /// The generics array that should be passed to the function when
@@ -476,8 +476,9 @@ pub enum ExprData<'a> {
     /// ```
     Parenthesized(&'a mut Expr<'a>),
 }
-const _: () =
-    const { assert!(std::mem::size_of::<Option<HostFn>>() == std::mem::size_of::<HostFn>()) };
+const _: () = const {
+    assert!(std::mem::size_of::<Option<ErasedHostFn>>() == std::mem::size_of::<ErasedHostFn>())
+};
 
 /// Represents a complete expression. Can contain nested expressions
 #[derive(Debug)]

@@ -10,7 +10,7 @@ use crate::ast::{
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::frontend::GlobalStatement;
 use crate::frontend::parser::Ast;
-use crate::mod_api::{Generic, ModApi, ModApiEntity, Trait};
+use crate::mod_api::{Generic, ModApi, ModApiExportFn, Trait};
 use crate::nt;
 use crate::ntstring::{NTStr, NTStrPtr};
 use crate::type_storage::TypeStorage;
@@ -21,7 +21,7 @@ use allocator_api2::vec::Vec;
 pub(super) struct TypePropagator<'mod_api, 'arena: 'temp, 'temp> {
     file_text: &'arena str,
     file_path: &'arena OsStr,
-    entity: &'mod_api ModApiEntity<'mod_api>,
+    entity_export_fns: &'mod_api [(&'mod_api NTStr, ModApiExportFn<'mod_api>)],
     mod_api: &'mod_api ModApi,
     current_mod_name: &'arena OsStr,
     mods_dir_path: &'mod_api OsStr,
@@ -64,7 +64,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     pub fn new(
         file_text: &'arena str,
         file_path: &'arena OsStr,
-        entity: &'mod_api ModApiEntity<'mod_api>,
+        entity_export_fns: &'mod_api [(&'mod_api NTStr, ModApiExportFn<'mod_api>)],
         mod_api: &'mod_api ModApi,
         mod_name: &'arena OsStr,
         mods_dir_path: &'mod_api OsStr,
@@ -77,7 +77,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         Self {
             file_text,
             file_path,
-            entity,
+            entity_export_fns,
             mod_api,
             current_mod_name: mod_name,
             mods_dir_path,
@@ -106,7 +106,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     }
 
     pub fn fill_result_types(
-        entity: &'mod_api ModApiEntity<'mod_api>,
+        entity_export_fns: &'mod_api [(&'mod_api NTStr, ModApiExportFn<'mod_api>)],
         mod_api: &'mod_api ModApi,
         mod_name: &'arena OsStr,
         mods_dir_path: &'mod_api OsStr,
@@ -129,7 +129,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         let mut type_propagator = Self::new(
             file_text,
             file_path,
-            entity,
+            entity_export_fns,
             mod_api,
             mod_name,
             mods_dir_path,
@@ -199,7 +199,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 _ => None,
             })
             .collect::<Vec<_>>();
-        for (on_fn_name, mod_api_on_fn) in type_propagator.entity.export_fns.iter() {
+        for (on_fn_name, mod_api_on_fn) in type_propagator.entity_export_fns.iter() {
             let Some((current_index, current_on_fn)) = on_functions
                 .iter_mut()
                 .enumerate()
@@ -285,10 +285,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             debug_assert!(type_propagator.current_fn_name == Some(current_on_fn.name.to_str()));
             type_propagator.current_fn_name = None;
         }
-        let entity_on_functions = &type_propagator.entity.export_fns;
+        let entity_export_fns = &type_propagator.entity_export_fns;
         for on_fn in on_functions {
             let on_fn_name = on_fn.name.to_ntstr();
-            if !entity_on_functions
+            if !entity_export_fns
                 .iter()
                 .any(|(name, _)| *name == on_fn_name)
             {
@@ -919,7 +919,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         } = receiver
                             && let recv_name = recv_name.to_str()
                             && let None = self.get_variable_type(recv_name)
-                            && let Some(static_methods) = self.mod_api.static_methods_of(recv_name)
+                            && let Some(class) = self.mod_api.classes().get(recv_name)
                         {
                             // Only remove the reciever on the second time through
                             // so the same codepaths are excercised both times
@@ -927,30 +927,11 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                                 *receiver_slot = None;
                             }
 
-                            let Some((_, host_fn)) = static_methods
+                            let Some((_, host_fn)) = class
+                                .assoc_fns
                                 .iter()
                                 .find(|(fn_name, _)| fn_name.as_str() == name)
                             else {
-                                let is_method =
-                                    self.mod_api.classes().get(recv_name).is_some_and(|class| {
-                                        class
-                                            .methods
-                                            .iter()
-                                            .any(|(fn_name, _)| fn_name.as_str() == name)
-                                    }) || self.mod_api.entities().get(recv_name).is_some_and(
-                                        |entity| {
-                                            entity
-                                                .methods
-                                                .iter()
-                                                .any(|(fn_name, _)| fn_name.as_str() == name)
-                                        },
-                                    );
-                                if is_method {
-                                    return Err(self.new_error(
-										*name_span,
-										format_args!("'{}' is a method on '{}', so it must be called on a value of that type, like 'x.{}()'", name, recv_name, name)
-									));
-                                }
                                 return Err(self.new_error(
                                     *name_span,
                                     format_args!(
@@ -959,6 +940,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                                     ),
                                 ));
                             };
+                            if !host_fn.is_static {
+                                return Err(self.new_error(
+									*name_span,
+									format_args!("'{}' is a method on '{}', so it must be called on a value of that type, like 'x.{}()'", name, recv_name, name)
+								));
+                            }
                             host_fn
                         } else {
                             let receiver_type =
@@ -983,14 +970,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                                     ));
                                 }
                             };
-                            let (mod_api_receiver_ty, receiver_methods) = if let Some(class) =
-                                self.mod_api.classes().get(receiver_name)
-                            {
-                                (class.ty, &*class.methods)
-                            } else if let Some(entity) = self.mod_api.entities().get(receiver_name)
-                            {
-                                (entity.ty, &*entity.methods)
-                            } else {
+
+                            let Some(class) = self.mod_api.classes().get(receiver_name) else {
                                 return Err(self.new_error(
                                     receiver.span,
                                     format_args!(
@@ -999,27 +980,11 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                                     ),
                                 ));
                             };
-                            let Some((_, host_fn)) = receiver_methods
+                            let Some((_, host_fn)) = class
+                                .assoc_fns
                                 .iter()
                                 .find(|(fn_name, _)| fn_name.as_str() == name)
                             else {
-                                let static_method = self
-                                    .mod_api
-                                    .classes()
-                                    .get(receiver_name)
-                                    .and_then(|class| class.get_static_method(name))
-                                    .or_else(|| {
-                                        self.mod_api
-                                            .entities()
-                                            .get(receiver_name)
-                                            .and_then(|entity| entity.get_static_method(name))
-                                    });
-                                if static_method.is_some() {
-                                    return Err(self.new_error(
-											*name_span,
-											format_args!("'{}' is a static method on '{}', so it must be called as '{}.{}()'", name, receiver_name, receiver_name, name)
-										));
-                                }
                                 return Err(self.new_error(
                                     receiver.span,
                                     format_args!(
@@ -1028,7 +993,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                                     ),
                                 ));
                             };
-                            receiver_info = Some((actual_receiver_ty, mod_api_receiver_ty));
+
+                            if host_fn.is_static {
+                                return Err(self.new_error(
+									*name_span,
+									format_args!("'{}' is a static method on '{}', so it must be called as '{}.{}()'", name, receiver_name, receiver_name, name)
+								));
+                            }
+                            receiver_info = Some((actual_receiver_ty, class.ty));
                             host_fn
                         }
                     } else {

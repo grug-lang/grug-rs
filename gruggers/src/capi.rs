@@ -8,7 +8,9 @@ use crate::ntstring::{NTOsStrPtr, NTStrPtr};
 use crate::state::{
     ExportFnEntry, FileInfo, Files, GrugEntityHandle, GrugInitSettings, GrugState, ResourcePaths,
 };
-use crate::types::{ExportFnId, FileId, GrugEntity, HostFnWithState, INVALID_GRUG_FILE_ID, Value};
+use crate::types::{
+    ErasedHostFn, ErasedRegFn, ExportFnId, FileId, GrugEntity, INVALID_GRUG_FILE_ID, Value,
+};
 
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
@@ -49,15 +51,20 @@ pub extern "C" fn grug_init(
 pub extern "C" fn grug_deinit(_: Option<Box<CState>>) {}
 
 /// # SAFETY
-/// same as [`GrugState::register_host_fn`]
+/// same as [`GrugState::register_host_fn`], except the number of generic
+/// paramters is not checked
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn grug_register_host_fn<'a>(
     state: &'a mut CState,
     fn_name: NTStrPtr,
-    func: HostFnWithState<0, GrugState>,
+    func: ErasedHostFn,
 ) -> Option<&'a GrugError<'a>> {
     // SAFETY: This function is exposed to C and is inherently unsafe
-    if let Err(err) = unsafe { state.0.register_host_fn(fn_name.to_str(), func) } {
+    if let Err(err) = unsafe {
+        state
+            .0
+            .register_host_fn_internal(None, fn_name.to_str(), func, None)
+    } {
         Some(state.1.get_mut().insert(err).inner())
     } else {
         None
@@ -65,19 +72,63 @@ pub unsafe extern "C" fn grug_register_host_fn<'a>(
 }
 
 /// # SAFETY
-/// same as [`GrugState::register_method`]
+/// same as [`GrugState::register_method`], except the number of generic
+/// paramters is not checked
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn grug_register_method<'a>(
+pub unsafe extern "C" fn grug_register_host_method<'a>(
     state: &'a mut CState,
     class_name: NTStrPtr,
     fn_name: NTStrPtr,
-    func: HostFnWithState<0, GrugState>,
+    func: ErasedHostFn,
 ) -> Option<&'a GrugError<'a>> {
     // SAFETY: This function is exposed to C and is inherently unsafe
     if let Err(err) = unsafe {
         state
             .0
-            .register_method(class_name.to_str(), fn_name.to_str(), func)
+            .register_host_fn_internal(Some(class_name.to_str()), fn_name.to_str(), func, None)
+    } {
+        Some(state.1.get_mut().insert(err).inner())
+    } else {
+        None
+    }
+}
+
+/// # SAFETY
+/// same as [`GrugState::register_reg_fn`], except the number of generic
+/// paramters is not checked
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn grug_register_reg_fn<'a>(
+    state: &'a mut CState,
+    fn_name: NTStrPtr,
+    func: ErasedRegFn,
+) -> Option<&'a GrugError<'a>> {
+    // SAFETY: This function is exposed to C and is inherently unsafe
+    if let Err(err) = unsafe {
+        state
+            .0
+            .register_reg_fn_internal(None, fn_name.to_str(), func, None)
+    } {
+        Some(state.1.get_mut().insert(err).inner())
+    } else {
+        None
+    }
+}
+
+/// # SAFETY
+/// same as [`GrugState::register_method`], except the number of generic
+/// paramters is not checked
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn grug_register_reg_method<'a>(
+    state: &'a mut CState,
+    class_name: NTStrPtr,
+    fn_name: NTStrPtr,
+    func: ErasedRegFn,
+) -> Option<&'a GrugError<'a>> {
+    // SAFETY: This function is exposed to C and is inherently unsafe
+    if let Err(err) = unsafe {
+        state
+            .0
+            .register_reg_fn_internal(Some(class_name.to_str()), fn_name.to_str(), func, None)
     } {
         Some(state.1.get_mut().insert(err).inner())
     } else {
