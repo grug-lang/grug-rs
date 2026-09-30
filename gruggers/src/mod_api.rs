@@ -757,14 +757,13 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
             // TODO: Change the mod api format so this always throws an
             // error
             // if not found, number of generics MUST be 0
-            } else {
-                if !generics.is_empty() {
-                    return Err(self.new_error(self.arena.fmt_into(format_args!(
-                        ": {} was not declared in \"classes\", so it cannot have generics",
-                        name
-                    ))));
-                }
-            }
+            } else if !generics.is_empty() {
+				return Err(self.new_error(self.arena.fmt_into(format_args!(
+					": {} was not declared in \"classes\", so it cannot have generics",
+					name
+				))));
+			}
+            
             self.pop_path();
         }
         Ok(())
@@ -1275,7 +1274,7 @@ pub(crate) fn get_mod_api_from_text(
 
     assert_eq!(0, context.json_path.0.len(), "{}", context.json_path);
 
-    classes.extend(entities.into_iter());
+    classes.extend(entities);
 
     let mut known_types = Vec::with_capacity_in(classes.len(), &arena);
 
@@ -1289,8 +1288,7 @@ pub(crate) fn get_mod_api_from_text(
         context.push_path(JsonPathComponent::ObjectKey(class_name));
         if known_types
             .iter()
-            .find(|(type_name, _)| *type_name == class_name.as_str())
-            .is_some()
+            .any(|(type_name, _)| *type_name == class_name.as_str())
         {
             return Err(context.new_error("class name already exists"));
         }

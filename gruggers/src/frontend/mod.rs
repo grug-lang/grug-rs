@@ -25,27 +25,31 @@ pub mod tokenizer;
 pub mod type_propagation;
 use type_propagation::TypePropagator;
 
+pub type CompileRequest = (Arena, &'static [&'static OsStr]);
+pub type CompileResponse = (
+	Arena,
+	OwnPtr<
+		'static,
+		[(
+			Result<GrugAst<'static>, Error>,
+			// derived from input paths
+			// These paths are relative
+			&'static OsStr,
+		)],
+	>,
+);
+
 // Compilation functions
 impl GrugState {
+	
     /// Send at most this many files to a thread for compilation
     const FILES_PER_THREAD: usize = 8;
     // All 'static fields are actually allocated within the arena
     /// Uses async file system apis on windows
     pub(crate) fn compiler_thread_fn(
         // these paths are relative
-        receiver: Receiver<(Arena, &'static [&'static OsStr])>,
-        sender: Sender<(
-            Arena,
-            OwnPtr<
-                'static,
-                [(
-                    Result<GrugAst<'static>, Error>,
-                    // derived from input paths
-                    // These paths are relative
-                    &'static OsStr,
-                )],
-            >,
-        )>,
+        receiver: Receiver<CompileRequest>,
+        sender: Sender<CompileResponse>,
         // path is absolute
         mods_dir_path: PathBuf,
         mod_api: Arc<ModApi>,
