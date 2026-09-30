@@ -53,7 +53,8 @@ use crate::ntstring::NTStrPtr;
 use crate::own_ptr::OwnPtr;
 use crate::type_storage::TypeStorage;
 use crate::types::{
-    ExportFnId, FileId, GrugEntity, HostFnWithState, INVALID_GRUG_FILE_ID, Id, Value,
+    ErasedHostFn, ErasedRegFn, ExportFnId, FileId, GrugEntity, HostFn, INVALID_GRUG_FILE_ID, Id,
+    RegFn, Value, erase_host_fn, erase_reg_fn,
 };
 use crate::watcher::watch_changes;
 use crate::xar::Xar;
@@ -355,7 +356,11 @@ impl GrugState {
         let init_globals = nt!("init_globals");
         let mods_dir_path = PathBuf::from(mods_dir_path.as_ref());
 
-        for (entity_type, entity) in mod_api.entities() {
+        for (entity_type, export_fns) in mod_api
+            .classes()
+            .iter()
+            .filter_map(|(name, data)| data.export_fns.as_ref().map(|x| (name, x)))
+        {
             on_fns.push(ExportFnEntry {
                 // SAFETY: All EventFnEntries we give out have a 'self
                 // lifetime, which is the same as the 'mod_api lifetime they
@@ -364,7 +369,7 @@ impl GrugState {
                 fn_name: unsafe { init_globals.as_ntstrptr().detach_lifetime() },
                 index: 0,
             });
-            for (i, (fn_name, _)) in entity.export_fns.iter().enumerate() {
+            for (i, (fn_name, _)) in export_fns.iter().enumerate() {
                 on_fns.push(ExportFnEntry {
                     // SAFETY: All EventFnEntries we give out have a 'self
                     // lifetime, which is the same as the 'mod_api lifetime they
@@ -455,7 +460,9 @@ impl GrugState {
     }
 
     pub fn get_export_fn_id(&self, entity_type: &str, fn_name: &str) -> Result<ExportFnId, Error> {
-        if !self.mod_api.entities().contains_key(entity_type) {
+        if let Some(entity) = self.mod_api.classes().get(entity_type)
+            && !entity.is_entity()
+        {
             return Err(Error::new(
                 ErrorKind::INIT_ERROR,
                 "",
@@ -497,7 +504,9 @@ impl GrugState {
         &self,
         entity_type: &str,
     ) -> Result<&[ExportFnEntry<'_>], Error> {
-        if !self.mod_api.entities().contains_key(entity_type) {
+        if let Some(entity) = self.mod_api.classes().get(entity_type)
+            && !entity.is_entity()
+        {
             return Err(Error::new(
                 ErrorKind::INIT_ERROR,
                 "",
@@ -535,32 +544,44 @@ impl GrugState {
 
     pub fn all_host_fns_registered(&self) -> Result<(), Error> {
         // Check all normal host functions
-        for (host_fn_name, host_fn) in self.mod_api.host_fns() {
-            if host_fn.fn_ptr.is_none() {
-                return Err(Error::new(
-                    ErrorKind::INIT_ERROR,
-                    "",
-                    "".as_ref(),
-                    "",
-                    SourceSpan { offset: 0, line: 0 },
-                    format_args!("host function '{host_fn_name}' has not been registered"),
-                ));
+        fn new_err(args: std::fmt::Arguments) -> Error {
+            Error::new(
+                ErrorKind::INIT_ERROR,
+                "",
+                "".as_ref(),
+                "",
+                SourceSpan { offset: 0, line: 0 },
+                args,
+            )
+        }
+        for (fn_name, host_fn) in self.mod_api.host_fns() {
+            if host_fn.fn_ptr.is_none() && host_fn.reg_fn.is_none() {
+                return Err(new_err(format_args!(
+                    "host function '{}' has not been registered",
+                    fn_name
+                )));
             }
         }
         // check all methods
         for (class_name, class) in self.mod_api.classes() {
-            for (method_name, method) in &*class.methods {
-                if method.fn_ptr.is_none() {
-                    return Err(Error::new(
-                        ErrorKind::INIT_ERROR,
-                        "",
-                        "".as_ref(),
-                        "",
-                        SourceSpan { offset: 0, line: 0 },
-                        format_args!(
-                            "method '{method_name}' in class '{class_name}' has not been registered"
-                        ),
-                    ));
+            for (fn_name, host_fn) in &*class.assoc_fns {
+                if host_fn.fn_ptr.is_none() && host_fn.reg_fn.is_none() {
+                    if host_fn.is_static {
+                        return Err(new_err(format_args!(
+                            "static method '{}.{}' has not been registered",
+                            class_name, fn_name
+                        )));
+                    } else if class.is_entity() {
+                        return Err(new_err(format_args!(
+                            "entity method '{}.{}' has not been registered",
+                            class_name, fn_name
+                        )));
+                    } else {
+                        return Err(new_err(format_args!(
+                            "class method '{}.{}' has not been registered",
+                            class_name, fn_name
+                        )));
+                    }
                 }
             }
         }
@@ -585,8 +606,7 @@ impl GrugState {
 
     /// Create a new entity from the input file id
     pub fn create_entity(&self, file_id: FileId) -> Option<GrugEntityHandle<'_>> {
-        let entity = self
-            .entities
+        let entity = self.entities
             .insert(unsafe { GrugEntity::new_uninit(self.get_next_entity_id(), file_id) });
         let entity = unsafe { GrugEntityHandle::new(entity) };
         let success = self.backend.init_entity(self, &entity);
@@ -599,9 +619,7 @@ impl GrugState {
                 .push(NonNull::from_ref(&*entity));
             Some(entity)
         } else {
-            unsafe {
-                self.entities.delete(entity.into_inner());
-            }
+            unsafe { self.entities.delete(entity.into_inner()); }
             None
         }
     }
@@ -615,9 +633,7 @@ impl GrugState {
         if self.entities.contains(entity.0) {
             // SAFETY: We take ownership of the entity so we cannot call this function on the same entity twice.
             // Also we make sure new entities and reloaded entities are always initialized
-            unsafe {
-                self.backend.destroy_entity_data(&entity);
-            }
+            unsafe { self.backend.destroy_entity_data(&entity); }
 
             self.script_entities
                 .borrow_mut()
@@ -658,30 +674,31 @@ impl GrugState {
 
 // Registration functions
 impl GrugState {
-    /// Register a non generic host function
-    pub unsafe fn register_host_fn<const N: usize>(
+    /// Register a generic host function
+    pub unsafe fn register_reg_fn<const N: usize>(
         &mut self,
         fn_name: &str,
-        func: HostFnWithState<N, Self>,
+        func: RegFn<N, GrugState>,
     ) -> Result<(), Error> {
-        unsafe { self.register_host_fn_internal(None, fn_name, func) }
+        unsafe { self.register_reg_fn_internal(None, fn_name, erase_reg_fn(func), Some(N)) }
     }
 
     /// Register a non generic host method
-    pub unsafe fn register_method<const N: usize>(
+    pub unsafe fn register_reg_method<const N: usize>(
         &mut self,
         class_name: &str,
         fn_name: &str,
-        func: HostFnWithState<N, Self>,
+        func: RegFn<N, GrugState>,
     ) -> Result<(), Error> {
-        unsafe { self.register_host_fn_internal(Some(class_name), fn_name, func) }
+        unsafe { self.register_reg_fn_internal(Some(class_name), fn_name, erase_reg_fn(func), Some(N)) }
     }
 
-    unsafe fn register_host_fn_internal<const N: usize>(
+    pub(crate) unsafe fn register_reg_fn_internal(
         &mut self,
         class_name: Option<&str>,
         fn_name: &str,
-        func: HostFnWithState<N, Self>,
+        func: ErasedRegFn,
+        count: Option<usize>,
     ) -> Result<(), Error> {
         // SAFETY: This Arc is shared between the state and all the compiler
         // threads.  Because we have a &mut self, we assume that all compiler
@@ -697,10 +714,54 @@ impl GrugState {
 
         // Note: This is the same as the unstable get_mut_unchecked on Arc;
         // Once that is stabilized, this can be replaced
-        let mod_api =
-            *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
+        let mod_api = *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
         let mod_api = unsafe { mod_api.byte_add(16).cast::<ModApi>() };
-        unsafe { (&mut *mod_api).register_fn(class_name, fn_name, func) }
+        unsafe { (&mut *mod_api).register_reg_fn(class_name, fn_name, func, count) }
+    }
+
+    /// Register a non generic host function
+    pub unsafe fn register_host_fn<const N: usize>(
+        &mut self,
+        fn_name: &str,
+        func: HostFn<N, Self>,
+    ) -> Result<(), Error> {
+        unsafe { self.register_host_fn_internal(None, fn_name, erase_host_fn(func), Some(N)) }
+    }
+
+    /// Register a non generic host method
+    pub unsafe fn register_method<const N: usize>(
+        &mut self,
+        class_name: &str,
+        fn_name: &str,
+        func: HostFn<N, Self>,
+    ) -> Result<(), Error> {
+        unsafe { self.register_host_fn_internal(Some(class_name), fn_name, erase_host_fn(func), Some(N)) }
+    }
+
+    pub(crate) unsafe fn register_host_fn_internal(
+        &mut self,
+        class_name: Option<&str>,
+        fn_name: &str,
+        func: ErasedHostFn,
+        count: Option<usize>,
+    ) -> Result<(), Error> {
+        // SAFETY: This Arc is shared between the state and all the compiler
+        // threads.  Because we have a &mut self, we assume that all compiler
+        // threads are parked waiting to receive more compile commands. This
+        // means that they cannot have an active reference to the mod_api data
+        // during this call to get_mut_unchecked
+
+        // Note: We dont want to use interior mutability here because that would
+        // technically allow the compiler threads to modify the data too.
+        //
+        // In that case, there would actually be a thread safety issue with
+        // this
+
+        // Note: This is the same as the unstable get_mut_unchecked on Arc;
+        // Once that is stabilized, this can be replaced
+        let mod_api = *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
+        let mod_api = unsafe { mod_api.byte_add(16).cast::<ModApi>() };
+        unsafe { (&mut *mod_api).register_host_fn(class_name, fn_name, func, count) }
     }
 
     /// Register a dummy function for each game function defined in the mod_api
@@ -720,8 +781,7 @@ impl GrugState {
 
         // Note: This is the same as the unstable get_mut_unchecked on Arc;
         // Once that is stabilized, this can be replaced
-        let mod_api =
-            *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
+        let mod_api = *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
         let mod_api = unsafe { mod_api.byte_add(16).cast::<ModApi>() };
         unsafe { (&mut *mod_api).register_dummies() }
     }

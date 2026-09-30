@@ -9,7 +9,7 @@ use crate::frontend::type_propagation::TypeListDisplay;
 use crate::nt;
 use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
 use crate::shared_vec::SharedVec;
-use crate::types::{FileId, GrugEntity, HostFn, Value};
+use crate::types::{ErasedHostFn, FileId, GrugEntity, Value};
 use crate::xar::{ErasedPtr, ErasedXar};
 
 use gruggers_core::export_backend;
@@ -1234,7 +1234,7 @@ struct HostFnData<'a> {
     args_count: u32,
     // This is actually 'static
     generics: &'static [Type<'static>],
-    ptr: HostFn,
+    ptr: ErasedHostFn,
 }
 
 union ConstantData<'a> {
@@ -1258,7 +1258,8 @@ struct Instructions {
     >,
     constants: Vec<ConstantData<'static>>,
     helper_fn_locations: HashMap<&'static str, /* constant location */ u32>,
-    game_fn_locations: HashMap</* HostFn as usize */ HostFn, /* constant location */ u32>,
+    game_fn_locations:
+        HashMap</* ErasedHostFn as usize */ ErasedHostFn, /* constant location */ u32>,
     // SAFETY: Strings are not 'static allocated within self._arena
     fn_labels: HashMap<usize, &'static str>,
     // SAFETY: Strings are not 'static allocated within self._arena

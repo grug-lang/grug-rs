@@ -8,7 +8,6 @@ use crate::state::{FileInfo, Files, GrugState, ResourcePaths};
 use crate::type_storage::TypeStorage;
 use crate::types::FileId;
 
-use allocator_api2::boxed::Box as Box2;
 use allocator_api2::vec::Vec;
 
 use std::ffi::OsStr;
@@ -480,7 +479,7 @@ impl GrugState {
                     path.file_name().unwrap(),
                     mod_dir_path,
                     entity_type,
-					entity_name.as_ref(),
+                    entity_name.as_ref(),
                     result,
                     &arena,
                 );
@@ -551,7 +550,7 @@ impl GrugState {
         let ast = parser::parse(tokens.leak(), arena, file_text, path)?;
 
         // get mod api entity declaration
-        let entity = mod_api.entities().get(entity_type).ok_or_else(||
+        let entity = mod_api.classes().get(entity_type).ok_or_else(||
 			// TODO: This is not handled by grug_tests
 			Error::new(
 				ErrorKind::FILE_NAME_ERROR,
@@ -561,10 +560,20 @@ impl GrugState {
 				SourceSpan{offset: 0, line: 0},
 				format_args!("Entity '{}' is not registered in the mod_api.json", entity_type),
 			))?;
+        let Some(export_fns) = &entity.export_fns else {
+            return Err(Error::new(
+                ErrorKind::FILE_NAME_ERROR,
+                "",
+                path,
+                "",
+                SourceSpan { offset: 0, line: 0 },
+                format_args!("'{}' is a class, not an entity", entity_type),
+            ));
+        };
 
         // type check
         let ast = TypePropagator::fill_result_types(
-            entity,
+            export_fns,
             mod_api,
             mod_name,
             mods_dir_path,
@@ -580,20 +589,22 @@ impl GrugState {
         // convert into GrugAst
         let mut member_variables = Vec::new_in(arena);
         let mut on_functions = Vec::new_in(arena);
-        on_functions.extend((0..entity.export_fns.len()).map(|_| None));
+        on_functions.extend((0..export_fns.len()).map(|_| None));
         let mut helper_functions = Vec::new_in(arena);
 
         ast.global_statements
             .into_iter()
             .for_each(|statement| match statement {
-                GlobalStatement::Variable(st @ MemberVariable { .. }) => member_variables.push(st),
-                GlobalStatement::OnFunction(st @ OnFunction { .. }) => {
-                    let (i, _) = entity.get_export_fn(st.name.to_str()).unwrap();
-                    on_functions[i] = Some(&*Box2::leak(Box2::new_in(st, arena)));
+                GlobalStatement::Variable(st) => member_variables.push(st),
+                GlobalStatement::OnFunction(st) => {
+                    let (i, _) = export_fns
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (name, _))| name.as_str() == st.name.to_str())
+                        .expect("export function has already been verified to exist");
+                    on_functions[i] = Some(&*arena.alloc_into(st));
                 }
-                GlobalStatement::HelperFunction(st @ HelperFunction { .. }) => {
-                    helper_functions.push(st)
-                }
+                GlobalStatement::HelperFunction(st) => helper_functions.push(st),
                 _ => (),
             });
 
