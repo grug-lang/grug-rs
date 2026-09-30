@@ -169,7 +169,7 @@ mod page_alloc {
         pub struct PageAllocator;
 
         pub static PAGE_SIZE: std::sync::LazyLock<u32> =
-            std::sync::LazyLock::new(|| PageAllocator::page_size());
+            std::sync::LazyLock::new(PageAllocator::page_size);
 
         impl PageAllocator {
             pub const fn page_size() -> u32 {

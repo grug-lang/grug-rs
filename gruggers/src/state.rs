@@ -112,7 +112,7 @@ impl Default for RuntimeErrorHandler {
     }
 }
 
-impl<F: for<'b> Fn(&RuntimeError)> From<F> for RuntimeErrorHandler {
+impl<F: Fn(&RuntimeError)> From<F> for RuntimeErrorHandler {
     fn from(f: F) -> Self {
         let f = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(f))) }.cast::<()>();
         extern "C" fn handler<F: Fn(&RuntimeError)>(data: NonNull<()>, error: &RuntimeError) {
@@ -191,7 +191,7 @@ impl<'a> GrugInitSettings<'a> {
         self
     }
 
-    pub fn set_runtime_error_handler<F: for<'b> Fn(&RuntimeError)>(mut self, f: F) -> Self {
+    pub fn set_runtime_error_handler<F: Fn(&RuntimeError)>(mut self, f: F) -> Self {
         self.runtime_error_handler = Some(f.into());
         self
     }
