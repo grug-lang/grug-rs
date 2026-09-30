@@ -317,9 +317,11 @@ mod typed_xar {
             for i in 0..1000 {
                 unsafe { vec.push(x.insert(i).get_mut()) };
             }
-            for i in 0..1000 {
-                *vec[i] *= 2;
-            }
+			for item in vec.iter_mut() {
+				**item *= 2;
+			}
+			// Shut the fuck up clippy
+			#[allow(warnings)]
             for i in 0..1000 {
                 assert_eq!(*vec[i], 2 * i);
             }

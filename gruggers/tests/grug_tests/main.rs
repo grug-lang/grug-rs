@@ -74,7 +74,7 @@ mod test_bindings {
         Some(Box::new((state, Arena::new())))
     }
 
-    pub extern "C" fn destroy_grug_state<'a>(_state: Box<CState>) {}
+    pub extern "C" fn destroy_grug_state(_state: Box<CState>) {}
 
     pub extern "C" fn compile_grug_file<'a>(
         cstate: &'a CState,
@@ -140,24 +140,22 @@ mod test_bindings {
         // schedule. This is test-only: real hosts call update() once per
         // frame and don't want any of this delay.
         std::thread::sleep(std::time::Duration::from_millis(100));
-        match state.update_files() {
-            (resources, updated_files) => {
-                // SAFETY: single threaded test harness
-                unsafe { LAST_UPDATED_RESOURCES = Some(resources) };
-                // for each file in the `updated_files`, find it in `files`,
-                // copy its contents over to the `files`'s arena and replace it
-                for updated_file in updated_files.files() {
-                    if let Err(err) = updated_file.result() {
-                        *err_out = Some(
-                            arena
-                                .copy_str_into_nt(err.error_string.to_str())
-                                .as_ntstrptr(),
-                        );
-                        return;
-                    }
-                }
-            }
-        }
+        let (resources, updated_files) = state.update_files();
+
+		// SAFETY: single threaded test harness
+		unsafe { LAST_UPDATED_RESOURCES = Some(resources) };
+
+		for updated_file in updated_files.files() {
+			if let Err(err) = updated_file.result() {
+				*err_out = Some(
+					arena
+						.copy_str_into_nt(err.error_string.to_str())
+						.as_ntstrptr(),
+				);
+				return;
+			}
+		}
+
         *err_out = None;
     }
 
@@ -272,8 +270,6 @@ mod test_bindings {
         state.set_host_fn_error(msg.to_str());
     }
 
-    #[allow(non_camel_case_types)]
-    // pub type c_size_t = u64;
     #[allow(non_camel_case_types)]
     pub type parse_mod_api_t = for<'a> extern "C" fn(NTOsStrPtr<'a>) -> Option<NTStrPtr<'static>>;
     #[allow(non_camel_case_types)]
