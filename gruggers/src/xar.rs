@@ -544,14 +544,12 @@ mod erased_xar {
                 return true;
             }
             let inner = unsafe { &*self.inner.as_ptr() };
-            let mut current_bucket_size = self.first_chunk_size();
+            let mut current_bucket_size = self.first_chunk_size() * self.item_size();
             for bucket in &inner.chunks {
                 let Some(bucket) = bucket.get() else {
                     return false;
                 };
-                if (handle.0.as_ptr().addr()).wrapping_sub(bucket.as_ptr().as_ptr().addr())
-                    < current_bucket_size
-                {
+                if (handle.0.as_ptr().addr()).wrapping_sub(bucket.as_ptr().as_ptr().addr()) < current_bucket_size {
                     return true;
                 }
                 current_bucket_size *= 2;
