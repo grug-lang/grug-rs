@@ -118,17 +118,16 @@ mod typed_xar {
                 return true;
             }
             let inner = unsafe { &*self.inner.as_ptr() };
-            let mut current_bucket_size = Self::FIRST_SIZE;
-            for bucket in &inner.chunks {
+            for (bucket_idx, bucket) in inner.chunks.iter().enumerate() {
                 let Some(bucket) = bucket.get() else {
                     return false;
                 };
-                if (handle.0.as_ptr().addr()).wrapping_sub(bucket.as_ptr().addr())
-                    < current_bucket_size
-                {
+                // The bucket spans `chunk_size` elements, so compare byte offsets against the
+                // bucket's size in bytes, not its element count.
+                let bucket_size = Self::chunk_size(bucket_idx) * size_of::<XarStorage<T>>();
+                if (handle.0.as_ptr().addr()).wrapping_sub(bucket.as_ptr().addr()) < bucket_size {
                     return true;
                 }
-                current_bucket_size *= 2;
             }
             false
         }
@@ -322,6 +321,15 @@ mod typed_xar {
             }
             for i in 0..1000 {
                 assert_eq!(*vec[i], 2 * i);
+            }
+        }
+
+        #[test]
+        fn xar_test_contains_every_slot() {
+            let x = Xar::new();
+            let handles: Vec<_> = (0..100).map(|i| x.insert(i)).collect();
+            for (i, handle) in handles.iter().enumerate() {
+                assert!(x.contains(*handle), "slot {i} should be contained");
             }
         }
 
@@ -542,17 +550,18 @@ mod erased_xar {
                 return true;
             }
             let inner = unsafe { &*self.inner.as_ptr() };
-            let mut current_bucket_size = self.first_chunk_size();
-            for bucket in &inner.chunks {
+            for (bucket_idx, bucket) in inner.chunks.iter().enumerate() {
                 let Some(bucket) = bucket.get() else {
                     return false;
                 };
+                // The bucket spans `chunk_size` elements, so compare byte offsets against the
+                // bucket's size in bytes, not its element count.
+                let bucket_size = self.chunk_size(bucket_idx) * self.item_size();
                 if (handle.0.as_ptr().addr()).wrapping_sub(bucket.as_ptr().as_ptr().addr())
-                    < current_bucket_size
+                    < bucket_size
                 {
                     return true;
                 }
-                current_bucket_size *= 2;
             }
             false
         }
@@ -678,6 +687,20 @@ mod erased_xar {
                 assert_eq!(27, *x_3.as_ref::<usize>());
                 assert_eq!(28, *x_4.as_ref::<usize>());
                 eprintln!("{:?}", x_1.as_ref::<usize>());
+            }
+        }
+
+        #[test]
+        fn xar_test_contains_every_slot() {
+            let x = ErasedXar::new(Layout::new::<usize>());
+            let mut handles = Vec::new();
+            for i in 0..100 {
+                let handle = x.get_slot();
+                unsafe { handle.write_value::<usize>(i) };
+                handles.push(handle);
+            }
+            for (i, handle) in handles.iter().enumerate() {
+                assert!(x.contains(*handle), "slot {i} should be contained");
             }
         }
     }
