@@ -1258,7 +1258,19 @@ struct Instructions {
     >,
     constants: Vec<ConstantData<'static>>,
     helper_fn_locations: HashMap<&'static str, /* constant location */ u32>,
-    game_fn_locations: HashMap</* HostFn as usize */ HostFn, /* constant location */ u32>,
+    /// Host fn constants, deduplicated by function pointer *and* the resolved
+    /// generic argument list.
+    ///
+    /// Generic host functions (e.g. `print2`) all compile down to a single C
+    /// dispatcher that branches on the generic types at runtime, so two call
+    /// sites share one `HostFn` even when their generics differ. Keying only
+    /// on the pointer made every call site after the first reuse the first
+    /// call's generics, so the dispatcher picked the wrong overload (printing
+    /// garbage, or dereferencing a bogus pointer and crashing).
+    game_fn_locations: HashMap<
+        (/* HostFn as usize */ HostFn, &'static [Type<'static>]),
+        /* constant location */ u32,
+    >,
     // SAFETY: Strings are not 'static allocated within self._arena
     fn_labels: HashMap<usize, &'static str>,
     // SAFETY: Strings are not 'static allocated within self._arena
@@ -1404,18 +1416,21 @@ impl Instructions {
         let name = unsafe {
             std::mem::transmute::<&NTStr, &'static NTStr>(self._arena.copy_str_into_nt(info.name))
         };
-        *self.game_fn_locations.entry(info.ptr).or_insert_with(|| {
-            let ret_val = self.constants.len();
-            self.constants.push(ConstantData {
-                host_fn_data: HostFnData { name, ..info },
-            });
-            assert!(
-                ret_val < u32::MAX as usize,
-                "internal error: script has more than {} constants",
-                u32::MAX
-            );
-            ret_val as u32
-        })
+        *self
+            .game_fn_locations
+            .entry((info.ptr, info.generics))
+            .or_insert_with(|| {
+                let ret_val = self.constants.len();
+                self.constants.push(ConstantData {
+                    host_fn_data: HostFnData { name, ..info },
+                });
+                assert!(
+                    ret_val < u32::MAX as usize,
+                    "internal error: script has more than {} constants",
+                    u32::MAX
+                );
+                ret_val as u32
+            })
     }
 
     fn get_loc(&self) -> usize {
