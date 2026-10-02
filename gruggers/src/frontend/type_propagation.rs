@@ -1297,6 +1297,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         full_path.push(resource_str.as_str());
         // An optional resource is allowed to not exist yet: the host function accepts a path it will
         // create later, like a screenshot reference on its first run.
+		//
         // we can't do `Ok(true) == std::fs::exists(&full_path)` because std::io::Error is not PartialEq
         if !optional && !std::fs::exists(&full_path).is_ok_and(std::convert::identity) {
             Err(self.new_error(span, format_args!("resource '{}' does not exist", value)))

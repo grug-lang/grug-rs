@@ -98,12 +98,10 @@ impl<'a> Type<'a> {
                 Id {
                     name: name_1,
                     generics: generics_1,
-                    ..
                 },
                 Id {
                     name: name_2,
                     generics: generics_2,
-                    ..
                 },
             ) => {
                 name_1 == name_2
@@ -115,13 +113,13 @@ impl<'a> Type<'a> {
             (
                 Resource {
                     extension: extension_1,
-                    ..
+					optional: optional_1,
                 },
                 Resource {
                     extension: extension_2,
-                    ..
+					optional: optional_2,
                 },
-            ) => extension_1 == extension_2,
+            ) => extension_1 == extension_2 && optional_1 == optional_2,
             (Resource { .. }, _) => false,
             (_, Resource { .. }) => false,
             (Entity { entity_type: ty_1 }, Entity { entity_type: ty_2 }) => ty_1 == ty_2,
