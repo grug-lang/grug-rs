@@ -85,7 +85,7 @@ enum TokenKind {
 
 impl<'a> Arbitrary<'a> for TokenKind {
 	fn arbitrary(u: &mut Unstructured) -> arbitrary::Result<Self> {
-		if u.len() == 0 {
+		if u.is_empty() {
 			return Err(Error::NotEnoughData)
 		}
 		Ok(*u.choose(&[
@@ -239,7 +239,7 @@ fuzz_target!(
 	|data: TokenizedString| -> Corpus {
 		match std::panic::catch_unwind(|| {
 			STATE.with(|state: &LazyCell<GrugState>| {
-				let result = state.compile_grug_file_from_str("fuzz/fuzz_targets/test/test-A.grug", &data.str);
+				let result = state.compile_grug_file_from_str("fuzz/fuzz_targets/test/test-A.grug", data.str);
 				if let Err(err) = result {
 					if err.inner().error_kind.matches(&ErrorKind::TOKENIZER_ERROR) {
 						Corpus::Reject

@@ -33,21 +33,21 @@ impl Instruction for Mov {
 				imm.encode_rex(Rex::R).insert_into(code);
 				let reg = imm.encode_reg();
 				match imm {
-					ImmReg::Imm8{dst, data} => {
+					ImmReg::Imm8{dst: _, data} => {
 						let opcode = MOV_IMM_TO_REG_VQP | reg;
 						code.insert_code(&[opcode, *data as u8]);
 					}
-					ImmReg::Imm16{dst, data} => {
+					ImmReg::Imm16{dst: _, data} => {
 						let opcode = MOV_IMM_TO_REG_VQP | reg | 0x08;
 						code.insert_code(&[Prefix::OPERAND_SIZE, opcode]);
-						code.insert_code(&(*data as i16).to_ne_bytes());
+						code.insert_code(&(*data).to_ne_bytes());
 					}
-					ImmReg::Imm32{dst, data} => {
+					ImmReg::Imm32{dst: _, data} => {
 						let opcode = MOV_IMM_TO_REG_VQP | reg | 0x08;
 						code.insert_code(&[opcode]);
 						code.insert_code(&data.to_ne_bytes());
 					}
-					ImmReg::Imm32s{dst, data} => {
+					ImmReg::Imm32s{dst: _, data} => {
 						let opcode = MOV_IMM_TO_REG_VDS | OpField::W;
 						code.insert_code(&[opcode, 0b11000000 | reg]);
 						code.insert_code(&data.to_ne_bytes());
@@ -422,6 +422,7 @@ impl Memory {
 
 					// displacement only can only be done with 
 					// NODISP, SIB, IDX = rsp, base = rbp with 32 bit displacement
+					#[expect(clippy::collapsible_else_if)]
 					if base == Base64::NoBase {
 						code.insert_code(&[
 							MOD_RM_NODISP | dst << 3 | rsp, 
@@ -779,10 +780,10 @@ mod register {
 
 	impl Reg8 {
 		pub fn always_requires_rex(self) -> bool {
-			match self {
-				Self::Spl | Self::Bpl | Self::Sil | Self::Dil => true,
-				_ => false,
-			}
+			matches!(
+				self,
+				Self::Spl | Self::Bpl | Self::Sil | Self::Dil,
+			)
 		}
 	}
 

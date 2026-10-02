@@ -49,6 +49,10 @@ impl Stack {
 	}
 }
 
+impl Default for Stack {
+	fn default() -> Self {Self::new()}
+}
+
 impl Drop for Stack {
 	fn drop(&mut self) {
 		unsafe{page_free(self.memory, self.normal_size + self.guard_size, Disposition::Release).unwrap()};

@@ -31,6 +31,9 @@ impl Code {
 		}
 	}
 
+	/// # Safety
+	///
+	/// There must be a valid function pointer of the output type at `offset`
 	pub unsafe fn get_fn_ptr_at<T: Copy>(&mut self, offset: usize) -> T {
 		*unsafe {std::mem::transmute::<&NonNull<u8>, &T>(&self.memory.add(self.data_pages * page_size() + offset))}
 	}
@@ -38,7 +41,7 @@ impl Code {
 	pub fn push_ins<Ins: Instruction>(&mut self, ins: Ins) -> usize {
 		let start = self.code_current;
 		ins.encode(self);
-		return self.code_current - start;
+		self.code_current - start
 	}
 
 	pub fn new_alloc(data_pages: usize, code_pages: usize) -> NonNull<u8> {
@@ -49,7 +52,7 @@ impl Code {
 		new_memory
 	}
 
-	pub unsafe fn copy_data_to(&self, new_memory: NonNull<u8>, new_data_pages: usize, new_code_pages: usize) {
+	unsafe fn copy_data_to(&self, new_memory: NonNull<u8>, new_data_pages: usize, new_code_pages: usize) {
 		let page_size = page_size();
 		debug_assert!(self.data_pages * page_size >= self.data_current);
 		let start_offset = self.data_pages * page_size - self.data_current;
@@ -63,7 +66,7 @@ impl Code {
 		unsafe{new_memory.add(new_start_offset).copy_from_nonoverlapping(self.memory.add(start_offset), len)};
 	}
 
-	pub unsafe fn dealloc(old_memory: NonNull<u8>, data_pages: usize, code_pages: usize) {
+	unsafe fn dealloc(old_memory: NonNull<u8>, data_pages: usize, code_pages: usize) {
 		if data_pages + code_pages != 0 {
 			unsafe{page_free(old_memory, data_pages + code_pages, Disposition::Release).unwrap()};
 		}
@@ -121,7 +124,7 @@ impl Code {
 			.copy_from_nonoverlapping(data.as_ptr(), data.len())
 		};
 		self.data_current = aligned_offset;
-		return -(aligned_offset as isize);
+		-(aligned_offset as isize)
 	}
 
 	pub fn insert_code(&mut self, data: &[u8]) {
@@ -138,6 +141,8 @@ impl Code {
 		self.code_current += data.len();
 	}
 }
+
+impl Default for Code {fn default() -> Self {Self::new()}}
 
 #[cfg(test)]
 mod test {

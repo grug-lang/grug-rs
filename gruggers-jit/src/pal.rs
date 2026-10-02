@@ -38,7 +38,7 @@ impl std::ops::BitAnd for Protection {
 
 impl std::ops::BitAndAssign for Protection {
 	fn bitand_assign(&mut self, other: Self) {
-		*self = *self | other;
+		self.0 &= other.0;
 	}
 }
 
@@ -106,6 +106,9 @@ pub mod inner {
 	pub fn page_size() -> usize {
 		*PAGE_SIZE as usize
 	}
+
+	/// # Safety
+	/// idk yet
 	pub unsafe fn page_alloc(base_addr: Option<NonNull<()>>, size: usize, disp: Disposition, prot: Protection) -> Result<NonNull<[u8]>, Error> {
 		let disp = disp_to_ulong(disp);
 		let prot = prot_to_ulong(prot)?;
@@ -116,21 +119,27 @@ pub mod inner {
 			prot,
 		).map_err(NTSTATUS::to_str)
 	}
+	/// # Safety
+	/// idk yet
 	pub unsafe fn page_protect(ptr: NonNull<u8>, size: usize, new_prot: Protection) -> Result<Protection, Error> {
 		let new_prot = prot_to_ulong(new_prot)?;
 		unsafe {virtual_protect(
 			ptr,
 			size,
 			new_prot,
-		)}.map_err(NTSTATUS::to_str).map(|prot| ulong_to_prot(prot)).flatten()
+		)}.map_err(NTSTATUS::to_str).and_then(|prot| ulong_to_prot(prot))
 	}
 	
+	/// # Safety
+	/// idk yet
 	pub unsafe fn page_free(ptr: NonNull<u8>, size: usize, disp: Disposition) -> Result<(), Error> {
 		let disp = disp_to_ulong(disp);
 		unsafe{virtual_free(ptr, size, disp).map_err(NTSTATUS::to_str)}
 	}
 
 	mod inner {
+		#![expect(clippy::module_inception)]
+		#![expect(clippy::upper_case_acronyms)]
 		use std::ffi::{c_int, c_void};
 
 		pub type HANDLE = *mut c_void;
@@ -340,7 +349,7 @@ pub mod inner {
 		use std::ptr::NonNull;
 
 		pub static PAGE_SIZE: std::sync::LazyLock<u32> =
-			std::sync::LazyLock::new(|| page_size());
+			std::sync::LazyLock::new(page_size);
 
 		#[link(name = "ntdll", kind="dylib")]
 		unsafe extern "system" {
@@ -368,6 +377,7 @@ pub mod inner {
 		}
 
 		pub fn page_size() -> u32 {
+			#![expect(clippy::upper_case_acronyms)]
 			#[repr(C)]
 			struct DUMMYSTRUCTNAME {
 				ProcessorArchitecture: WORD,
