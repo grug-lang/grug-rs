@@ -1258,8 +1258,10 @@ struct Instructions {
     >,
     constants: Vec<ConstantData<'static>>,
     helper_fn_locations: HashMap<&'static str, /* constant location */ u32>,
-    game_fn_locations:
-        HashMap</* ErasedHostFn as usize */ ErasedHostFn, /* constant location */ u32>,
+    game_fn_locations: HashMap<
+        (/* HostFn as usize */ HostFn, &'static [Type<'static>]),
+        /* constant location */ u32,
+    >,
     // SAFETY: Strings are not 'static allocated within self._arena
     fn_labels: HashMap<usize, &'static str>,
     // SAFETY: Strings are not 'static allocated within self._arena
@@ -1405,18 +1407,21 @@ impl Instructions {
         let name = unsafe {
             std::mem::transmute::<&NTStr, &'static NTStr>(self._arena.copy_str_into_nt(info.name))
         };
-        *self.game_fn_locations.entry(info.ptr).or_insert_with(|| {
-            let ret_val = self.constants.len();
-            self.constants.push(ConstantData {
-                host_fn_data: HostFnData { name, ..info },
-            });
-            assert!(
-                ret_val < u32::MAX as usize,
-                "internal error: script has more than {} constants",
-                u32::MAX
-            );
-            ret_val as u32
-        })
+        *self
+            .game_fn_locations
+            .entry((info.ptr, info.generics))
+            .or_insert_with(|| {
+                let ret_val = self.constants.len();
+                self.constants.push(ConstantData {
+                    host_fn_data: HostFnData { name, ..info },
+                });
+                assert!(
+                    ret_val < u32::MAX as usize,
+                    "internal error: script has more than {} constants",
+                    u32::MAX
+                );
+                ret_val as u32
+            })
     }
 
     fn get_loc(&self) -> usize {
