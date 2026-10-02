@@ -5,6 +5,7 @@ use crate::ast::{
     BinaryOperator, Expr, ExprData, HelperFunction, MemberVariable, OnFunction, Parameter,
     Statement, Type, UnaryOperator,
 };
+use crate::nt;
 use crate::ntstring::NTStr;
 
 use crate::error::{Error, ErrorKind, SourceSpan};

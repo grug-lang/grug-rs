@@ -1259,7 +1259,7 @@ struct Instructions {
     constants: Vec<ConstantData<'static>>,
     helper_fn_locations: HashMap<&'static str, /* constant location */ u32>,
     game_fn_locations: HashMap<
-        (/* HostFn as usize */ HostFn, &'static [Type<'static>]),
+        (/* HostFn as usize */ ErasedHostFn, &'static [Type<'static>]),
         /* constant location */ u32,
     >,
     // SAFETY: Strings are not 'static allocated within self._arena
