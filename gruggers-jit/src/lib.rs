@@ -1,3 +1,4 @@
+#![cfg(target_os="windows")]
 #![deny(warnings)]
 pub mod asm;
 pub mod stack;

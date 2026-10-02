@@ -49,9 +49,10 @@ pub enum Disposition {
 	Release,
 }
 
-pub use inner::*;
 #[cfg(target_os = "windows")]
-pub mod inner {
+pub use windows::*;
+#[cfg(target_os = "windows")]
+pub mod windows {
     #![allow(non_camel_case_types)]
     #![allow(non_snake_case)]
 	use super::*;
@@ -138,7 +139,6 @@ pub mod inner {
 	}
 
 	mod inner {
-		#![expect(clippy::module_inception)]
 		#![expect(clippy::upper_case_acronyms)]
 		use std::ffi::{c_int, c_void};
 
