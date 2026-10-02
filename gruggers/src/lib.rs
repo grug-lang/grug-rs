@@ -18,6 +18,7 @@ mod async_fs;
 mod cachemap;
 pub mod error;
 mod own_ptr;
+mod reentrant_lock;
 mod shared_vec;
 mod type_storage;
 mod watcher;

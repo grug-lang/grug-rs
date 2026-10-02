@@ -134,6 +134,7 @@ impl GrugState {
     /// compiled directly once, the file will be automatically hot reloaded by
     /// the state.
     pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<FileId, Error> {
+        let _guard = self.enter();
         let path = path.as_ref();
         let mut path_buf = self.mods_dir_path.clone();
         path_buf.push("/");
@@ -161,6 +162,7 @@ impl GrugState {
         path: impl AsRef<OsStr>,
         file_text: &str,
     ) -> Result<FileId, Error> {
+        let _guard = self.enter();
         use crate::async_fs::verify_file_data;
         let path = path.as_ref();
 
@@ -204,6 +206,7 @@ impl GrugState {
     /// Compile all the files within the mods directory. Uses asynchronous file
     /// system apis if available on the current platform
     pub fn compile_all_files(&self) -> Files {
+        let _guard = self.enter();
         // iterate over all files and get all valid paths
         let arena = self.arenas.borrow_mut().pop().unwrap_or_default();
 
@@ -381,6 +384,7 @@ impl GrugState {
     /// script: those strings are only used to validate that a resource
     /// exists at compile time, they no longer register a file watch.
     pub fn update_files(&self) -> (ResourcePaths, Files) {
+        let _guard = self.enter();
         let arena = self.arenas.borrow_mut().pop().unwrap_or_default();
         let mut file_paths = Vec::new_in(&arena);
         let mut updated_resources = std::vec::Vec::new();

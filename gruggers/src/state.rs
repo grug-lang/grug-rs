@@ -51,6 +51,7 @@ use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::nt;
 use crate::ntstring::NTStrPtr;
+use crate::reentrant_lock::{ReentrantGuard, ReentrantLock};
 use crate::type_storage::TypeStorage;
 use crate::types::{
     ErasedHostFn, ErasedRegFn, ExportFnId, FileId, GrugEntity, HostFn, INVALID_GRUG_FILE_ID, Id,
@@ -273,7 +274,21 @@ pub fn default_runtime_error_handler(
     std::process::exit(1);
 }
 
+/// The state of a single grug VM: its compiled files, its entities and its
+/// backend.
+///
+/// # Thread safety
+///
+/// Entries into the state are serialized by an internal reentrant lock, so
+/// the same state may be called from more than one thread, which is the
+/// shape the C API hands out. A host function may also call back into the
+/// state on the same thread. A host function must not block on another
+/// thread that calls into the same state, because that thread would wait for
+/// the blocked call to release the lock.
 pub struct GrugState {
+    /// Serializes the methods that mutate the state or run a script. See the
+    /// thread safety notes on [`GrugState`].
+    entry_lock: ReentrantLock,
     pub(crate) mod_api: Arc<ModApi>,
     pub(crate) mods_dir_path: OsString,
     pub(crate) type_storage: RefCell<TypeStorage>,
@@ -307,6 +322,7 @@ pub struct GrugState {
 
 impl State for GrugState {
     fn handle_runtime_error(&self, error: &RuntimeError) {
+        let _guard = self.enter();
         self.is_errorring.set(true);
         self.runtime_error_handler.handle_error(error);
     }
@@ -411,6 +427,7 @@ impl GrugState {
             .collect::<Vec<_>>();
 
         Ok(Self {
+            entry_lock: ReentrantLock::new(),
             mod_api,
             mods_dir_path: mods_dir_path.into(),
             type_storage: RefCell::new(TypeStorage::new()),
@@ -430,7 +447,17 @@ impl GrugState {
         })
     }
 
+    /// Locks this state for the duration of the returned guard.
+    ///
+    /// The methods that mutate the state or run a script lock it themselves,
+    /// so the guard is only needed to make a sequence of calls atomic, or by
+    /// the C API, which keeps storage of its own in sync with the state.
+    pub(crate) fn enter(&self) -> ReentrantGuard<'_> {
+        self.entry_lock.lock()
+    }
+
     pub(crate) fn get_or_insert_script_id(&self, path: &Path) -> FileId {
+        let _guard = self.enter();
         let mut canonicalized = PathBuf::from(self.mods_dir_path.clone());
         canonicalized.push(path);
         let canonicalized = canonicalized
@@ -530,6 +557,7 @@ impl GrugState {
 
     // This should only happen during an error so its okay if its slow
     pub fn get_script_path_rel(&self, script_id: FileId) -> Option<&OsStr> {
+        let _guard = self.enter();
         let string = Ref::filter_map(self.path_to_script_ids.borrow(), |inner| {
             inner.values().find(|(_, v)| *v == script_id).map(|x| &*x.0)
         })
@@ -603,6 +631,7 @@ impl GrugState {
 
     /// Create a new entity from the input file id
     pub fn create_entity(&self, file_id: FileId) -> Option<GrugEntityHandle<'_>> {
+        let _guard = self.enter();
         let entity = self.entities
             .insert(unsafe { GrugEntity::new_uninit(self.get_next_entity_id(), file_id) });
         let entity = unsafe { GrugEntityHandle::new(entity) };
@@ -627,6 +656,7 @@ impl GrugState {
     /// otherwise. This is mostly meant as a safety check. User code must
     /// ensure entites are passed to the correct state
     pub fn destroy_entity<'a>(&'a self, entity: GrugEntityHandle<'a>) -> bool {
+        let _guard = self.enter();
         if self.entities.contains(entity.0) {
             // SAFETY: We take ownership of the entity so we cannot call this function on the same entity twice.
             // Also we make sure new entities and reloaded entities are always initialized
@@ -656,6 +686,7 @@ impl GrugState {
 
     /// Clear any currently active errors
     pub fn clear_error(&self) {
+        let _guard = self.enter();
         self.is_errorring.set(false);
     }
 
@@ -665,6 +696,7 @@ impl GrugState {
     }
 
     pub fn set_host_fn_error(&self, message: &str) {
+        let _guard = self.enter();
         self.backend.raise_runtime_error(self, message);
     }
 }
@@ -813,6 +845,7 @@ impl GrugState {
         fn_id: ExportFnId,
         values: *const Value,
     ) -> bool {
+        let _guard = self.enter();
         unsafe {
             self.backend
                 .call_on_function_raw(self, entity, self.get_export_fn_index(fn_id), values)
@@ -821,6 +854,7 @@ impl GrugState {
 
     #[must_use]
     pub fn call_export_fn(&self, entity: &GrugEntity, fn_id: ExportFnId, values: &[Value]) -> bool {
+        let _guard = self.enter();
         self.backend
             .call_on_function(self, entity, self.get_export_fn_index(fn_id), values)
     }
@@ -1066,3 +1100,109 @@ mod files {
     }
 }
 pub use files::*;
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use crate::backend::BytecodeBackend;
+
+    pub(crate) const MOD_API: &str = r#"{
+        "classes": {},
+        "entities": {
+            "Test": {
+                "description": "a test entity",
+                "export_functions": [
+                    { "name": "run", "description": "runs" }
+                ]
+            }
+        },
+        "host_functions": {}
+    }"#;
+
+    pub(crate) const SCRIPT: &str = r#"export run() {
+    x: number = 0
+    acc: number = 0
+    while x < 4000 {
+        acc = acc + x
+        x = x + 1
+    }
+}
+"#;
+
+    pub(crate) fn write_test_mods(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("gruggers-tests-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("race").join("code")).unwrap();
+        std::fs::write(dir.join("mod_api.json"), MOD_API).unwrap();
+        std::fs::write(dir.join("race").join("code").join("race-Test.grug"), SCRIPT).unwrap();
+        dir
+    }
+
+    pub(crate) fn build_test_state(dir: &Path) -> GrugState {
+        let mod_api_path = dir.join("mod_api.json");
+        GrugInitSettings::new()
+            .set_mod_api_path(&mod_api_path)
+            .set_mods_dir(dir)
+            .set_backend(BytecodeBackend::new())
+            .set_runtime_error_handler(|_| {})
+            .set_poll_interval(Duration::from_secs(3600))
+            .build_state()
+            .expect("test state builds")
+    }
+}
+
+#[cfg(test)]
+mod concurrent_tests {
+    use super::test_support::{build_test_state, write_test_mods};
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    const THREADS: usize = 4;
+    const CALLS_PER_THREAD: usize = 100;
+
+    /// The regression test for #23. Export calls used to borrow the backend's
+    /// `RefCell`s from two threads at once, which gave `RefCell already
+    /// borrowed` or corrupted the heap when the calls overlapped. The state
+    /// serializes entries now, so every call has to finish.
+    #[test]
+    fn two_threads_can_call_one_export_function() {
+        let dir = write_test_mods("concurrent-export");
+        let mut state = build_test_state(&dir);
+        // SAFETY: the script below never calls a host function, so the dummies
+        // are never called.
+        unsafe { state.register_dummies() };
+        let file_id = state
+            .compile_grug_file("race/code/race-Test.grug")
+            .expect("script compiles");
+        let handle = state.create_entity(file_id).expect("entity is created");
+        let entity = &*handle;
+        let fn_id = state
+            .get_export_fn_id("Test", "run")
+            .expect("export fn exists");
+
+        // The state is `!Sync`, and the C API is the reason: it hands the same
+        // pointer to every thread. Raw pointers reproduce that sharing here
+        // without the C API's plumbing.
+        let state_ptr = &state as *const GrugState as usize;
+        let entity_ptr = entity as *const GrugEntity as usize;
+        let calls = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                scope.spawn(|| {
+                    // SAFETY: the state serializes the calls, and the entity
+                    // outlives this scope by construction.
+                    let state = state_ptr as *const GrugState;
+                    let entity = entity_ptr as *const GrugEntity;
+                    for _ in 0..CALLS_PER_THREAD {
+                        assert!(unsafe { (*state).call_export_fn(&*entity, fn_id, &[]) });
+                        calls.fetch_add(1, Ordering::Relaxed);
+                    }
+                });
+            }
+        });
+
+        assert_eq!(calls.load(Ordering::Relaxed), THREADS * CALLS_PER_THREAD);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
