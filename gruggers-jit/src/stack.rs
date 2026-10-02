@@ -62,7 +62,6 @@ impl Drop for Stack {
 #[cfg(test)]
 mod test {
 	use super::*;
-	use crate::pal::*;
 	#[test]
 	fn basic_test() {
 		let mut stack = Stack::new();
