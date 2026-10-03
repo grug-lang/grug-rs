@@ -34,6 +34,9 @@ jobs:
       - name: Run unit tests
         run: cargo test --verbose --lib --bins
 
+      - name: Run reentrant runtime error test
+        run: cargo test --verbose --test reentrant_runtime_error
+
       - name: Run doc tests
         run: cargo test --verbose --doc
 

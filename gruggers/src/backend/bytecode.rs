@@ -1,3 +1,5 @@
+use allocator_api2::vec::Vec as ArenaVec;
+
 use crate::arena::Arena;
 use crate::ast::{
     BinaryOperator, Expr, ExprData, GrugAst, HelperFunction, OnFunction, Statement, Type,
@@ -619,7 +621,13 @@ pub struct BytecodeBackend {
     // Safety: The strings in the stack frames are stored within self.files, so
     // their actual lifetime is not `'static`
     call_stack: SharedVec<StackFrame<'static>>,
-    error_arena: RefCell<Arena>,
+    /// The arenas the active runtime errors are built in. Each raise takes one out and puts it
+    /// back after the handler has run, so a handler that re-enters the VM and raises a second
+    /// error gets its own arena instead of borrowing the one the outer error lives in.
+    error_arenas: RefCell<Vec<Arena>>,
+    /// Set while an invocation has reported an error it still has to unwind out of. A nested
+    /// invocation, such as a host function or a runtime error handler calling back in, saves and
+    /// restores it across `call_on_function`, so a nested success cannot cancel the outer unwind.
     is_errorring: Cell<bool>,
 }
 
@@ -629,7 +637,7 @@ impl BytecodeBackend {
             files: RefCell::new(Vec::new()),
             stacks: RefCell::new(Vec::new()),
             call_stack: SharedVec::new(),
-            error_arena: RefCell::new(Arena::new()),
+            error_arenas: RefCell::new(Vec::new()),
             is_errorring: Cell::new(false),
         }
     }
@@ -902,8 +910,15 @@ impl BytecodeBackend {
         message: &str,
     ) {
         self.is_errorring.set(true);
-        let arena = &mut *self.error_arena.borrow_mut();
+
+        // A runtime error handler is host code, and a host may call back into the VM from it, so
+        // nothing the error borrows may stay borrowed across the handler. Take an arena out of the
+        // pool rather than borrowing the only one, and copy the frames out of the shared call
+        // stack, which a nested call pushes and pops. A nested raise then works on its own arena
+        // and leaves this error intact until its handler returns.
+        let mut arena = self.error_arenas.borrow_mut().pop().unwrap_or_default();
         arena.clear();
+
         let call_stack = unsafe { self.call_stack.as_slice_unsafe() };
         let last_frame = *call_stack.last().expect("call_stack cannot be empty");
         let fn_name = call_stack
@@ -921,18 +936,24 @@ impl BytecodeBackend {
             .next()
             .expect("must have at least one grug stack frame");
 
+        let mut frames = ArenaVec::new_in(&arena);
+        frames.extend_from_slice(&call_stack[..call_stack.len() - 1]);
+        let frames = frames.leak();
+
         let script_path = script_path.to_osstr();
         let error = RuntimeError::new_error_in(
             kind,
-            &call_stack[..call_stack.len() - 1],
+            frames,
             fn_name,
             script_path,
             span,
             last_frame.file_text.to_str(),
             message,
-            arena,
+            &arena,
         );
         state.handle_runtime_error(&error);
+
+        self.error_arenas.borrow_mut().push(arena);
     }
 }
 
@@ -1037,7 +1058,9 @@ impl Backend for BytecodeBackend {
         on_fn_index: usize,
         values: *const Value,
     ) -> bool {
-        self.is_errorring.set(false);
+        // A runtime error handler may re-enter the VM while the outer invocation is still
+        // erroring, so keep the outer flag across this nested run instead of clearing it for good.
+        let outer_errorring = self.is_errorring.get();
         let files = self.files.borrow();
         let file = files
             .get(entity.file_id.0 as usize)
@@ -1072,6 +1095,7 @@ impl Backend for BytecodeBackend {
             span: SourceSpan { line: 0, offset: 0 },
             file_text: file.instructions.file_text.as_ntstrptr(),
         });
+        self.is_errorring.set(false);
         let ret_val = unsafe {
             self.run(
                 &mut stack,
@@ -1083,6 +1107,10 @@ impl Backend for BytecodeBackend {
             )
         }
         .is_some();
+        // A nested invocation must not swallow this invocation's pending error, and an error the
+        // nested invocation raised must not be swallowed either.
+        self.is_errorring
+            .set(outer_errorring || self.is_errorring.get());
         // Make sure that any stack frames pushed by subsequent code are
         // popped. This way code inside the run function doesn't have to worry
         // about popping recursive function calls
@@ -1101,7 +1129,9 @@ impl Backend for BytecodeBackend {
         on_fn_index: usize,
         values: &[Value],
     ) -> bool {
-        self.is_errorring.set(false);
+        // A runtime error handler may re-enter the VM while the outer invocation is still
+        // erroring, so keep the outer flag across this nested run instead of clearing it for good.
+        let outer_errorring = self.is_errorring.get();
         let files = self.files.borrow();
         let file = files
             .get(entity.file_id.0 as usize)
@@ -1141,6 +1171,7 @@ impl Backend for BytecodeBackend {
             file_text: file.instructions.file_text.as_ntstrptr(),
         });
 
+        self.is_errorring.set(false);
         let ret_val = unsafe {
             self.run(
                 &mut stack,
@@ -1152,6 +1183,10 @@ impl Backend for BytecodeBackend {
             )
         }
         .is_some();
+        // A nested invocation must not swallow this invocation's pending error, and an error the
+        // nested invocation raised must not be swallowed either.
+        self.is_errorring
+            .set(outer_errorring || self.is_errorring.get());
 
         // Make sure that any stack frames pushed by subsequent code are
         // popped. This way code inside the run function doesn't have to worry
