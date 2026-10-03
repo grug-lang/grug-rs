@@ -1,3 +1,5 @@
+use allocator_api2::vec::Vec as ArenaVec;
+
 use crate::arena::Arena;
 use crate::ast::{
     BinaryOperator, Expr, ExprData, GrugAst, HelperFunction, OnFunction, Statement, Type,
@@ -619,7 +621,10 @@ pub struct BytecodeBackend {
     // Safety: The strings in the stack frames are stored within self.files, so
     // their actual lifetime is not `'static`
     call_stack: SharedVec<StackFrame<'static>>,
-    error_arena: RefCell<Arena>,
+    /// The arenas the active runtime errors are built in. Each raise takes one out and puts it
+    /// back after the handler has run, so a handler that re-enters the VM and raises a second
+    /// error gets its own arena instead of borrowing the one the outer error lives in.
+    error_arenas: RefCell<Vec<Arena>>,
     is_errorring: Cell<bool>,
 }
 
@@ -629,7 +634,7 @@ impl BytecodeBackend {
             files: RefCell::new(Vec::new()),
             stacks: RefCell::new(Vec::new()),
             call_stack: SharedVec::new(),
-            error_arena: RefCell::new(Arena::new()),
+            error_arenas: RefCell::new(Vec::new()),
             is_errorring: Cell::new(false),
         }
     }
@@ -902,8 +907,15 @@ impl BytecodeBackend {
         message: &str,
     ) {
         self.is_errorring.set(true);
-        let arena = &mut *self.error_arena.borrow_mut();
+
+        // A runtime error handler is host code, and a host may call back into the VM from it, so
+        // nothing the error borrows may stay borrowed across the handler. Take an arena out of the
+        // pool rather than borrowing the only one, and copy the frames out of the shared call
+        // stack, which a nested call pushes and pops. A nested raise then works on its own arena
+        // and leaves this error intact until its handler returns.
+        let mut arena = self.error_arenas.borrow_mut().pop().unwrap_or_default();
         arena.clear();
+
         let call_stack = unsafe { self.call_stack.as_slice_unsafe() };
         let last_frame = *call_stack.last().expect("call_stack cannot be empty");
         let fn_name = call_stack
@@ -921,18 +933,24 @@ impl BytecodeBackend {
             .next()
             .expect("must have at least one grug stack frame");
 
+        let mut frames = ArenaVec::new_in(&arena);
+        frames.extend_from_slice(&call_stack[..call_stack.len() - 1]);
+        let frames = frames.leak();
+
         let script_path = script_path.to_osstr();
         let error = RuntimeError::new_error_in(
             kind,
-            &call_stack[..call_stack.len() - 1],
+            frames,
             fn_name,
             script_path,
             span,
             last_frame.file_text.to_str(),
             message,
-            arena,
+            &arena,
         );
         state.handle_runtime_error(&error);
+
+        self.error_arenas.borrow_mut().push(arena);
     }
 }
 
