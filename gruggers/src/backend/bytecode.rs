@@ -625,6 +625,9 @@ pub struct BytecodeBackend {
     /// back after the handler has run, so a handler that re-enters the VM and raises a second
     /// error gets its own arena instead of borrowing the one the outer error lives in.
     error_arenas: RefCell<Vec<Arena>>,
+    /// Set while an invocation has reported an error it still has to unwind out of. A nested
+    /// invocation, such as a host function or a runtime error handler calling back in, saves and
+    /// restores it across `call_on_function`, so a nested success cannot cancel the outer unwind.
     is_errorring: Cell<bool>,
 }
 
@@ -1055,7 +1058,9 @@ impl Backend for BytecodeBackend {
         on_fn_index: usize,
         values: *const Value,
     ) -> bool {
-        self.is_errorring.set(false);
+        // A runtime error handler may re-enter the VM while the outer invocation is still
+        // erroring, so keep the outer flag across this nested run instead of clearing it for good.
+        let outer_errorring = self.is_errorring.get();
         let files = self.files.borrow();
         let file = files
             .get(entity.file_id.0 as usize)
@@ -1090,6 +1095,7 @@ impl Backend for BytecodeBackend {
             span: SourceSpan { line: 0, offset: 0 },
             file_text: file.instructions.file_text.as_ntstrptr(),
         });
+        self.is_errorring.set(false);
         let ret_val = unsafe {
             self.run(
                 &mut stack,
@@ -1101,6 +1107,10 @@ impl Backend for BytecodeBackend {
             )
         }
         .is_some();
+        // A nested invocation must not swallow this invocation's pending error, and an error the
+        // nested invocation raised must not be swallowed either.
+        self.is_errorring
+            .set(outer_errorring || self.is_errorring.get());
         // Make sure that any stack frames pushed by subsequent code are
         // popped. This way code inside the run function doesn't have to worry
         // about popping recursive function calls
@@ -1119,7 +1129,9 @@ impl Backend for BytecodeBackend {
         on_fn_index: usize,
         values: &[Value],
     ) -> bool {
-        self.is_errorring.set(false);
+        // A runtime error handler may re-enter the VM while the outer invocation is still
+        // erroring, so keep the outer flag across this nested run instead of clearing it for good.
+        let outer_errorring = self.is_errorring.get();
         let files = self.files.borrow();
         let file = files
             .get(entity.file_id.0 as usize)
@@ -1159,6 +1171,7 @@ impl Backend for BytecodeBackend {
             file_text: file.instructions.file_text.as_ntstrptr(),
         });
 
+        self.is_errorring.set(false);
         let ret_val = unsafe {
             self.run(
                 &mut stack,
@@ -1170,6 +1183,10 @@ impl Backend for BytecodeBackend {
             )
         }
         .is_some();
+        // A nested invocation must not swallow this invocation's pending error, and an error the
+        // nested invocation raised must not be swallowed either.
+        self.is_errorring
+            .set(outer_errorring || self.is_errorring.get());
 
         // Make sure that any stack frames pushed by subsequent code are
         // popped. This way code inside the run function doesn't have to worry
