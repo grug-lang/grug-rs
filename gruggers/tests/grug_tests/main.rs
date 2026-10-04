@@ -473,6 +473,11 @@ mod game_fn_bindings {
             values: *const Value,
             generics: &[Type; 0],
         ) -> Value;
+        safe fn game_fn_has_optional_resource<'a>(
+            state: &'a GrugState,
+            values: *const Value,
+            generics: &[Type; 0],
+        ) -> Value;
         safe fn game_fn_has_entity<'a>(
             state: &'a GrugState,
             values: *const Value,
@@ -729,6 +734,7 @@ mod game_fn_bindings {
             state.register_host_fn("spawn", game_fn_spawn)?;
             state.register_host_fn("spawn_d", game_fn_spawn_d)?;
             state.register_host_fn("has_resource", game_fn_has_resource)?;
+            state.register_host_fn("has_optional_resource", game_fn_has_optional_resource)?;
             state.register_host_fn("has_entity", game_fn_has_entity)?;
             state.register_host_fn("has_string", game_fn_has_string)?;
             state.register_host_fn("get_opponent", game_fn_get_opponent)?;
