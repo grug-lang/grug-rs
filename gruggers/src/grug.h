@@ -375,10 +375,8 @@ void grug_deinit_entity(struct grug_state* gst, grug_entity_handle entity);
 // Destroy a grug state and free all its resources
 void grug_deinit(struct grug_state* gst);
 
-void grug_swap_backend_TODO(struct grug_state* gst, struct grug_backend backend);
-
 // The game may call this at any point, even within an on_fn. However, a backend is entirely free to ignore this call if it happens within an on fn, so beware.
-void grug_set_fast_mode_TODO(struct grug_state* gst, bool fast);
+void grug_set_unsafe_mode_TODO(struct grug_state* gst, bool unsafe);
 
 // returns false if on function could not be executed, if the id given isn't an entity, or if there was a runtime error
 // `args` can be NULL if there are no arguments
