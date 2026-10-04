@@ -1,3 +1,5 @@
+use allocator_api2::vec::Vec as ArenaVec;
+
 use crate::arena::Arena;
 use crate::ast::{
     BinaryOperator, Expr, ExprData, GrugAst, HelperFunction, OnFunction, Statement, Type,
@@ -619,7 +621,8 @@ pub struct BytecodeBackend {
     // Safety: The strings in the stack frames are stored within self.files, so
     // their actual lifetime is not `'static`
     call_stack: SharedVec<StackFrame<'static>>,
-    error_arena: RefCell<Arena>,
+    error_arenas: RefCell<Vec<Arena>>,
+    invocation_depth: Cell<usize>,
     is_errorring: Cell<bool>,
 }
 
@@ -629,7 +632,8 @@ impl BytecodeBackend {
             files: RefCell::new(Vec::new()),
             stacks: RefCell::new(Vec::new()),
             call_stack: SharedVec::new(),
-            error_arena: RefCell::new(Arena::new()),
+            error_arenas: RefCell::new(Vec::new()),
+            invocation_depth: Cell::new(0),
             is_errorring: Cell::new(false),
         }
     }
@@ -637,6 +641,31 @@ impl BytecodeBackend {
     /// # Safety:
     /// The instruction stream must be valid
     unsafe fn run<GrugState: State>(
+        &self,
+        stack: &mut Stack,
+        state: &GrugState,
+        globals: &[Cell<Value>],
+        instructions: &Instructions,
+        locals_size: u32,
+        start_loc: usize,
+    ) -> Option<Value> {
+        let nested = self.invocation_depth.get() > 0;
+        let outer_errorring = self.is_errorring.get();
+        self.invocation_depth.set(self.invocation_depth.get() + 1);
+        self.is_errorring.set(false);
+        let ret_val = unsafe {
+            self.run_inner(stack, state, globals, instructions, locals_size, start_loc)
+        };
+        self.invocation_depth.set(self.invocation_depth.get() - 1);
+        self.is_errorring.set(if nested {
+            outer_errorring || self.is_errorring.get()
+        } else {
+            false
+        });
+        ret_val
+    }
+
+    unsafe fn run_inner<GrugState: State>(
         &self,
         stack: &mut Stack,
         state: &GrugState,
@@ -902,8 +931,9 @@ impl BytecodeBackend {
         message: &str,
     ) {
         self.is_errorring.set(true);
-        let arena = &mut *self.error_arena.borrow_mut();
+        let mut arena = self.error_arenas.borrow_mut().pop().unwrap_or_default();
         arena.clear();
+
         let call_stack = unsafe { self.call_stack.as_slice_unsafe() };
         let last_frame = *call_stack.last().expect("call_stack cannot be empty");
         let fn_name = call_stack
@@ -921,18 +951,24 @@ impl BytecodeBackend {
             .next()
             .expect("must have at least one grug stack frame");
 
+        let mut frames = ArenaVec::with_capacity_in(call_stack.len() - 1, &arena);
+        frames.extend_from_slice(&call_stack[..call_stack.len() - 1]);
+        let frames = frames.leak();
+
         let script_path = script_path.to_osstr();
         let error = RuntimeError::new_error_in(
             kind,
-            &call_stack[..call_stack.len() - 1],
+            frames,
             fn_name,
             script_path,
             span,
             last_frame.file_text.to_str(),
             message,
-            arena,
+            &arena,
         );
         state.handle_runtime_error(&error);
+
+        self.error_arenas.borrow_mut().push(arena);
     }
 }
 
@@ -1037,7 +1073,6 @@ impl Backend for BytecodeBackend {
         on_fn_index: usize,
         values: *const Value,
     ) -> bool {
-        self.is_errorring.set(false);
         let files = self.files.borrow();
         let file = files
             .get(entity.file_id.0 as usize)
@@ -1101,7 +1136,6 @@ impl Backend for BytecodeBackend {
         on_fn_index: usize,
         values: &[Value],
     ) -> bool {
-        self.is_errorring.set(false);
         let files = self.files.borrow();
         let file = files
             .get(entity.file_id.0 as usize)
