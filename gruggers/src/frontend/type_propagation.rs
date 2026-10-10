@@ -28,12 +28,38 @@ pub(super) struct TypePropagator<'mod_api, 'arena: 'temp, 'temp> {
     local_fns: &'arena [(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>]))],
     export_fns: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
     global_variables: HashMap<&'arena str, Type<'arena>>,
-    local_variables: Vec<HashMap<&'arena str, Type<'arena>>>,
     num_while_loops_deep: usize,
     current_fn_name: Option<&'arena str>,
     arena: &'arena Arena,
     temp_arena: &'temp Arena,
     type_storage: &'temp mut TypeStorage,
+}
+
+struct LocalVariables<'a, 'this> {
+	current: HashMap<&'a str, Type<'a>>,
+	parent: Option<&'this Self>,
+}
+
+impl<'a, 'this> LocalVariables<'a, 'this> {
+	fn new(parent: Option<&'this Self>) -> Self {
+		Self{
+			current: HashMap::new(),
+			parent
+		}
+	}
+
+	fn get_local_variable_type(&self, var_name: &str) -> Option<Type<'a>> {
+		let mut current = self;
+		loop {
+			if let Some(var_ty) = current.current.get(var_name) {
+				return Some(*var_ty)
+			} else if let Some(parent) = &current.parent {
+				current = parent
+			} else {
+				return None
+			}
+		}
+	}
 }
 
 #[derive(Debug)]
@@ -85,7 +111,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             local_fns,
             export_fns,
             global_variables: HashMap::new(),
-            local_variables: Vec::new(),
             num_while_loops_deep: 0,
             current_fn_name: None,
             arena,
@@ -158,11 +183,11 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             _ => None,
         });
         for variable in variables {
-            type_propagator.verify_generics(variable.ty, variable.type_span)?;
+            type_propagator.verify_generics::<false>(variable.ty, variable.type_span)?;
             type_propagator.check_global_expr(&variable.assignment_expr, variable.name.to_str())?;
 
-            let result_ty = type_propagator
-                .fill_complete_expr(&mut variable.assignment_expr, Some(variable.ty))
+            type_propagator
+                .fill_global_variable(&mut variable.assignment_expr, variable.ty)
                 .map_err(|err| match err {
                     TypeInferenceError::Error(err) => err,
                     TypeInferenceError::Mismatch(mismatch) => type_propagator.new_error(
@@ -176,6 +201,9 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     ),
                 })?;
 
+			// TODO: check back up on this
+			//
+			// https://github.com/grug-lang/grug-tests/issues/180
             if let ExprData::Identifier(name) = &variable.assignment_expr.data
                 && name.to_str() == "me"
             {
@@ -186,7 +214,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             }
             type_propagator.add_global_variable(
                 variable.name.to_str(),
-                result_ty,
+                variable.ty,
                 variable.span,
             )?;
         }
@@ -211,7 +239,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             };
 
             // These should only be set inside type_propagator.fill_statements
-            debug_assert!(type_propagator.local_variables.is_empty());
             debug_assert!(type_propagator.num_while_loops_deep == 0);
             debug_assert!(type_propagator.current_fn_name.is_none());
 
@@ -254,7 +281,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 .iter()
                 .zip(current_on_fn.parameters.iter())
             {
-                type_propagator.verify_generics(arg.ty, arg.type_span)?;
+                type_propagator.verify_generics::<false>(arg.ty, arg.type_span)?;
                 if param.name != arg.name {
                     return Err(type_propagator.new_error(
                         arg.name_span,
@@ -273,16 +300,16 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					));
                 }
             }
-            type_propagator.push_scope();
+			let mut local_variables = LocalVariables::new(None);
             for param in current_on_fn.parameters {
                 type_propagator.add_local_variable(
+					&mut local_variables,
                     param.name.to_str(),
                     param.ty,
                     param.name_span,
                 )?;
             }
-            type_propagator.fill_statements(current_on_fn.body_statements, &Type::Void)?;
-            type_propagator.pop_scope();
+            type_propagator.fill_complete_function(&local_variables, current_on_fn.body_statements, Type::Void)?;
 
             debug_assert!(type_propagator.current_fn_name == Some(current_on_fn.name.to_str()));
             type_propagator.current_fn_name = None;
@@ -315,25 +342,26 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     parameters,
                     body_statements,
                     return_type,
-                    return_type_span: _,
+                    return_type_span,
                     span,
                 }) => {
-                    debug_assert!(type_propagator.local_variables.is_empty());
                     debug_assert!(type_propagator.num_while_loops_deep == 0);
                     debug_assert!(type_propagator.current_fn_name.is_none());
 
                     let name = name.to_str();
                     type_propagator.current_fn_name = Some(name);
-                    type_propagator.push_scope();
+					let mut local_variables = LocalVariables::new(None);
                     for param in *parameters {
-                        type_propagator.verify_generics(param.ty, param.type_span)?;
+                        type_propagator.verify_generics::<false>(param.ty, param.type_span)?;
                         type_propagator.add_local_variable(
+							&mut local_variables,
                             param.name.to_str(),
                             param.ty,
                             param.name_span,
                         )?;
                     }
-                    type_propagator.fill_statements(body_statements, return_type)?;
+					type_propagator.verify_generics::<false>(*return_type, *return_type_span)?;
+                    type_propagator.fill_complete_function(&local_variables, body_statements, *return_type)?;
 
                     if *return_type != Type::Void
                         && !matches!(body_statements.last(), Some(Statement::Return { .. }))
@@ -347,8 +375,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         ));
                     }
 
-                    type_propagator.pop_scope();
-
                     debug_assert!(type_propagator.current_fn_name == Some(name));
                     type_propagator.current_fn_name = None;
                 }
@@ -358,7 +384,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         Ok(ast)
     }
 
-    fn verify_generics(&self, ty: Type, err_span: SourceSpan) -> Result<(), Error> {
+    fn verify_generics<const ALLOW_EXISTENTIALS: bool>(&self, ty: Type, err_span: SourceSpan) -> Result<(), Error> {
         // Check the number of generic parameters
         if let Type::Id { name, generics } = ty {
             if let Some(class) = self.mod_api.classes().get(name.to_str()) {
@@ -374,7 +400,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     ));
                 }
                 for generic in generics {
-                    self.verify_generics(*generic, err_span)?;
+                    self.verify_generics::<ALLOW_EXISTENTIALS>(*generic, err_span)?;
                 }
                 Ok(())
             } else if !generics.is_empty() {
@@ -390,195 +416,18 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             } else {
                 Ok(())
             }
-        } else {
+        } else if !ALLOW_EXISTENTIALS && let Type::Existential { .. } = ty {
+			return Err(self.new_error(
+				err_span,
+				// TODO: Improve this error message to provide context 
+				// e.g. 'Global variables cannot use type inference'
+				format_args!(
+					"Type inference is not allowed in this position",
+				),
+			));
+		} else {
             Ok(())
         }
-    }
-
-    fn fill_statements(
-        &mut self,
-        statements: &mut [Statement<'arena>],
-        expected_return_type: &Type<'arena>,
-    ) -> Result<(), Error> {
-        self.push_scope();
-        for statement in statements {
-            match statement {
-                Statement::Variable {
-                    name,
-                    ty,
-                    type_span,
-                    assignment_expr,
-                    name_span,
-                } => {
-                    if let Some(ty) = ty {
-                        self.verify_generics(**ty, *type_span)?;
-                        self.fill_complete_expr(assignment_expr, Some(**ty))
-                            .map_err(|err| match err {
-                                TypeInferenceError::Error(err) => err,
-                                TypeInferenceError::Mismatch(mismatch) => self.new_error(
-                                    mismatch.span,
-                                    format_args!(
-                                        "Can't assign {} to '{}', which has type {}",
-                                        mismatch.diff.swapped(),
-                                        name,
-                                        mismatch.diff
-                                    ),
-                                ),
-                            })?;
-                        self.add_local_variable(name.to_str(), **ty, *name_span)?;
-                    } else {
-                        let ty =
-                            if let Some(ty) = self.get_global_variable_type(name.to_str()) {
-                                if matches!(ty, Type::Id { .. }) {
-                                    return Err(self.new_error(
-                                        assignment_expr.span,
-                                        format_args!("Global id variables can't be reassigned"),
-                                    ));
-                                }
-                                ty
-                            } else if let Some(ty) = self.get_local_variable_type(name.to_str()) {
-                                ty
-                            } else {
-                                return Err(self.new_error(
-								*name_span,
-								format_args!("Can't assign to the variable '{}', since it does not exist", name)
-							));
-                            };
-
-                        self.fill_complete_expr(assignment_expr, Some(ty)).map_err(
-                            |err| match err {
-                                TypeInferenceError::Error(err) => err,
-                                TypeInferenceError::Mismatch(mismatch) => self.new_error(
-                                    mismatch.span,
-                                    format_args!(
-                                        "Can't assign {} to '{}', which has type {}",
-                                        mismatch.diff.swapped(),
-                                        name,
-                                        mismatch.diff
-                                    ),
-                                ),
-                            },
-                        )?;
-                    }
-                }
-                Statement::Call(expr) => {
-                    self.fill_complete_expr(expr, None)
-                        .map_err(|err| match err {
-                            TypeInferenceError::Error(err) => err,
-                            TypeInferenceError::Mismatch(_) => unreachable!(),
-                        })?;
-                }
-                Statement::If {
-                    condition,
-                    is_chained,
-                    if_block,
-                    else_block,
-                } => {
-                    let mut condition = condition;
-                    let mut is_chained = is_chained;
-                    let mut if_block = if_block;
-                    let mut else_block = else_block;
-                    loop {
-                        self.fill_complete_expr(condition, Some(Type::Bool))
-                            .map_err(|err| match err {
-                                TypeInferenceError::Error(err) => err,
-                                TypeInferenceError::Mismatch(mismatch) => self.new_error(
-                                    mismatch.span,
-                                    format_args!(
-                                        "If condition must be bool but got '{}'",
-                                        mismatch.diff.swapped()
-                                    ),
-                                ),
-                            })?;
-                        self.fill_statements(if_block, expected_return_type)?;
-                        if !else_block.is_empty() {
-                            if *is_chained {
-                                debug_assert!(else_block.len() == 1);
-                                let [statement] = else_block else {
-                                    unreachable!()
-                                };
-                                (condition, is_chained, if_block, else_block) = match statement {
-                                    Statement::If {
-                                        condition,
-                                        is_chained,
-                                        if_block,
-                                        else_block,
-                                    } => (condition, is_chained, if_block, else_block),
-                                    _ => unreachable!(),
-                                };
-                                continue;
-                            } else {
-                                self.fill_statements(else_block, expected_return_type)?;
-                            }
-                        }
-                        break;
-                    }
-                    // TODO: Maybe this should be looked at again
-                    // [https://github.com/grug-lang/grug/issues/116]
-                }
-                Statement::While { condition, block } => {
-                    self.fill_complete_expr(condition, Some(Type::Bool))
-                        .map_err(|err| match err {
-                            TypeInferenceError::Error(err) => err,
-                            TypeInferenceError::Mismatch(mismatch) => self.new_error(
-                                mismatch.span,
-                                format_args!(
-                                    "While condition must be bool but got '{}'",
-                                    mismatch.diff.swapped()
-                                ),
-                            ),
-                        })?;
-                    self.num_while_loops_deep += 1;
-                    self.fill_statements(block, expected_return_type)?;
-                    self.num_while_loops_deep -= 1;
-                }
-                Statement::Return { return_span, expr } => {
-                    if let Some(expr) = expr {
-                        self.fill_complete_expr(expr, Some(*expected_return_type)).map_err(|err| match err {
-							TypeInferenceError::Error(err) => err,
-							TypeInferenceError::Mismatch(mismatch) if mismatch.diff.print == Type::Void => self.new_error(
-								mismatch.span,
-								format_args!("Function '{}' wasn't supposed to return any value but it returned {}", self.current_fn_name.unwrap(), mismatch.diff.swapped())
-							),
-							TypeInferenceError::Mismatch(mismatch) => self.new_error(
-								mismatch.span,
-								format_args!("Function '{}' is supposed to return {}, not {}", self.current_fn_name.unwrap(), mismatch.diff, mismatch.diff.swapped())
-							),
-						})?;
-                    } else if *expected_return_type != Type::Void {
-						return Err(self.new_error(
-							*return_span,
-							format_args!(
-								"Function '{}' is supposed to return a value of type {}",
-								self.current_fn_name.unwrap(),
-								expected_return_type
-							),
-						));
-					}
-                }
-                Statement::Break(span) => {
-                    if self.num_while_loops_deep == 0 {
-                        return Err(self.new_error(
-                            *span,
-                            format_args!(
-                                "There is a break statement that isn't inside of a while loop"
-                            ),
-                        ));
-                    }
-                }
-                Statement::Continue(span) if self.num_while_loops_deep == 0 => {
-                    return Err(self.new_error(
-                        *span,
-                        format_args!(
-                            "There is a continue statement that isn't inside of a while loop"
-                        ),
-                    ));
-                }
-                _ => (),
-            }
-        }
-        self.pop_scope();
-        Ok(())
     }
 
     // Check that the global variable's assigned value doesn't contain a call to a helper function nor identifier
@@ -669,29 +518,34 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         }
     }
 
-    /// Type inference in grug is limited to host function calls,
-    /// Variables do not have type inference (yet).
+    /// Type inference in grug is limited to variables and expressions within
+	/// a single function
+    /// Function Parameters, return types, and global variables do not allow
+	/// type inference
     ///
-    /// This means that each complete expression can be type checked
+    /// This means that each complete function can be type checked
     /// independently (but in order).
     ///
-    /// This function creates a typing context for such an expression and
-    /// typechecks it.
+    /// This function creates a typing context for a function typechecks it.
     ///
     /// The basic flow of this function is as follows:
     ///
     /// 1. Create a new typing context,
-    /// 2. Walk the expression tree once
+    /// 2. Walk the statement tree once
     ///     - For each call to a generic host function, create new existential
     ///       types for the generics used by that host function.
+	///     - For each local variable declaration, create new existentials for
+	///       inferred types within it
     ///     - Emit constraints for the expressions.
+	///         - For local variables, add a constraint between the type of
+	///           the expression and the type of the variable
     ///         - For function calls, add a constraint between the expected
     ///           type of the parameter (which may or may not be generic) and the
     ///           actual type of the expression (which may or may not be generic).
     ///     - For each constraint check if it is consistent with the preexisting constraints.
     ///         - Return an error if not.
     /// 3. Recursively substitute all existentials with their actual types in the type context.
-    /// 4. Walk the expression tree a second time in the exact same order.
+    /// 4. Walk the statement tree a second time in the exact same order.
     ///     - Create the new existentials again, but this time, substitute the
     ///       calculated types from the previous steps as soon as the
     ///       existentials are created.
@@ -699,13 +553,80 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     /// see
     /// (this)[https://smallcultfollowing.com/babysteps/blog/2017/03/25/unification-in-chalk-part-1/]
     /// blog post for an explanation of how constraints work
-    fn fill_complete_expr(
+	fn fill_complete_function(
+        &mut self,
+		local_variables: &LocalVariables<'arena, '_>,
+        statements: &mut [Statement<'arena>],
+        expected_return_type: Type<'arena>,
+	) -> Result<(), Error> {
+        let mut ty_ctx = TyCtx::new(
+            self.current_fn_name.unwrap(),
+            self.file_path,
+            self.file_text,
+            self.temp_arena,
+        );
+        // First run through the function, We do not have a list of substitutions.
+        //
+        // the `fill_statements` function writes the result of the expression into
+        // the `result_type` field of all inner expressions The first time
+        // through, we give it the `'temp` arena.
+        //
+        // This would require that `'temp` outlives `'arena'` which would
+        // defeat the point of the temporary arena So we temporarily truncate
+        // the lifetime of the expression to be `'temp` just for this call
+        //
+        // This would be unsound if the final AST ever contains an allocation
+        // into the temporary arena but we ensure this never happens
+        //
+        // 1. If this entire function succeeds, the second call to fill_expr
+        //    will replace all pointers into the `'temp` arena with pointers
+        //    into the `'arena` arena, and callers never need to care about this.
+        //
+        // 2. If there is an error in any inner function, because we don't ever
+        //    catch an error in the type propagator, we will return the error
+        //    out of `fill_result_types`, and the caller will never see the
+        //    inconsistent state of the AST.
+        //    The destructor of the AST will see the pointers into the `'temp`
+        //    arena, but the arena will last at least as long as the call to
+        //    `fill_result_types`
+        self.fill_statements(
+            &mut ty_ctx,
+			local_variables,
+            None,
+            unsafe { std::mem::transmute::<&mut [Statement<'arena>], &mut [Statement<'temp>]>(statements) },
+			expected_return_type,
+            self.temp_arena,
+        )?;
+        let substitutions = ty_ctx.substitute(self.type_storage, self.arena)?;
+        // Clear the typing context for the second pass.
+        // This time, the type context is only used to keep track of the number
+        // of existentials that have been created
+
+        Ok(self.fill_statements(
+            &mut TyCtx::new(
+                self.current_fn_name.unwrap(),
+                self.file_path,
+                self.file_text,
+                self.arena,
+            ),
+			local_variables,
+            Some(substitutions),
+            statements,
+			expected_return_type,
+            self.arena,
+        )?)
+	}
+
+	/// Global variables do not have type inference, and they cannot be folded
+	/// into the `fill_complete_function`, function above, so we use the old
+	/// `fill_complete_expr` function instead
+    fn fill_global_variable(
         &mut self,
         expr: &mut Expr<'arena>,
-        expected_type: Option<Type<'arena>>,
-    ) -> Result<Type<'arena>, TypeInferenceError<'temp>> {
+        expected_type: Type<'arena>,
+    ) -> Result<(), TypeInferenceError<'temp>> {
         let mut ty_ctx = TyCtx::new(
-            self.current_fn_name.unwrap_or("member scope"),
+            "member scope",
             self.file_path,
             self.file_text,
             self.temp_arena,
@@ -736,43 +657,251 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         //    `fill_result_types`
         let expr_type = self.fill_expr(
             &mut ty_ctx,
+			&LocalVariables::new(None),
             None,
             unsafe { std::mem::transmute::<&mut Expr<'arena>, &mut Expr<'temp>>(expr) },
             self.temp_arena,
         )?;
-        if let Some(expected_type) = expected_type {
-            ty_ctx.add_constraint(expr.span, expected_type, expr_type)?;
-        }
+		ty_ctx.add_constraint(expr.span, expected_type, expr_type)?;
         let substitutions = ty_ctx.substitute(self.type_storage, self.arena)?;
-        let substitutions = self.type_storage.insert_type_list(substitutions);
         // Clear the typing context for the second pass.
         // This time, the type context is only used to keep track of the number
         // of existentials that have been created
 
-        Ok(self.fill_expr(
+        self.fill_expr(
             &mut TyCtx::new(
-                self.current_fn_name.unwrap_or("member scope"),
+				"member scope",
                 self.file_path,
                 self.file_text,
                 self.arena,
             ),
+			&LocalVariables::new(None),
             Some(substitutions),
             expr,
             self.arena,
-        )?)
+        )?;
+		Ok(())
+    }
+
+    fn fill_statements<'a>(
+        &mut self,
+        ty_ctx: &mut TyCtx<'a, 'arena>,
+		local_variables: &LocalVariables<'a, '_>,
+        substitutions: Option<&[Type<'static>]>,
+        statements: &mut [Statement<'a>],
+        expected_return_type: Type<'arena>,
+        arena: &'a Arena,
+    ) -> Result<(), Error> where 'arena: 'a {
+		let mut local_variables = LocalVariables::new(Some(local_variables));
+        for statement in statements {
+            match statement {
+                Statement::Variable {
+                    name,
+                    ty,
+                    type_span,
+                    assignment_expr,
+                    name_span,
+                } => {
+					let name = name.to_str();
+                    if let Some(ty) = ty {
+                        self.verify_generics::<true>(**ty, *type_span)?;
+						*ty = arena.alloc_into(
+							ty_ctx.instantiate_variable_existentials(name, *name_span, **ty, substitutions)
+						);
+						let result_ty = self.fill_expr(ty_ctx, &local_variables, substitutions, assignment_expr, arena)?;
+						ty_ctx
+							.add_constraint(assignment_expr.span, **ty, result_ty)
+							.map_err(|err| {
+								self.new_error(
+									err.span,
+									format_args!(
+                                        "Can't assign {} to '{}', which has type {}",
+										err.diff.swapped(),
+										name,
+										err.diff
+									),
+								)
+							})?;
+
+                        self.add_local_variable(&mut local_variables, name, **ty, *name_span)?;
+                    } else {
+                        let ty =
+                            if let Some(ty) = self.get_global_variable_type(name) {
+                                if matches!(ty, Type::Id { .. }) {
+                                    return Err(self.new_error(
+                                        assignment_expr.span,
+                                        format_args!("Global id variables can't be reassigned"),
+                                    ));
+                                }
+                                ty
+                            } else if let Some(ty) = local_variables.get_local_variable_type(name) {
+                                ty
+                            } else {
+                                return Err(self.new_error(
+									*name_span,
+									format_args!("Can't assign to the variable '{}', since it does not exist", name)
+								));
+                            };
+
+						let result_ty = self.fill_expr(ty_ctx, &local_variables, substitutions, assignment_expr, arena)?;
+						ty_ctx
+							.add_constraint(assignment_expr.span, ty, result_ty)
+							.map_err(|err| {
+								self.new_error(
+									err.span,
+									format_args!(
+                                        "Can't assign {} to '{}', which has type {}",
+										err.diff.swapped(),
+										name,
+										err.diff
+									),
+								)
+							})?;
+                    }
+                }
+                Statement::Call(expr) => {
+					self.fill_expr(ty_ctx, &local_variables, substitutions, expr, arena)?;
+                }
+                Statement::If {
+                    condition,
+                    is_chained,
+                    if_block,
+                    else_block,
+                } => {
+                    let mut condition = condition;
+                    let mut is_chained = is_chained;
+                    let mut if_block = if_block;
+                    let mut else_block = else_block;
+                    loop {
+						let ty = self.fill_expr(ty_ctx, &local_variables, substitutions, condition, arena)?;
+						ty_ctx
+							.add_constraint(condition.span, ty, Type::Bool)
+							.map_err(|err| {
+								self.new_error(
+									err.span,
+									format_args!(
+                                        "If condition must be bool but got '{}'",
+										err.diff,
+									),
+								)
+							})?;
+						
+                        self.fill_statements(ty_ctx, &local_variables, substitutions, if_block, expected_return_type, arena)?;
+                        if !else_block.is_empty() {
+                            if *is_chained {
+                                debug_assert!(else_block.len() == 1);
+                                let [statement] = else_block else {
+                                    unreachable!()
+                                };
+                                (condition, is_chained, if_block, else_block) = match statement {
+                                    Statement::If {
+                                        condition,
+                                        is_chained,
+                                        if_block,
+                                        else_block,
+                                    } => (condition, is_chained, if_block, else_block),
+                                    _ => unreachable!(),
+                                };
+                                continue;
+                            } else {
+								self.fill_statements(ty_ctx, &local_variables, substitutions, else_block, expected_return_type, arena)?;
+                            }
+                        }
+                        break;
+                    }
+                    // TODO: Maybe this should be looked at again
+                    // [https://github.com/grug-lang/grug/issues/116]
+                }
+                Statement::While { condition, block } => {
+					let ty = self.fill_expr(ty_ctx, &local_variables, substitutions, condition, arena)?;
+					ty_ctx
+						.add_constraint(condition.span, ty, Type::Bool)
+						.map_err(|err| {
+							self.new_error(
+								err.span,
+								format_args!(
+									"While condition must be bool but got '{}'",
+									err.diff,
+								),
+							)
+						})?;
+                    self.num_while_loops_deep += 1;
+					self.fill_statements(ty_ctx, &local_variables, substitutions, block, expected_return_type, arena)?;
+                    self.num_while_loops_deep -= 1;
+                }
+                Statement::Return { return_span, expr } => {
+                    if let Some(expr) = expr {
+						let ty = self.fill_expr(ty_ctx, &local_variables, substitutions, expr, arena)?;
+						ty_ctx
+							.add_constraint(expr.span, ty, expected_return_type)
+							.map_err(|err| {
+								match expected_return_type {
+									Type::Void => self.new_error(
+										err.span,
+										format_args!(
+											"Function '{}' wasn't supposed to return any value but it returned {}",
+											self.current_fn_name.unwrap(),
+											err.diff,
+										),
+									),
+									_ => self.new_error(
+										err.span,
+										format_args!(
+											"Function '{}' is supposed to return {}, not {}",
+											self.current_fn_name.unwrap(),
+											err.diff.swapped(),
+											err.diff
+										),
+									),
+								}
+							})?;
+                    } else if expected_return_type != Type::Void {
+						return Err(self.new_error(
+							*return_span,
+							format_args!(
+								"Function '{}' is supposed to return a value of type {}",
+								self.current_fn_name.unwrap(),
+								expected_return_type
+							),
+						));
+					}
+                }
+                Statement::Break(span) => {
+                    if self.num_while_loops_deep == 0 {
+                        return Err(self.new_error(
+                            *span,
+                            format_args!(
+                                "There is a break statement that isn't inside of a while loop"
+                            ),
+                        ));
+                    }
+                }
+                Statement::Continue(span) if self.num_while_loops_deep == 0 => {
+                    return Err(self.new_error(
+                        *span,
+                        format_args!(
+                            "There is a continue statement that isn't inside of a while loop"
+                        ),
+                    ));
+                }
+                _ => (),
+            }
+        }
+        Ok(())
     }
 
     fn fill_expr<'a>(
         &mut self,
         ty_ctx: &mut TyCtx<'a, 'arena>,
+		local_variables: &LocalVariables<'a, '_>, 
         substitutions: Option<&[Type<'static>]>,
-        assignment_expr: &mut Expr<'a>,
+        expr: &mut Expr<'a>,
         arena: &'a Arena,
     ) -> Result<Type<'a>, Error>
     where
         'arena: 'a,
     {
-        let result_ty = match &mut assignment_expr.data {
+        let result_ty = match &mut expr.data {
             ExprData::True => Type::Bool,
             ExprData::False => Type::Bool,
             ExprData::String { .. } => Type::String,
@@ -782,9 +911,9 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             },
             ExprData::Entity { .. } => Type::Entity { entity_type: None },
             ExprData::Identifier(name) => {
-                let Some(ty) = self.get_variable_type(name.to_str()) else {
+                let Some(ty) = self.get_variable_type(local_variables, name.to_str()) else {
                     return Err(self.new_error(
-                        assignment_expr.span,
+                        expr.span,
                         format_args!("The variable '{}' does not exist", name.to_str()),
                     ));
                 };
@@ -803,7 +932,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 						format_args!("Found '{0}' directly next to another '{0}', which can be simplified by just removing both of them", op)
 					));
                 }
-                let result_ty = self.fill_expr(ty_ctx, substitutions, expr, arena)?;
+                let result_ty = self.fill_expr(ty_ctx, local_variables, substitutions, expr, arena)?;
                 let expected = match op {
                     UnaryOperator::Not => Type::Bool,
                     UnaryOperator::Minus => Type::Number,
@@ -829,8 +958,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 op,
                 op_span,
             } => {
-                let result_0 = self.fill_expr(ty_ctx, substitutions, left, arena)?;
-                let result_1 = self.fill_expr(ty_ctx, substitutions, right, arena)?;
+                let result_0 = self.fill_expr(ty_ctx, local_variables, substitutions, left, arena)?;
+                let result_1 = self.fill_expr(ty_ctx, local_variables, substitutions, right, arena)?;
                 ty_ctx.add_constraint(*op_span, result_0, result_1).map_err(|err| self.new_error(
 					err.span,
 					format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, err.diff, err.diff.swapped())
@@ -919,7 +1048,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             ..
                         } = receiver
                             && let recv_name = recv_name.to_str()
-                            && let None = self.get_variable_type(recv_name)
+                            && let None = self.get_variable_type(local_variables, recv_name)
                             && let Some(class) = self.mod_api.classes().get(recv_name)
                         {
                             // Only remove the reciever on the second time through
@@ -950,7 +1079,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             host_fn
                         } else {
                             let receiver_type =
-                                self.fill_expr(ty_ctx, substitutions, receiver, arena)?;
+                                self.fill_expr(ty_ctx, local_variables, substitutions, receiver, arena)?;
                             // We want to at least know the first level of the type is known
                             let actual_receiver_ty =
                                 if let Some(ty) = ty_ctx.get_current_type(receiver_type) {
@@ -962,7 +1091,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                                     ));
                                 };
 
-                            let receiver_name = match receiver_type {
+                            let receiver_name = match actual_receiver_ty {
                                 Type::Id { name, .. } => name.to_str(),
                                 ty => {
                                     return Err(self.new_error(
@@ -1010,6 +1139,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 						self.fill_arguments(
 							name,
 							ty_ctx,
+							local_variables,
 							substitutions,
 							*name_span,
 							sig_arguments,
@@ -1049,7 +1179,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         // for the second time through, replace the existentials as they are created, and also verify traits
                         let mut generics = Vec::with_capacity_in(host_fn.generics.len(), arena);
                         for generic in host_fn.generics {
-                            let idx = ty_ctx.create_existential(name, *name_span);
+                            let idx = ty_ctx.create_existential(name, *name_span, ExistentialKind::Function);
                             let actual_ty = substitutions[idx];
                             ty_ctx.verify_traits(actual_ty, generic.traits(), *name_span, name)?;
                             generics.push(actual_ty)
@@ -1058,10 +1188,9 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     } else {
                         // The first time through, just create the existentials
                         arena.slice_from_iter(host_fn.generics.iter().map(|_| Type::Existential {
-                            idx: ty_ctx.create_existential(name, *name_span),
+                            idx: ty_ctx.create_existential(name, *name_span, ExistentialKind::Function),
                         }))
                     };
-
                     // substitute generic arguments in host fn parameters with actual types (existentials the first time through)
                     let parameters =
                         arena.slice_from_iter(host_fn.parameters.iter().map(|param| Parameter {
@@ -1075,13 +1204,16 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         let mod_api_receiver_ty =
                             Self::convert_mod_api_type(mod_api_receiver_ty, generics, arena);
                         ty_ctx
-                            .add_constraint(*name_span, mod_api_receiver_ty, actual_receiver_ty)
-                            .expect("An error cannot be triggerred here");
+                            .add_constraint(*name_span, mod_api_receiver_ty, actual_receiver_ty) .map_err(|err| self.new_error(
+								err.span,
+								format_args!("An error cannot be triggered here, Type mismatch {} vs {}", err.diff, err.diff.swapped())
+							))?;
                     }
 
                     self.fill_arguments(
                         name,
                         ty_ctx,
+						local_variables,
                         substitutions,
                         *name_span,
                         parameters,
@@ -1105,10 +1237,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
                 }
             }
-            ExprData::Parenthesized(expr) => self.fill_expr(ty_ctx, substitutions, expr, arena)?,
+            ExprData::Parenthesized(expr) => self.fill_expr(ty_ctx, local_variables, substitutions, expr, arena)?,
         };
 
-        assignment_expr.result_type = Some(arena.alloc_into(result_ty));
+        expr.result_type = Some(arena.alloc_into(result_ty));
         Ok(result_ty)
     }
 
@@ -1117,6 +1249,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         &mut self,
         function_name: &str,
         ty_ctx: &mut TyCtx<'a, 'arena>,
+		local_variables: &LocalVariables<'a, '_>,
         substitutions: Option<&[Type<'static>]>,
         name_span: SourceSpan,
         signature: &[Parameter<'a>],
@@ -1139,7 +1272,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             ));
         } else if signature.len() < arguments.len() {
             let arg = &mut arguments[signature.len()];
-            let got_type = self.fill_expr(ty_ctx, substitutions, arg, arena)?;
+            let got_type = self.fill_expr(ty_ctx, local_variables, substitutions, arg, arena)?;
             return Err(self.new_error(
                 arg.span,
                 format_args!(
@@ -1149,7 +1282,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             ));
         }
         for (param, arg) in signature.iter().zip(arguments) {
-            let arg_result_ty = self.fill_expr(ty_ctx, substitutions, arg, arena)?;
+            let arg_result_ty = self.fill_expr(ty_ctx, local_variables, substitutions, arg, arena)?;
             // If argument is resource
             if let Type::Resource {
                 extension,
@@ -1382,29 +1515,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         Ok(())
     }
 
-    fn get_variable_type(&self, var_name: &str) -> Option<Type<'arena>> {
-        if let var @ Some(_) = self.get_local_variable_type(var_name) {
+    fn get_variable_type<'a>(&self, local_variables: &LocalVariables<'a, '_>, var_name: &str) -> Option<Type<'a>> where 'arena: 'a{
+        if let var @ Some(_) = local_variables.get_local_variable_type(var_name) {
             var
         } else {
             self.get_global_variable_type(var_name)
         }
-    }
-
-    fn push_scope(&mut self) {
-        self.local_variables.push(HashMap::new());
-    }
-
-    fn pop_scope(&mut self) {
-        self.local_variables.pop().unwrap();
-    }
-
-    fn get_local_variable_type(&self, var_name: &str) -> Option<Type<'arena>> {
-        for scope in self.local_variables.iter().rev() {
-            if let var @ Some(_) = scope.get(var_name) {
-                return var.cloned();
-            }
-        }
-        None
     }
 
     fn get_global_variable_type(&self, var_name: &str) -> Option<Type<'arena>> {
@@ -1424,12 +1540,13 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         Ok(())
     }
 
-    fn add_local_variable(
-        &mut self,
+    fn add_local_variable<'a>(
+        &self,
+		local_variables: &mut LocalVariables<'a, '_>,
         name: &'arena str,
         ty: Type<'arena>,
         name_span: SourceSpan,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error> where 'arena: 'a {
         self.validate_variable_name(name, name_span)?;
         if self.get_global_variable_type(name).is_some() {
             return Err(self.new_error(
@@ -1440,7 +1557,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 ),
             ));
         }
-        if self.get_local_variable_type(name).is_some() {
+        if local_variables.get_local_variable_type(name).is_some() {
             return Err(self.new_error(
                 name_span,
                 format_args!(
@@ -1449,14 +1566,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 ),
             ));
         }
-        let result = self
-            .local_variables
-            .last_mut()
-            .expect("There is no local scope to push onto")
-            .insert(name, ty)
-            .is_none();
-        debug_assert!(result);
-        Ok(())
+		local_variables.current.insert(name, ty);
+		Ok(())
     }
 
     fn add_global_variable(
@@ -1484,12 +1595,31 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     }
 }
 
-#[derive(Clone, Copy)]
+// Indicates if an existential was created from a variable from function
+#[derive(Debug, Clone, Copy)]
+enum ExistentialKind {
+	Function,
+	Variable
+}
+
+impl ExistentialKind {
+	fn as_str(self) -> &'static str {
+		match self {
+			Self::Function => "function",
+			Self::Variable => "variable",
+		}
+	}
+}
+
+#[derive(Clone, Copy, Debug)]
 struct ExistentialData<'a> {
-    // span of the name of the function that declared the existential
-    function_name_span: SourceSpan,
-    // name of the function that declared the existential
-    function_name: &'a str,
+	// indicates if this existential was created for a variable or for a
+	// host function
+	kind: ExistentialKind,
+    // span of the name of the function or variable that declared the existential
+    name_span: SourceSpan,
+    // name of the function or variable that declared the existential
+    name: &'a str,
 }
 
 struct TyCtx<'a, 'err> {
@@ -1579,19 +1709,43 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 
     fn create_existential(
         &mut self,
-        function_name: &'a str,
-        function_name_span: SourceSpan,
+        name: &'a str,
+        name_span: SourceSpan,
+		kind: ExistentialKind,
     ) -> usize {
         let new_existential = self.existentials.len();
         self.existentials.push(ExistentialData {
-            function_name_span,
-            function_name,
+			kind,
+            name_span,
+            name,
         });
         self.substitutions.push(Type::Existential {
             idx: new_existential,
         });
         new_existential
     }
+
+	fn instantiate_variable_existentials(&mut self, var_name: &'a str, name_span: SourceSpan, var_ty: Type<'a>, substitutions: Option<&[Type<'a>]>) -> Type<'a> {
+		match var_ty {
+			Type::Id { name, generics } => {
+				let generics = self.temp_arena.slice_from_iter(generics.into_iter().map(|generic| {
+					self.instantiate_variable_existentials(var_name, name_span, *generic, substitutions)
+				}));
+				Type::Id {name, generics }
+			},
+			// the index in here is not real, it's just a placeholder from the
+			// parser
+			Type::Existential { .. } => {
+				let idx = self.create_existential(var_name, name_span, ExistentialKind::Variable);
+				if let Some(substitutions) = substitutions {
+					substitutions[idx]
+				} else {
+					Type::Existential { idx }
+				}
+			}
+			x => x
+		}
+	}
 
     fn add_constraint(
         &mut self,
@@ -1627,8 +1781,8 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                         // The occurs check also ensures types are never recursive
                         diff: unsafe {
                             TypeDiff::new(
-                                self.copy_type_into(left, self.temp_arena),
-                                self.copy_type_into(right, self.temp_arena),
+                                self.copy_type_into::<false>(left, self.temp_arena),
+                                self.copy_type_into::<false>(right, self.temp_arena),
                             )
                         },
                     });
@@ -1653,17 +1807,13 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                         self.constraints.push((*left, *right));
                     }
                 }
-                // An existential is always equal to it
+                // An existential is always equal to itself
                 (Type::Existential { idx: left_idx }, Type::Existential { idx: right_idx })
                     if left_idx == right_idx => {}
-                // At least one side is an existential
-                // This part *is* recursive. The error should contain the new types
                 (Type::Existential { idx }, other) | (other, Type::Existential { idx }) => {
                     // TODO, recursive `occurs` check
                     let old_substitution = self.substitutions[idx];
-                    if let Type::Existential { idx: found_idx } = old_substitution
-                        && found_idx == idx
-                    {
+                    if let Type::Existential { idx: _ } = old_substitution {
                         self.substitutions[idx] = other;
                     }
                     self.constraints.push((other, old_substitution));
@@ -1673,8 +1823,8 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                         span: err_span,
                         diff: unsafe {
                             TypeDiff::new(
-                                self.copy_type_into(left, self.temp_arena),
-                                self.copy_type_into(right, self.temp_arena),
+                                self.copy_type_into::<false>(left, self.temp_arena),
+                                self.copy_type_into::<false>(right, self.temp_arena),
                             )
                         },
                     });
@@ -1690,7 +1840,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
     //
     // # Note:
     // If there are any non-trivial loops, this will result in a stack overflow
-    unsafe fn copy_type_into<'arena>(&self, ty: Type<'a>, arena: &'arena Arena) -> Type<'arena> {
+    unsafe fn copy_type_into<'arena, const RECURSE_EXISTENTIALS: bool>(&self, ty: Type<'a>, arena: &'arena Arena) -> Type<'arena> {
         match ty {
             Type::Resource {
                 extension,
@@ -1705,18 +1855,18 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 entity_type: Some(arena.copy_str_into_nt(entity_type.to_str()).as_ntstrptr()),
             },
             Type::Existential { idx } => {
-                if let Type::Existential { idx } = self.substitutions[idx] {
+                if let Type::Existential { idx } = self.substitutions[idx] && !RECURSE_EXISTENTIALS {
                     return Type::Existential { idx };
                 }
 
-                unsafe { self.copy_type_into(self.substitutions[idx], arena) }
+                unsafe { self.copy_type_into::<RECURSE_EXISTENTIALS>(self.substitutions[idx], arena) }
             }
             Type::Id { name, generics } => Type::Id {
                 name: arena.copy_str_into_nt(name.to_str()).as_ntstrptr(),
                 generics: arena.slice_from_iter(
                     generics
                         .iter()
-                        .map(|ty| unsafe { self.copy_type_into(*ty, arena) }),
+                        .map(|ty| unsafe { self.copy_type_into::<RECURSE_EXISTENTIALS>(*ty, arena) }),
                 ),
             },
             Type::Void => Type::Void,
@@ -1727,36 +1877,38 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         }
     }
 
+	// Ensure there are no types that cannot be fully determined
     fn check_consistency(
         &self,
         ty: Type,
+		direct: bool,
+		error_idx: usize,
         parent_existentials: StackLL<usize>,
     ) -> Result<(), Error> {
         match ty {
             Type::Existential { idx } => {
-                if idx == *parent_existentials {
-                    let data = self.existentials[idx];
-                    return Err(self.new_error(
-                        data.function_name_span,
-                        format_args!(
-                            "unable to infer generics in function '{}'",
-                            data.function_name
-                        ),
-                    ));
-                }
                 let mut current = Some(&parent_existentials);
                 while let Some(cur) = current {
                     if **cur == idx {
-                        let data = self.existentials[idx];
-                        return Err(self.new_error(
-							data.function_name_span,
-							format_args!("Infinitely recursive type found during type inference of function `{}`", data.function_name)
-						));
+                        let data = self.existentials[error_idx];
+						if direct {
+							return Err(self.new_error(
+								data.name_span,
+								format_args!("unable to infer generics in {} '{}'", data.kind.as_str(), data.name)
+							));
+						} else {
+							return Err(self.new_error(
+								data.name_span,
+								format_args!("infinite recursive type found in {} '{}'", data.kind.as_str(), data.name)
+							));
+						}
                     }
                     current = cur.parent;
                 }
                 self.check_consistency(
                     self.substitutions[idx],
+					true,
+					error_idx,
                     StackLL {
                         current: idx,
                         parent: Some(&parent_existentials),
@@ -1765,7 +1917,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
             }
             Type::Id { name: _, generics } => {
                 for generic in generics {
-                    self.check_consistency(*generic, parent_existentials)?
+                    self.check_consistency(*generic, false, error_idx, parent_existentials)?
                 }
             }
             _ => (),
@@ -1777,11 +1929,13 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         &mut self,
         type_storage: &mut TypeStorage,
         arena: &'arena Arena,
-    ) -> Result<&'arena [Type<'static>], Error> {
+    ) -> Result<&'arena mut [Type<'static>], Error> {
         // Copy all types into the permanent arena
         for i in 0..self.substitutions.len() {
             self.check_consistency(
                 self.substitutions[i],
+				true,
+				i, 
                 StackLL {
                     current: i,
                     parent: None,
@@ -1790,7 +1944,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         }
         Ok(arena.slice_from_iter(self.substitutions.iter().map(|ty| {
             // SAFETY: Consistency check has been performed on all existentials
-            unsafe { type_storage.insert_type(self.copy_type_into(*ty, arena)) }
+            unsafe { type_storage.insert_type(self.copy_type_into::<true>(*ty, arena)) }
         })))
     }
 

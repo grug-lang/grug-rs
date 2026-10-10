@@ -1,6 +1,7 @@
 use super::GlobalStatement;
 use super::tokenizer::{Token, TokenType};
 use crate::arena::Arena;
+use crate::VARIABLE_INFERENCE;
 use crate::ast::{
     BinaryOperator, Expr, ExprData, HelperFunction, MemberVariable, OnFunction, Parameter,
     Statement, Type, UnaryOperator,
@@ -1215,6 +1216,17 @@ impl<'a> Parser<'a> {
         }
         Ok((
             match type_token.value {
+				"_" if VARIABLE_INFERENCE => Type::Existential {
+					// TODO: Is this okay, should we create a unique idx for
+					// each inferred variable in a function?
+					idx: 0,
+				},
+				"_" => {
+					return self.new_error(
+						type_token.span,
+						format_args!("`_` is not a valid type name"),
+					);
+				}
                 "bool" => Type::Bool,
                 "number" => Type::Number,
                 "string" => Type::String,

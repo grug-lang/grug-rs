@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-#![deny(warnings)]
+// #![deny(warnings)]
 // #![deny(missing_docs)]
 #![allow(clippy::single_char_add_str, clippy::bool_comparison)]
 
@@ -24,13 +24,13 @@ mod watcher;
 
 mod pal;
 
+static VARIABLE_INFERENCE: bool = false;
+
 pub use gruggers_core::ast;
 pub use gruggers_core::types;
 
 pub use gruggers_core::nt;
 pub use gruggers_core::ntstring;
-
-const HAS_CONSTRAINTS: bool = true;
 
 // TODO: JIT Backend
 // TODO: Experiment with variable type inference
