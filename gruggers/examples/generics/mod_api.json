@@ -128,7 +128,43 @@
 				{
 					"name": "$T2"
 				}
-			]
+			],
+			"methods": {
+				"first": {
+					"description": "",
+					"return_type": {
+						"name": "$T1"
+					}
+				},
+				"second": {
+					"description": "",
+					"return_type": {
+						"name": "$T2"
+					}
+				},
+				"set_first": {
+					"description": "",
+					"parameters": [
+						{
+							"name": "val",
+							"type": {
+								"name": "$T1"
+							}
+						}
+					]
+				},
+				"set_second": {
+					"description": "",
+					"parameters": [
+						{
+							"name": "val",
+							"type": {
+								"name": "$T2"
+							}
+						}
+					]
+				}
+			}
 		},
 		"List": {
 			"description": "A list of values",
@@ -191,6 +227,38 @@
 					"name": "$T"
 				}
 			],
+			"static_methods": {
+				"some": {
+					"description": "Creates an option with a value",
+					"return_type": {
+						"name": "Option",
+						"generics": [
+							{
+								"name": "$T"
+							}
+						]
+					},
+					"parameters": [
+						{
+							"name": "value",
+							"type": {
+								"name": "$T"
+							}
+						}
+					]
+				},
+				"none": {
+					"description": "Creates an option with no value",
+					"return_type": {
+						"name": "Option",
+						"generics": [
+							{
+								"name": "$T"
+							}
+						]
+					}
+				}
+			},
 			"methods": {
 				"is": {
 					"description": "Checks if a value is present",
