@@ -130,9 +130,11 @@ mod ser {
                 }
                 object
             }
+            Type::Existential { .. } => object! {
+				"name": "_"
+			},
             Type::Resource { .. } => unreachable!(),
             Type::Entity { .. } => unreachable!(),
-            Type::Existential { .. } => unreachable!(),
         }
     }
 

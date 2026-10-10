@@ -5,7 +5,6 @@ use std::io::Write;
 use std::path::Path;
 use std::ptr::NonNull;
 
-use crate::HAS_CONSTRAINTS;
 use crate::arena::Arena;
 use crate::ast::{Parameter, Type};
 use crate::error::{Error, ErrorKind, Result, SourceSpan};
@@ -497,7 +496,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
         let mut used_generics = Vec::with_capacity_in(used_generics_json.len(), arena);
         for (i, used_generic) in used_generics_json.iter().enumerate() {
             self.push_path(JsonPathComponent::ArrayIdx(i));
-            let generic = if HAS_CONSTRAINTS {
+            let generic = {
                 let JsonValue::Object(used_generic) = used_generic else {
                     return Err(self.new_error("is not an object"));
                 };
@@ -538,15 +537,6 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                     name,
                     traits: &*constraints,
                 }
-            } else {
-                let Some(used_generic) = used_generic.as_str() else {
-                    return Err(self.new_error("is not a string"));
-                };
-                let name = arena.copy_str_into_nt(used_generic);
-                if !name.starts_with("$") {
-                    return Err(self.new_error("must begin with '$'"));
-                }
-                Generic { name, traits: &[] }
             };
             used_generics.push(generic);
             self.pop_path(); // used generics idx
@@ -849,9 +839,7 @@ pub(crate) fn get_mod_api_from_text(
     // context must be dropped before mod_api_root
     let mut context = context;
 
-    let traits = if let Some(constraints) = mod_api_root.get("constraints")
-        && HAS_CONSTRAINTS
-    {
+    let traits = if let Some(constraints) = mod_api_root.get("constraints") {
         context.push_path(JsonPathComponent::ObjectKey("constraints"));
         let JsonValue::Object(constraints) = constraints else {
             return Err(context.new_error("is not an object"));
