@@ -19,6 +19,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      # The toolchain is pinned so a new stable cannot fail this job on its own.
+      # The runner images move to the next stable within days of its release, and a
+      # new lint under `-D warnings` then breaks a commit that did not change:
+      # 1.99.0's clippy::nonnull_unchecked_on_box_ptr did exactly that, on two lines
+      # that predate it. Bump this deliberately, fixing what the new toolchain
+      # reports in the same change.
+      - name: Install the pinned toolchain
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --no-self-update
+          rustup default 1.98.1
+          rustc --version
       - run: git submodule update --init --force
       - run: cmake -S gruggers/src/grug-tests/ -B ./gruggers/src/grug-tests/build/ -G Ninja -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build ./gruggers/src/grug-tests/build
