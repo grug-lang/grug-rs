@@ -56,7 +56,17 @@ struct grug_source_span {
 	size_t line;
 };
 
-typedef union grug_value (*host_fn)(struct grug_state* gst, const union grug_value[]);
+struct grug_type;
+
+// The resolved generics of a call are the third argument. A host function
+// cannot leave them out: the library always passes them, and generic host
+// functions (Option, List, and so on) dispatch on them.
+typedef union grug_value (*host_fn)(struct grug_state* gst, const union grug_value[], const struct grug_type* generics);
+
+// A registration function resolves the generics once and returns the host
+// function to call for them. Implementations may cache the result, so these
+// have to be pure.
+typedef host_fn (*reg_fn)(const struct grug_type* generics);
 
 typedef struct {
 	uint8_t tag[4];
@@ -324,8 +334,8 @@ struct grug_error* grug_get_error(struct grug_state* gst);
 // does not handle that in its main branch yet
 struct grug_error* grug_register_host_fn(struct grug_state* gst, char* fn_name, host_fn func);
 struct grug_error* grug_register_host_method (struct grug_state* gst, char* class_name, char* fn_name, host_fn func);
-struct grug_error* grug_register_reg_fn (struct grug_state* gst, char* class_name, char* fn_name, host_fn func);
-struct grug_error* grug_register_reg_method (struct grug_state* gst, char* class_name, char* fn_name, host_fn func);
+struct grug_error* grug_register_reg_fn (struct grug_state* gst, char* fn_name, reg_fn func);
+struct grug_error* grug_register_reg_method (struct grug_state* gst, char* class_name, char* fn_name, reg_fn func);
 
 // Returns true if all game functions defined in mod_api.json are registered
 struct grug_error* grug_all_host_functions_registered(struct grug_state* gst);
@@ -370,7 +380,9 @@ grug_entity_handle grug_create_entity(struct grug_state* gst, grug_file_id scrip
 struct grug_entity* grug_entity_get_data(struct grug_state* gst, grug_entity_handle entity);
 // Destroy the data associated with an entity
 // It is UB to pass in an invalid handle
-void grug_deinit_entity(struct grug_state* gst, grug_entity_handle entity);
+// Whether the entity was allocated by this state and has now been destroyed,
+// so a consumer can tell a destroy that happened from one that did not.
+bool grug_deinit_entity(struct grug_state* gst, grug_entity_handle entity);
 
 // Destroy a grug state and free all its resources
 void grug_deinit(struct grug_state* gst);
