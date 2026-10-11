@@ -118,17 +118,15 @@ mod typed_xar {
                 return true;
             }
             let inner = unsafe { &*self.inner.as_ptr() };
-            let mut current_bucket_size = Self::FIRST_SIZE;
-            for bucket in &inner.chunks {
+            for (bucket_idx, bucket) in inner.chunks.iter().enumerate() {
                 let Some(bucket) = bucket.get() else {
                     return false;
                 };
                 if (handle.0.as_ptr().addr()).wrapping_sub(bucket.as_ptr().addr())
-                    < current_bucket_size
+                    < Self::chunk_size(bucket_idx) * size_of::<XarStorage<T>>()
                 {
                     return true;
                 }
-                current_bucket_size *= 2;
             }
             false
         }
@@ -284,6 +282,33 @@ mod typed_xar {
             assert_eq!(Xar::<usize>::calc_location(16), (2, 0));
             assert_eq!(Xar::<usize>::calc_location(31), (2, 15));
             assert_eq!(Xar::<usize>::calc_location(32), (3, 0));
+        }
+
+        #[test]
+        fn xar_contains_rejects_a_pointer_past_a_chunk() {
+            let x = Xar::new();
+            let mut handles = Vec::new();
+            for i in 0..500 {
+                handles.push(x.insert(i));
+            }
+            for handle in &handles {
+                assert!(x.contains(*handle), "contains rejected a live handle");
+            }
+
+            // The highest allocated bucket, and a pointer one past its end. The
+            // bound has to be that bucket's own allocation: chunk_size(0) and
+            // chunk_size(1) are equal, so a doubling would let bucket 1 accept a
+            // pointer outside itself.
+            let inner = unsafe { &*x.inner.as_ptr() };
+            let (bucket_idx, bucket) = inner
+                .chunks
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(i, chunk)| chunk.get().map(|chunk| (i, chunk)))
+                .unwrap();
+            let past_end = unsafe { bucket.add(Xar::<i32>::chunk_size(bucket_idx)) };
+            assert!(!x.contains(XarHandle::new(past_end)));
         }
 
         #[test]
@@ -544,15 +569,15 @@ mod erased_xar {
                 return true;
             }
             let inner = unsafe { &*self.inner.as_ptr() };
-            let mut current_bucket_size = self.first_chunk_size() * self.item_size();
-            for bucket in &inner.chunks {
+            for (bucket_idx, bucket) in inner.chunks.iter().enumerate() {
                 let Some(bucket) = bucket.get() else {
                     return false;
                 };
-                if (handle.0.as_ptr().addr()).wrapping_sub(bucket.as_ptr().as_ptr().addr()) < current_bucket_size {
+                if (handle.0.as_ptr().addr()).wrapping_sub(bucket.as_ptr().as_ptr().addr())
+                    < self.chunk_size(bucket_idx) * self.item_size()
+                {
                     return true;
                 }
-                current_bucket_size *= 2;
             }
             false
         }
