@@ -146,7 +146,7 @@ mod str {
         /// Get the string as a [`NTStrPtr`]
         pub const fn as_ntstrptr(&self) -> NTStrPtr<'_> {
             // SAFETY There is a null byte at the self.len()
-            unsafe { NTStrPtr::from_ptr(NonNull::from_ref(&self.0).cast::<i8>()) }
+            unsafe { NTStrPtr::from_ptr(NonNull::from_ref(&self.0).cast::<c_char>()) }
         }
     }
 
@@ -566,7 +566,7 @@ mod osstr {
         /// Get the string as a [`NTOsStrPtr`]
         pub const fn as_ntosstrptr(&self) -> NTOsStrPtr<'_> {
             // SAFETY There is a null byte at the self.len()
-            unsafe { NTOsStrPtr::from_ptr(NonNull::from_ref(&self.0).cast::<i8>()) }
+            unsafe { NTOsStrPtr::from_ptr(NonNull::from_ref(&self.0).cast::<c_char>()) }
         }
 
         /// same as [`OsStr::display`]
