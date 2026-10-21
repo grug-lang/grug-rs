@@ -276,12 +276,6 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
 								"Unexpected line break in string on line {}", cur_line
 							));
 						}
-						'\0' => {
-							return Err(new_tokenizer_error!(
-								(file_text_str.len() - chars.as_str().len(), cur_line) =>
-								"Unexpected null byte on line {}", cur_line
-							));
-						}
 						'\n' => {
 							cur_line += 1;
 							allocated.push(b'\n');
@@ -407,12 +401,6 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
             i += 1;
             let start = i;
             while i < file_text.len() && file_text[i] != b'\r' && file_text[i] != b'\n' {
-                if file_text[i] == b'\0' {
-                    return Err(new_tokenizer_error!(
-                        (i, cur_line) =>
-                        "Unexpected null byte on line {}", cur_line
-                    ));
-                }
                 i += 1;
             }
 

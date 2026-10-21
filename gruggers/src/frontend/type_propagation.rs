@@ -2103,6 +2103,8 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
 pub(crate) struct TypeListDisplay<'a>(pub(crate) &'a [Type<'a>]);
 
 impl<'a> std::fmt::Display for TypeListDisplay<'a> {
+	// Cov: This only exists to pretty print a list of types, which currently
+	// is only used by the backend for to dump the bytecode
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("[")?;
         for (i, ty) in self.0.iter().enumerate() {
