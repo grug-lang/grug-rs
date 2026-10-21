@@ -32,7 +32,9 @@ pub use gruggers_core::ntstring;
 
 const HAS_CONSTRAINTS: bool = true;
 
-// TODO: Add Debug info to backends and improve runtime errors
+// TODO: JIT Backend
+// TODO: Experiment with variable type inference
+// TODO: Debugger interface
 // TODO: Specify grug's string lifetimes.
 // TODO: Outline Debugger implementation
 // TODO: Replace custom errors in serde.rs with Error
@@ -41,7 +43,6 @@ const HAS_CONSTRAINTS: bool = true;
 // 		- Box
 // 		- HashMap
 // TODO: replace quotes (') in errors with backticks (`)
-// TODO: (WIP) ModsDir struct
 // TODO: (WIP) README and docs for gruggers
 // TODO: (WIP) Debug info to backends
 

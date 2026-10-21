@@ -6,8 +6,6 @@ use gruggers_core::state::State;
 
 /// An empty backend that simply throws away any file given to it.
 /// Cannot be used to create entities or call functions.
-///
-/// Will throw if another backend is swapped into this
 pub struct StubBackend;
 
 impl Backend for StubBackend {
