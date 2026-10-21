@@ -1606,6 +1606,7 @@ impl ExistentialKind {
 	fn as_str(self) -> &'static str {
 		match self {
 			Self::Function => "function",
+			// Cov: only meaningful with variable inference
 			Self::Variable => "variable",
 		}
 	}
@@ -1678,6 +1679,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
             match substitutions[stack.current] {
                 Type::Existential { idx } => {
                     let mut current = Some(&stack);
+					// Cov: I don't think this can be tested without variable type inference
                     while let Some(cur) = current {
                         if **cur == idx {
                             return None;
@@ -1735,6 +1737,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 			},
 			// the index in here is not real, it's just a placeholder from the
 			// parser
+			// Cov: Cannot be covered without variable type inference
 			Type::Existential { .. } => {
 				let idx = self.create_existential(var_name, name_span, ExistentialKind::Variable);
 				if let Some(substitutions) = substitutions {
@@ -1757,6 +1760,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         // This ensures recursive calls only handle the constraints relevant to them
         while let Some(constraint) = self.constraints.pop() {
             match constraint {
+				// Cov: Cannot occur naturally, even with variable type inference
                 (Type::Void, Type::Void) => (),
                 (Type::Bool, Type::Bool) => (),
                 (Type::Number, Type::Number) => (),
@@ -1842,6 +1846,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
     // If there are any non-trivial loops, this will result in a stack overflow
     unsafe fn copy_type_into<'arena, const RECURSE_EXISTENTIALS: bool>(&self, ty: Type<'a>, arena: &'arena Arena) -> Type<'arena> {
         match ty {
+			// Cov: Resources and entities cannot occur with generic types
             Type::Resource {
                 extension,
                 optional,
@@ -1854,6 +1859,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
             } => Type::Entity {
                 entity_type: Some(arena.copy_str_into_nt(entity_type.to_str()).as_ntstrptr()),
             },
+            Type::Entity { entity_type: None } => Type::Entity { entity_type: None },
             Type::Existential { idx } => {
                 if let Type::Existential { idx } = self.substitutions[idx] && !RECURSE_EXISTENTIALS {
                     return Type::Existential { idx };
@@ -1873,7 +1879,6 @@ impl<'a, 'err> TyCtx<'a, 'err> {
             Type::Bool => Type::Bool,
             Type::Number => Type::Number,
             Type::String => Type::String,
-            Type::Entity { entity_type: None } => Type::Entity { entity_type: None },
         }
     }
 
@@ -1897,6 +1902,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 								format_args!("unable to infer generics in {} '{}'", data.kind.as_str(), data.name)
 							));
 						} else {
+							// Cov: Cannot occur without variable type inference
 							return Err(self.new_error(
 								data.name_span,
 								format_args!("infinite recursive type found in {} '{}'", data.kind.as_str(), data.name)
@@ -1983,6 +1989,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                             .iter()
                             .any(|imp| type_matches_implementor(ty, imp.ty, imp.generics))
                     }),
+				// Cov: Void cannot appear in normal grug code
                 (Type::Void, Type::Void) => true,
                 (Type::Bool, Type::Bool) => true,
                 (Type::Number, Type::Number) => true,
