@@ -1208,12 +1208,6 @@ impl<'a> Parser<'a> {
         arena: &'a Arena,
     ) -> Result<(Type<'a>, SourceSpan), ParserError<'a>> {
         let [type_token] = consume_next_token_types(tokens, &[TokenType::Word])?;
-        if type_token.ty != TokenType::Word {
-            return self.new_error(
-                type_token.span,
-                format_args!("Expected word but got {}", type_token.ty),
-            );
-        }
         Ok((
             match type_token.value {
 				"_" if VARIABLE_INFERENCE => Type::Existential {
