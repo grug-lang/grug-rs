@@ -37,6 +37,8 @@ mod test_bindings {
         mods_dir_path: NTOsStrPtr<'a>,
         _unsafe_mode: bool,
     ) -> Option<Box<CState>> {
+		// Resource reloading test picks up the 
+        std::thread::sleep(std::time::Duration::from_millis(100));
         let mut state = GrugInitSettings::new()
             .set_mod_api_path(mod_api_path.to_osstr())
             .set_mods_dir(mods_dir_path.to_osstr())
@@ -71,6 +73,7 @@ mod test_bindings {
                 err
             })
             .ok()?;
+		// state.compile_all_files();
         Some(Box::new((state, Arena::new())))
     }
 
@@ -377,7 +380,7 @@ mod game_fn_bindings {
         safe fn game_fn_magic<'a>                         (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
         safe fn game_fn_initialize<'a>                    (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
         safe fn game_fn_initialize_bool<'a>               (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
-        safe fn game_fn_identity<'a>                      (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
+        safe fn game_fn_identity<'a>                      (state: &'a GrugState, values: *const Value, generics: &[Type; 1]) -> Value;
         safe fn game_fn_max<'a>                           (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
         safe fn game_fn_say<'a>                           (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
         safe fn game_fn_sin<'a>                           (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
