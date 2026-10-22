@@ -305,6 +305,12 @@ pub struct GrugState {
     pub(crate) changes: Receiver<Result<OsString, std::io::Error>>,
 }
 
+// SAFETY: Nothing in GrugState depends on the thread it was created on, like a
+// thread local, so it can be moved to and dropped on another thread. Its
+// NonNulls only point into memory that the state owns. It isn't Sync, since
+// its RefCells and Cells can only be used by one thread at a time
+unsafe impl Send for GrugState {}
+
 impl State for GrugState {
     fn handle_runtime_error(&self, error: &RuntimeError) {
         self.is_errorring.set(true);
