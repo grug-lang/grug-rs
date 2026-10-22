@@ -949,6 +949,21 @@ pub(crate) fn get_mod_api_from_text(
 
                     let ty = context.get_key(implementor, "type")?;
                     let ty = context.parse_type(ty, used_generics, &arena)?;
+                    match ty {
+                        Type::Resource { .. } => {
+                            return Err(context.new_error("cannot be a resource string"));
+                        }
+                        Type::Entity { .. } => {
+                            return Err(context.new_error("cannot be an entity string"));
+                        }
+                        // A bare generic could implement the constraint it is
+                        // part of, which would make checking that constraint
+                        // recurse forever
+                        Type::Existential { .. } => {
+                            return Err(context.new_error("cannot be a bare generic"));
+                        }
+                        _ => (),
+                    }
                     context.pop_path();
 
                     implementors.push(TraitImplementor {

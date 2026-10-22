@@ -1324,6 +1324,19 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					arg.span,
 					format_args!("The host function '{}' expects an entity string, so put an 'e' in front of string \"{}\"", function_name, string)
 				));
+            // argument is a resource or entity string but a generic is expected
+            } else if let Type::Existential { .. } = param.ty
+                && let Type::Resource { .. } | Type::Entity { .. } = arg_result_ty
+            {
+                let kind = if let Type::Resource { .. } = arg_result_ty {
+                    "a resource"
+                } else {
+                    "an entity"
+                };
+                return Err(self.new_error(
+					arg.span,
+					format_args!("Function call '{}' can't take {} string for its generic argument '{}'", function_name, kind, param.name)
+				));
             // if argument is void
             } else if arg_result_ty == Type::Void {
                 return Err(self.new_error(
