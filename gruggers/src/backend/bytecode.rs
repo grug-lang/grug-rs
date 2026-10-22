@@ -75,7 +75,7 @@ impl<'a> Compiler<'a> {
         instructions.push_ins(Op::StoreGlobal { index: me_location }, None);
         for global in ast.members.iter() {
             compiler.compile_expr(&mut instructions, &global.assignment_expr);
-            let i = compiler.insert_global_variable(global.name.to_str());
+            let i = compiler.insert_global_variable(global.name);
             instructions.push_ins(Op::StoreGlobal { index: i }, Some(global.span));
         }
         // Note(nikhil): Maybe this should point to the location of the last member variable
@@ -119,14 +119,14 @@ impl<'a> Compiler<'a> {
         self.push_scope();
         let begin_location = instructions.get_loc();
         for param in helper_function.parameters {
-            self.insert_local_variable(param.name.to_str());
+            self.insert_local_variable(param.name);
         }
         for statement in &*helper_function.body_statements {
             self.compile_statement(instructions, statement);
         }
         instructions.push_ins(Op::ReturnVoid, None);
         instructions.insert_helper_fn(
-            helper_function.name.to_ntstr(),
+            helper_function.name,
             helper_function.parameters.len() as u32,
             self.locals_size_max,
             begin_location,
@@ -149,7 +149,7 @@ impl<'a> Compiler<'a> {
         let begin_location = instructions.get_loc();
         let param_count = on_function.parameters.len();
         for param in on_function.parameters {
-            self.insert_local_variable(param.name.to_str());
+            self.insert_local_variable(param.name);
         }
         for statement in &*on_function.body_statements {
             self.compile_statement(instructions, statement);
@@ -159,7 +159,9 @@ impl<'a> Compiler<'a> {
         instructions.insert_on_fn(
             index,
             GrugFnData {
-                name: on_function.name.to_ntstr(),
+				// SAFETY: this string is allocated in instructions._arena,
+				// which is not cleared as long as the instructions exists.
+                name: unsafe{std::mem::transmute::<&NTStr, &'static NTStr>(instructions._arena.copy_str_into_nt(on_function.name))},
                 location: begin_location,
                 args_count: param_count as u32,
                 locals_size: self.locals_size_max,
@@ -178,7 +180,7 @@ impl<'a> Compiler<'a> {
                 assignment_expr,
                 name_span,
             } => {
-                let name = name.to_str();
+                let name = name;
                 self.compile_expr(instructions, assignment_expr);
                 if ty.is_some() {
                     let loc = self.insert_local_variable(name);
@@ -363,7 +365,7 @@ impl<'a> Compiler<'a> {
             ExprData::True => instructions.push_ins(Op::LoadTrue, Some(expr.span)),
             ExprData::False => instructions.push_ins(Op::LoadFalse, Some(expr.span)),
             ExprData::String(value) | ExprData::Resource(value) | ExprData::Entity(value) => {
-                let data_loc = instructions.insert_string(value.to_str());
+                let data_loc = instructions.insert_string(value);
                 instructions.push_ins(Op::LoadStr { data_loc }, Some(expr.span));
             }
             ExprData::Number(value, _) => {
@@ -371,7 +373,7 @@ impl<'a> Compiler<'a> {
                 instructions.push_ins(Op::LoadNumber { data_loc }, Some(expr.span));
             }
             ExprData::Identifier(name) => {
-                let name = name.to_str();
+                let name = name;
                 if let Some(loc) = self.get_local_location(name) {
                     instructions.push_ins(Op::LoadLocal { index: loc }, Some(expr.span));
                 } else if let Some(loc) = self.get_global_location(name) {
@@ -511,10 +513,10 @@ impl<'a> Compiler<'a> {
                 }
 
                 let data_loc = instructions
-                    .get_helper_fn_info(name.to_str())
+                    .get_helper_fn_info(name)
                     .unwrap_or_else(|| {
                         self.helper_fn_patches
-                            .push((instructions.get_loc(), name.to_str()));
+                            .push((instructions.get_loc(), name));
                         0
                     });
                 instructions.push_ins(Op::CallHelperFunction { data_loc }, Some(*name_span));
@@ -550,7 +552,9 @@ impl<'a> Compiler<'a> {
 
                 let has_return = *expr.result_type.unwrap() != Type::Void;
                 let data_loc = instructions.insert_game_fn_data(HostFnData {
-                    name: name.to_ntstr(),
+					// SAFETY: this string is allocated in instructions._arena,
+					// which is not cleared as long as the instructions exists.
+					name: unsafe{std::mem::transmute::<&NTStr, &'static NTStr>(instructions._arena.copy_str_into_nt(name))},
                     args_count: args_count as u32,
                     generics,
                     ptr: *ptr,
@@ -1589,14 +1593,15 @@ impl std::fmt::Display for Instructions {
                     let HostFnData {
                         args_count: _,
                         generics,
-                        ptr: _,
+                        ptr,
                         name,
                     } = unsafe { self.constants[*data_loc as usize].host_fn_data };
                     write!(
                         f,
-                        "CallGameFunction {} generics: {}",
+                        "CallGameFunction {} generics: {} addr: 0x{:x}",
                         name,
-                        TypeListDisplay(generics)
+                        TypeListDisplay(generics),
+						ptr as usize
                     )
                 }
             }?;

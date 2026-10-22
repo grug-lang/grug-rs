@@ -337,7 +337,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                 self.pop_path();
                 Type::Entity {
                     entity_type: (!entity_type.is_empty())
-                        .then(|| arena.copy_str_into_nt(entity_type).as_ntstrptr()),
+                        .then(|| arena.copy_str_into(entity_type)),
                 }
             }
             "resource" => {
@@ -358,7 +358,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                 };
 
                 Type::Resource {
-                    extension: arena.copy_str_into_nt(extension).as_ntstrptr(),
+					extension: arena.copy_str_into(extension),
                     optional,
                 }
             }
@@ -374,7 +374,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                 );
             }
             type_name => {
-                let name = arena.copy_str_into_nt(type_name).as_ntstrptr();
+                let name = arena.copy_str_into(type_name);
                 // recursively parse types within generics
                 let generics = if let Some(generics) = object.get("generics") {
                     self.push_path(JsonPathComponent::ObjectKey("generics"));
@@ -421,7 +421,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
             self.pop_path();
             self.push_path(JsonPathComponent::ArrayKey(param_name));
 
-            let param_name = arena.copy_str_into_nt(param_name);
+            let param_name = arena.copy_str_into(param_name);
 
             // required "type" string
             let ty = self.get_key(param_values, "type")?;
@@ -433,7 +433,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
 
             self.pop_path();
             temp.push(Parameter {
-                name: param_name.as_ntstrptr(),
+                name: param_name,
                 ty,
                 name_span: SourceSpan { offset: 0, line: 0 },
                 type_span: SourceSpan { offset: 0, line: 0 },
@@ -570,7 +570,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
     ) -> Result<()> {
         self.push_path(JsonPathComponent::ObjectKey("parameters"));
         for parameter in parameters {
-            self.push_path(JsonPathComponent::ArrayKey(parameter.name.to_str()));
+            self.push_path(JsonPathComponent::ArrayKey(parameter.name));
             self.validate_type(parameter.ty, used_generics, known_types)?;
             self.pop_path();
         }
@@ -644,7 +644,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
             self.push_path(JsonPathComponent::ObjectKey("generics"));
             if let Some((_, constraints)) = known_types
                 .iter()
-                .find(|(ty_name, _)| *ty_name == name.to_str())
+                .find(|(ty_name, _)| *ty_name == name)
             {
                 if constraints.len() != generics.len() {
                     return Err(self.new_error(self.arena.fmt_into(format_args!(
@@ -983,7 +983,7 @@ pub(crate) fn get_mod_api_from_text(
                 context.pop_path();
 
                 let ty = Type::Id {
-                    name: entity_name.as_ntstrptr(),
+                    name: entity_name.as_str(),
                     generics: &[],
                 };
 
@@ -1146,7 +1146,7 @@ pub(crate) fn get_mod_api_from_text(
                 let generics = used_generics.leak();
 
                 let ty = Type::Id {
-                    name: class_name.as_ntstrptr(),
+                    name: class_name.as_str(),
                     generics: arena.slice_from_iter(
                         (0..(generics.len())).map(|i| Type::Existential { idx: i }),
                     ),

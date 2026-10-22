@@ -6,7 +6,6 @@ use crate::ast::{
     BinaryOperator, Expr, ExprData, HelperFunction, MemberVariable, OnFunction, Parameter,
     Statement, Type, UnaryOperator,
 };
-use crate::nt;
 use crate::ntstring::NTStr;
 
 use crate::error::{Error, ErrorKind, SourceSpan};
@@ -254,7 +253,7 @@ pub(crate) fn parse<'a>(
                 parser
                     .global_statements
                     .push(GlobalStatement::Variable(MemberVariable {
-                        name: Box::leak(NTStr::box_from_str_in(global_name, arena)).as_ntstrptr(),
+						name: global_name,
                         ty: global_type,
                         type_span: global_type_span,
                         assignment_expr,
@@ -309,7 +308,7 @@ pub(crate) fn parse<'a>(
                 }
 
                 let on_fn = OnFunction {
-                    name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
+					name: fn_name,
                     parameters,
                     body_statements,
                     span: name_token.span,
@@ -426,7 +425,7 @@ pub(crate) fn parse<'a>(
                 }
 
                 let helper_fn = HelperFunction {
-                    name: Box::leak(NTStr::box_from_str_in(fn_name, arena)).as_ntstrptr(),
+					name: fn_name,
                     parameters,
                     body_statements,
                     return_type,
@@ -581,7 +580,7 @@ impl<'a> Parser<'a> {
                 );
             }
             arguments.push(Parameter {
-                name: Box::leak(NTStr::box_from_str_in(arg_name, arena)).as_ntstrptr(),
+				name: arg_name,
                 ty: param_type,
                 name_span: name_token.span,
                 type_span,
@@ -790,8 +789,7 @@ impl<'a> Parser<'a> {
                 tokens.next();
                 Ok(Statement::Comment {
                     comment_span: next_tokens[0].span,
-                    value: Box::leak(NTStr::box_from_str_in(next_tokens[0].value, arena))
-                        .as_ntstrptr(),
+					value: next_tokens[0].value,
                 })
             }
             got_token => self.new_error(
@@ -875,7 +873,7 @@ impl<'a> Parser<'a> {
         consume_space(tokens)?;
         let assignment_expr = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
         Ok(Statement::Variable {
-            name: Box::leak(NTStr::box_from_str_in(local_name, arena)).as_ntstrptr(),
+			name: local_name,
             ty: ty.map(|ty| &*Box::leak(Box::new_in(ty, arena))),
             type_span,
             assignment_expr,
@@ -915,33 +913,26 @@ impl<'a> Parser<'a> {
                     span: *span,
                 },
                 TokenType::String => Expr {
-                    data: ExprData::String(
-                        Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
-                    ),
+                    data: ExprData::String(value),
                     result_type: None,
                     span: *span,
                 },
                 TokenType::Resource => Expr {
-                    data: ExprData::Resource(
-                        Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
-                    ),
+                    data: ExprData::Resource(value),
                     result_type: None,
                     span: *span,
                 },
                 TokenType::Entity => Expr {
-                    data: ExprData::Entity(
-                        Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
-                    ),
+                    data: ExprData::Entity(value),
                     result_type: None,
                     span: *span,
                 },
                 TokenType::Word => {
-                    let value: &'a NTStr = Box::leak(NTStr::box_from_str_in(value, arena));
                     // a word token can actually be a function call
                     if let Ok([_]) = consume_next_token_types(tokens, &[TokenType::OpenParenthesis])
                     {
-                        if value.as_str().starts_with("_")
-                            && !self.called_local_functions.contains(&value.as_str())
+                        if value.starts_with("_")
+                            && !self.called_local_functions.contains(value)
                         {
                             self.called_local_functions.push(value);
                         }
@@ -954,7 +945,7 @@ impl<'a> Parser<'a> {
                             Expr {
                                 data: ExprData::Call {
                                     receiver: None,
-                                    name: value.as_ntstrptr(),
+                                    name: value,
                                     args: Vec::new().leak(),
                                     ptr: None,
                                     name_span: *span,
@@ -984,7 +975,7 @@ impl<'a> Parser<'a> {
                                     break Expr {
                                         data: ExprData::Call {
                                             receiver: None,
-                                            name: value.as_ntstrptr(),
+                                            name: value,
                                             args: arguments.leak(),
                                             ptr: None,
                                             name_span: *span,
@@ -998,7 +989,7 @@ impl<'a> Parser<'a> {
                         }
                     } else {
                         Expr {
-                            data: ExprData::Identifier(value.as_ntstrptr()),
+                            data: ExprData::Identifier(value),
                             result_type: None,
                             span: *span,
                         }
@@ -1007,7 +998,7 @@ impl<'a> Parser<'a> {
                 TokenType::Int32 => Expr {
                     data: ExprData::Number(
                         value.parse::<i64>().unwrap_or(f64::MAX as i64) as f64,
-                        Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
+						value,
                     ),
                     result_type: None,
                     span: *span,
@@ -1030,7 +1021,7 @@ impl<'a> Parser<'a> {
                     Expr {
                         data: ExprData::Number(
                             number,
-                            Box::leak(NTStr::box_from_str_in(value, arena)).as_ntstrptr(),
+							value,
                         ),
                         result_type: None,
                         span: *span,
@@ -1075,7 +1066,7 @@ impl<'a> Parser<'a> {
             {
                 let receiver = current;
                 let name_span = name.span;
-                let name: &'a NTStr = arena.copy_str_into_nt(name.value);
+                let name = name.value;
                 // a word token can actually be a function call
                 let next_token = get_next_token(tokens)?;
                 if next_token.ty == TokenType::OpenParenthesis {
@@ -1088,7 +1079,7 @@ impl<'a> Parser<'a> {
                             span: receiver.span,
                             data: ExprData::Call {
                                 receiver: Some(arena.alloc_into(receiver)),
-                                name: name.as_ntstrptr(),
+								name, 
                                 args: Vec::new().leak(),
                                 ptr: None,
                                 name_span,
@@ -1118,7 +1109,7 @@ impl<'a> Parser<'a> {
                                     span: receiver.span,
                                     data: ExprData::Call {
                                         receiver: Some(arena.alloc_into(receiver)),
-                                        name: name.as_ntstrptr(),
+										name, 
                                         args: arguments.leak(),
                                         ptr: None,
                                         name_span,
@@ -1227,7 +1218,7 @@ impl<'a> Parser<'a> {
                 "number" => Type::Number,
                 "string" => Type::String,
                 "resource" => Type::Resource {
-                    extension: nt!("").as_ntstrptr(),
+                    extension: "",
                     optional: false,
                 },
                 "entity" => Type::Entity { entity_type: None },
@@ -1248,7 +1239,7 @@ impl<'a> Parser<'a> {
                         &[]
                     };
                     Type::Id {
-                        name: arena.copy_str_into_nt(type_name).as_ntstrptr(),
+                        name: type_name,
                         generics,
                     }
                 }
