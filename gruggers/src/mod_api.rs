@@ -8,6 +8,7 @@ use std::ptr::NonNull;
 use crate::arena::Arena;
 use crate::ast::{Parameter, Type};
 use crate::error::{Error, ErrorKind, Result, SourceSpan};
+use crate::frontend::type_propagation::StackLL;
 use crate::ntstring::NTStr;
 use crate::types::{ErasedHostFn, ErasedRegFn};
 
@@ -22,6 +23,8 @@ pub(crate) struct ModApi {
     classes: HashMap<&'static NTStr, ModApiClass<'static>>,
     host_fns: HashMap<&'static NTStr, ModApiHostFn<'static>>,
     _arena: Arena,
+    // Holds temporary strings, like the names in registration errors
+    temp_arena: Arena,
 }
 
 // We don't have a public api that uses the `_arena` field which is the only !Send
@@ -105,9 +108,16 @@ impl ModApi {
         class_name: Option<&str>,
         fn_name: &str,
         gen_count: Option<usize>,
-    ) -> Result<(&mut ModApiHostFn<'static>, String)> {
+    ) -> Result<(&mut ModApiHostFn<'static>, &str)> {
+        self.temp_arena.clear();
+        let ModApi {
+            classes,
+            host_fns,
+            temp_arena,
+            ..
+        } = self;
         let (host_fn, err_name) = if let Some(class_name) = class_name {
-            let Some(class) = self.classes.get_mut(class_name) else {
+            let Some(class) = classes.get_mut(class_name) else {
                 return Err(Self::new_reg_error(format_args!(
                     "class or entity {} was not declared in the mod_api",
                     class_name
@@ -132,15 +142,21 @@ impl ModApi {
             } else {
                 "method"
             };
-            (host_fn, format!("{} {}.{}", kind, class_name, fn_name))
+            (
+                host_fn,
+                temp_arena.fmt_into(format_args!("{} {}.{}", kind, class_name, fn_name)),
+            )
         } else {
-            let Some(host_fn) = self.host_fns.get_mut(fn_name) else {
+            let Some(host_fn) = host_fns.get_mut(fn_name) else {
                 return Err(Self::new_reg_error(format_args!(
                     "host function {} was not declared in the mod_api",
                     fn_name
                 )));
             };
-            (host_fn, format!("host function {}", fn_name))
+            (
+                host_fn,
+                temp_arena.fmt_into(format_args!("host function {}", fn_name)),
+            )
         };
 
         if let Some(gen_count) = gen_count
@@ -587,8 +603,35 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
         used_generics: &[Generic],
         known_types: &[(&str, &[Generic])],
     ) -> Result<()> {
+        // `checking` holds the (type, constraint) pairs whose check is in progress
+        fn implements_trait<'b>(
+            actual: (Type<'b>, &'b [Generic<'b>]),
+            tr: &'b Trait<'b>,
+            checking: Option<&StackLL<(Type<'b>, &'b Trait<'b>)>>,
+        ) -> bool {
+            // A bare generic implementor can make a check depend on itself,
+            // and that path can't prove that the type implements the constraint
+            if checking.is_some_and(|checking| {
+                checking.any(|&(checked_ty, checked_tr)| {
+                    checked_ty == actual.0 && std::ptr::eq(checked_tr, tr)
+                })
+            }) {
+                return false;
+            }
+            let checking = StackLL {
+                current: (actual.0, tr),
+                parent: checking,
+            };
+            tr.implementors
+                .iter()
+                .any(|imp| type_matches_implementor(actual, (imp.ty, imp.generics), &checking))
+        }
         // Checks if a particular types matches a particular trait
-        fn type_matches_implementor(actual: (Type, &[Generic]), imp: (Type, &[Generic])) -> bool {
+        fn type_matches_implementor<'b>(
+            actual: (Type<'b>, &'b [Generic<'b>]),
+            imp: (Type<'b>, &'b [Generic<'b>]),
+            checking: &StackLL<(Type<'b>, &'b Trait<'b>)>,
+        ) -> bool {
             match (actual.0, imp.0) {
                 (
                     Type::Id {
@@ -604,7 +647,11 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                         .iter()
                         .zip(imp_generic_types)
                         .all(|(ty, imp_gen_type)| {
-                            type_matches_implementor((*ty, actual.1), (*imp_gen_type, imp.1))
+                            type_matches_implementor(
+                                (*ty, actual.1),
+                                (*imp_gen_type, imp.1),
+                                checking,
+                            )
                         })
                 }
                 (Type::Existential { idx: act_idx }, Type::Existential { idx: imp_idx }) => {
@@ -624,11 +671,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                     .expect("existential should always point to a valid generic")
                     .traits()
                     .iter()
-                    .all(|tr| {
-                        tr.implementors.iter().any(|imp| {
-                            type_matches_implementor((ty, actual.1), (imp.ty, imp.generics))
-                        })
-                    }),
+                    .all(|tr| implements_trait((ty, actual.1), tr, Some(checking))),
                 (Type::Void, Type::Void)
                 | (Type::Bool, Type::Bool)
                 | (Type::Number, Type::Number)
@@ -681,12 +724,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                                         false
                                     };
                                 let is_type_that_matches_a_trait_implementor =
-                                    tr.implementors.iter().any(|imp| {
-                                        type_matches_implementor(
-                                            (*generic, used_generics),
-                                            (imp.ty, imp.generics),
-                                        )
-                                    });
+                                    implements_trait((*generic, used_generics), tr, None);
                                 if !is_existential_that_implements_constraint
                                     && !is_type_that_matches_a_trait_implementor
                                 {
@@ -909,12 +947,6 @@ pub(crate) fn get_mod_api_from_text(
                         }
                         Type::Entity { .. } => {
                             return Err(context.new_error("cannot be an entity string"));
-                        }
-                        // A bare generic could implement the constraint it is
-                        // part of, which would make checking that constraint
-                        // recurse forever
-                        Type::Existential { .. } => {
-                            return Err(context.new_error("cannot be a bare generic"));
                         }
                         _ => (),
                     }
@@ -1345,6 +1377,7 @@ pub(crate) fn get_mod_api_from_text(
             >(host_fns)
         },
         _arena: arena,
+        temp_arena: Arena::new(),
     })
 }
 
@@ -1414,8 +1447,8 @@ mod tests {
         Value { void: () }
     }
 
-    unsafe extern "C" fn dummy_reg_fn(_generics: *const Type<'static>) -> ErasedHostFn {
-        dummy_host_fn
+    unsafe extern "C" fn dummy_reg_fn(_generics: *const Type<'static>) -> Option<ErasedHostFn> {
+        Some(dummy_host_fn)
     }
 
     // Box[$T] with a method and a static method, an entity E with a method,
@@ -1516,7 +1549,7 @@ mod tests {
             "host function f has already been registered"
         );
         // The registered reg fn hands out a callable host fn
-        let host_fn = unsafe { dummy_reg_fn(std::ptr::null()) };
+        let host_fn = unsafe { dummy_reg_fn(std::ptr::null()) }.unwrap();
         unsafe { host_fn(std::ptr::null(), std::ptr::null(), std::ptr::null()) };
     }
 

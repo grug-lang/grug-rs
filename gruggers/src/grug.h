@@ -65,7 +65,9 @@ typedef union grug_value (*host_fn)(struct grug_state* gst, const union grug_val
 
 // A registration function resolves the generics once and returns the host
 // function to call for them. Implementations may cache the result, so these
-// have to be pure.
+// have to be pure. Returning NULL falls back to the host function registered
+// with grug_register_host_fn for the same function, and is a compile error if
+// there is none.
 typedef host_fn (*reg_fn)(const struct grug_type* generics);
 
 typedef struct {

@@ -1,14 +1,19 @@
 //! Tests for compiler behavior that grug-tests doesn't cover, because it is
 //! specific to gruggers or to its API.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
 use gruggers::backend::BytecodeBackend;
+use gruggers::error::Error;
 use gruggers::state::{GrugInitSettings, GrugState};
 
 const MOD_API_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/grug-tests/mod_api.json");
+
+/// An existing mods directory for tests that compile a string, so they don't
+/// have to create one. The file watcher scans it, so it has to stay small
+const STR_MODS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests");
 
 /// A mods directory that is deleted when the test using it ends
 struct ModsDir(PathBuf);
@@ -42,26 +47,37 @@ impl Drop for ModsDir {
     }
 }
 
-fn new_state(mods_dir: &Path) -> GrugState {
-    let mut state = GrugInitSettings::new()
+/// A state whose host functions haven't been registered
+fn new_unregistered_state(mods_dir: &Path) -> GrugState {
+    GrugInitSettings::new()
         .set_mod_api_path(MOD_API_PATH)
         .set_mods_dir(mods_dir.as_os_str())
-        .set_poll_interval(Duration::from_millis(20))
         .set_backend(BytecodeBackend::new())
         .build_state()
-        .unwrap();
+        .unwrap()
+}
+
+fn new_state(mods_dir: &Path) -> GrugState {
+    let mut state = new_unregistered_state(mods_dir);
     // SAFETY: None of the scripts in these tests call a host function
     unsafe { state.register_dummies() };
     state
 }
 
-fn compile_error(path: &str, text: &str) -> String {
-    let mods_dir = ModsDir::new("compile-error");
-    let state = new_state(&mods_dir.0);
-    let err = state
+fn compile_error(state: &GrugState, path: impl AsRef<OsStr>, text: &str) -> Error {
+    state
         .compile_grug_file_from_str(path, text)
-        .expect_err("expected a compile error");
-    err.inner().error_message.to_str().to_owned()
+        .expect_err("expected a compile error")
+}
+
+/// The full error string of compiling `text` as the file at `path`
+fn compile_error_string(path: impl AsRef<OsStr>, text: &str) -> String {
+    let state = new_state(Path::new(STR_MODS_DIR));
+    compile_error(&state, path, text)
+        .inner()
+        .error_string
+        .to_str()
+        .to_owned()
 }
 
 /// The error messages of the files that `compile_all_files` failed to compile
@@ -91,18 +107,20 @@ fn expressions_cant_be_nested_too_deeply() {
     // get by default, in an unoptimized build with coverage instrumentation
     let error = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
-        .spawn(move || compile_error("m/x-D.grug", &text))
+        .spawn(move || compile_error_string("m/x-D.grug", &text))
         .unwrap()
         .join()
         .unwrap();
     assert_eq!(
         error,
-        "There is a function that contains more than 100 levels of nested expressions"
+        "  in a (m/x-D.grug:3:2)\nError: There is a function that contains more than 100 levels of nested expressions\n3 $ }"
     );
 }
 
 // TODO: Move to grug-tests if grug-lang/grug-tests#64, which proposes these
 // escape sequences, is accepted
+// compile_grug_file_from_str canonicalizes the path of a file that compiles,
+// which needs the file to exist
 #[test]
 fn strings_can_contain_escape_sequences() {
     let mods_dir = ModsDir::new("escapes");
@@ -117,8 +135,8 @@ fn strings_can_contain_escape_sequences() {
 #[test]
 fn strings_cant_escape_a_windows_line_break() {
     assert_eq!(
-        compile_error("m/x-A.grug", "x: string = \"a\\\r\n\"\n"),
-        "Unexpected line break in string on line 1"
+        compile_error_string("m/x-A.grug", "x: string = \"a\\\r\n\"\n"),
+        "  in (m/x-A.grug:1:15)\nError: Unexpected line break in string on line 1\n1 $ x: string = \"a\\"
     );
 }
 
@@ -127,7 +145,13 @@ fn strings_cant_escape_a_windows_line_break() {
 #[test]
 fn entity_type_cant_be_too_long() {
     let path = format!("m/x-{}.grug", "A".repeat(421));
-    assert!(compile_error(&path, "x: number = 1\n").contains("exceeding MAX_FILE_ENTITY_TYPE_LENGTH"));
+    assert_eq!(
+        compile_error_string(&path, "x: number = 1\n"),
+        format!(
+            "Error: There are more than 421 characters \nin the entity type of '{0}', exceeding MAX_FILE_ENTITY_TYPE_LENGTH\n$  {0}",
+            path
+        )
+    );
 }
 
 #[cfg(unix)]
@@ -135,23 +159,23 @@ fn entity_type_cant_be_too_long() {
 fn entity_type_must_be_utf8() {
     use std::os::unix::ffi::OsStrExt;
 
-    let mods_dir = ModsDir::new("non-utf8");
-    let state = new_state(&mods_dir.0);
-    let path = std::ffi::OsStr::from_bytes(b"m/x-\xff.grug");
-    let err = state
-        .compile_grug_file_from_str(path, "x: number = 1\n")
-        .expect_err("expected a compile error");
-    assert!(err.inner().error_message.to_str().ends_with("is not valid utf8"));
+    let path = OsStr::from_bytes(b"m/x-\xff.grug");
+    assert_eq!(
+        compile_error_string(path, "x: number = 1\n"),
+        "Error: '\u{FFFD}' is not valid utf8\n$  \u{FFFD}"
+    );
 }
 
 #[test]
 fn compiling_a_missing_file_is_an_io_error() {
-    let mods_dir = ModsDir::new("missing-file");
-    let state = new_state(&mods_dir.0);
+    let state = new_state(Path::new(STR_MODS_DIR));
     let err = state
         .compile_grug_file("m/missing-A.grug")
         .expect_err("expected an IO error");
-    assert!(err.inner().error_message.to_str().starts_with("IO error: "));
+    // The OS error in between differs per platform
+    let error_string = err.inner().error_string.to_str();
+    assert!(error_string.starts_with("Error: IO error: "), "{}", error_string);
+    assert!(error_string.ends_with("\n$ m/missing-A.grug"), "{}", error_string);
 }
 
 #[test]
@@ -214,24 +238,13 @@ fn compile_all_files_reports_files_it_cant_open() {
     assert_eq!(errors.len(), 1);
 }
 
+// all_host_fns_registered is optional, so compiling has to check this too
 #[test]
-fn update_files_compiles_new_files() {
-    let mods_dir = ModsDir::new("update-new-file");
-    mods_dir.write("m/old-A.grug", "x: number = 1\n");
-    let state = new_state(&mods_dir.0);
-    compile_all_errors(&state);
-
-    mods_dir.write("m/new-A.grug", "x: number = 2\n");
-    // The file watcher polls every 20ms, but a busy machine can take longer
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let (_, updated) = state.update_files();
-        let results: Vec<_> = updated.files().iter().map(|file| file.result().is_ok()).collect();
-        if !results.is_empty() {
-            assert_eq!(results, [true]);
-            break;
-        }
-        assert!(std::time::Instant::now() < deadline, "the new file was never reported");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+fn called_host_fn_must_be_registered() {
+    let state = new_unregistered_state(Path::new(STR_MODS_DIR));
+    let err = compile_error(&state, "m/x-D.grug", "export a() {\n    say(\"hi\")\n}\n");
+    assert_eq!(
+        err.inner().error_string.to_str(),
+        "  in a (m/x-D.grug:2:5)\nError: The host function 'say' was not registered\n2 $ say(\"hi\")"
+    );
 }
