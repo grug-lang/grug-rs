@@ -4,6 +4,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
 use gruggers::backend::BytecodeBackend;
 use gruggers::error::Error;
@@ -70,10 +71,18 @@ fn compile_error(state: &GrugState, path: impl AsRef<OsStr>, text: &str) -> Erro
         .expect_err("expected a compile error")
 }
 
+/// The state shared by the tests that only compile a string, since creating
+/// a state takes milliseconds
+fn shared_state() -> MutexGuard<'static, GrugState> {
+    static STATE: LazyLock<Mutex<GrugState>> =
+        LazyLock::new(|| Mutex::new(new_state(Path::new(STR_MODS_DIR))));
+    // A test that fails while holding the lock leaves the state usable
+    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// The full error string of compiling `text` as the file at `path`
 fn compile_error_string(path: impl AsRef<OsStr>, text: &str) -> String {
-    let state = new_state(Path::new(STR_MODS_DIR));
-    compile_error(&state, path, text)
+    compile_error(&shared_state(), path, text)
         .inner()
         .error_string
         .to_str()
@@ -168,8 +177,7 @@ fn entity_type_must_be_utf8() {
 
 #[test]
 fn compiling_a_missing_file_is_an_io_error() {
-    let state = new_state(Path::new(STR_MODS_DIR));
-    let err = state
+    let err = shared_state()
         .compile_grug_file("m/missing-A.grug")
         .expect_err("expected an IO error");
     // The OS error in between differs per platform
