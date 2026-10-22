@@ -372,7 +372,7 @@ mod game_fn_bindings {
     use gruggers::ast::Type;
     use gruggers::error::Error;
     use gruggers::state::GrugState;
-    use gruggers::types::Value;
+    use gruggers::types::{HostFn, Value};
     #[link(name = "tests", kind = "dylib")]
     #[allow(improper_ctypes)]
     unsafe extern "C" {
@@ -384,6 +384,7 @@ mod game_fn_bindings {
         safe fn game_fn_identity<'a>                      (state: &'a GrugState, values: *const Value, generics: &[Type; 1]) -> Value;
         safe fn game_fn_max<'a>                           (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
         safe fn game_fn_say<'a>                           (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
+        safe fn game_fn_show<'a>                          (state: &'a GrugState, values: *const Value, generics: &[Type; 1]) -> Value;
         safe fn game_fn_sin<'a>                           (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
         safe fn game_fn_cos<'a>                           (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
         safe fn game_fn_mega<'a>                          (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
@@ -444,6 +445,8 @@ mod game_fn_bindings {
         safe fn game_fn_box_get<'a>                           (state: &'a GrugState, values: *const Value, generics: &[Type; 1]) -> Value;
 
         safe fn game_fn_default<'a>                           (state: &'a GrugState, values: *const Value, generics: &[Type; 1]) -> Value;
+        safe fn reg_game_fn_default                           (generics: &[Type<'static>; 1]) -> Option<HostFn<1, GrugState>>;
+        safe fn reg_game_fn_specialized                       (generics: &[Type<'static>; 2]) -> Option<HostFn<2, GrugState>>;
 
         safe fn game_fn_dict<'a>                              (state: &'a GrugState, values: *const Value, generics: &[Type; 2]) -> Value;
         safe fn game_fn_dict_from_vec<'a>                     (state: &'a GrugState, values: *const Value, generics: &[Type; 2]) -> Value;
@@ -470,6 +473,7 @@ mod game_fn_bindings {
             state.register_host_fn("identity"                , game_fn_identity                )?;
             state.register_host_fn("max"                     , game_fn_max                     )?;
             state.register_host_fn("say"                     , game_fn_say                     )?;
+            state.register_host_fn("show"                    , game_fn_show                    )?;
             state.register_host_fn("sin"                     , game_fn_sin                     )?;
             state.register_host_fn("cos"                     , game_fn_cos                     )?;
             state.register_host_fn("mega"                    , game_fn_mega                    )?;
@@ -542,6 +546,8 @@ mod game_fn_bindings {
             state.register_method ("Dict"         , "put", game_fn_dict_put  )?;
 
             state.register_host_fn("default"                    , game_fn_default                    )?;
+            state.register_reg_fn ("default"                    , reg_game_fn_default                )?;
+            state.register_reg_fn ("specialized"                , reg_game_fn_specialized            )?;
             state.register_host_fn("cause_game_fn_error_generic", game_fn_cause_game_fn_error_generic)?;
 
             Ok(())

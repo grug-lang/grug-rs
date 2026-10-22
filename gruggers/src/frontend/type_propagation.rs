@@ -1231,13 +1231,28 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     // through.
                     if substitutions.is_some() {
                         *final_generics = self.type_storage.insert_type_list(generics);
-                        if let Some(host_fn_ptr) = host_fn.fn_ptr {
-                            *ptr = Some(host_fn_ptr);
-                        } else {
-                            panic!(
-                                "function {} was not registered (Note: This error is not triggerred by grug_tests)",
-                                name
-                            );
+                        // A reg fn can specialize the host function for these
+                        // generics, and returns None to fall back to fn_ptr
+                        let specialized = host_fn
+                            .reg_fn
+                            .and_then(|reg_fn| unsafe { reg_fn(final_generics.as_ptr()) });
+                        *ptr = specialized.or(host_fn.fn_ptr);
+                        // The host doesn't have to call all_host_fns_registered
+                        if ptr.is_none() && host_fn.reg_fn.is_none() {
+                            return Err(self.new_error(
+                                *name_span,
+                                format_args!("The host function '{}' was not registered", name),
+                            ));
+                        }
+                        if ptr.is_none() {
+                            return Err(self.new_error(
+                                *name_span,
+                                format_args!(
+                                    "The host function '{}' has no version for the generics {}",
+                                    name,
+                                    TypeListDisplay(final_generics),
+                                ),
+                            ));
                         }
                     }
                     Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
@@ -1893,14 +1908,12 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 extension: arena.copy_str_into_nt(extension.to_str()).as_ntstrptr(),
                 optional,
             },
-            // Only a parameter can have an entity type, and fill_arguments never
-            // passes a parameter's entity type on to add_constraint
             // grcov-excl-start
             Type::Entity {
-                entity_type: Some(entity_type),
-            } => Type::Entity {
-                entity_type: Some(arena.copy_str_into_nt(entity_type.to_str()).as_ntstrptr()),
-            },
+                entity_type: Some(_),
+            } => unreachable!(
+                "only a parameter can have an entity type, and fill_arguments never passes a parameter's entity type on to add_constraint"
+            ),
             // grcov-excl-stop
             Type::Entity { entity_type: None } => Type::Entity { entity_type: None },
             Type::Existential { idx } => {
@@ -2009,7 +2022,35 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         err_span: SourceSpan,
         function_name: &str,
     ) -> Result<(), Error> {
-        fn type_matches_implementor(ty: Type, imp_ty: Type, generics: &[Generic]) -> bool {
+        // `checking` holds the (type, constraint) pairs whose check is in progress
+        fn implements_trait<'b>(
+            ty: Type<'b>,
+            tr: &'b Trait<'b>,
+            checking: Option<&StackLL<(Type<'b>, &'b Trait<'b>)>>,
+        ) -> bool {
+            // A bare generic implementor can make a check depend on itself,
+            // and that path can't prove that the type implements the constraint
+            if checking.is_some_and(|checking| {
+                checking.any(|&(checked_ty, checked_tr)| {
+                    checked_ty == ty && std::ptr::eq(checked_tr, tr)
+                })
+            }) {
+                return false;
+            }
+            let checking = StackLL {
+                current: (ty, tr),
+                parent: checking,
+            };
+            tr.implementors
+                .iter()
+                .any(|imp| type_matches_implementor(ty, imp.ty, imp.generics, &checking))
+        }
+        fn type_matches_implementor<'b>(
+            ty: Type<'b>,
+            imp_ty: Type<'b>,
+            generics: &'b [Generic<'b>],
+            checking: &StackLL<(Type<'b>, &'b Trait<'b>)>,
+        ) -> bool {
             match (ty, imp_ty) {
                 (
                     Type::Id {
@@ -2025,18 +2066,14 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                     ty_generics
                         .iter()
                         .zip(imp_generics)
-                        .all(|(ty, imp)| type_matches_implementor(*ty, *imp, generics))
+                        .all(|(ty, imp)| type_matches_implementor(*ty, *imp, generics, checking))
                 }
                 (ty, Type::Existential { idx }) => generics
                     .get(idx)
                     .expect("existential should always point to a valid generic")
                     .traits()
                     .iter()
-                    .all(|tr| {
-                        tr.implementors
-                            .iter()
-                            .any(|imp| type_matches_implementor(ty, imp.ty, imp.generics))
-                    }),
+                    .all(|tr| implements_trait(ty, tr, Some(checking))),
                 // Void cannot appear in normal grug code
                 (Type::Void, Type::Void)
                 | (Type::Bool, Type::Bool)
@@ -2052,11 +2089,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
             }
         }
         for tr in traits {
-            if !tr
-                .implementors
-                .iter()
-                .any(|imp| type_matches_implementor(ty, imp.ty, imp.generics))
-            {
+            if !implements_trait(ty, tr, None) {
                 return Err(self.new_error(err_span, format_args!("host function '{}' expects type '{}' to implement constraint '{}' but it doesn't", function_name, ty, tr.name)));
             }
         }
@@ -2066,9 +2099,23 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 
 /// A linked list whose elements live on the stack
 #[derive(Clone, Copy)]
-struct StackLL<'a, T> {
-    current: T,
-    parent: Option<&'a StackLL<'a, T>>,
+pub(crate) struct StackLL<'a, T> {
+    pub(crate) current: T,
+    pub(crate) parent: Option<&'a StackLL<'a, T>>,
+}
+
+impl<'a, T> StackLL<'a, T> {
+    /// Whether this element or one of its parents matches `f`
+    pub(crate) fn any(&self, mut f: impl FnMut(&T) -> bool) -> bool {
+        let mut current = Some(self);
+        while let Some(cur) = current {
+            if f(&cur.current) {
+                return true;
+            }
+            current = cur.parent;
+        }
+        false
+    }
 }
 
 impl<'a, T> std::ops::Deref for StackLL<'a, T> {
@@ -2152,9 +2199,6 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
 pub(crate) struct TypeListDisplay<'a>(pub(crate) &'a [Type<'a>]);
 
 impl<'a> std::fmt::Display for TypeListDisplay<'a> {
-	// Cov: This only exists to pretty print a list of types, which currently
-	// is only used by the backend for to dump the bytecode
-	// grcov-excl-start
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("[")?;
         for (i, ty) in self.0.iter().enumerate() {
@@ -2166,5 +2210,4 @@ impl<'a> std::fmt::Display for TypeListDisplay<'a> {
         f.write_str("]")?;
         Ok(())
     }
-	// grcov-excl-stop
 }

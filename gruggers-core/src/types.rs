@@ -8,7 +8,7 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 
 /// A Type erased version of [`RegFn`]
-pub type ErasedRegFn = unsafe extern "C" fn(*const Type<'static>) -> ErasedHostFn;
+pub type ErasedRegFn = unsafe extern "C" fn(*const Type<'static>) -> Option<ErasedHostFn>;
 
 /// A function pointer to a function that provides specialized versions of
 /// generic host functions
@@ -26,7 +26,12 @@ pub type ErasedRegFn = unsafe extern "C" fn(*const Type<'static>) -> ErasedHostF
 /// The number of types provided is the number of generics for the function in
 /// the mod_api. For methods, if the method does not define any generics, then
 /// the parent's generics are inherited.
-pub type RegFn<const N: usize, State> = extern "C" fn(&[Type<'static>; N]) -> HostFn<N, State>;
+///
+/// Returning `None` (NULL in C) means there is no specialized version for these
+/// generics, so the host function pointer registered for the same function is
+/// called instead. If there is none, the call is a compile error.
+pub type RegFn<const N: usize, State> =
+    extern "C" fn(&[Type<'static>; N]) -> Option<HostFn<N, State>>;
 
 /// Type erases a registration function pointer
 pub fn erase_reg_fn<const N: usize, GrugState: State>(reg_fn: RegFn<N, GrugState>) -> ErasedRegFn {
