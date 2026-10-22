@@ -51,5 +51,67 @@ jobs:
       - name: Run grug_bench
         run: cargo test --verbose --test grug_bench
 
+      - name: Run frontend tests
+        run: cargo test --verbose --test frontend
+
       - name: Run grug_tests integration suite
         run: cargo test --verbose --test grug_tests -- --continue-on-fail
+
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned for the same reason as in the build job. Coverage runs on stable:
+      # lines that can't be reached are excluded with grcov's markers, as
+      # explained in the "Require 100% coverage" step below.
+      - name: Install the pinned toolchain
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component llvm-tools --no-self-update
+          rustup default 1.98.1
+          rustc --version
+      - name: Install cargo-llvm-cov and grcov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,grcov
+      - run: git submodule update --init --force
+      - run: cmake -S gruggers/src/grug-tests/ -B ./gruggers/src/grug-tests/build/ -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build ./gruggers/src/grug-tests/build
+      - run: cmake -S gruggers/src/grug-bench/ -B ./gruggers/src/grug-bench/build/ -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build ./gruggers/src/grug-bench/build
+
+      - name: Run the tests with coverage
+        run: |
+          cargo llvm-cov --no-report --workspace --lib --bins
+          cargo llvm-cov --no-report --workspace --test grug_bench --test frontend
+          cargo llvm-cov --no-report --workspace --test grug_tests -- --continue-on-fail
+          cargo llvm-cov report --lcov --output-path lcov.info
+
+      # Only the compiler is held to 100% for now; grug-lang/grug-rs#6 tracks
+      # the rest of the crate. A line that can't be reached is excluded by
+      # ending it with `// grcov-excl-line`, or by putting it between
+      # `// grcov-excl-start` and `// grcov-excl-stop` lines.
+      - name: Require 100% coverage of the compiler
+        run: |
+          grcov lcov.info -s . -t covdir -o covdir.json \
+            --keep-only 'gruggers/src/frontend/*' --keep-only 'gruggers/src/mod_api.rs' \
+            --excl-line grcov-excl-line --excl-start grcov-excl-start --excl-stop grcov-excl-stop
+          python3 - <<'EOF'
+          import json
+
+          def uncovered_lines(node, path):
+              if "children" in node:
+                  for name, child in node["children"].items():
+                      yield from uncovered_lines(child, f"{path}/{name}")
+              else:
+                  for i, count in enumerate(node["coverage"]):
+                      if count == 0:
+                          yield f"{path.lstrip('/')}:{i + 1}"
+
+          covdir = json.load(open("covdir.json"))
+          print(f"Compiler line coverage: {covdir['coveragePercent']}%")
+          lines = list(uncovered_lines(covdir, ""))
+          for line in lines:
+              print(f"Not covered: {line}")
+          raise SystemExit(1 if lines else 0)
+          EOF

@@ -22,7 +22,6 @@ pub(crate) struct ModApi {
     classes: HashMap<&'static NTStr, ModApiClass<'static>>,
     host_fns: HashMap<&'static NTStr, ModApiHostFn<'static>>,
     _arena: Arena,
-    temp_arena: Arena,
 }
 
 // We don't have a public api that uses the `_arena` field which is the only !Send
@@ -66,68 +65,17 @@ impl ModApi {
         f: ErasedHostFn,
         gen_count: Option<usize>,
     ) -> Result<()> {
-        self.temp_arena.clear();
-        let arena = &self.temp_arena;
-
-        let (host_fn, err_name) = if let Some(class_name) = class_name {
-            let Some(class) = self.classes.get_mut(class_name) else {
-                return Err(Self::new_reg_error(format_args!(
-                    "class or entity {} was not declared in the mod_api",
-                    class_name
-                )));
-            };
-            let class_is_entity = class.is_entity();
-            let Some((_, host_fn)) = class
-                .assoc_fns
-                .iter_mut()
-                .find(|(name, _)| name.as_str() == fn_name)
-            else {
-                return Err(Self::new_reg_error(format_args!(
-                    "method {}.{} was not declared in the mod_api",
-                    class_name, fn_name
-                )));
-            };
-
-            let err_name = if host_fn.is_static {
-                arena.fmt_into(format_args!("static method {}.{}", class_name, fn_name))
-            } else if class_is_entity {
-                arena.fmt_into(format_args!("entity method {}.{}", class_name, fn_name))
-            } else {
-                arena.fmt_into(format_args!("static method {}.{}", class_name, fn_name))
-            };
-
-            (host_fn, err_name)
-        } else {
-            let Some(host_fn) = self.host_fns.get_mut(fn_name) else {
-                return Err(Self::new_reg_error(format_args!(
-                    "host function {} was not declared in the mod_api",
-                    fn_name
-                )));
-            };
-            (
-                host_fn,
-                arena.fmt_into(format_args!("host function {}", fn_name)),
-            )
-        };
-
-        if let Some(gen_count) = gen_count
-            && host_fn.generics.len() != gen_count
-        {
-            return Err(Self::new_reg_error(format_args!(
-                "{} was not declared in the mod_api",
-                err_name
-            )));
-        }
+        let (host_fn, err_name) = self.find_host_fn_to_register(class_name, fn_name, gen_count)?;
         match &mut host_fn.fn_ptr {
-            Some(_) => {
-                return Err(Self::new_reg_error(format_args!(
-                    "{} has already been registered",
-                    err_name
-                )));
+            Some(_) => Err(Self::new_reg_error(format_args!(
+                "{} has already been registered",
+                err_name
+            ))),
+            ptr @ None => {
+                *ptr = Some(f);
+                Ok(())
             }
-            ptr @ None => *ptr = Some(f),
         }
-        Ok(())
     }
 
     pub(crate) fn register_reg_fn(
@@ -137,9 +85,27 @@ impl ModApi {
         f: ErasedRegFn,
         gen_count: Option<usize>,
     ) -> Result<()> {
-        self.temp_arena.clear();
-        let arena = &self.temp_arena;
+        let (host_fn, err_name) = self.find_host_fn_to_register(class_name, fn_name, gen_count)?;
+        match &mut host_fn.reg_fn {
+            Some(_) => Err(Self::new_reg_error(format_args!(
+                "{} has already been registered",
+                err_name
+            ))),
+            ptr @ None => {
+                *ptr = Some(f);
+                Ok(())
+            }
+        }
+    }
 
+    // Finds the host function or method that a registration is for, along
+    // with the name that registration errors should call it by
+    fn find_host_fn_to_register(
+        &mut self,
+        class_name: Option<&str>,
+        fn_name: &str,
+        gen_count: Option<usize>,
+    ) -> Result<(&mut ModApiHostFn<'static>, String)> {
         let (host_fn, err_name) = if let Some(class_name) = class_name {
             let Some(class) = self.classes.get_mut(class_name) else {
                 return Err(Self::new_reg_error(format_args!(
@@ -159,15 +125,14 @@ impl ModApi {
                 )));
             };
 
-            let err_name = if host_fn.is_static {
-                arena.fmt_into(format_args!("static method {}.{}", class_name, fn_name))
+            let kind = if host_fn.is_static {
+                "static method"
             } else if class_is_entity {
-                arena.fmt_into(format_args!("entity method {}.{}", class_name, fn_name))
+                "entity method"
             } else {
-                arena.fmt_into(format_args!("static method {}.{}", class_name, fn_name))
+                "method"
             };
-
-            (host_fn, err_name)
+            (host_fn, format!("{} {}.{}", kind, class_name, fn_name))
         } else {
             let Some(host_fn) = self.host_fns.get_mut(fn_name) else {
                 return Err(Self::new_reg_error(format_args!(
@@ -175,10 +140,7 @@ impl ModApi {
                     fn_name
                 )));
             };
-            (
-                host_fn,
-                arena.fmt_into(format_args!("host function {}", fn_name)),
-            )
+            (host_fn, format!("host function {}", fn_name))
         };
 
         if let Some(gen_count) = gen_count
@@ -189,16 +151,7 @@ impl ModApi {
                 err_name
             )));
         }
-        match &mut host_fn.reg_fn {
-            Some(_) => {
-                return Err(Self::new_reg_error(format_args!(
-                    "{} has already been registered",
-                    err_name
-                )));
-            }
-            ptr @ None => *ptr = Some(f),
-        }
-        Ok(())
+        Ok((host_fn, err_name))
     }
 
     pub(crate) unsafe fn register_dummies(&mut self) {
@@ -671,16 +624,12 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                             type_matches_implementor((ty, actual.1), (imp.ty, imp.generics))
                         })
                     }),
-                (Type::Void, Type::Void) => true,
-                (Type::Bool, Type::Bool) => true,
-                (Type::Number, Type::Number) => true,
-                (Type::String, Type::String) => true,
-                (Type::Resource { .. }, _) | (_, Type::Resource { .. }) => {
-                    unreachable!("resource strings cannot be used in generics")
-                }
-                (Type::Entity { .. }, _) | (_, Type::Entity { .. }) => {
-                    unreachable!("entity strings cannot be used in generics")
-                }
+                (Type::Void, Type::Void)
+                | (Type::Bool, Type::Bool)
+                | (Type::Number, Type::Number)
+                | (Type::String, Type::String) => true,
+                // Resource and entity strings end up here, since no implementor
+                // can be one, even when they are nested in a generic type
                 _ => false,
             }
         }
@@ -1116,6 +1065,15 @@ pub(crate) fn get_mod_api_from_text(
                     for (static_method_name, static_method_values) in static_methods.iter() {
                         context.push_path(JsonPathComponent::ObjectKey(static_method_name));
                         let static_method_name = arena.copy_str_into_nt(static_method_name);
+                        // A static method can't share a name with a method, since
+                        // registering either one only names the type and the
+                        // function, which then wouldn't say which of the two it is
+                        if assoc_fns
+                            .iter()
+                            .any(|(method_name, _)| *method_name == static_method_name)
+                        {
+                            return Err(context.new_error("is already declared as a method"));
+                        }
                         assoc_fns.push((
                             static_method_name,
                             context.parse_host_fn::<true>(
@@ -1222,11 +1180,9 @@ pub(crate) fn get_mod_api_from_text(
                     for (static_method_name, static_method_values) in static_methods.iter() {
                         context.push_path(JsonPathComponent::ObjectKey(static_method_name));
                         let static_method_name = arena.copy_str_into_nt(static_method_name);
-                        // Make sure there are no methods with the same name is this static method
-                        // A static method can't share a name with a regular method,
-                        // since both are called as `Type.name(...)` in different forms
-                        // (`Type.name()` vs `value.name()`) and the ambiguity isn't
-                        // resolvable from the call site alone.
+                        // A static method can't share a name with a method, since
+                        // registering either one only names the type and the
+                        // function, which then wouldn't say which of the two it is
                         if assoc_fns
                             .iter()
                             .any(|(method_name, _)| *method_name == static_method_name)
@@ -1295,23 +1251,10 @@ pub(crate) fn get_mod_api_from_text(
 
     let mut known_types = Vec::with_capacity_in(classes.len(), &arena);
 
-    // Collect all classes and the number of generics they declare
+    // Collect all classes and the number of generics they declare. The names
+    // are unique, since a class can't share its name with an entity
     for (class_name, class_data) in classes.iter() {
-        if class_data.is_entity() {
-            context.push_path(JsonPathComponent::ObjectKey("classes"));
-        } else {
-            context.push_path(JsonPathComponent::ObjectKey("entities"));
-        }
-        context.push_path(JsonPathComponent::ObjectKey(class_name));
-        if known_types
-            .iter()
-            .any(|(type_name, _)| *type_name == class_name.as_str())
-        {
-            return Err(context.new_error("class name already exists"));
-        }
         known_types.push((class_name.as_str(), class_data.generics));
-        context.pop_path();
-        context.pop_path();
     }
 
     let known_types = known_types.leak();
@@ -1397,39 +1340,192 @@ pub(crate) fn get_mod_api_from_text(
             >(host_fns)
         },
         _arena: arena,
-        temp_arena: Arena::new(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Value;
+
+    // Builds a mod_api.json from the bodies of its root objects
+    fn mod_api_json(classes: &str, entities: &str, host_functions: &str) -> String {
+        format!(
+            r#"{{"classes": {{{classes}}}, "entities": {{{entities}}}, "host_functions": {{{host_functions}}}}}"#
+        )
+    }
+
+    fn parse(classes: &str, entities: &str, host_functions: &str) -> ModApi {
+        get_mod_api_from_text("test", &mod_api_json(classes, entities, host_functions)).unwrap()
+    }
+
+    fn parse_error(classes: &str, entities: &str, host_functions: &str) -> String {
+        let err = get_mod_api_from_text("test", &mod_api_json(classes, entities, host_functions))
+            .err()
+            .expect("expected the mod_api to be rejected");
+        err.inner().error_message.to_str().to_owned()
+    }
 
     #[test]
     fn mod_api_test_ok() {
-        let text = r#"{
-			"classes": {},
-			"entities": {},
-			"host_functions": {}
-		}"#;
-        get_mod_api_from_text("test", text).unwrap();
+        parse("", "", "");
     }
 
     #[test]
     fn mod_api_test_err_1() {
-        let text = r#"{
-			"classes": {
-				"Test": 42
-			},
-			"entities": {},
-			"host_functions": {}
-		}"#;
-        match get_mod_api_from_text("test", text) {
-            Ok(_) => panic!("expected failure"),
-            Err(err) => assert_eq!(
-                err.inner().error_message.to_str(),
-                "root.classes.Test is not an object"
+        assert_eq!(
+            parse_error(r#""Test": 42"#, "", ""),
+            "root.classes.Test is not an object"
+        );
+    }
+
+    #[test]
+    fn missing_mod_api_file_is_an_io_error() {
+        let err = get_mod_api("this/mod_api.json/does/not/exist")
+            .err()
+            .expect("expected reading the mod_api to fail");
+        assert!(err.inner().error_message.to_str().starts_with("IO Error: "));
+    }
+
+    // TODO: Move to grug-tests once it's decided how mod_api.json treats type
+    // names it doesn't declare, since grug-for-python reads "void" as one
+    #[test]
+    fn host_fn_parameter_cannot_be_void() {
+        assert_eq!(
+            parse_error(
+                "",
+                "",
+                r#""f": {"description": "Foo", "parameters": [{"name": "x", "type": {"name": "void"}}]}"#
             ),
+            "root.host_functions.f.parameters[\"x\"].type cannot be void"
+        );
+    }
+
+    unsafe extern "C" fn dummy_host_fn(
+        _state: *const c_void,
+        _arguments: *const Value,
+        _generics: *const Type<'static>,
+    ) -> Value {
+        Value { void: () }
+    }
+
+    unsafe extern "C" fn dummy_reg_fn(_generics: *const Type<'static>) -> ErasedHostFn {
+        dummy_host_fn
+    }
+
+    // Box[$T] with a method and a static method, an entity E with a method,
+    // and a host function f
+    fn registration_mod_api() -> ModApi {
+        parse(
+            r#""Box": {
+                "description": "Foo",
+                "used_generics": [{"name": "$T"}],
+                "methods": {"get": {"description": "Foo"}},
+                "static_methods": {"new": {"description": "Foo"}}
+            }"#,
+            r#""E": {"description": "Foo", "methods": {"m": {"description": "Foo"}}}"#,
+            r#""f": {"description": "Foo"}"#,
+        )
+    }
+
+    fn register_twice(class_name: Option<&str>, fn_name: &str) -> String {
+        let mut mod_api = registration_mod_api();
+        mod_api.register_host_fn(class_name, fn_name, dummy_host_fn, None).unwrap();
+        let err = mod_api
+            .register_host_fn(class_name, fn_name, dummy_host_fn, None)
+            .expect_err("expected the second registration to fail");
+        err.inner().error_message.to_str().to_owned()
+    }
+
+    fn register_error(class_name: Option<&str>, fn_name: &str, gen_count: Option<usize>) -> String {
+        let err = registration_mod_api()
+            .register_host_fn(class_name, fn_name, dummy_host_fn, gen_count)
+            .expect_err("expected the registration to fail");
+        err.inner().error_message.to_str().to_owned()
+    }
+
+    #[test]
+    fn host_fn_can_only_be_registered_once() {
+        assert_eq!(register_twice(None, "f"), "host function f has already been registered");
+    }
+
+    #[test]
+    fn method_can_only_be_registered_once() {
+        assert_eq!(register_twice(Some("Box"), "get"), "method Box.get has already been registered");
+    }
+
+    #[test]
+    fn static_method_can_only_be_registered_once() {
+        assert_eq!(
+            register_twice(Some("Box"), "new"),
+            "static method Box.new has already been registered"
+        );
+    }
+
+    #[test]
+    fn entity_method_can_only_be_registered_once() {
+        assert_eq!(register_twice(Some("E"), "m"), "entity method E.m has already been registered");
+    }
+
+    #[test]
+    fn registered_host_fn_must_be_declared() {
+        assert_eq!(
+            register_error(None, "g", None),
+            "host function g was not declared in the mod_api"
+        );
+    }
+
+    #[test]
+    fn registered_method_class_must_be_declared() {
+        assert_eq!(
+            register_error(Some("Nope"), "get", None),
+            "class or entity Nope was not declared in the mod_api"
+        );
+    }
+
+    #[test]
+    fn registered_method_must_be_declared() {
+        assert_eq!(
+            register_error(Some("Box"), "nope", None),
+            "method Box.nope was not declared in the mod_api"
+        );
+    }
+
+    #[test]
+    fn registered_generic_count_must_match() {
+        assert_eq!(
+            register_error(None, "f", Some(1)),
+            "host function f was not declared in the mod_api"
+        );
+    }
+
+    #[test]
+    fn reg_fn_can_only_be_registered_once() {
+        let mut mod_api = registration_mod_api();
+        mod_api.register_reg_fn(None, "f", dummy_reg_fn, None).unwrap();
+        let err = mod_api
+            .register_reg_fn(None, "f", dummy_reg_fn, None)
+            .expect_err("expected the second registration to fail");
+        assert_eq!(
+            err.inner().error_message.to_str(),
+            "host function f has already been registered"
+        );
+        // The registered reg fn hands out a callable host fn
+        let host_fn = unsafe { dummy_reg_fn(std::ptr::null()) };
+        unsafe { host_fn(std::ptr::null(), std::ptr::null(), std::ptr::null()) };
+    }
+
+    #[test]
+    fn register_dummies_registers_every_host_fn_and_method() {
+        let mut mod_api = registration_mod_api();
+        unsafe { mod_api.register_dummies() };
+        let host_fns = mod_api
+            .host_fns
+            .values()
+            .chain(mod_api.classes.values().flat_map(|class| class.assoc_fns.iter().map(|(_, host_fn)| host_fn)));
+        for host_fn in host_fns {
+            let fn_ptr = host_fn.fn_ptr.expect("every host fn should have a dummy");
+            unsafe { fn_ptr(std::ptr::null(), std::ptr::null(), std::ptr::null()) };
         }
     }
 }
