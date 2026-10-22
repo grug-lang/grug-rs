@@ -1043,7 +1043,7 @@ impl<'a> Parser<'a> {
                             consume_space(tokens)?;
                             UnaryOperator::Not
                         }
-                        _ => unreachable!(),
+                        _ => unreachable!(), // grcov-excl-line
                     };
                     let ((), r_bp) = Self::get_prefix_precedence(unary_op);
                     let expr = self.parse_expression(tokens, parsing_depth + 1, r_bp, arena)?;
@@ -1210,11 +1210,13 @@ impl<'a> Parser<'a> {
         let [type_token] = consume_next_token_types(tokens, &[TokenType::Word])?;
         Ok((
             match type_token.value {
+				// grcov-excl-start: VARIABLE_INFERENCE is off
 				"_" if VARIABLE_INFERENCE => Type::Existential {
 					// TODO: Is this okay, should we create a unique idx for
 					// each inferred variable in a function?
 					idx: 0,
 				},
+				// grcov-excl-stop
 				"_" => {
 					return self.new_error(
 						type_token.span,

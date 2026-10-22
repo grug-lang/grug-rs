@@ -417,6 +417,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 Ok(())
             }
         } else if !ALLOW_EXISTENTIALS && let Type::Existential { .. } = ty {
+			// grcov-excl-start: the parser only creates existentials with VARIABLE_INFERENCE on
 			return Err(self.new_error(
 				err_span,
 				// TODO: Improve this error message to provide context 
@@ -425,6 +426,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					"Type inference is not allowed in this position",
 				),
 			));
+			// grcov-excl-stop
 		} else {
             Ok(())
         }
@@ -790,8 +792,9 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         if !else_block.is_empty() {
                             if *is_chained {
                                 debug_assert!(else_block.len() == 1);
+                                // The parser only chains an else block that is a single if statement
                                 let [statement] = else_block else {
-                                    unreachable!()
+                                    unreachable!() // grcov-excl-line
                                 };
                                 (condition, is_chained, if_block, else_block) = match statement {
                                     Statement::If {
@@ -800,7 +803,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                                         if_block,
                                         else_block,
                                     } => (condition, is_chained, if_block, else_block),
-                                    _ => unreachable!(),
+                                    _ => unreachable!(), // grcov-excl-line
                                 };
                                 continue;
                             } else {
@@ -1205,9 +1208,9 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             Self::convert_mod_api_type(mod_api_receiver_ty, generics, arena);
                         ty_ctx
                             .add_constraint(*name_span, mod_api_receiver_ty, actual_receiver_ty) .map_err(|err| self.new_error(
-								err.span,
-								format_args!("An error cannot be triggered here, Type mismatch {} vs {}", err.diff, err.diff.swapped())
-							))?;
+								err.span, // grcov-excl-line
+								format_args!("An error cannot be triggered here, Type mismatch {} vs {}", err.diff, err.diff.swapped()), // grcov-excl-line
+							))?; // grcov-excl-line
                     }
 
                     self.fill_arguments(
@@ -1620,7 +1623,7 @@ impl ExistentialKind {
 		match self {
 			Self::Function => "function",
 			// Cov: only meaningful with variable inference
-			Self::Variable => "variable",
+			Self::Variable => "variable", // grcov-excl-line
 		}
 	}
 }
@@ -1751,6 +1754,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 			// the index in here is not real, it's just a placeholder from the
 			// parser
 			// Cov: Cannot be covered without variable type inference
+			// grcov-excl-start
 			Type::Existential { .. } => {
 				let idx = self.create_existential(var_name, name_span, ExistentialKind::Variable);
 				if let Some(substitutions) = substitutions {
@@ -1759,6 +1763,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 					Type::Existential { idx }
 				}
 			}
+			// grcov-excl-stop
 			x => x
 		}
 	}
@@ -1773,16 +1778,17 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         // This ensures recursive calls only handle the constraints relevant to them
         while let Some(constraint) = self.constraints.pop() {
             match constraint {
-				// Cov: Cannot occur naturally, even with variable type inference
-                (Type::Void, Type::Void) => (),
-                (Type::Bool, Type::Bool) => (),
-                (Type::Number, Type::Number) => (),
-                (Type::String, Type::String) => (),
+                // Void can't occur naturally, even with variable type inference
+                (Type::Void, Type::Void)
+                | (Type::Bool, Type::Bool)
+                | (Type::Number, Type::Number)
+                | (Type::String, Type::String) => (),
+                // fill_arguments rejects these before they reach a generic
                 (_, Type::Resource { .. }) | (Type::Resource { .. }, _) => {
-                    unreachable!("resource strings never appear in generics")
+                    unreachable!("resource strings never appear in generics") // grcov-excl-line
                 }
                 (_, Type::Entity { .. }) | (Type::Entity { .. }, _) => {
-                    unreachable!("entity strings never appear in generics")
+                    unreachable!("entity strings never appear in generics") // grcov-excl-line
                 }
                 (
                     Type::Id {
@@ -1858,8 +1864,10 @@ impl<'a, 'err> TyCtx<'a, 'err> {
     // # Note:
     // If there are any non-trivial loops, this will result in a stack overflow
     unsafe fn copy_type_into<'arena, const RECURSE_EXISTENTIALS: bool>(&self, ty: Type<'a>, arena: &'arena Arena) -> Type<'arena> {
-        match ty {
+        // The counter of the excluded arms below starts on this line
+        match ty { // grcov-excl-line
 			// Cov: Resources and entities cannot occur with generic types
+			// grcov-excl-start
             Type::Resource {
                 extension,
                 optional,
@@ -1873,6 +1881,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 entity_type: Some(arena.copy_str_into_nt(entity_type.to_str()).as_ntstrptr()),
             },
             Type::Entity { entity_type: None } => Type::Entity { entity_type: None },
+			// grcov-excl-stop
             Type::Existential { idx } => {
                 if let Type::Existential { idx } = self.substitutions[idx] && !RECURSE_EXISTENTIALS {
                     return Type::Existential { idx };
@@ -1908,7 +1917,10 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 let mut current = Some(&parent_existentials);
                 while let Some(cur) = current {
                     if **cur == idx {
-                        let data = self.existentials[error_idx];
+                        // An uninferred generic names the last generic in its
+                        // chain before the chain loops back, which is the one
+                        // that nothing tells the type of
+                        let data = self.existentials[if direct { parent_existentials.current } else { error_idx }];
 						if direct {
 							return Err(self.new_error(
 								data.name_span,
@@ -1916,10 +1928,12 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 							));
 						} else {
 							// Cov: Cannot occur without variable type inference
+							// grcov-excl-start
 							return Err(self.new_error(
 								data.name_span,
 								format_args!("infinite recursive type found in {} '{}'", data.kind.as_str(), data.name)
 							));
+							// grcov-excl-stop
 						}
                     }
                     current = cur.parent;
@@ -2002,16 +2016,16 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                             .iter()
                             .any(|imp| type_matches_implementor(ty, imp.ty, imp.generics))
                     }),
-				// Cov: Void cannot appear in normal grug code
-                (Type::Void, Type::Void) => true,
-                (Type::Bool, Type::Bool) => true,
-                (Type::Number, Type::Number) => true,
-                (Type::String, Type::String) => true,
+                // Void cannot appear in normal grug code
+                (Type::Void, Type::Void)
+                | (Type::Bool, Type::Bool)
+                | (Type::Number, Type::Number)
+                | (Type::String, Type::String) => true,
                 (Type::Resource { .. }, _) | (_, Type::Resource { .. }) => {
-                    unreachable!("resource strings cannot be used in generics")
+                    unreachable!("resource strings cannot be used in generics") // grcov-excl-line
                 }
                 (Type::Entity { .. }, _) | (_, Type::Entity { .. }) => {
-                    unreachable!("entity strings cannot be used in generics")
+                    unreachable!("entity strings cannot be used in generics") // grcov-excl-line
                 }
                 _ => false,
             }
@@ -2067,14 +2081,15 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         fn get_type_name(ty: Type<'_>) -> &str {
             match ty {
-                Type::Void => "void",
+                // A type mismatch never involves void, resources or entities
+                Type::Void => "void", // grcov-excl-line
                 Type::Bool => "bool",
                 Type::Number => "number",
                 Type::String => "string",
                 Type::Id { name, generics: _ } => name.to_str(),
-                Type::Resource { .. } => "resource",
-                Type::Entity { .. } => "entity",
-                Type::Existential { .. } => unreachable!(),
+                Type::Resource { .. } => "resource", // grcov-excl-line
+                Type::Entity { .. } => "entity", // grcov-excl-line
+                Type::Existential { .. } => unreachable!(), // grcov-excl-line
             }
         }
 
@@ -2118,6 +2133,7 @@ pub(crate) struct TypeListDisplay<'a>(pub(crate) &'a [Type<'a>]);
 impl<'a> std::fmt::Display for TypeListDisplay<'a> {
 	// Cov: This only exists to pretty print a list of types, which currently
 	// is only used by the backend for to dump the bytecode
+	// grcov-excl-start
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("[")?;
         for (i, ty) in self.0.iter().enumerate() {
@@ -2129,4 +2145,5 @@ impl<'a> std::fmt::Display for TypeListDisplay<'a> {
         f.write_str("]")?;
         Ok(())
     }
+	// grcov-excl-stop
 }

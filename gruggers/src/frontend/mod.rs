@@ -95,7 +95,8 @@ impl GrugState {
                         let path = *path;
                         let file_text = match data {
                             Ok(data) => data,
-                            Err(err) => return (Err(err), path),
+                            // Only reachable when reading fails after opening succeeded
+                            Err(err) => return (Err(err), path), // grcov-excl-line
                         };
 
                         // compile the file
@@ -123,8 +124,9 @@ impl GrugState {
                         OwnPtr<'static, [(Result<GrugAst<'static>, Error>, &'static OsStr)]>,
                     >(results.into_boxed_slice().into())
                 };
+                // The state stopped listening, because it is being dropped
                 let Ok(()) = sender.send((arena, results)) else {
-                    break;
+                    break; // grcov-excl-line
                 };
             }
         }
@@ -181,17 +183,7 @@ impl GrugState {
             let id = self.get_or_insert_script_id(path.as_ref());
             self.backend.insert_file(id, &file);
 
-            let mut script_entities = self.script_entities.borrow_mut();
-            // Add entity tracking info to self.script_entities
-            if (id.to_inner() as usize) < script_entities.len() {
-                for entity in &script_entities[id.to_inner() as usize] {
-                    self.backend.init_entity(self, unsafe { &*entity.as_ptr() });
-                }
-            } else if id.to_inner() as usize == script_entities.len() {
-                script_entities.push(std::vec::Vec::new());
-            } else {
-                unreachable!();
-            }
+            self.track_file_entities(id);
 
             Ok(id)
         })();
@@ -199,6 +191,22 @@ impl GrugState {
         self.arenas.borrow_mut().push(arena);
 
         id
+    }
+
+    // Starts tracking the entities of a file that was compiled for the first
+    // time, or reinitializes the entities of a file that was compiled before
+    fn track_file_entities(&self, id: FileId) {
+        let mut script_entities = self.script_entities.borrow_mut();
+        if (id.to_inner() as usize) < script_entities.len() {
+            for entity in &script_entities[id.to_inner() as usize] {
+                self.backend.init_entity(self, unsafe { &*entity.as_ptr() });
+            }
+        } else if id.to_inner() as usize == script_entities.len() {
+            script_entities.push(std::vec::Vec::new());
+        } else {
+            // File ids are handed out in order, so a new id is always the next one
+            unreachable!(); // grcov-excl-line
+        }
     }
 
     /// Compile all the files within the mods directory. Uses asynchronous file
@@ -226,7 +234,7 @@ impl GrugState {
             std::fs::read_dir(&self.mods_dir_path).expect("Could not read mods directory")
         {
             let Ok(mod_dir) = mod_dir else {
-                panic!("unable to read directory: {:?}", mod_dir);
+                panic!("unable to read directory: {:?}", mod_dir); // grcov-excl-line
             };
             let mut entries_to_check = std::vec::Vec::from([mod_dir]);
 
@@ -241,7 +249,7 @@ impl GrugState {
                         std::fs::read_dir(&next_entry_path).expect("Could not read mods directory")
                     {
                         let Ok(entry) = entry else {
-                            panic!("unable to read entry: {:?}", entry);
+                            panic!("unable to read entry: {:?}", entry); // grcov-excl-line
                         };
                         entries_to_check.push(entry);
                     }
@@ -306,17 +314,7 @@ impl GrugState {
                         // Send to backend
                         self.backend.insert_file(id, &ast);
 
-                        let mut script_entities = self.script_entities.borrow_mut();
-                        // Add entity tracking info to self.script_entities
-                        if (id.to_inner() as usize) < script_entities.len() {
-                            for entity in &script_entities[id.to_inner() as usize] {
-                                self.backend.init_entity(self, unsafe { &*entity.as_ptr() });
-                            }
-                        } else if id.to_inner() as usize == script_entities.len() {
-                            script_entities.push(std::vec::Vec::new());
-                        } else {
-                            unreachable!();
-                        }
+                        self.track_file_entities(id);
                         Ok(id)
                     }
                     Err(err) => {
@@ -442,18 +440,7 @@ impl GrugState {
                         // Send to backend
                         self.backend.insert_file(id, &ast);
 
-                        let mut script_entities = self.script_entities.borrow_mut();
-                        // Add entity tracking info to self.script_entities
-                        // Script already exists, reload all files
-                        if (id.to_inner() as usize) < script_entities.len() {
-                            for entity in &script_entities[id.to_inner() as usize] {
-                                self.backend.init_entity(self, unsafe { &*entity.as_ptr() });
-                            }
-                        } else if id.to_inner() as usize == script_entities.len() {
-                            script_entities.push(std::vec::Vec::new());
-                        } else {
-                            unreachable!();
-                        }
+                        self.track_file_entities(id);
                         Ok(id)
                     }
                     Err(err) => {

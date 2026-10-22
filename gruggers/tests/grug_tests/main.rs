@@ -378,6 +378,7 @@ mod game_fn_bindings {
     unsafe extern "C" {
         safe fn game_fn_nothing<'a>                       (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
         safe fn game_fn_magic<'a>                         (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
+        safe fn game_fn_d_double<'a>                      (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
         safe fn game_fn_initialize<'a>                    (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
         safe fn game_fn_initialize_bool<'a>               (state: &'a GrugState, values: *const Value, generics: &[Type; 0]) -> Value;
         safe fn game_fn_identity<'a>                      (state: &'a GrugState, values: *const Value, generics: &[Type; 1]) -> Value;
@@ -456,6 +457,7 @@ mod game_fn_bindings {
         safe fn game_fn_Utils_cause_game_fn_error_generic<'a> (state: &'a GrugState, values: *const Value, generics: &[Type; 1]) -> Value;
 
         safe fn game_fn_make_pair<'a>                         (state: &'a GrugState, values: *const Value, generics: &[Type; 2]) -> Value;
+        safe fn game_fn_count_matching<'a>                    (state: &'a GrugState, values: *const Value, generics: &[Type; 2]) -> Value;
         safe fn game_fn_pair_first<'a>                        (state: &'a GrugState, values: *const Value, generics: &[Type; 2]) -> Value;
         safe fn game_fn_pair_second<'a>                       (state: &'a GrugState, values: *const Value, generics: &[Type; 2]) -> Value;
     }
@@ -512,6 +514,7 @@ mod game_fn_bindings {
             state.register_method ("VecNumber", "new", game_fn_vec_number_new                    )?;
             state.register_method ("VecNumber", "with_capacity", game_fn_vec_number_with_capacity)?;
             state.register_method ("D"        , "magic", game_fn_magic                           )?;
+            state.register_method ("D"        , "double", game_fn_d_double                       )?;
             state.register_method ("Utils"    , "fail", game_fn_cause_game_fn_error              )?;
 
             state.register_method ("Utils", "assert_state_is_not_null", game_fn_Utils_assert_state_is_not_null,      )?;
@@ -530,6 +533,7 @@ mod game_fn_bindings {
             state.register_method ("Box", "get", game_fn_box_get             )?;
 
             state.register_host_fn("make_pair", game_fn_make_pair            )?;
+            state.register_host_fn("count_matching", game_fn_count_matching  )?;
             state.register_method ("Pair"     , "first" , game_fn_pair_first )?;
             state.register_method ("Pair"     , "second", game_fn_pair_second)?;
 
