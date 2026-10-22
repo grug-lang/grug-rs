@@ -1958,13 +1958,11 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         Ok(())
     }
 
-    // The arena hands out a new allocation, so the mutable slice doesn't alias it
-    #[expect(clippy::mut_from_ref)]
     fn substitute<'arena>(
         &mut self,
         type_storage: &mut TypeStorage,
         arena: &'arena Arena,
-    ) -> Result<&'arena mut [Type<'static>], Error> {
+    ) -> Result<&'arena [Type<'static>], Error> {
         // Copy all types into the permanent arena
         for i in 0..self.substitutions.len() {
             self.check_consistency(

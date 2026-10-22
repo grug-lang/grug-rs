@@ -222,9 +222,16 @@ fn update_files_compiles_new_files() {
     compile_all_errors(&state);
 
     mods_dir.write("m/new-A.grug", "x: number = 2\n");
-    // Give the file watcher, which polls every 20ms, time to see the new file
-    std::thread::sleep(Duration::from_millis(200));
-    let (_, updated) = state.update_files();
-    let results: Vec<_> = updated.files().iter().map(|file| file.result().is_ok()).collect();
-    assert_eq!(results, [true]);
+    // The file watcher polls every 20ms, but a busy machine can take longer
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let (_, updated) = state.update_files();
+        let results: Vec<_> = updated.files().iter().map(|file| file.result().is_ok()).collect();
+        if !results.is_empty() {
+            assert_eq!(results, [true]);
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the new file was never reported");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
