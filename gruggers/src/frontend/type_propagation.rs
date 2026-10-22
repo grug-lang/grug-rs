@@ -936,6 +936,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 					));
                 }
                 let result_ty = self.fill_expr(ty_ctx, local_variables, substitutions, expr, arena)?;
+                self.reject_resource_or_entity_operand(result_ty, expr.span)?;
                 let expected = match op {
                     UnaryOperator::Not => Type::Bool,
                     UnaryOperator::Minus => Type::Number,
@@ -963,6 +964,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             } => {
                 let result_0 = self.fill_expr(ty_ctx, local_variables, substitutions, left, arena)?;
                 let result_1 = self.fill_expr(ty_ctx, local_variables, substitutions, right, arena)?;
+                self.reject_resource_or_entity_operand(result_0, left.span)?;
+                self.reject_resource_or_entity_operand(result_1, right.span)?;
                 ty_ctx.add_constraint(*op_span, result_0, result_1).map_err(|err| self.new_error(
 					err.span,
 					format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, err.diff, err.diff.swapped())
@@ -1247,6 +1250,20 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         Ok(result_ty)
     }
 
+    // Resource and entity strings can only be passed directly to host
+    // functions, so they can't be the operand of an operator
+    fn reject_resource_or_entity_operand(&self, ty: Type, span: SourceSpan) -> Result<(), Error> {
+        let kind = match ty {
+            Type::Resource { .. } => "A resource",
+            Type::Entity { .. } => "An entity",
+            _ => return Ok(()),
+        };
+        Err(self.new_error(
+            span,
+            format_args!("{} string can only be passed directly to a host function", kind),
+        ))
+    }
+
 	#[expect(clippy::too_many_arguments)]
     fn fill_arguments<'a>(
         &mut self,
@@ -1326,6 +1343,17 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 return Err(self.new_error(
 					arg.span,
 					format_args!("The host function '{}' expects an entity string, so put an 'e' in front of string \"{}\"", function_name, string)
+				));
+            // anything else is passed where a resource or entity string is expected
+            } else if let Type::Resource { .. } | Type::Entity { .. } = param.ty {
+                let kind = if let Type::Resource { .. } = param.ty {
+                    "a resource"
+                } else {
+                    "an entity"
+                };
+                return Err(self.new_error(
+					arg.span,
+					format_args!("The host function '{}' expects {} string for argument '{}'", function_name, kind, param.name)
 				));
             // argument is a resource or entity string but a generic is expected
             } else if let Type::Existential { .. } = param.ty
@@ -1783,13 +1811,6 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 | (Type::Bool, Type::Bool)
                 | (Type::Number, Type::Number)
                 | (Type::String, Type::String) => (),
-                // fill_arguments rejects these before they reach a generic
-                (_, Type::Resource { .. }) | (Type::Resource { .. }, _) => {
-                    unreachable!("resource strings never appear in generics") // grcov-excl-line
-                }
-                (_, Type::Entity { .. }) | (Type::Entity { .. }, _) => {
-                    unreachable!("entity strings never appear in generics") // grcov-excl-line
-                }
                 (
                     Type::Id {
                         name: left_name, ..
@@ -1864,10 +1885,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
     // # Note:
     // If there are any non-trivial loops, this will result in a stack overflow
     unsafe fn copy_type_into<'arena, const RECURSE_EXISTENTIALS: bool>(&self, ty: Type<'a>, arena: &'arena Arena) -> Type<'arena> {
-        // The counter of the excluded arms below starts on this line
-        match ty { // grcov-excl-line
-			// Cov: Resources and entities cannot occur with generic types
-			// grcov-excl-start
+        match ty {
             Type::Resource {
                 extension,
                 optional,
@@ -1875,13 +1893,16 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 extension: arena.copy_str_into_nt(extension.to_str()).as_ntstrptr(),
                 optional,
             },
+            // Only a parameter can have an entity type, and fill_arguments never
+            // passes a parameter's entity type on to add_constraint
+            // grcov-excl-start
             Type::Entity {
                 entity_type: Some(entity_type),
             } => Type::Entity {
                 entity_type: Some(arena.copy_str_into_nt(entity_type.to_str()).as_ntstrptr()),
             },
+            // grcov-excl-stop
             Type::Entity { entity_type: None } => Type::Entity { entity_type: None },
-			// grcov-excl-stop
             Type::Existential { idx } => {
                 if let Type::Existential { idx } = self.substitutions[idx] && !RECURSE_EXISTENTIALS {
                     return Type::Existential { idx };
@@ -2081,14 +2102,14 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         fn get_type_name(ty: Type<'_>) -> &str {
             match ty {
-                // A type mismatch never involves void, resources or entities
+                // A type mismatch never involves void
                 Type::Void => "void", // grcov-excl-line
                 Type::Bool => "bool",
                 Type::Number => "number",
                 Type::String => "string",
                 Type::Id { name, generics: _ } => name.to_str(),
-                Type::Resource { .. } => "resource", // grcov-excl-line
-                Type::Entity { .. } => "entity", // grcov-excl-line
+                Type::Resource { .. } => "resource",
+                Type::Entity { .. } => "entity",
                 Type::Existential { .. } => unreachable!(), // grcov-excl-line
             }
         }
