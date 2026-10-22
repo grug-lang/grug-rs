@@ -321,6 +321,11 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
         let ty = self.get_str(object, "name")?;
         self.pop_path();
 
+        if ty != "resource" && object.get("optional").is_some() {
+            self.push_path(JsonPathComponent::ObjectKey("optional"));
+            return Err(self.new_error("is only allowed on resource types"));
+        }
+
         let ty = match ty {
             "void" => Type::Void,
             "bool" => Type::Bool,

@@ -109,6 +109,20 @@ jobs:
                           yield f"{path.lstrip('/')}:{i + 1}"
 
           covdir = json.load(open("covdir.json"))
+
+          # An empty report would otherwise pass, without measuring anything
+          def find(node, path):
+              for name in path.split("/"):
+                  node = node.get("children", {}).get(name)
+                  if node is None:
+                      return None
+              return node
+
+          for path in ("gruggers/src/frontend", "gruggers/src/mod_api.rs"):
+              node = find(covdir, path)
+              if node is None or node["linesTotal"] == 0:
+                  raise SystemExit(f"The coverage report doesn't measure {path}")
+
           print(f"Compiler line coverage: {covdir['coveragePercent']}%")
           lines = list(uncovered_lines(covdir, ""))
           for line in lines:
