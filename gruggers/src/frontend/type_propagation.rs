@@ -418,14 +418,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             }
         } else if !ALLOW_EXISTENTIALS && let Type::Existential { .. } = ty {
 			// grcov-excl-start: the parser only creates existentials with VARIABLE_INFERENCE on
-			return Err(self.new_error(
+			Err(self.new_error(
 				err_span,
 				// TODO: Improve this error message to provide context 
 				// e.g. 'Global variables cannot use type inference'
 				format_args!(
 					"Type inference is not allowed in this position",
 				),
-			));
+			))
 			// grcov-excl-stop
 		} else {
             Ok(())
@@ -604,7 +604,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         // This time, the type context is only used to keep track of the number
         // of existentials that have been created
 
-        Ok(self.fill_statements(
+        self.fill_statements(
             &mut TyCtx::new(
                 self.current_fn_name.unwrap(),
                 self.file_path,
@@ -616,7 +616,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             statements,
 			expected_return_type,
             self.arena,
-        )?)
+        )
 	}
 
 	/// Global variables do not have type inference, and they cannot be folded
@@ -1746,7 +1746,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
 	fn instantiate_variable_existentials(&mut self, var_name: &'a str, name_span: SourceSpan, var_ty: Type<'a>, substitutions: Option<&[Type<'a>]>) -> Type<'a> {
 		match var_ty {
 			Type::Id { name, generics } => {
-				let generics = self.temp_arena.slice_from_iter(generics.into_iter().map(|generic| {
+				let generics = self.temp_arena.slice_from_iter(generics.iter().map(|generic| {
 					self.instantiate_variable_existentials(var_name, name_span, *generic, substitutions)
 				}));
 				Type::Id {name, generics }
@@ -1958,6 +1958,8 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         Ok(())
     }
 
+    // The arena hands out a new allocation, so the mutable slice doesn't alias it
+    #[expect(clippy::mut_from_ref)]
     fn substitute<'arena>(
         &mut self,
         type_storage: &mut TypeStorage,
