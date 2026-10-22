@@ -87,8 +87,16 @@ fn expressions_cant_be_nested_too_deeply() {
         "(".repeat(101),
         ")".repeat(101)
     );
+    // Parsing 100 levels of nesting can overflow the 2 MiB stack that tests
+    // get by default, in an unoptimized build with coverage instrumentation
+    let error = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || compile_error("m/x-D.grug", &text))
+        .unwrap()
+        .join()
+        .unwrap();
     assert_eq!(
-        compile_error("m/x-D.grug", &text),
+        error,
         "There is a function that contains more than 100 levels of nested expressions"
     );
 }
