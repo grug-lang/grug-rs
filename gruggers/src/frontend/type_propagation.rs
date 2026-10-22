@@ -1901,6 +1901,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
     // If there are any non-trivial loops, this will result in a stack overflow
     unsafe fn copy_type_into<'arena, const RECURSE_EXISTENTIALS: bool>(&self, ty: Type<'a>, arena: &'arena Arena) -> Type<'arena> {
         match ty {
+			// Cov: Resources and entities cannot occur with generic types
             Type::Resource {
                 extension,
                 optional,
