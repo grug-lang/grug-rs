@@ -2,7 +2,7 @@ use crate::arena::Arena;
 use crate::ast::*;
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::mod_api::ModApi;
-use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
+use crate::ntstring::{NTOsStrPtr, NTStr};
 use crate::own_ptr::OwnPtr;
 use crate::state::{FileInfo, Files, GrugState, ResourcePaths};
 use crate::type_storage::TypeStorage;
@@ -535,12 +535,7 @@ impl GrugState {
         }
 
         // tokenize
-		let new_tokens = tokenizer::tokenize_2(file_text, arena, path)?;
         let tokens = tokenizer::tokenize(file_text, arena, path)?;
-		tokens.iter().copied().zip(new_tokens.as_slice()).for_each(|(left, right)| assert_eq!(left, right));
-		// println!("{:?}", tokens);
-		// println!("{:?}", new_tokens.as_slice().types());
-		assert!(tokens.iter().copied().eq(new_tokens.leak()));
         // parse
         let ast = parser::parse(tokens.leak(), arena, file_text, path)?;
 
@@ -658,7 +653,7 @@ pub(crate) enum GlobalStatement<'a> {
     /// ## This is a global comment
     /// shared_number: number = 0
     /// ```
-    Comment { value: NTStrPtr<'a> },
+    Comment { value: &'a str },
     /// An Empty line at the top level of a script
     EmptyLine,
 }

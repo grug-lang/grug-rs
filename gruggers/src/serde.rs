@@ -17,7 +17,7 @@ pub fn dump_file_to_json(grug_text: &str, file_path: impl AsRef<OsStr>) -> Resul
 
     let tokens = tokenizer::tokenize(grug_text, &arena, "")?;
 
-    let ast = parser::parse(&tokens, &arena, grug_text, file_path.as_ref())?;
+    let ast = parser::parse(tokens.leak(), &arena, grug_text, file_path.as_ref())?;
 
     let json = json::stringify_pretty(ast_to_json(&ast.global_statements), 4);
     Ok(json)
@@ -92,7 +92,7 @@ mod ser {
 			} => {
 				object! {
 					"type": "COMMENT_STATEMENT",
-					"comment": value.to_str(),
+					"comment": *value,
 				}
 			},
 			GlobalStatement::EmptyLine => {
