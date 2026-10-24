@@ -626,6 +626,15 @@ pub struct BytecodeBackend {
     is_errorring: Cell<bool>,
 }
 
+// SAFETY: The raw pointers in BytecodeBackend only point into memory it owns:
+// the `*const Op`s in its stacks point into the instructions in `files`, and
+// each ErasedXar owns its chunks. Nothing depends on the thread it was created
+// on. A `Value::custom_type` pointer comes from the host's game functions, and
+// whether it can be used from another thread is the host's responsibility, like
+// any other raw pointer passed through the C API. It isn't Sync, since its
+// RefCells and Cells can only be used by one thread at a time
+unsafe impl Send for BytecodeBackend {}
+
 impl BytecodeBackend {
     pub const fn new() -> Self {
         Self {

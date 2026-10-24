@@ -112,7 +112,9 @@ impl Default for RuntimeErrorHandler {
     }
 }
 
-impl<F: Fn(&RuntimeError)> From<F> for RuntimeErrorHandler {
+// F must be Send because GrugState is Send, and 'static because the handler is
+// erased to a pointer that can outlive any borrow F holds
+impl<F: Fn(&RuntimeError) + Send + 'static> From<F> for RuntimeErrorHandler {
     fn from(f: F) -> Self {
         let f = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(f))) }.cast::<()>();
         extern "C" fn handler<F: Fn(&RuntimeError)>(data: NonNull<()>, error: &RuntimeError) {
@@ -191,7 +193,10 @@ impl<'a> GrugInitSettings<'a> {
         self
     }
 
-    pub fn set_runtime_error_handler<F: Fn(&RuntimeError)>(mut self, f: F) -> Self {
+    pub fn set_runtime_error_handler<F: Fn(&RuntimeError) + Send + 'static>(
+        mut self,
+        f: F,
+    ) -> Self {
         self.runtime_error_handler = Some(f.into());
         self
     }
@@ -307,8 +312,12 @@ pub struct GrugState {
 
 // SAFETY: Nothing in GrugState depends on the thread it was created on, like a
 // thread local, so it can be moved to and dropped on another thread. Its
-// NonNulls only point into memory that the state owns. It isn't Sync, since
-// its RefCells and Cells can only be used by one thread at a time
+// NonNulls only point into memory that the state owns. The two user-provided
+// values it stores behind erased pointers are Send too: `From<F> for
+// RuntimeErrorHandler` requires `F: Send`, and `Backend` has `Send` as a
+// supertrait. Values passed in through the C API are the host's responsibility.
+// It isn't Sync, since its RefCells and Cells can only be used by one thread at
+// a time
 unsafe impl Send for GrugState {}
 
 impl State for GrugState {
