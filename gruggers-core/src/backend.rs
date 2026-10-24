@@ -11,7 +11,11 @@ use std::ptr::NonNull;
 ///
 /// An implementor of the backend is expected to store the state's runtime error
 /// handler function in its constructor. That function should be called when a runtime error is required
-pub trait Backend {
+///
+/// A backend is erased to a pointer when it is handed to a state, so it must
+/// be `'static`, since the state can outlive any borrow it holds, and `Send`,
+/// since the state can be moved to another thread.
+pub trait Backend: Send + 'static {
     /// The AST of a typechecked grug file is provided to let the backend do
     /// further transforms and lower to bytecode or even machine code
     ///
