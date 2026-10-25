@@ -443,37 +443,56 @@ impl<'a> Compiler<'a> {
                             instructions.push_ins(Op::CmpNeq, Some(*op_span));
                         }
                     },
+                    // JmpIf and JmpIfNot pop the left operand, so each arm leaves exactly one
+                    // value behind: the right operand when it ran, or the constant the left
+                    // operand already decided. Keeping the left operand on the stack when the
+                    // right one runs would leave an extra value under the enclosing call's
+                    // arguments and shift them.
                     BinaryOperator::Or => {
-                        instructions.push_ins(Op::Dup { index: 0 }, Some(*op_span));
-                        let first_patch_loc = instructions.get_loc();
+                        let skip_loc = instructions.get_loc();
                         instructions.push_ins(Op::JmpIf { offset: 0 }, Some(*op_span));
                         self.compile_expr(instructions, right);
+                        let end_loc = instructions.get_loc();
+                        instructions.push_ins(Op::Jmp { offset: 0 }, Some(*op_span));
                         instructions
                             .try_patch(
                                 Op::JmpIf {
-                                    offset: Op::calc_offset(
-                                        first_patch_loc,
-                                        instructions.get_loc(),
-                                    ),
+                                    offset: Op::calc_offset(skip_loc, instructions.get_loc()),
                                 },
-                                first_patch_loc,
+                                skip_loc,
+                            )
+                            .unwrap();
+                        instructions.push_ins(Op::LoadTrue, Some(*op_span));
+                        instructions
+                            .try_patch(
+                                Op::Jmp {
+                                    offset: Op::calc_offset(end_loc, instructions.get_loc()),
+                                },
+                                end_loc,
                             )
                             .unwrap();
                     }
                     BinaryOperator::And => {
-                        instructions.push_ins(Op::Dup { index: 0 }, Some(*op_span));
-                        let first_patch_loc = instructions.get_loc();
+                        let skip_loc = instructions.get_loc();
                         instructions.push_ins(Op::JmpIfNot { offset: 0 }, Some(*op_span));
                         self.compile_expr(instructions, right);
+                        let end_loc = instructions.get_loc();
+                        instructions.push_ins(Op::Jmp { offset: 0 }, Some(*op_span));
                         instructions
                             .try_patch(
                                 Op::JmpIfNot {
-                                    offset: Op::calc_offset(
-                                        first_patch_loc,
-                                        instructions.get_loc(),
-                                    ),
+                                    offset: Op::calc_offset(skip_loc, instructions.get_loc()),
                                 },
-                                first_patch_loc,
+                                skip_loc,
+                            )
+                            .unwrap();
+                        instructions.push_ins(Op::LoadFalse, Some(*op_span));
+                        instructions
+                            .try_patch(
+                                Op::Jmp {
+                                    offset: Op::calc_offset(end_loc, instructions.get_loc()),
+                                },
+                                end_loc,
                             )
                             .unwrap();
                     }
@@ -733,14 +752,6 @@ impl BytecodeBackend {
                 },
                 Op::LoadFalse => stack.values.push(Value { bool: 0 }),
                 Op::LoadTrue => stack.values.push(Value { bool: 1 }),
-                Op::Dup { index } => unsafe {
-                    stack.values.push(
-                        *stack
-                            .values
-                            .get(stack.values.len() - 1 - index as usize)
-                            .unwrap_unchecked(),
-                    )
-                },
                 Op::Add | Op::Sub | Op::Mul | Op::Div => {
                     let second = unsafe { stack.values.pop().unwrap_unchecked().number };
                     let first = unsafe { stack.values.pop().unwrap_unchecked().number };
@@ -1220,7 +1231,6 @@ enum Op {
     LoadStr { data_loc: u32 },
     LoadFalse,
     LoadTrue,
-    Dup { index: u32 },
     // Pop,
     Add,
     Sub,
@@ -1540,7 +1550,6 @@ impl std::fmt::Display for Instructions {
                 }),
                 Op::LoadFalse => write!(f, "LoadFalse"),
                 Op::LoadTrue => write!(f, "LoadTrue"),
-                Op::Dup { index } => write!(f, "Dup {}", index),
                 // Op::Pop => write!(f, "Pop"),
                 Op::Add => write!(f, "Add"),
                 Op::Sub => write!(f, "Sub"),
