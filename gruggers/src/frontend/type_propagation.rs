@@ -12,7 +12,7 @@ use crate::frontend::GlobalStatement;
 use crate::frontend::parser::Ast;
 use crate::mod_api::{Generic, ModApi, ModApiExportFn, Trait};
 use crate::nt;
-use crate::ntstring::{NTStr, NTStrPtr};
+use crate::ntstring::NTStr;
 use crate::type_storage::TypeStorage;
 
 use allocator_api2::boxed::Box;
@@ -172,8 +172,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             Type::Id {
                 name: type_propagator
                     .arena
-                    .copy_str_into_nt(entity_type)
-                    .as_ntstrptr(),
+                    .copy_str_into(entity_type),
                 generics: &[],
             },
         );
@@ -184,7 +183,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         });
         for variable in variables {
             type_propagator.verify_generics::<false>(variable.ty, variable.type_span)?;
-            type_propagator.check_global_expr(&variable.assignment_expr, variable.name.to_str())?;
+            type_propagator.check_global_expr(&variable.assignment_expr, variable.name)?;
 
             type_propagator
                 .fill_global_variable(&mut variable.assignment_expr, variable.ty)
@@ -205,7 +204,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 			//
 			// https://github.com/grug-lang/grug-tests/issues/180
             if let ExprData::Identifier(name) = &variable.assignment_expr.data
-                && name.to_str() == "me"
+                && *name == "me"
             {
                 return Err(type_propagator.new_error(
                     variable.assignment_expr.span,
@@ -213,7 +212,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 ));
             }
             type_propagator.add_global_variable(
-                variable.name.to_str(),
+                variable.name,
                 variable.ty,
                 variable.span,
             )?;
@@ -233,7 +232,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             let Some((current_index, current_on_fn)) = on_functions
                 .iter_mut()
                 .enumerate()
-                .find(|(_, on_fn)| on_fn.name.to_ntstr() == &**on_fn_name)
+                .find(|(_, on_fn)| on_fn.name == on_fn_name.as_str())
             else {
                 continue;
             };
@@ -246,12 +245,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 type_propagator.current_fn_name = Some(on_fn_name);
                 return Err(type_propagator.new_error(
 					current_on_fn.span,
-					format_args!("The function '{}' needs to be moved before or after a different export function, according to the entity '{}' in mod_api.json", current_on_fn.name.to_str(), entity_type)
+					format_args!("The function '{}' needs to be moved before or after a different export function, according to the entity '{}' in mod_api.json", current_on_fn.name, entity_type)
 				));
             }
             previous_on_fn_index = current_index;
 
-            type_propagator.current_fn_name = Some(current_on_fn.name.to_str());
+            type_propagator.current_fn_name = Some(current_on_fn.name);
 
             if mod_api_on_fn.parameters.len() > current_on_fn.parameters.len() {
                 let param = &mod_api_on_fn.parameters[current_on_fn.parameters.len()];
@@ -259,8 +258,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     current_on_fn.span,
                     format_args!(
                         "Function '{}' expected the parameter '{}' with type {}",
-                        current_on_fn.name.to_str(),
-                        param.name.to_str(),
+                        current_on_fn.name,
+                        param.name,
                         param.ty
                     ),
                 ));
@@ -270,8 +269,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     param.name_span,
                     format_args!(
                         "Function '{}' got an unexpected extra parameter '{}' with type {}",
-                        current_on_fn.name.to_str(),
-                        param.name.to_str(),
+                        current_on_fn.name,
+                        param.name,
                         param.ty
                     ),
                 ));
@@ -287,16 +286,16 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         arg.name_span,
                         format_args!(
                             "Function '{}' its '{}' parameter was supposed to be named '{}'",
-                            current_on_fn.name.to_str(),
-                            arg.name.to_str(),
-                            param.name.to_str()
+                            current_on_fn.name,
+                            arg.name,
+                            param.name
                         ),
                     ));
                 }
                 if param.ty != arg.ty {
                     return Err(type_propagator.new_error(
 						arg.type_span,
-						format_args!("Function '{}' its '{}' parameter was supposed to have the type {}, but got {}", current_on_fn.name.to_str(), param.name.to_str(), param.ty, arg.ty)
+						format_args!("Function '{}' its '{}' parameter was supposed to have the type {}, but got {}", current_on_fn.name, param.name, param.ty, arg.ty)
 					));
                 }
             }
@@ -304,24 +303,24 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             for param in current_on_fn.parameters {
                 type_propagator.add_local_variable(
 					&mut local_variables,
-                    param.name.to_str(),
+                    param.name,
                     param.ty,
                     param.name_span,
                 )?;
             }
             type_propagator.fill_complete_function(&local_variables, current_on_fn.body_statements, Type::Void)?;
 
-            debug_assert!(type_propagator.current_fn_name == Some(current_on_fn.name.to_str()));
+            debug_assert!(type_propagator.current_fn_name == Some(current_on_fn.name));
             type_propagator.current_fn_name = None;
         }
         let entity_export_fns = &type_propagator.entity_export_fns;
         for on_fn in on_functions {
-            let on_fn_name = on_fn.name.to_ntstr();
+            let on_fn_name = on_fn.name;
             if !entity_export_fns
                 .iter()
-                .any(|(name, _)| *name == on_fn_name)
+                .any(|(name, _)| name.as_str() == on_fn_name)
             {
-                type_propagator.current_fn_name = Some(on_fn_name.as_str());
+                type_propagator.current_fn_name = Some(on_fn_name);
                 return Err(type_propagator.new_error(
                     on_fn.span,
                     format_args!(
@@ -348,14 +347,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     debug_assert!(type_propagator.num_while_loops_deep == 0);
                     debug_assert!(type_propagator.current_fn_name.is_none());
 
-                    let name = name.to_str();
+                    let name = name;
                     type_propagator.current_fn_name = Some(name);
 					let mut local_variables = LocalVariables::new(None);
                     for param in *parameters {
                         type_propagator.verify_generics::<false>(param.ty, param.type_span)?;
                         type_propagator.add_local_variable(
 							&mut local_variables,
-                            param.name.to_str(),
+                            param.name,
                             param.ty,
                             param.name_span,
                         )?;
@@ -387,7 +386,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     fn verify_generics<const ALLOW_EXISTENTIALS: bool>(&self, ty: Type, err_span: SourceSpan) -> Result<(), Error> {
         // Check the number of generic parameters
         if let Type::Id { name, generics } = ty {
-            if let Some(class) = self.mod_api.classes().get(name.to_str()) {
+            if let Some(class) = self.mod_api.classes().get(name) {
                 if generics.len() != class.generics.len() {
                     return Err(self.new_error(
                         err_span,
@@ -464,7 +463,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 name_span: _,
                 generics: _,
             } => {
-                let fn_name = fn_name.to_str();
+                let fn_name = fn_name;
                 if fn_name.starts_with("_") {
                     return Err(self.new_error(
                         assignment_expr.span,
@@ -704,7 +703,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     assignment_expr,
                     name_span,
                 } => {
-					let name = name.to_str();
+					let name = name;
                     if let Some(ty) = ty {
                         self.verify_generics::<true>(**ty, *type_span)?;
 						*ty = arena.alloc_into(
@@ -909,15 +908,15 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             ExprData::False => Type::Bool,
             ExprData::String { .. } => Type::String,
             ExprData::Resource { .. } => Type::Resource {
-                extension: nt!("").as_ntstrptr(),
+                extension: "",
                 optional: false,
             },
             ExprData::Entity { .. } => Type::Entity { entity_type: None },
             ExprData::Identifier(name) => {
-                let Some(ty) = self.get_variable_type(local_variables, name.to_str()) else {
+                let Some(ty) = self.get_variable_type(local_variables, name) else {
                     return Err(self.new_error(
                         expr.span,
-                        format_args!("The variable '{}' does not exist", name.to_str()),
+                        format_args!("The variable '{}' does not exist", name),
                     ));
                 };
                 ty
@@ -1040,7 +1039,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 generics: final_generics,
             } => {
                 'outer: {
-                    let name = name.to_str();
+                    let name = name;
                     let mut receiver_info = None;
                     let host_fn = if let Some(receiver) = receiver_slot {
                         // A bare identifier receiver that isn't shadowed by a variable,
@@ -1053,7 +1052,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             data: ExprData::Identifier(recv_name),
                             ..
                         } = receiver
-                            && let recv_name = recv_name.to_str()
+                            && let recv_name = *recv_name
                             && let None = self.get_variable_type(local_variables, recv_name)
                             && let Some(class) = self.mod_api.classes().get(recv_name)
                         {
@@ -1066,7 +1065,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             let Some((_, host_fn)) = class
                                 .assoc_fns
                                 .iter()
-                                .find(|(fn_name, _)| fn_name.as_str() == name)
+                                .find(|(fn_name, _)| fn_name.as_str() == *name)
                             else {
                                 return Err(self.new_error(
                                     *name_span,
@@ -1098,7 +1097,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                                 };
 
                             let receiver_name = match actual_receiver_ty {
-                                Type::Id { name, .. } => name.to_str(),
+                                Type::Id { name, .. } => name,
                                 ty => {
                                     return Err(self.new_error(
                                         receiver.span,
@@ -1119,7 +1118,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             let Some((_, host_fn)) = class
                                 .assoc_fns
                                 .iter()
-                                .find(|(fn_name, _)| fn_name.as_str() == name)
+                                .find(|(fn_name, _)| fn_name.as_str() == *name)
                             else {
                                 return Err(self.new_error(
                                     receiver.span,
@@ -1140,7 +1139,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             host_fn
                         }
                     } else if let Some((_, (return_ty, sig_arguments))) =
-						self.local_fns.iter().find(|(fn_name, _)| *fn_name == name)
+						self.local_fns.iter().find(|(fn_name, _)| fn_name == name)
 					{
 						self.fill_arguments(
 							name,
@@ -1153,7 +1152,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 							arena,
 						)?;
 						break 'outer *return_ty;
-					} else if let Some(host_fn) = self.mod_api.host_fns().get(name) {
+					} else if let Some(host_fn) = self.mod_api.host_fns().get(*name) {
 						host_fn
 					} else if name.starts_with("_") {
 						return Err(self.new_error(
@@ -1163,7 +1162,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 								name
 							),
 						));
-					} else if self.export_fns.iter().any(|(fn_name, _)| *fn_name == name) {
+					} else if self.export_fns.iter().any(|(fn_name, _)| fn_name == name) {
 						return Err(self.new_error(
 							*name_span,
 							format_args!(
@@ -1301,7 +1300,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 format_args!(
                     "Function call '{}' expected the argument '{}' with type {}",
                     function_name,
-                    param.name.to_str(),
+                    param.name,
                     param.ty
                 ),
             ));
@@ -1328,13 +1327,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 if substitutions.is_some() {
                     *value = self
                         .validate_and_fix_resource_string(
-                            value.to_str(),
-                            extension.to_str(),
+                            value,
+                            extension,
                             optional,
                             arg.span,
                             arena,
-                        )?
-                        .as_ntstrptr();
+                        )?;
                 }
             // If argument is entity
             } else if let Type::Entity { entity_type: _ } = param.ty
@@ -1500,11 +1498,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
     fn validate_and_fix_entity_string<'a>(
         &mut self,
-        entity_string_old: &mut NTStrPtr<'a>,
+        entity_string: &mut &'a str,
         span: SourceSpan,
         arena: &'a Arena,
     ) -> Result<(), Error> {
-        let entity_string = entity_string_old.to_str();
         // Validate string
         if entity_string.is_empty() {
             return Err(self.new_error(span, format_args!("Entities can't be empty strings")));
@@ -1535,7 +1532,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 }
                 (mod_name, entity_name)
             } else {
-                ("", entity_string)
+                ("", *entity_string)
             };
 
         if let Some(ch) = mod_name.chars().find(|ch| {
@@ -1565,11 +1562,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         // TODO: If the mod name is non utf8, this may cause problems
         // Cross mod entities are supported, so we actually need to handle this properly
         if mod_name.is_empty() {
-            *entity_string_old = Box::leak(NTStr::box_from_str_in(
-                &format!("{}:{}", self.current_mod_name.display(), entity_name),
-                arena,
-            ))
-            .as_ntstrptr()
+			*entity_string = arena.fmt_into(format_args!("{}:{}", self.current_mod_name.display(), entity_name));
         }
         Ok(())
     }
@@ -1906,7 +1899,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 extension,
                 optional,
             } => Type::Resource {
-                extension: arena.copy_str_into_nt(extension.to_str()).as_ntstrptr(),
+                extension: arena.copy_str_into(extension),
                 optional,
             },
             // grcov-excl-start
@@ -1925,7 +1918,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                 unsafe { self.copy_type_into::<RECURSE_EXISTENTIALS>(self.substitutions[idx], arena) }
             }
             Type::Id { name, generics } => Type::Id {
-                name: arena.copy_str_into_nt(name.to_str()).as_ntstrptr(),
+                name: arena.copy_str_into(name),
                 generics: arena.slice_from_iter(
                     generics
                         .iter()
@@ -2155,7 +2148,7 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
                 Type::Bool => "bool",
                 Type::Number => "number",
                 Type::String => "string",
-                Type::Id { name, generics: _ } => name.to_str(),
+                Type::Id { name, generics: _ } => name,
                 Type::Resource { .. } => "resource",
                 Type::Entity { .. } => "entity",
                 Type::Existential { .. } => unreachable!(), // grcov-excl-line

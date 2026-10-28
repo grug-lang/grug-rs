@@ -49,7 +49,7 @@ pub enum Type<'a> {
     /// TODO: Explain usage of ID types in grug
     Id {
         /// Custom name of the id type
-        name: NTStrPtr<'a>,
+        name: &'a str,
         /// The generics of the type, if any
         generics: &'a [Type<'a>],
     },
@@ -63,7 +63,7 @@ pub enum Type<'a> {
         ///
         /// This value ensures that only file paths with particular extensions
         /// can be passed to host functions
-        extension: NTStrPtr<'a>,
+        extension: &'a str,
         /// If true, the path does not have to exist when the program is compiled. A host function can
         /// use this for a path that is created later, like a screenshot reference on its first run.
         optional: bool,
@@ -75,7 +75,7 @@ pub enum Type<'a> {
     /// This can only be used as the type of an argument of a game function
     Entity {
         /// The type of the entity pointed to by the entity string
-        entity_type: Option<NTStrPtr<'a>>,
+        entity_type: Option<&'a str>,
     },
     #[doc(hidden)]
     /// For internal use, Backends should never ever see this
@@ -381,19 +381,19 @@ pub enum ExprData<'a> {
     /// ```
     ///
     /// Before type propagation, resource and entities are treated as normal strings
-    String(NTStrPtr<'a>),
+    String(&'a str),
     /// Represents a resource string literal
     ///
     /// The frontend ensures that the resource actually exists within the mod
-    Resource(NTStrPtr<'a>),
+    Resource(&'a str),
     /// Represents an entity string literal
     ///
     /// The frontend ensures that the entity actually exists within the indicated mod
-    Entity(NTStrPtr<'a>),
+    Entity(&'a str),
     /// Represents an expression that evaluates to the value of a variable at this moment
-    Identifier(NTStrPtr<'a>),
+    Identifier(&'a str),
     /// Represents a number literal
-    Number(f64, NTStrPtr<'a>),
+    Number(f64, &'a str),
     /// Represents a unary expression
     ///
     /// ```text
@@ -460,7 +460,7 @@ pub enum ExprData<'a> {
         /// Receiver of the method
         receiver: Option<&'a mut Expr<'a>>,
         /// Name of the function or method
-        name: NTStrPtr<'a>,
+        name: &'a str,
         /// Expressions for each of the arguments of the function call
         args: &'a mut [Expr<'a>],
         /// Pointer to the host function if this expression is a game function call
@@ -511,7 +511,7 @@ pub struct Expr<'a> {
 #[derive(Debug)]
 pub struct MemberVariable<'a> {
     /// Name of the variable
-    pub name: NTStrPtr<'a>,
+    pub name: &'a str,
     /// Type of the variable
     pub ty: Type<'a>,
     /// Source Span of the type
@@ -544,7 +544,7 @@ pub enum Statement<'a> {
     /// may either be a member variable or a local variable.
     Variable {
         /// Name of the variable
-        name: NTStrPtr<'a>,
+        name: &'a str,
         /// Type of the variable if the statement is a declaration
         ty: Option<&'a Type<'a>>,
         /// Span of the type, if it exists, or just the span of the name again,
@@ -645,7 +645,7 @@ pub enum Statement<'a> {
         /// The span of the comment within the file
         comment_span: SourceSpan,
         /// The value of the comment
-        value: NTStrPtr<'a>,
+        value: &'a str,
     },
     /// A break statement.
     ///
@@ -701,7 +701,7 @@ pub enum Statement<'a> {
 pub struct Parameter<'a> {
     /// Name of the parameter
     /// `n` is the name in the example
-    pub name: NTStrPtr<'a>,
+    pub name: &'a str,
     /// Type of the parameter
     /// `number` is the type in the example
     pub ty: Type<'a>,
@@ -727,7 +727,7 @@ pub struct Parameter<'a> {
 #[derive(Debug)]
 pub struct OnFunction<'a> {
     /// Name of the function as a [null terminated string](crate::ntstring::NTStrPtr)
-    pub name: NTStrPtr<'a>,
+    pub name: &'a str,
     /// List of parameters to the function and their types
     pub parameters: &'a [Parameter<'a>],
     /// List of statements that make up the top level of the function.
@@ -761,7 +761,7 @@ pub struct OnFunction<'a> {
 #[derive(Debug)]
 pub struct HelperFunction<'a> {
     /// Name of the function as a [null terminated string](crate::ntstring::NTStrPtr)
-    pub name: NTStrPtr<'a>,
+    pub name: &'a str,
     /// Return type of the function.
     ///
     /// Return type is [`Type::Void`] if there is no return type
