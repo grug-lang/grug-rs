@@ -11,7 +11,7 @@ use std::io::Write;
 /// from the start of the file and the line number. The column number must be
 /// determined by scanning the file backwards from the offset. The offset is
 /// guaranteed to be at a utf-8 codepoint boundary.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct SourceSpan {
     /// The byte offset within the file where the span begins
