@@ -41,7 +41,6 @@ pub type CompileResponse = (
 
 // Compilation functions
 impl GrugState {
-	
     /// Send at most this many files to a thread for compilation
     const FILES_PER_THREAD: usize = 8;
     // All 'static fields are actually allocated within the arena
@@ -536,7 +535,12 @@ impl GrugState {
         }
 
         // tokenize
+		let new_tokens = tokenizer::tokenize_2(file_text, arena, path)?;
         let tokens = tokenizer::tokenize(file_text, arena, path)?;
+		tokens.iter().copied().zip(new_tokens.as_slice()).for_each(|(left, right)| assert_eq!(left, right));
+		// println!("{:?}", tokens);
+		// println!("{:?}", new_tokens.as_slice().types());
+		assert!(tokens.iter().copied().eq(new_tokens.leak()));
         // parse
         let ast = parser::parse(tokens.leak(), arena, file_text, path)?;
 
@@ -591,7 +595,7 @@ impl GrugState {
                     let (i, _) = export_fns
                         .iter()
                         .enumerate()
-                        .find(|(_, (name, _))| name.as_str() == st.name.to_str())
+                        .find(|(_, (name, _))| name.as_str() == st.name)
                         .expect("export function has already been verified to exist");
                     on_functions[i] = Some(&*arena.alloc_into(st));
                 }

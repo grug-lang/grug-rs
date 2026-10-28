@@ -44,7 +44,7 @@ mod ser {
 			}) => {
 				object! {
 					"type": "VARIABLE_STATEMENT",
-					"name": name.to_str(), 
+					"name": *name, 
 					"variable_type": serialize_type(ty),
 					"assignment": serialize_expr(assignment_expr),
 				}
@@ -57,7 +57,7 @@ mod ser {
 			}) => {
 				let mut object = object! {
 					"type": "EXPORT_FN",
-					"name": name.to_str(),
+					"name": *name,
 					"statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				};
 				if !parameters.is_empty() {
@@ -75,7 +75,7 @@ mod ser {
 			}) => {
 				let mut object = object! {
 					"type": "LOCAL_FN",
-					"name": name.to_str(),
+					"name": *name,
 					"statements": body_statements.iter().map(serialize_statement).collect::<Vec<_>>(),
 				};
 				if !parameters.is_empty() {
@@ -119,7 +119,7 @@ mod ser {
             },
             Type::Id { name, generics } => {
                 let mut object = object! {
-                    "name": name.to_str(),
+                    "name": *name,
                 };
                 if !generics.is_empty() {
                     object["generics"] = generics
@@ -148,23 +148,23 @@ mod ser {
             },
             ExprData::String(value) => object! {
                 "type": "STRING_EXPR",
-                "str": value.to_str(),
+                "str": *value,
             },
             ExprData::Resource(value) => object! {
                 "type": "RESOURCE_EXPR",
-                "str": value.to_str(),
+                "str": *value,
             },
             ExprData::Entity(value) => object! {
                 "type": "ENTITY_EXPR",
-                "str": value.to_str(),
+                "str": *value,
             },
             ExprData::Identifier(name) => object! {
                 "type": "IDENTIFIER_EXPR",
-                "str": name.to_str(),
+                "str": *name,
             },
             ExprData::Number(_, string) => object! {
                 "type": "NUMBER_EXPR",
-                "value": string.to_str(),
+                "value": *string,
             },
             ExprData::Unary {
                 op,
@@ -203,7 +203,7 @@ mod ser {
             } => {
                 let mut object = object! {
                     "type": "CALL_EXPR",
-                    "name": name.to_str(),
+                    "name": *name,
                 };
                 if let Some(receiver) = receiver {
                     object["receiver"] = serialize_expr(receiver);
@@ -247,7 +247,7 @@ mod ser {
 
     fn serialize_parameter(argument: &Parameter) -> JsonValue {
         object! {
-            "name": argument.name.to_str(),
+            "name": argument.name,
             "type": serialize_type(&argument.ty),
         }
     }
@@ -263,7 +263,7 @@ mod ser {
             } => {
                 let mut object = object! {
                     "type": "VARIABLE_STATEMENT",
-                    "name": name.to_str(),
+                    "name": *name,
                     "assignment": serialize_expr(assignment_expr),
                 };
                 if let Some(ty) = ty {
@@ -336,7 +336,7 @@ mod ser {
                 value,
             } => object! {
                 "type": "COMMENT_STATEMENT",
-                "comment": value.to_str(),
+                "comment": *value,
             },
             Statement::Break(_) => object! {"type": "BREAK_STATEMENT"},
             Statement::Continue(_) => object! {"type": "CONTINUE_STATEMENT"},
