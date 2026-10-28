@@ -513,7 +513,6 @@ mod game_fn_bindings {
             state.register_method ("VecNumber", "push", game_fn_vec_number_push                  )?;
             state.register_method ("VecNumber", "pop", game_fn_vec_number_pop                    )?;
             state.register_method ("VecNumber", "insert", game_fn_vec_number_insert              )?;
-			
             // Static methods. These reuse the same native functions as their free-function counterparts.
             state.register_method ("VecNumber", "new", game_fn_vec_number_new                    )?;
             state.register_method ("VecNumber", "with_capacity", game_fn_vec_number_with_capacity)?;
