@@ -501,6 +501,7 @@ pub(crate) fn parse<'a>(
         }
         Ok(())
     })(&mut parser);
+
     match result {
         Ok(()) => Ok(Ast {
             global_statements: parser.global_statements,
