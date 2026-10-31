@@ -29,7 +29,7 @@ impl<'a> PartialEq for TypeWrapper<'a> {
                     generics: generics_2,
                     ..
                 },
-            ) => std::ptr::eq(name_1, name_2) && std::ptr::eq(generics_1, generics_2),
+            ) => name_1.ptr_eq(name_2) && std::ptr::eq(generics_1, generics_2),
             (
                 Resource {
                     extension: extension_1,
@@ -39,10 +39,10 @@ impl<'a> PartialEq for TypeWrapper<'a> {
                     extension: extension_2,
                     optional: optional_2,
                 },
-            ) => std::ptr::eq(extension_1, extension_2) && optional_1 == optional_2,
+            ) => extension_1.ptr_eq(extension_2) && optional_1 == optional_2,
             (Entity { entity_type: ty_1 }, Entity { entity_type: ty_2 }) => match (ty_1, ty_2) {
                 (None, None) => true,
-                (Some(ty_1), Some(ty_2)) => std::ptr::eq(ty_1, ty_2),
+                (Some(ty_1), Some(ty_2)) => ty_1.ptr_eq(ty_2),
                 _ => false,
             },
             (Existential { idx: idx1 }, Existential { idx: idx2 }) => idx1 == idx2,
@@ -112,7 +112,7 @@ impl TypeStorage {
         }
     }
 
-    pub fn insert_string(&mut self, str: &str) -> &'static str {
+    pub fn insert_string(&mut self, str: &str) -> &'static NTStr {
         match self.strings.get(str) {
             Some(str) => str,
             None => {
@@ -128,7 +128,7 @@ impl TypeStorage {
                     let mut global_storage = GLOBAL_TYPE_STORAGE.write().unwrap();
                     global_storage.strings.insert(str);
                     self.strings.insert(str);
-                    str.as_str()
+                    str
                 }
             }
         }
@@ -138,13 +138,13 @@ impl TypeStorage {
         use Type::*;
         match ty {
             Id { name, generics } => {
-                let name = self.insert_string(name);
+                let name = self.insert_string(name.to_str());
                 let generics = self.insert_type_list(generics);
                 self.type_lists
                     .insert(TypeWrapper::cast_slice_from_type(generics));
 
                 Id {
-                    name,
+                    name: name.as_ntstrptr(),
                     generics,
                 }
             }
@@ -152,13 +152,13 @@ impl TypeStorage {
                 extension,
                 optional,
             } => Resource {
-                extension: self.insert_string(extension),
+                extension: self.insert_string(extension.to_str()).as_ntstrptr(),
                 optional,
             },
             Entity {
                 entity_type: Some(ty),
             } => Entity {
-                entity_type: Some(self.insert_string(ty)),
+                entity_type: Some(self.insert_string(ty.to_str()).as_ntstrptr()),
             },
             Void => Void,
             Bool => Bool,

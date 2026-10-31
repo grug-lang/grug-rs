@@ -16,6 +16,7 @@ use crate::types::ErasedHostFn;
 /// Represents the type of a value in grug
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C, u32)]
+#[non_exhaustive]
 pub enum Type<'a> {
     /// Return type of a function with no return value
     ///
@@ -49,9 +50,12 @@ pub enum Type<'a> {
     /// TODO: Explain usage of ID types in grug
     Id {
         /// Custom name of the id type
-        name: &'a str,
+        name: NTStrPtr<'a>,
         /// The generics of the type, if any
         generics: &'a [Type<'a>],
+		/// The total number of tokens taken by the entire type. Just helper
+		/// information, should not be used to check for equality
+		num_spans: u32,
     },
     /// Type of a resource string
     ///
@@ -63,7 +67,7 @@ pub enum Type<'a> {
         ///
         /// This value ensures that only file paths with particular extensions
         /// can be passed to host functions
-        extension: &'a str,
+        extension: NTStrPtr<'a>,
         /// If true, the path does not have to exist when the program is compiled. A host function can
         /// use this for a path that is created later, like a screenshot reference on its first run.
         optional: bool,
@@ -75,7 +79,7 @@ pub enum Type<'a> {
     /// This can only be used as the type of an argument of a game function
     Entity {
         /// The type of the entity pointed to by the entity string
-        entity_type: Option<&'a str>,
+        entity_type: Option<NTStrPtr<'a>>,
     },
     #[doc(hidden)]
     /// For internal use, Backends should never ever see this
@@ -98,13 +102,16 @@ impl<'a> Type<'a> {
                 Id {
                     name: name_1,
                     generics: generics_1,
+					num_spans: num_spans_1,
                 },
                 Id {
                     name: name_2,
                     generics: generics_2,
+					num_spans: num_spans_2,
                 },
             ) => {
                 name_1 == name_2
+					&& num_spans_1 == num_spans_2
                     && generics_1
                         .iter()
                         .zip(*generics_2)
@@ -137,7 +144,7 @@ impl<'a> std::fmt::Display for Type<'a> {
             Self::Bool => write!(f, "bool"),
             Self::Number => write!(f, "number"),
             Self::String => write!(f, "string"),
-            Self::Id { name, generics } => {
+            Self::Id { name, generics, num_spans: _ } => {
                 write!(f, "{}", name)?;
                 if !generics.is_empty() {
                     write!(f, "[")?;
@@ -381,19 +388,19 @@ pub enum ExprData<'a> {
     /// ```
     ///
     /// Before type propagation, resource and entities are treated as normal strings
-    String(&'a str),
+    String(NTStrPtr<'a>),
     /// Represents a resource string literal
     ///
     /// The frontend ensures that the resource actually exists within the mod
-    Resource(&'a str),
+    Resource(NTStrPtr<'a>),
     /// Represents an entity string literal
     ///
     /// The frontend ensures that the entity actually exists within the indicated mod
-    Entity(&'a str),
+    Entity(NTStrPtr<'a>),
     /// Represents an expression that evaluates to the value of a variable at this moment
-    Identifier(&'a str),
+    Identifier(NTStrPtr<'a>),
     /// Represents a number literal
-    Number(f64, &'a str),
+    Number(f64, NTStrPtr<'a>),
     /// Represents a unary expression
     ///
     /// ```text
@@ -407,8 +414,6 @@ pub enum ExprData<'a> {
         op: UnaryOperator,
         /// Inner expression
         expr: &'a mut Expr<'a>,
-        /// Span of the operator
-        op_span: SourceSpan,
     },
     /// Represents a binary expression
     ///
@@ -427,8 +432,6 @@ pub enum ExprData<'a> {
         left: &'a mut Expr<'a>,
         /// Right hand side of the expression
         right: &'a mut Expr<'a>,
-        /// Span of the operator
-        op_span: SourceSpan,
     },
     /// Represents a function call
     ///
@@ -460,13 +463,11 @@ pub enum ExprData<'a> {
         /// Receiver of the method
         receiver: Option<&'a mut Expr<'a>>,
         /// Name of the function or method
-        name: &'a str,
+        name: NTStrPtr<'a>,
         /// Expressions for each of the arguments of the function call
         args: &'a mut [Expr<'a>],
         /// Pointer to the host function if this expression is a game function call
         ptr: Option<ErasedHostFn>,
-        /// Span of the function or method name,
-        name_span: SourceSpan,
         /// The generics array that should be passed to the function when
         /// called
         generics: &'static [Type<'static>],
@@ -493,8 +494,10 @@ pub struct Expr<'a> {
     pub result_type: Option<&'a Type<'a>>,
     /// Actual data needed to represent the expression
     pub data: ExprData<'a>,
-    /// Span of the expression
-    pub span: SourceSpan,
+	/// Start of the source spans of the expression
+	pub spans: u32,
+	/// Number of tokens in the source span of the Variable
+	pub spans_len: u32,
 }
 
 /// Represents a single member variable declaration within a file
@@ -511,16 +514,18 @@ pub struct Expr<'a> {
 #[derive(Debug)]
 pub struct MemberVariable<'a> {
     /// Name of the variable
-    pub name: &'a str,
+    pub name: NTStrPtr<'a>,
     /// Type of the variable
     pub ty: Type<'a>,
-    /// Source Span of the type
-    pub type_span: SourceSpan,
     /// Initializer of the variable.
     /// It is not allowed to call an on function or helper function.
     pub assignment_expr: Expr<'a>,
-    /// Source span of the name of the variable
-    pub span: SourceSpan,
+	/// Start of the source spans of the Variable
+	/// The first index points to the name, second and third point to the `:` and space.
+	/// The remaining indeces point to the type.
+	pub spans: u32,
+	/// Number of tokens in the source span of the Variable
+	pub spans_len: u32,
 }
 
 /// Represents a statement within a function
@@ -544,15 +549,17 @@ pub enum Statement<'a> {
     /// may either be a member variable or a local variable.
     Variable {
         /// Name of the variable
-        name: &'a str,
+        name: NTStrPtr<'a>,
         /// Type of the variable if the statement is a declaration
         ty: Option<&'a Type<'a>>,
-        /// Span of the type, if it exists, or just the span of the name again,
-        type_span: SourceSpan,
         /// Expression to assign to the variable
         assignment_expr: Expr<'a>,
-        /// Span of the name
-        name_span: SourceSpan,
+		/// Start of the source spans of the Variable
+		/// The first index points to the name, second and third point to the `:` and space.
+		/// The remaining indeces point to the type.
+		spans: u32,
+		/// Number of tokens in the source span of the Variable
+		spans_len: u32,
     },
     /// A statement that only consists of a single function call.
     ///
@@ -584,6 +591,7 @@ pub enum Statement<'a> {
     /// the else block with the `is_chained` field set to true. The else block
     /// contains a single If statement in that case.
     // TODO: change this to the newer grug-for-c layout
+	// TODO: add spans for the statement
     If {
         /// The condition expression of the if block. The result_type of the
         /// expression must be a boolean
@@ -635,17 +643,17 @@ pub enum Statement<'a> {
     /// return result
     /// ```
     Return {
-        /// Span of the return keyword
-        return_span: SourceSpan,
+        /// Index of the span of the return keyword
+        return_span: u32,
         /// Expression that is returned from the function
         expr: Option<&'a mut Expr<'a>>,
     },
     /// A comment within a function
     Comment {
-        /// The span of the comment within the file
-        comment_span: SourceSpan,
+        /// The index of the span of the comment within the file
+        comment_span: u32,
         /// The value of the comment
-        value: &'a str,
+        value: NTStrPtr<'a>,
     },
     /// A break statement.
     ///
@@ -664,8 +672,8 @@ pub enum Statement<'a> {
     ///
     /// This statement can only occur within a while loop
     ///
-    /// The span points at the location of the `break` keyword
-    Break(SourceSpan),
+    /// The value is the index of the span that points at the location of the `break` keyword
+    Break(u32),
     /// A continue statement.
     ///
     /// ```text
@@ -683,8 +691,8 @@ pub enum Statement<'a> {
     ///
     /// This statement can only occur within a while loop
     ///
-    /// The span points at the location of the `continue` keyword
-    Continue(SourceSpan),
+    /// The value is the index of the span that points at the location of the `continue` keyword
+    Continue(u32),
     /// An empty line within a function.
     ///
     /// It is a compile error to have multiple empty lines in a row
@@ -701,14 +709,16 @@ pub enum Statement<'a> {
 pub struct Parameter<'a> {
     /// Name of the parameter
     /// `n` is the name in the example
-    pub name: &'a str,
+    pub name: NTStrPtr<'a>,
     /// Type of the parameter
     /// `number` is the type in the example
     pub ty: Type<'a>,
-    /// Span of the name
-    pub name_span: SourceSpan,
-    /// Span of the type
-    pub type_span: SourceSpan,
+	/// Start of the source spans of the parameter
+	/// The first index points to the name, second and third point to the `:` and space.
+	/// The remaining indeces point to the type
+	pub spans: u32,
+	/// Number of tokens in the source span of the Variable
+	pub spans_len: u32,
 }
 
 // TODO: Rename to ExportFunction
@@ -725,15 +735,17 @@ pub struct Parameter<'a> {
 /// On functions need to be defined after all member variables and before all helper functions
 #[repr(C)]
 #[derive(Debug)]
-pub struct OnFunction<'a> {
+pub struct ExportFunction<'a> {
     /// Name of the function as a [null terminated string](crate::ntstring::NTStrPtr)
-    pub name: &'a str,
+    pub name: NTStrPtr<'a>,
     /// List of parameters to the function and their types
     pub parameters: &'a [Parameter<'a>],
     /// List of statements that make up the top level of the function.
     pub body_statements: &'a mut [Statement<'a>],
-    /// Source span of the name of the on function
-    pub span: SourceSpan,
+    /// Start index of the Source Span of the signature of the export function
+	pub sig_span_start: u32,
+	/// Number of tokens in the signature of the export function
+	pub sig_span_len: u32
 }
 
 /// Represents a single helper function declaration
@@ -761,19 +773,23 @@ pub struct OnFunction<'a> {
 #[derive(Debug)]
 pub struct HelperFunction<'a> {
     /// Name of the function as a [null terminated string](crate::ntstring::NTStrPtr)
-    pub name: &'a str,
+    pub name: NTStrPtr<'a>,
     /// Return type of the function.
     ///
     /// Return type is [`Type::Void`] if there is no return type
     pub return_type: Type<'a>,
-    /// Source Span of the return type
-    pub return_type_span: SourceSpan,
+    /// Start index of the Source Span of the return type
+    pub return_type_start: u32,
+	/// Number of tokens in the Source Span
+    pub return_type_len: u32,
     /// List of parameters to the function and their types
     pub parameters: &'a [Parameter<'a>],
     /// List of statements that make up the top level of the function.
     pub body_statements: &'a mut [Statement<'a>],
-    /// Source span of the name of the helper function
-    pub span: SourceSpan,
+    /// Start index of the Source Span of the signature of the helper function
+	pub sig_spans_start: u32,
+	/// Number of tokens in the signature of the helper function
+	pub sig_spans_len: u32
 }
 
 // TODO: All the references here should be mut references
@@ -781,6 +797,9 @@ pub struct HelperFunction<'a> {
 #[repr(C)]
 #[derive(Debug)]
 pub struct GrugAst<'a> {
+	/// Holds the spans of all ast nodes in the source code. Spans in the
+	/// nodes are indexes into this slice
+	pub spans: &'a [SourceSpan],
     /// Represents the member functions declared at the top of the functions
     ///
     /// ```text
@@ -805,7 +824,7 @@ pub struct GrugAst<'a> {
     ///
     /// If an on function is not present in the file, that entry will be `None`
     /// (or a null pointer on the c side)
-    pub on_functions: &'a mut [Option<&'a OnFunction<'a>>],
+    pub on_functions: &'a mut [Option<&'a ExportFunction<'a>>],
     /// Represents all the helper function declarations in the file
     ///
     /// ```text
@@ -846,7 +865,7 @@ const _: () = const {
     unsafe {
         assert!(x.len() == (&x as *const _ as *const usize).add(1).read());
     }
-    let x: &[OnFunction] = &[];
+    let x: &[ExportFunction] = &[];
     unsafe {
         assert!(x.len() == (&x as *const _ as *const usize).add(1).read());
     }
