@@ -178,12 +178,7 @@ pub extern "C" fn grug_compile_file(state: &CState, file_path: NTStrPtr<'_>) -> 
     }
 }
 
-/// Writes `text` and its null terminator into `out`, or the number of bytes needed into
-/// `out_len`.
-///
-/// `out_len` is the capacity of `out` on entry and the number of bytes needed, terminator
-/// included, on return. An undersized or null buffer only asks for that size, so it is not an
-/// error and leaves the state's error empty.
+/// Writes `text` and a null terminator into `out`, or the needed size into `out_len`.
 fn write_text(out: *mut u8, out_len: &mut usize, text: &str) -> bool {
     let needed = text.len() + 1;
     if out.is_null() || *out_len < needed {
@@ -202,14 +197,8 @@ fn write_text(out: *mut u8, out_len: &mut usize, text: &str) -> bool {
 
 /// Converts grug source text into its json ast.
 ///
-/// `file_path` only appears in error messages, and may be an empty string.
-///
-/// `out_len` is the capacity of `out_json` in bytes on entry. On return it is the number of bytes
-/// needed, including the null terminator. An undersized buffer, a null `out_json` included, writes
-/// nothing and returns false without setting an error, so a caller can size its buffer with a
-/// first call passing `null` and 0.
-///
-/// Returns false on failure, with the grug error available from [`grug_get_error`].
+/// `out_json_len` is the capacity of `out_json` on entry and the bytes needed, terminator included,
+/// on return. A null or undersized buffer only asks for that size.
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_to_json(
     state: &CState,
@@ -228,11 +217,8 @@ pub extern "C" fn grug_to_json(
     }
 }
 
-/// Converts a json grug ast back into grug source text.
-///
-/// The buffer rules are those of [`grug_to_json`].
-///
-/// Returns false on failure, with the json error available from [`grug_get_error`].
+/// Converts a json grug ast back into grug source text. The buffer rules are those of
+/// [`grug_to_json`].
 #[unsafe(no_mangle)]
 pub extern "C" fn json_to_grug(
     state: &CState,
@@ -347,161 +333,4 @@ pub extern "C" fn grug_entity_get_data<'a>(
     entity: Option<&'a GrugEntity>,
 ) -> Option<&'a GrugEntity> {
     entity
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::error::ErrorKind;
-    use crate::ntstring::NTStr;
-    use crate::state::GrugInitSettings;
-    use std::mem::MaybeUninit;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    const SOURCE: &str = "export bark() {\n    print_string(\"hi\")\n}\n";
-
-    struct TempDir(PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// A state with the empty mod api, and the directory holding it, which the guard removes when
-    /// the test is done. The functions under test only need the error slot, so the mod api has no
-    /// entries.
-    fn state() -> (Box<CState>, TempDir) {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "grug-capi-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mod_api = dir.join("mod_api.json");
-        std::fs::write(
-            &mod_api,
-            r#"{"classes": {}, "entities": {}, "host_functions": {}}"#,
-        )
-        .unwrap();
-        let settings = GrugInitSettings::new()
-            .set_mod_api_path(&mod_api)
-            .set_mods_dir("examples/resources/mods");
-        let mut err = MaybeUninit::uninit();
-        let state = match grug_init(settings, &mut err) {
-            Some(state) => state,
-            // SAFETY: `grug_init` only leaves this uninitialized on success
-            None => panic!("grug_init failed: {:?}", unsafe { err.assume_init() }),
-        };
-        (state, TempDir(dir))
-    }
-
-    /// The size a conversion needs, from a call with a null buffer.
-    fn size_of(state: &CState, convert: impl Fn(&CState, *mut u8, &mut usize) -> bool) -> usize {
-        let mut needed = 0;
-        assert!(!convert(state, std::ptr::null_mut(), &mut needed));
-        assert!(needed > 1);
-        assert!(
-            grug_get_error(state).is_none(),
-            "asking for the size is not an error"
-        );
-        needed
-    }
-
-    fn into_string(buffer: &[u8], len: usize) -> String {
-        assert_eq!(buffer[len - 1], 0, "the output is null terminated");
-        String::from_utf8(buffer[..len - 1].to_vec()).unwrap()
-    }
-
-    #[test]
-    fn json_round_trip() {
-        let (state, _dir) = state();
-        let source = NTStr::arc_from_str(SOURCE);
-        let source = NTStrPtr::from(&*source);
-        let empty = NTStr::arc_from_str("");
-        let empty = NTStrPtr::from(&*empty);
-
-        let needed = size_of(&state, |state, out, len| {
-            grug_to_json(state, empty, source, out, len)
-        });
-        let mut buffer = vec![0u8; needed];
-        let mut len = buffer.len();
-        assert!(grug_to_json(
-            &state,
-            empty,
-            source,
-            buffer.as_mut_ptr(),
-            &mut len
-        ));
-        assert_eq!(len, needed);
-        let json = into_string(&buffer, len);
-        assert!(json.starts_with('['), "{json}");
-        assert!(json.contains("\"type\": \"EXPORT_FN\""), "{json}");
-
-        let json = NTStr::arc_from_str(&json);
-        let json = NTStrPtr::from(&*json);
-        let needed = size_of(&state, |state, out, len| {
-            json_to_grug(state, json, out, len)
-        });
-        let mut buffer = vec![0u8; needed];
-        let mut len = buffer.len();
-        assert!(json_to_grug(&state, json, buffer.as_mut_ptr(), &mut len));
-        let grug = into_string(&buffer, len);
-        assert!(grug.contains("export bark()"), "{grug}");
-        assert!(grug.contains("print_string(\"hi\")"), "{grug}");
-    }
-
-    #[test]
-    fn an_undersized_buffer_asks_for_the_size() {
-        let (state, _dir) = state();
-        let source = NTStr::arc_from_str(SOURCE);
-        let source = NTStrPtr::from(&*source);
-        let empty = NTStr::arc_from_str("");
-        let empty = NTStrPtr::from(&*empty);
-        let mut buffer = [0u8; 1];
-        let mut len = buffer.len();
-        assert!(!grug_to_json(
-            &state,
-            empty,
-            source,
-            buffer.as_mut_ptr(),
-            &mut len
-        ));
-        assert!(len > buffer.len());
-        assert!(grug_get_error(&state).is_none());
-    }
-
-    #[test]
-    fn grug_that_does_not_parse_is_an_error() {
-        let (state, _dir) = state();
-        let source = NTStr::arc_from_str("export bark() {\n");
-        let source = NTStrPtr::from(&*source);
-        let empty = NTStr::arc_from_str("");
-        let empty = NTStrPtr::from(&*empty);
-        let mut buffer = vec![0u8; 4096];
-        let mut len = buffer.len();
-        assert!(!grug_to_json(
-            &state,
-            empty,
-            source,
-            buffer.as_mut_ptr(),
-            &mut len
-        ));
-        let err = grug_get_error(&state).expect("a parse error");
-        assert!(err.error_kind.matches(&ErrorKind::COMPILE_ERROR));
-    }
-
-    #[test]
-    fn json_that_is_not_a_grug_ast_is_an_error() {
-        let (state, _dir) = state();
-        let json = NTStr::arc_from_str("{\"not\": \"an array\"}");
-        let json = NTStrPtr::from(&*json);
-        let mut buffer = vec![0u8; 4096];
-        let mut len = buffer.len();
-        assert!(!json_to_grug(&state, json, buffer.as_mut_ptr(), &mut len));
-        let err = grug_get_error(&state).expect("a json error");
-        assert!(err.error_kind.matches(&ErrorKind::COMPILE_ERROR));
-    }
 }

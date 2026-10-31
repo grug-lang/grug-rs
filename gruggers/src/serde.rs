@@ -23,10 +23,7 @@ pub fn dump_file_to_json(grug_text: &str, file_path: impl AsRef<OsStr>) -> Resul
     Ok(json)
 }
 
-/// Converts a grug json ast into a grug file if there are no errors.
-///
-/// Invalid json or a json value that is not a grug ast is an error rather than a panic, since the
-/// c api exposes this function and a panic across the c boundary aborts the process.
+/// Converts a grug json ast into a grug file. Invalid json is an error, not a panic.
 pub fn generate_file_from_json(input_json: &str) -> Result<String, Error> {
     let json_value = json::parse(input_json)
         .map_err(|err| invalid_json(input_json, format_args!("invalid json: {}", err)))?;
@@ -34,8 +31,7 @@ pub fn generate_file_from_json(input_json: &str) -> Result<String, Error> {
         .map_err(|err| invalid_json(input_json, format_args!("invalid grug ast: {:?}", err)))
 }
 
-/// The error for json that cannot be turned back into grug text. The json has no file, so the
-/// error carries the json text itself and a span at its start.
+/// The compile error for json that cannot be turned back into grug text.
 fn invalid_json(input_json: &str, message: std::fmt::Arguments) -> Error {
     Error::new(
         ErrorKind::COMPILE_ERROR,
@@ -394,6 +390,7 @@ mod de {
         StatementsNotArray,
         StatementNotObject,
         StatementKindNotString,
+        InvalidStatementType,
         LocalVariableNameNotString,
         ElseBlockNotArray,
         CommentValueNotString,
@@ -703,7 +700,7 @@ mod de {
                     }
                 }
                 "EMPTY_LINE_STATEMENT" => (),
-                value => unreachable!("{}", value),
+                _ => return Err(JsonDeserializeError::InvalidStatementType),
             }
             output.push_str("\n");
         }
