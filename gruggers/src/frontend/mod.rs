@@ -535,9 +535,9 @@ impl GrugState {
         }
 
         // tokenize
-        let tokens = tokenizer::tokenize(file_text, arena, path)?;
+        let tokens = tokenizer::tokenize(file_text, arena, path)?.leak();
         // parse
-        let ast = parser::parse(tokens.leak(), arena, file_text, path)?;
+        let ast = parser::parse(tokens, arena, file_text, path)?;
 
         // get mod api entity declaration
         let entity = mod_api.classes().get(entity_type).ok_or_else(||
@@ -586,11 +586,11 @@ impl GrugState {
             .into_iter()
             .for_each(|statement| match statement {
                 GlobalStatement::Variable(st) => member_variables.push(st),
-                GlobalStatement::OnFunction(st) => {
+                GlobalStatement::ExportFunction(st) => {
                     let (i, _) = export_fns
                         .iter()
                         .enumerate()
-                        .find(|(_, (name, _))| name.as_str() == st.name)
+                        .find(|(_, (name, _))| *name == st.name.to_ntstr())
                         .expect("export function has already been verified to exist");
                     on_functions[i] = Some(&*arena.alloc_into(st));
                 }
@@ -602,6 +602,7 @@ impl GrugState {
         // at the end of the string
         let file_path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
         let file = GrugAst {
+			spans: tokens.spans(),
             members: member_variables.leak(),
             on_functions: on_functions.leak(),
             helper_functions: helper_functions.leak(),
@@ -629,7 +630,7 @@ pub(crate) enum GlobalStatement<'a> {
     ///     set_weapon("sword.json")
     /// }
     /// ```
-    OnFunction(OnFunction<'a>),
+    ExportFunction(ExportFunction<'a>),
     /// A helper function declaration
     /// ```text
     /// helper_color(n: number) Color {

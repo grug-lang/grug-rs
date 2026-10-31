@@ -455,6 +455,7 @@ impl<'a> Tokens<'a> {
 
 	pub fn leak(self) -> TokensSlice<'a> {
 		TokensSlice {
+			offset: 0,
 			len: self.len,
 			tys: self.tys_ptr(),
 			values: self.values_ptr(),
@@ -541,8 +542,9 @@ impl<'a> Tokens<'a> {
 	}
 }
 
-// #[derive(Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct TokensSlice<'a> {
+	offset: usize,
 	len: usize,
 	// if len != 0, tys is guaranteed to contain 64 values past the end of slice that are `None`
 	// This is to allow SIMD optimizations for array comparisons
@@ -587,6 +589,7 @@ impl<'a> TokensSlice<'a> {
 				}
 			} 
 			Some(TokensArray {
+				offset: self.offset,
 				tys   : unsafe{self.tys   .cast().as_ref()},
 				values: unsafe{self.values.cast().as_ref()},
 				spans : unsafe{self.spans .cast().as_ref()},
@@ -599,6 +602,7 @@ impl<'a> TokensSlice<'a> {
 	#[inline(always)]
 	pub fn take_array<const N: usize>(&mut self) -> Option<TokensArray<'a, N>> {
 		let arr = self.as_array()?;
+		self.offset += N;
 		self.len -= N;
 		self.tys    = unsafe{self.tys.add(N)};
 		self.values = unsafe{self.values.add(N)};
@@ -614,20 +618,26 @@ impl<'a> TokensSlice<'a> {
 	// pub fn values(&self) -> &[&str] {
 	// 	unsafe{std::slice::from_raw_parts(self.values.as_ptr(), self.len)}
 	// }
-	pub fn spans(&self) -> &[SourceSpan] {
-		unsafe{std::slice::from_raw_parts(self.spans.as_ptr(), self.len)}
+	/// Returns a slice over the full spans of the file. This does not change as tokens are consumed.
+	pub fn spans(&self) -> &'a [SourceSpan] {
+		unsafe{std::slice::from_raw_parts(self.spans.as_ptr().sub(self.offset), self.len + self.offset)}
+	}
+
+	pub fn offset(&self) -> usize {
+		self.offset
 	}
 }
 
 #[derive(Clone, Copy)]
 pub struct TokensArray<'a, const N: usize> {
+	pub offset: usize,
 	pub tys:    &'a [TokenType ;N],
 	pub values: &'a [&'a str   ;N],
 	pub spans:  &'a [SourceSpan;N],
 }
 
 impl<'a, const N: usize> TokensArray<'a, N> {
-	pub fn as_arrays(self) -> (&'a [TokenType ;N], &'a [&'a str; N], &'a [SourceSpan; N]) {
-		(self.tys, self.values, self.spans)
+	pub fn as_arrays(self) -> (&'a [TokenType ;N], &'a [&'a str; N], &'a [SourceSpan; N], usize) {
+		(self.tys, self.values, self.spans, self.offset)
 	}
 }
