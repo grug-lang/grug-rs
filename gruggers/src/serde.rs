@@ -739,6 +739,20 @@ mod de {
         }
     }
 
+    /// Writes a string literal with the escapes the tokenizer decodes.
+    fn push_escaped(value: &str, output: &mut String) {
+        for character in value.chars() {
+            match character {
+                '\\' => output.push_str("\\\\"),
+                '"' => output.push_str("\\\""),
+                '\t' => output.push_str("\\t"),
+                '\n' => output.push_str("\\n"),
+                '\r' => output.push_str("\\r"),
+                character => output.push(character),
+            }
+        }
+    }
+
     fn apply_expr(input: &JsonValue, output: &mut String) -> Result<(), JsonDeserializeError> {
         let JsonValue::Object(input) = input else {
             return Err(JsonDeserializeError::ExpressionNotObject);
@@ -753,7 +767,7 @@ mod de {
                     return Err(JsonDeserializeError::LiteralExpressionValueNotString);
                 };
                 output.push_str("\"");
-                output.push_str(value);
+                push_escaped(value, output);
                 output.push_str("\"");
                 Ok(())
             }
@@ -763,7 +777,7 @@ mod de {
                     return Err(JsonDeserializeError::LiteralExpressionValueNotString);
                 };
                 output.push_str("e\"");
-                output.push_str(value);
+                push_escaped(value, output);
                 output.push_str("\"");
                 Ok(())
             }
@@ -773,7 +787,7 @@ mod de {
                     return Err(JsonDeserializeError::LiteralExpressionValueNotString);
                 };
                 output.push_str("r\"");
-                output.push_str(value);
+                push_escaped(value, output);
                 output.push_str("\"");
                 Ok(())
             }
