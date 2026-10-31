@@ -3,7 +3,7 @@
 //! These functions have the same safety requirements as the equivalent
 //! functions in state.rs
 #![allow(improper_ctypes_definitions)]
-use crate::error::{Error, GrugError};
+use crate::error::{Error, ErrorKind, GrugError, SourceSpan};
 use crate::ntstring::{NTOsStrPtr, NTStrPtr};
 use crate::serde;
 use crate::state::{
@@ -228,6 +228,19 @@ pub extern "C" fn json_to_grug(
 ) -> bool {
     unsafe { *state.1.get() = None };
     match serde::generate_file_from_json(json_text.to_str()) {
+        Ok(grug) if grug.contains('\0') => {
+            unsafe {
+                *state.1.get() = Some(Error::new(
+                    ErrorKind::COMPILE_ERROR,
+                    "",
+                    "".as_ref(),
+                    "",
+                    SourceSpan { offset: 0, line: 0 },
+                    format_args!("the generated grug source contains a null byte"),
+                ))
+            };
+            false
+        }
         Ok(grug) => write_text(out_grug, out_grug_len, &grug),
         Err(err) => {
             unsafe { *state.1.get() = Some(err) };
