@@ -777,7 +777,8 @@ mod de {
                     return Err(JsonDeserializeError::LiteralExpressionValueNotString);
                 };
                 output.push_str("e\"");
-                push_escaped(value, output);
+                // The tokenizer's escapes are String-only, so this value is raw.
+                output.push_str(value);
                 output.push_str("\"");
                 Ok(())
             }
@@ -787,7 +788,8 @@ mod de {
                     return Err(JsonDeserializeError::LiteralExpressionValueNotString);
                 };
                 output.push_str("r\"");
-                push_escaped(value, output);
+                // The tokenizer's escapes are String-only, so this value is raw.
+                output.push_str(value);
                 output.push_str("\"");
                 Ok(())
             }
