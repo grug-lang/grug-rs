@@ -3,7 +3,7 @@
 //! Grug files can be losslessly converted to and from json. This allows for
 //! easy ast transformations for upgrades and downgrades
 use crate::arena::Arena;
-use crate::error::Error;
+use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::frontend::*;
 
 use std::ffi::OsStr;
@@ -23,10 +23,24 @@ pub fn dump_file_to_json(grug_text: &str, file_path: impl AsRef<OsStr>) -> Resul
     Ok(json)
 }
 
-/// Converts a grug json ast into a grug file if there are no errors.
+/// Converts a grug json ast into a grug file. Invalid json is an error, not a panic.
 pub fn generate_file_from_json(input_json: &str) -> Result<String, Error> {
-    let json_value = json::parse(input_json).unwrap();
-    Ok(json_to_text(&json_value).unwrap())
+    let json_value = json::parse(input_json)
+        .map_err(|err| invalid_json(input_json, format_args!("invalid json: {}", err)))?;
+    json_to_text(&json_value)
+        .map_err(|err| invalid_json(input_json, format_args!("invalid grug ast: {:?}", err)))
+}
+
+/// The compile error for json that cannot be turned back into grug text.
+fn invalid_json(input_json: &str, message: std::fmt::Arguments) -> Error {
+    Error::new(
+        ErrorKind::COMPILE_ERROR,
+        "",
+        "".as_ref(),
+        input_json,
+        SourceSpan { offset: 0, line: 0 },
+        message,
+    )
 }
 
 mod ser {
@@ -376,6 +390,7 @@ mod de {
         StatementsNotArray,
         StatementNotObject,
         StatementKindNotString,
+        InvalidStatementType,
         LocalVariableNameNotString,
         ElseBlockNotArray,
         CommentValueNotString,
@@ -685,7 +700,7 @@ mod de {
                     }
                 }
                 "EMPTY_LINE_STATEMENT" => (),
-                value => unreachable!("{}", value),
+                _ => return Err(JsonDeserializeError::InvalidStatementType),
             }
             output.push_str("\n");
         }

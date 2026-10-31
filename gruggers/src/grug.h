@@ -375,6 +375,13 @@ struct grug_resource_paths grug_get_updated_resources(struct grug_state* gst);
 // If it overlaps with a path on the actual filesystem, it is given the same id as that path
 grug_file_id grug_compile_file_from_str_TODO(struct grug_state* gst, const char* path, char* file_text);
 
+// Converts grug source text to its json ast. A null or small out_json only writes the size it
+// needs to out_json_len, which is the capacity on entry and the bytes needed on return.
+bool grug_to_json(struct grug_state* gst, const char* file_path, const char* grug_text, char* out_json, size_t* out_json_len);
+
+// Converts a json grug ast back to grug source text, with the buffer rules of grug_to_json.
+bool json_to_grug(struct grug_state* gst, const char* json_text, char* out_grug, size_t* out_grug_len);
+
 // Instantiate an entity from a script
 grug_entity_handle grug_create_entity(struct grug_state* gst, grug_file_id script);
 

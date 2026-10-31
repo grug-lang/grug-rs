@@ -5,6 +5,7 @@
 #![allow(improper_ctypes_definitions)]
 use crate::error::{Error, GrugError};
 use crate::ntstring::{NTOsStrPtr, NTStrPtr};
+use crate::serde;
 use crate::state::{
     ExportFnEntry, FileInfo, Files, GrugEntityHandle, GrugInitSettings, GrugState, ResourcePaths,
 };
@@ -173,6 +174,64 @@ pub extern "C" fn grug_compile_file(state: &CState, file_path: NTStrPtr<'_>) -> 
         Err(err) => {
             unsafe { *state.1.get() = Some(err) };
             INVALID_GRUG_FILE_ID
+        }
+    }
+}
+
+/// Writes `text` and a null terminator into `out`, or the needed size into `out_len`.
+fn write_text(out: *mut u8, out_len: &mut usize, text: &str) -> bool {
+    let needed = text.len() + 1;
+    if out.is_null() || *out_len < needed {
+        *out_len = needed;
+        return false;
+    }
+    // SAFETY: The caller promises that `out` holds `*out_len` writable bytes, and `needed` is
+    // within that capacity.
+    unsafe {
+        std::ptr::copy_nonoverlapping(text.as_ptr(), out, text.len());
+        out.add(text.len()).write(b'\0');
+    }
+    *out_len = needed;
+    true
+}
+
+/// Converts grug source text into its json ast.
+///
+/// `out_json_len` is the capacity of `out_json` on entry and the bytes needed, terminator included,
+/// on return. A null or undersized buffer only asks for that size.
+#[unsafe(no_mangle)]
+pub extern "C" fn grug_to_json(
+    state: &CState,
+    file_path: NTStrPtr<'_>,
+    grug_text: NTStrPtr<'_>,
+    out_json: *mut u8,
+    out_json_len: &mut usize,
+) -> bool {
+    unsafe { *state.1.get() = None };
+    match serde::dump_file_to_json(grug_text.to_str(), file_path.to_str()) {
+        Ok(json) => write_text(out_json, out_json_len, &json),
+        Err(err) => {
+            unsafe { *state.1.get() = Some(err) };
+            false
+        }
+    }
+}
+
+/// Converts a json grug ast back into grug source text. The buffer rules are those of
+/// [`grug_to_json`].
+#[unsafe(no_mangle)]
+pub extern "C" fn json_to_grug(
+    state: &CState,
+    json_text: NTStrPtr<'_>,
+    out_grug: *mut u8,
+    out_grug_len: &mut usize,
+) -> bool {
+    unsafe { *state.1.get() = None };
+    match serde::generate_file_from_json(json_text.to_str()) {
+        Ok(grug) => write_text(out_grug, out_grug_len, &grug),
+        Err(err) => {
+            unsafe { *state.1.get() = Some(err) };
+            false
         }
     }
 }
