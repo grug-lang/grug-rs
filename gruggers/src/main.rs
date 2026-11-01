@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use gruggers::backend::StubBackend;
+use gruggers::CompileSettings;
 use gruggers::state::{GrugInitSettings, GrugState};
 
 const BIN_NAME: &str = "grugc";
@@ -75,7 +76,11 @@ fn compile_files<P: AsRef<Path>>(state: &GrugState, path: P) -> bool {
             && extension == "grug"
         {
             let file_text = std::fs::read_to_string(&path)?;
-            match state.compile_grug_file_from_str(path.as_ref(), &file_text) {
+            match state.compile_grug_file_from_str(
+                path.as_ref(),
+                &file_text,
+                CompileSettings::safe(),
+            ) {
                 Ok(_) => (),
                 Err(err) => {
                     eprintln!("{}", err);

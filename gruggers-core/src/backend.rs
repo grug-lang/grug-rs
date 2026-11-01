@@ -3,7 +3,7 @@ use crate::ast::GrugAst;
 use crate::ntstring::NTStrPtr;
 use crate::runtime_error::RuntimeError;
 use crate::state::State;
-use crate::types::{FileId, GrugEntity, Value};
+use crate::types::{FileId, GrugEntity, Mode, Value};
 
 use std::ptr::NonNull;
 
@@ -30,7 +30,13 @@ pub trait Backend: Send + 'static {
     /// The entity member of all entities created from the old script should be
     /// destroyed. This means that any entity that was created from this file
     /// is temporarily invalid until the bindings call init_entity on them again.
-    fn insert_file(&self, id: FileId, file: &GrugAst<'_>);
+    ///
+    /// `mode` is the mode this file's code runs in from now on, decided by the
+    /// host for this compile ([`Mode`]). A backend that runs grug code enforces
+    /// the checks [`Mode::Safe`] lists and skips exactly those for
+    /// [`Mode::Unsafe`], for this file alone: the mode of a file that called
+    /// into this one does not apply to it.
+    fn insert_file(&self, id: FileId, file: &GrugAst<'_>, mode: Mode);
     /// Initialize the member data of the entity. When this
     /// function is called, the member field of `entity` points to garbage and
     /// must not be deinitialized. The FileId to be used is obtained from
@@ -106,7 +112,8 @@ pub struct ErasedBackend<GrugState: State + 'static> {
 pub struct BackendVTable<GrugState: State> {
     #[allow(improper_ctypes_definitions)]
     /// See [`Backend::insert_file`]
-    pub(crate) insert_file: extern "C" fn(data: NonNull<()>, id: FileId, file: &GrugAst<'_>),
+    pub(crate) insert_file:
+        extern "C" fn(data: NonNull<()>, id: FileId, file: &GrugAst<'_>, mode: Mode),
     /// See [`Backend::init_entity`]
     pub(crate) init_entity:
         extern "C" fn(data: NonNull<()>, state: &GrugState, entity: &GrugEntity) -> bool,
@@ -145,8 +152,8 @@ pub struct BackendVTable<GrugState: State> {
 impl<GrugState: State> ErasedBackend<GrugState> {
     /// See [`Backend::insert_file`]
     #[inline]
-    pub fn insert_file(&self, id: FileId, file: &GrugAst<'_>) {
-        (self.vtable.insert_file)(self.data, id, file)
+    pub fn insert_file(&self, id: FileId, file: &GrugAst<'_>, mode: Mode) {
+        (self.vtable.insert_file)(self.data, id, file, mode)
     }
     /// See [`Backend::init_entity`]
     #[inline]
@@ -212,8 +219,13 @@ impl<GrugState: State> Drop for ErasedBackend<GrugState> {
 impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
     fn from(other: T) -> Self {
         #[allow(improper_ctypes_definitions)]
-        extern "C" fn insert_file<T: Backend>(data: NonNull<()>, id: FileId, file: &GrugAst<'_>) {
-            T::insert_file(unsafe { data.cast::<T>().as_ref() }, id, file)
+        extern "C" fn insert_file<T: Backend>(
+            data: NonNull<()>,
+            id: FileId,
+            file: &GrugAst<'_>,
+            mode: Mode,
+        ) {
+            T::insert_file(unsafe { data.cast::<T>().as_ref() }, id, file, mode)
         }
 
         extern "C" fn init_entity<T: Backend, GrugState: State>(
@@ -343,11 +355,17 @@ pub struct CBackend<B: Backend> {
 impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
     fn from(other: CBackend<B>) -> Self {
         #[allow(improper_ctypes_definitions)]
-        extern "C" fn insert_file<B: Backend>(data: NonNull<()>, id: FileId, file: &GrugAst<'_>) {
+        extern "C" fn insert_file<B: Backend>(
+            data: NonNull<()>,
+            id: FileId,
+            file: &GrugAst<'_>,
+            mode: Mode,
+        ) {
             B::insert_file(
                 unsafe { &data.cast::<CBackend<B>>().as_ref().backend },
                 id,
                 file,
+                mode,
             )
         }
 

@@ -1,6 +1,6 @@
 use crate::ast::GrugAst;
 use crate::backend::Backend;
-use crate::types::{FileId, GrugEntity, Value};
+use crate::types::{FileId, GrugEntity, Mode, Value};
 
 use gruggers_core::state::State;
 
@@ -9,7 +9,7 @@ use gruggers_core::state::State;
 pub struct StubBackend;
 
 impl Backend for StubBackend {
-    fn insert_file(&self, _id: FileId, _file: &GrugAst) {}
+    fn insert_file(&self, _id: FileId, _file: &GrugAst, _mode: Mode) {}
     fn init_entity<GrugState: State>(&self, _state: &GrugState, _entity: &GrugEntity) -> bool {
         panic!("Tried to initialize entity with stub backend");
     }

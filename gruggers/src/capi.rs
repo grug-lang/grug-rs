@@ -4,6 +4,7 @@
 //! functions in state.rs
 #![allow(improper_ctypes_definitions)]
 use crate::error::{Error, GrugError};
+use crate::frontend::CompileSettings;
 use crate::ntstring::{NTOsStrPtr, NTStrPtr};
 use crate::state::{
     ExportFnEntry, FileInfo, Files, GrugEntityHandle, GrugInitSettings, GrugState, ResourcePaths,
@@ -13,6 +14,8 @@ use crate::types::{
 };
 
 use std::cell::UnsafeCell;
+use std::ffi::{OsStr, c_void};
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
 // TODO: Create an actual struct for these
@@ -22,6 +25,58 @@ type CState = (
     /* info from last compile */ UnsafeCell<Files>,
     /* resources from last update */ UnsafeCell<ResourcePaths>,
 );
+
+/// Decides the mode of one mod's files, as `grug.h` declares it.
+///
+/// `mod_name` is `mod_name_len` bytes and need not be null terminated, and it
+/// is the first directory component of a file's path relative to the mods
+/// directory, exactly as `grug_file_info`'s `mod_name` reports it, or empty for
+/// a file directly within the mods directory. An answer of true compiles that
+/// mod's files in [`Mode::Unsafe`](crate::types::Mode::Unsafe).
+///
+/// It is called on the thread that called the compile function, once per file
+/// that call installs, and must give the same answer for the same name for the
+/// length of that call.
+pub type GrugIsUnsafeModFn =
+    extern "C" fn(user_data: *const c_void, mod_name: *const u8, mod_name_len: usize) -> bool;
+
+/// The mode of every file one compile call compiles, as `grug.h` declares it,
+/// which is what [`CompileSettings`] wraps for Rust.
+///
+/// grug's mode is per file and fixed when the file compiles, so a call that
+/// compiles many files takes the whole decision instead of one mode. The
+/// decision is by mod, so a host answers for the mod of each file it compiles
+/// rather than for each path, and a file that is hot reloaded or added later is
+/// in its mod's mode without the host naming it again.
+#[repr(C)]
+pub struct GrugCompileSettings<'a> {
+    /// Answers the mode of the mod of each file the call compiles. Null means
+    /// safe for every file, which is what a host that grants nothing passes.
+    is_unsafe_mod: Option<GrugIsUnsafeModFn>,
+    /// Passed back to `is_unsafe_mod`. Unused, and may be null, when it is
+    /// null.
+    user_data: *const c_void,
+    _marker: PhantomData<&'a ()>,
+}
+
+impl GrugCompileSettings<'_> {
+    /// Runs `compile` with these settings as [`CompileSettings`] reads them.
+    ///
+    /// The callback is borrowed for the length of that call, so the caller must
+    /// keep it, and what `user_data` points to, alive and usable until the
+    /// compile call returns.
+    fn with<T>(&self, compile: impl FnOnce(CompileSettings<'_>) -> T) -> T {
+        let Some(is_unsafe_mod) = self.is_unsafe_mod else {
+            return compile(CompileSettings::safe());
+        };
+        let user_data = self.user_data;
+        let decide = |mod_name: &OsStr| {
+            let mod_name = mod_name.as_encoded_bytes();
+            is_unsafe_mod(user_data, mod_name.as_ptr(), mod_name.len())
+        };
+        compile(CompileSettings::new(&decide))
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn grug_default_settings() -> GrugInitSettings<'static> {
@@ -137,18 +192,24 @@ pub unsafe extern "C" fn grug_register_reg_method<'a>(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_compile_all_files(state: &CState) -> &[FileInfo<'_>] {
+pub extern "C" fn grug_compile_all_files<'a, 'b>(
+    state: &'a CState,
+    settings: GrugCompileSettings<'b>,
+) -> &'a [FileInfo<'a>] {
     let files = unsafe { &mut *state.2.get() };
-    *files = state.0.compile_all_files();
+    *files = settings.with(|settings| state.0.compile_all_files(settings));
     files.files()
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_update(state: &CState) -> &[FileInfo<'_>] {
+pub extern "C" fn grug_update<'a, 'b>(
+    state: &'a CState,
+    settings: GrugCompileSettings<'b>,
+) -> &'a [FileInfo<'a>] {
     state.0.clear_error();
     let files = unsafe { &mut *state.2.get() };
     let resources = unsafe { &mut *state.3.get() };
-    (*resources, *files) = state.0.update_files();
+    (*resources, *files) = settings.with(|settings| state.0.update_files(settings));
     files.files()
 }
 
@@ -167,8 +228,12 @@ pub extern "C" fn grug_get_updated_resources(state: &CState) -> &[NTOsStrPtr<'_>
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn grug_compile_file(state: &CState, file_path: NTStrPtr<'_>) -> FileId {
-    match state.0.compile_grug_file(file_path.to_str()) {
+pub extern "C" fn grug_compile_file(
+    state: &CState,
+    file_path: NTStrPtr<'_>,
+    settings: GrugCompileSettings<'_>,
+) -> FileId {
+    match settings.with(|settings| state.0.compile_grug_file(file_path.to_str(), settings)) {
         Ok(id) => id,
         Err(err) => {
             unsafe { *state.1.get() = Some(err) };

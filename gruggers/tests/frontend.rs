@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
+use gruggers::CompileSettings;
 use gruggers::backend::BytecodeBackend;
 use gruggers::error::Error;
 use gruggers::state::{GrugInitSettings, GrugState};
@@ -81,7 +82,7 @@ fn new_state_with_poll_interval(mods_dir: &Path, interval: std::time::Duration) 
 
 fn compile_error(state: &GrugState, path: impl AsRef<OsStr>, text: &str) -> Error {
     state
-        .compile_grug_file_from_str(path, text)
+        .compile_grug_file_from_str(path, text, CompileSettings::safe())
         .expect_err("expected a compile error")
 }
 
@@ -105,7 +106,7 @@ fn compile_error_string(path: impl AsRef<OsStr>, text: &str) -> String {
 
 /// The error messages of the files that `compile_all_files` failed to compile
 fn compile_all_errors(state: &GrugState) -> (usize, Vec<String>) {
-    let files = state.compile_all_files();
+    let files = state.compile_all_files(CompileSettings::safe());
     let mut ok_count = 0;
     let mut errors = Vec::new();
     for file in files.files() {
@@ -150,7 +151,7 @@ fn strings_can_contain_escape_sequences() {
     let text = "x: string = \"a\\tb\\nc\\rd\\\\e\\\"f\"\n";
     mods_dir.write("m/x-A.grug", text);
     let state = new_state(&mods_dir.0);
-    state.compile_grug_file_from_str("m/x-A.grug", text).unwrap();
+    state.compile_grug_file_from_str("m/x-A.grug", text, CompileSettings::safe()).unwrap();
 }
 
 // grug-tests covers "\n", but can't cover "\r\n", since grug-for-python reads
@@ -192,7 +193,7 @@ fn entity_type_must_be_utf8() {
 #[test]
 fn compiling_a_missing_file_is_an_io_error() {
     let err = shared_state()
-        .compile_grug_file("m/missing-A.grug")
+        .compile_grug_file("m/missing-A.grug", CompileSettings::safe())
         .expect_err("expected an IO error");
     // The OS error in between differs per platform
     let error_string = err.inner().error_string.to_str();
@@ -205,11 +206,11 @@ fn recompiling_a_file_reinitializes_its_entities() {
     let mods_dir = ModsDir::new("recompile");
     mods_dir.write("m/x-A.grug", "x: number = 1\n");
     let state = new_state(&mods_dir.0);
-    let file = state.compile_grug_file("m/x-A.grug").unwrap();
+    let file = state.compile_grug_file("m/x-A.grug", CompileSettings::safe()).unwrap();
     state.create_entity(file).unwrap();
 
     mods_dir.write("m/x-A.grug", "x: number = 2\n");
-    assert_eq!(state.compile_grug_file("m/x-A.grug").unwrap(), file);
+    assert_eq!(state.compile_grug_file("m/x-A.grug", CompileSettings::safe()).unwrap(), file);
 }
 
 #[test]
@@ -226,7 +227,7 @@ fn compile_all_files_compiles_every_grug_file() {
     assert_eq!(errors, ["unexpected end of file"]);
 
     // Compiling everything again reinitializes the entities of each file
-    let file = state.compile_grug_file("m/ok-A.grug").unwrap();
+    let file = state.compile_grug_file("m/ok-A.grug", CompileSettings::safe()).unwrap();
     state.create_entity(file).unwrap();
     assert_eq!(compile_all_errors(&state).0, 2);
 }
@@ -282,11 +283,11 @@ fn compiling_a_deleted_file_from_a_string_is_an_io_error() {
     let mods_dir = ModsDir::new("deleted-from-string");
     mods_dir.write("m/x-A.grug", "x: number = 1\n");
     let state = new_state(&mods_dir.0);
-    state.compile_grug_file("m/x-A.grug").unwrap();
+    state.compile_grug_file("m/x-A.grug", CompileSettings::safe()).unwrap();
     std::fs::remove_file(mods_dir.0.join("m/x-A.grug")).unwrap();
 
     let err = state
-        .compile_grug_file_from_str("m/x-A.grug", "x: number = 2\n")
+        .compile_grug_file_from_str("m/x-A.grug", "x: number = 2\n", CompileSettings::safe())
         .expect_err("expected an IO error for a file that is gone");
     // The OS error in between differs per platform
     let error_string = err.inner().error_string.to_str();
@@ -353,7 +354,7 @@ fn a_file_deleted_before_its_compile_is_installed_is_not_an_error() {
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     let update = std::thread::spawn(move || {
-        let (_, files) = state.update_files();
+        let (_, files) = state.update_files(CompileSettings::safe());
         files
             .files()
             .iter()
@@ -395,7 +396,7 @@ fn a_file_deleted_during_the_startup_walk_is_not_an_error() {
 
     let state = new_state(&mods_dir.0);
     let compile = std::thread::spawn(move || {
-        let files = state.compile_all_files();
+        let files = state.compile_all_files(CompileSettings::safe());
         files
             .files()
             .iter()
@@ -433,3 +434,47 @@ fn a_grug_symlink_to_a_gone_file_is_an_io_error_at_startup() {
     assert_eq!(errors.len(), 1);
     assert!(errors[0].starts_with("IO error: "), "{}", errors[0]);
 }
+
+/// grug's mode is per file, and a file's mode is its mod's: two files that
+/// recurse deeper than the recursion limit are stopped in the mod the host left
+/// safe and finish in the mod it granted, in the same call that compiles both.
+///
+/// This is what a host granting one mod unsafe mode asks for, and it is the
+/// whole of the per-file input: the same file text, the same state and the same
+/// compile call, differing only in the mod the decision names.
+#[test]
+fn a_files_mode_is_its_mods_mode() {
+    let mods_dir = ModsDir::new("mode-per-mod");
+    // Deeper than the recursion limit, so safe mode stops it and unsafe mode
+    // runs all 5000 frames and returns
+    let deep = "export a() {\n    _deep(5000)\n}\n\nlocal _deep(n: number) {\n    if n == 0 {\n        return\n    }\n    _deep(n - 1)\n}\n";
+    mods_dir.write("safe/x-D.grug", deep);
+    mods_dir.write("granted/x-D.grug", deep);
+    let state = new_state(&mods_dir.0);
+
+    let granted = OsStr::new("granted");
+    let decide = move |mod_name: &OsStr| mod_name == granted;
+    let settings = CompileSettings::new(&decide);
+    let files = state.compile_all_files(settings);
+    let mut ran = Vec::new();
+    for file in files.files() {
+        let id = file.result().expect("both files compile");
+        let path = state.get_script_path_rel(id).unwrap().to_str().unwrap().to_owned();
+        let entity = state.create_entity(id).expect("the entity is created");
+        state.clear_error();
+        let fn_id = state.get_export_fn_id("D", "a").unwrap();
+        // False means a runtime error stopped the export function
+        let finished = state.call_export_fn(&entity, fn_id, &[]);
+        ran.push((path, finished));
+        state.destroy_entity(entity);
+    }
+
+    assert_eq!(
+        ran,
+        [
+            ("granted/x-D.grug".to_owned(), true),
+            ("safe/x-D.grug".to_owned(), false),
+        ]
+    );
+}
+

@@ -11,7 +11,7 @@ use crate::frontend::type_propagation::TypeListDisplay;
 use crate::nt;
 use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
 use crate::shared_vec::SharedVec;
-use crate::types::{ErasedHostFn, FileId, GrugEntity, Value};
+use crate::types::{ErasedHostFn, FileId, GrugEntity, Mode, Value};
 use crate::xar::{ErasedPtr, ErasedXar};
 
 use gruggers_core::export_backend;
@@ -56,7 +56,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn compile(ast: &GrugAst<'a>, path: &OsStr) -> CompiledFile {
+    fn compile(ast: &GrugAst<'a>, path: &OsStr, mode: Mode) -> CompiledFile {
         let mut compiler = Compiler::new();
         let mut instructions = Instructions::new(path, ast.file_text.to_str());
 
@@ -103,6 +103,7 @@ impl<'a> Compiler<'a> {
         CompiledFile {
             instructions,
             globals_size,
+            mode,
             data: ErasedXar::new(Layout::array::<Value>(globals_size).expect("invalid layout")),
         }
     }
@@ -631,6 +632,9 @@ impl<'a> Compiler<'a> {
 struct CompiledFile {
     instructions: Instructions,
     globals_size: usize,
+    /// The mode this file's code runs in, decided when it was compiled. It is
+    /// per file: a file this one calls into runs in its own mode.
+    mode: Mode,
     data: ErasedXar,
 }
 
@@ -668,6 +672,11 @@ impl BytecodeBackend {
 
     /// # Safety:
     /// The instruction stream must be valid
+    ///
+    /// `mode` is the mode of the file the instruction stream belongs to, which
+    /// decides whether the time limit, the recursion limit and host function
+    /// errors stop the code.
+    #[expect(clippy::too_many_arguments)]
     unsafe fn run<GrugState: State>(
         &self,
         stack: &mut Stack,
@@ -676,13 +685,22 @@ impl BytecodeBackend {
         instructions: &Instructions,
         locals_size: u32,
         start_loc: usize,
+        mode: Mode,
     ) -> Option<Value> {
         let nested = self.invocation_depth.get() > 0;
         let outer_errorring = self.is_errorring.get();
         self.invocation_depth.set(self.invocation_depth.get() + 1);
         self.is_errorring.set(false);
         let ret_val = unsafe {
-            self.run_inner(stack, state, globals, instructions, locals_size, start_loc)
+            self.run_inner(
+                stack,
+                state,
+                globals,
+                instructions,
+                locals_size,
+                start_loc,
+                mode,
+            )
         };
         self.invocation_depth.set(self.invocation_depth.get() - 1);
         self.is_errorring.set(if nested {
@@ -693,6 +711,7 @@ impl BytecodeBackend {
         ret_val
     }
 
+    #[expect(clippy::too_many_arguments)]
     unsafe fn run_inner<GrugState: State>(
         &self,
         stack: &mut Stack,
@@ -701,7 +720,11 @@ impl BytecodeBackend {
         instructions: &Instructions,
         locals_size: u32,
         start_loc: usize,
+        mode: Mode,
     ) -> Option<Value> {
+        // Hoisted so the three checks below cost one compare per instruction in
+        // safe mode, and nothing in unsafe mode
+        let safe = mode.is_safe();
         let mut stream = instructions.stream[start_loc..].as_ptr().cast::<Op>();
         let start_time = Instant::now();
         stack
@@ -871,7 +894,7 @@ impl BytecodeBackend {
                         .values
                         .resize(stack.rbp + locals_size as usize, Value { void: () });
                     stream = unsafe { instructions.stream.as_ptr().cast::<Op>().add(location) };
-                    if self.call_stack.len() >= MAX_RECURSION_LIMIT {
+                    if safe && self.call_stack.len() >= MAX_RECURSION_LIMIT {
                         self.raise_runtime_error_inner(
                             state,
                             RuntimeErrorKind::StackOverflow,
@@ -925,12 +948,16 @@ impl BytecodeBackend {
                     if has_return {
                         stack.values.push(value);
                     }
-                    if self.is_errorring.get() {
+                    // Unsafe mode keeps the error the host function reported, and
+                    // that the host's error handler was called for, but lets the
+                    // script carry on with the value the host function returned.
+                    if safe && self.is_errorring.get() {
                         return None;
                     }
                 }
             }
-            if i_count & 0xFFFFF == 0
+            if safe
+                && i_count & 0xFFFFF == 0
                 && start_time.elapsed() > Duration::from_millis(ON_FN_TIME_LIMIT)
             {
                 self.raise_runtime_error_inner(
@@ -1000,9 +1027,9 @@ impl Default for BytecodeBackend {
 
 impl Backend for BytecodeBackend {
     #[inline]
-    fn insert_file(&self, id: FileId, file: &GrugAst) {
+    fn insert_file(&self, id: FileId, file: &GrugAst, mode: Mode) {
         let path = file.file_path.to_osstr();
-        let compiled_file = Compiler::compile(file, path);
+        let compiled_file = Compiler::compile(file, path, mode);
         let mut files = self.files.borrow_mut();
         if let Some(old_file) = files.get_mut(id.0 as usize) {
             *old_file = compiled_file;
@@ -1046,7 +1073,8 @@ impl Backend for BytecodeBackend {
         });
 
         let ret_val =
-            unsafe { self.run(&mut stack, state, globals, &file.instructions, 1, 0) }.is_some();
+            unsafe { self.run(&mut stack, state, globals, &file.instructions, 1, 0, file.mode) }
+                .is_some();
 
         // Make sure that any stack frames pushed by subsequent code are
         // popped. This way code inside the run function doesn't have to worry
@@ -1135,6 +1163,7 @@ impl Backend for BytecodeBackend {
                 &file.instructions,
                 export_fn_info.locals_size,
                 export_fn_info.location,
+                file.mode,
             )
         }
         .is_some();
@@ -1203,6 +1232,7 @@ impl Backend for BytecodeBackend {
                 &file.instructions,
                 export_fn_info.locals_size,
                 export_fn_info.location,
+                file.mode,
             )
         }
         .is_some();

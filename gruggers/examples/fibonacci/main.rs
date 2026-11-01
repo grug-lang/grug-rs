@@ -1,5 +1,6 @@
 #![deny(warnings)]
 #![allow(static_mut_refs)]
+use gruggers::CompileSettings;
 use gruggers::state::{GrugInitSettings, GrugState};
 use gruggers::types::Value;
 
@@ -263,7 +264,7 @@ fn main() {
         OBJECTS.write(HashMap::new());
 
         let script_id = STATE
-            .compile_grug_file("fib_script/entity-Fib.grug")
+            .compile_grug_file("fib_script/entity-Fib.grug", CompileSettings::safe())
             .unwrap();
         let script = STATE.create_entity(script_id).unwrap();
 

@@ -2,6 +2,7 @@
 #![allow(improper_ctypes)]
 mod test_bindings {
     use gruggers::backend::BytecodeBackend as Backend;
+    use gruggers::CompileSettings;
     use gruggers::ntstring::{NTOsStrPtr, NTStrPtr};
     use gruggers::state::{GrugEntityHandle, GrugInitSettings, GrugState};
     use gruggers::types::{ExportFnId, FileId, GrugEntity, Value};
@@ -52,7 +53,9 @@ mod test_bindings {
     extern "C" fn destroy_grug_state(_: Box<GrugState>) {}
 
     extern "C" fn compile_grug_file(state: &GrugState, script_path: NTStrPtr<'_>) -> FileId {
-        state.compile_grug_file(script_path.to_str()).unwrap()
+        state
+            .compile_grug_file(script_path.to_str(), CompileSettings::safe())
+            .unwrap()
     }
 
     extern "C" fn get_on_fn_id(

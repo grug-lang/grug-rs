@@ -6,7 +6,7 @@ use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
 use crate::own_ptr::OwnPtr;
 use crate::state::{FileInfo, Files, GrugState, ResourcePaths};
 use crate::type_storage::TypeStorage;
-use crate::types::FileId;
+use crate::types::{FileId, Mode};
 use crate::watcher::vanished_while_listing;
 
 use allocator_api2::vec::Vec;
@@ -39,6 +39,64 @@ pub type CompileResponse = (
 		)],
 	>,
 );
+
+/// The mode of every file one call compiles, given by the host.
+///
+/// grug's mode is per file and fixed when the file compiles (see [`Mode`]), so
+/// a call that compiles many files cannot take one mode: it takes the whole
+/// decision. [`Mode`] is designed around a mod, which is the first directory
+/// component of a file's path relative to the mods directory (what
+/// [`FileInfo::mod_name`] reports), so the host answers per mod and every file
+/// of that mod compiles in the mode the host gave it.
+///
+/// Answering per mod rather than per file is what keeps a file's mode equal to
+/// its mod's however the mod's files change: a file that is hot reloaded or
+/// added later asks the same question and gets the same answer, without the
+/// host having to name that new file. A host that grants a mod unsafe mode
+/// therefore keeps the grant until it answers differently, and the way to take
+/// a mode back is to pass different settings and let the mod's files recompile.
+pub struct CompileSettings<'a> {
+    /// Answers unsafe for a mod's name, or is `None`, which is safe for every
+    /// file and lets a host that grants nothing pass no decision at all.
+    is_unsafe_mod: Option<&'a dyn Fn(&OsStr) -> bool>,
+}
+
+impl<'a> CompileSettings<'a> {
+    /// Every file compiles in [`Mode::Safe`], which is what a host that grants
+    /// nothing passes.
+    pub const fn safe() -> Self {
+        Self {
+            is_unsafe_mod: None,
+        }
+    }
+
+    /// Asks `is_unsafe_mod` for the mod of each file it compiles, which
+    /// compiles in [`Mode::Unsafe`] when it answers true and in [`Mode::Safe`]
+    /// when it answers false.
+    ///
+    /// It is asked once per file a call installs, on the thread that made the
+    /// call, with the file's mod: the first directory component of the file's
+    /// path, or the empty string for a file directly within the mods directory.
+    /// It must give the same answer for the same name for the length of that
+    /// call, since two files of one mod must not end up in different modes. It
+    /// also has to outlive the settings, so a closure that is not a plain
+    /// function is bound to a variable first.
+    pub const fn new(is_unsafe_mod: &'a dyn Fn(&OsStr) -> bool) -> Self {
+        Self {
+            is_unsafe_mod: Some(is_unsafe_mod),
+        }
+    }
+
+    /// The mode `path` compiles in, where `path` is relative to the mods
+    /// directory, like every other path in this module.
+    pub fn mode(&self, path: &OsStr) -> Mode {
+        match self.is_unsafe_mod {
+            None => Mode::Safe,
+            Some(is_unsafe_mod) if is_unsafe_mod(get_mod_name(path)) => Mode::Unsafe,
+            Some(_) => Mode::Safe,
+        }
+    }
+}
 
 // Compilation functions
 impl GrugState {
@@ -136,7 +194,13 @@ impl GrugState {
     /// Compile a grug file at a relative path within the mods directory. Once
     /// compiled directly once, the file will be automatically hot reloaded by
     /// the state.
-    pub fn compile_grug_file(&self, path: impl AsRef<OsStr>) -> Result<FileId, Error> {
+    ///
+    /// `settings` decides the mode the file runs in ([`CompileSettings`]).
+    pub fn compile_grug_file(
+        &self,
+        path: impl AsRef<OsStr>,
+        settings: CompileSettings<'_>,
+    ) -> Result<FileId, Error> {
         let path = path.as_ref();
         let mut path_buf = self.mods_dir_path.clone();
         path_buf.push("/");
@@ -147,7 +211,7 @@ impl GrugState {
             Err(err) => return Err(Error::from_io_error(err, path)),
         };
 
-        self.compile_grug_file_from_str(path, &file_text)
+        self.compile_grug_file_from_str(path, &file_text, settings)
     }
 
     /// Compile a grug file directly from a string. The path is required to
@@ -159,10 +223,14 @@ impl GrugState {
     ///
     /// If a file has already been compiled with the same path, the script will
     /// be hot reloaded.
+    ///
+    /// `settings` decides the mode the file runs in from now on
+    /// ([`CompileSettings`]).
     pub fn compile_grug_file_from_str(
         &self,
         path: impl AsRef<OsStr>,
         file_text: &str,
+        settings: CompileSettings<'_>,
     ) -> Result<FileId, Error> {
         use crate::async_fs::verify_file_data;
         let path = path.as_ref();
@@ -184,7 +252,7 @@ impl GrugState {
             let id = self
                 .get_or_insert_script_id(path.as_ref())
                 .map_err(|err| Error::from_io_error(err, path))?;
-            self.backend.insert_file(id, &file);
+            self.backend.insert_file(id, &file, settings.mode(path));
 
             self.track_file_entities(id);
 
@@ -214,7 +282,9 @@ impl GrugState {
 
     /// Compile all the files within the mods directory. Uses asynchronous file
     /// system apis if available on the current platform
-    pub fn compile_all_files(&self) -> Files {
+    ///
+    /// `settings` decides the mode of each file ([`CompileSettings`]).
+    pub fn compile_all_files(&self, settings: CompileSettings<'_>) -> Files {
         // iterate over all files and get all valid paths
         let arena = self.arenas.borrow_mut().pop().unwrap_or_default();
 
@@ -352,7 +422,7 @@ impl GrugState {
                             // grcov-excl-stop
                         };
                         // Send to backend
-                        self.backend.insert_file(id, &ast);
+                        self.backend.insert_file(id, &ast, settings.mode(path));
 
                         self.track_file_entities(id);
                         Ok(id)
@@ -418,7 +488,11 @@ impl GrugState {
     /// whether it's referenced by a `resource` string inside a `.grug`
     /// script: those strings are only used to validate that a resource
     /// exists at compile time, they no longer register a file watch.
-    pub fn update_files(&self) -> (ResourcePaths, Files) {
+    ///
+    /// `settings` decides the mode of each file it compiles, so a host changes
+    /// a mod's mode by passing different settings: the next change to any of
+    /// that mod's files recompiles it in its new mode.
+    pub fn update_files(&self, settings: CompileSettings<'_>) -> (ResourcePaths, Files) {
         let arena = self.arenas.borrow_mut().pop().unwrap_or_default();
         let mut file_paths = Vec::new_in(&arena);
         let mut updated_resources = std::vec::Vec::new();
@@ -493,7 +567,7 @@ impl GrugState {
                             // grcov-excl-stop
                         };
                         // Send to backend
-                        self.backend.insert_file(id, &ast);
+                        self.backend.insert_file(id, &ast, settings.mode(path));
 
                         self.track_file_entities(id);
                         Ok(id)
@@ -714,10 +788,12 @@ pub(crate) enum GlobalStatement<'a> {
     EmptyLine,
 }
 
-/// The mods directory contains a directory for each mod. Each mod may contain
-/// several scripts. This function returns the name of the current mod
-/// directory from the full path.
-fn get_mod_name(path: &OsStr) -> &OsStr {
+/// The mod of a path relative to the mods directory: its first directory
+/// component, or the empty string for a path with no directory component.
+///
+/// This is what [`FileInfo::mod_name`] and [`crate::capi`]'s `grug_file_info`
+/// report, and what a host names in [`CompileSettings`].
+pub fn get_mod_name(path: &OsStr) -> &OsStr {
     let path = path.as_encoded_bytes();
     let mut slash_len = 0;
     for (i, ch) in path.iter().enumerate() {

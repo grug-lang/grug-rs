@@ -4,17 +4,38 @@ use gruggers::nt;
 use gruggers::ntstring::NTStr;
 
 mod test_bindings {
+    use gruggers::CompileSettings;
     use gruggers::arena::Arena;
     use gruggers::backend::{BytecodeBackend, StubBackend};
     use gruggers::nt;
     use gruggers::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
     use gruggers::serde;
     use gruggers::state::{GrugEntityHandle, GrugInitSettings, GrugState};
-    use gruggers::types::{FileId, Value};
+    use gruggers::types::{FileId, Mode, Value};
 
+    use std::ffi::OsStr;
     use std::path::Path;
 
-    type CState = (GrugState, Arena);
+    /// A state, the errors it last reported and the mode its files compile in.
+    ///
+    /// tests.c creates two states, one it runs safe and one it runs unsafe, and
+    /// passes `safe_mode`, so every file this state compiles is in one mode.
+    type CState = (GrugState, Arena, Mode);
+
+    /// The decision of a state whose files all compile unsafe: grug-tests runs
+    /// each test in one mode, not one mode per test directory.
+    static UNSAFE_EVERY_MOD: fn(&OsStr) -> bool = |_mod_name| true;
+
+    /// The mode of a state tests.c made, as the settings to compile its files
+    /// with.
+    fn compile_settings(mode: Mode) -> CompileSettings<'static> {
+        match mode {
+            // CompileSettings::safe() is also what a state that was asked for
+            // nothing gets, so this is the path a host that grants no mod takes
+            Mode::Safe => CompileSettings::safe(),
+            Mode::Unsafe => CompileSettings::new(&UNSAFE_EVERY_MOD),
+        }
+    }
 
     pub extern "C" fn parse_mod_api(mod_api_path: NTOsStrPtr) -> Option<NTStrPtr<'static>> {
         let state = GrugInitSettings::new()
@@ -35,7 +56,7 @@ mod test_bindings {
     pub extern "C" fn create_grug_state<'a>(
         mod_api_path: NTOsStrPtr<'a>,
         mods_dir_path: NTOsStrPtr<'a>,
-        _unsafe_mode: bool,
+        safe_mode: bool,
     ) -> Option<Box<CState>> {
 		// Resource reloading test picks up the 
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -74,7 +95,8 @@ mod test_bindings {
             })
             .ok()?;
 		// state.compile_all_files();
-        Some(Box::new((state, Arena::new())))
+        let mode = if safe_mode { Mode::Safe } else { Mode::Unsafe };
+        Some(Box::new((state, Arena::new(), mode)))
     }
 
     pub extern "C" fn destroy_grug_state(_state: Box<CState>) {}
@@ -84,10 +106,10 @@ mod test_bindings {
         path: NTOsStrPtr<'_>,
         err_out: &'_ mut Option<NTStrPtr<'a>>,
     ) -> FileId {
-        let (state, arena) = cstate;
+        let (state, arena, mode) = cstate;
 
         // SAFETY: Bite me
-        match state.compile_grug_file(path.to_osstr()) {
+        match state.compile_grug_file(path.to_osstr(), compile_settings(*mode)) {
             Ok(id) => {
                 *err_out = None;
                 id
@@ -107,7 +129,7 @@ mod test_bindings {
     pub extern "C" fn destroy_grug_file(_: &CState, _file_id: FileId) {}
 
     pub extern "C" fn create_entity<'a>(
-        (state, _): &'a CState,
+        (state, ..): &'a CState,
         file_id: FileId,
         err_out: &'_ mut Option<NTStrPtr<'a>>,
     ) -> Option<GrugEntityHandle<'a>> {
@@ -124,7 +146,7 @@ mod test_bindings {
         }
     }
 
-    pub extern "C" fn destroy_entity<'a>((state, _): &'a CState, handle: GrugEntityHandle<'a>) {
+    pub extern "C" fn destroy_entity<'a>((state, ..): &'a CState, handle: GrugEntityHandle<'a>) {
         state.destroy_entity(handle);
     }
 
@@ -134,7 +156,10 @@ mod test_bindings {
     // itself uses to capture call data.
     static mut LAST_UPDATED_RESOURCES: Option<gruggers::state::ResourcePaths> = None;
 
-    pub extern "C" fn update<'a>((state, arena): &'a CState, err_out: &mut Option<NTStrPtr<'a>>) {
+    pub extern "C" fn update<'a>(
+        (state, arena, mode): &'a CState,
+        err_out: &mut Option<NTStrPtr<'a>>,
+    ) {
         // create_grug_state() above configures a 20ms poll interval for
         // this test binary (instead of the 1 second production default).
         // Sleeping here for comfortably longer than that guarantees at
@@ -143,7 +168,7 @@ mod test_bindings {
         // schedule. This is test-only: real hosts call update() once per
         // frame and don't want any of this delay.
         std::thread::sleep(std::time::Duration::from_millis(100));
-        let (resources, updated_files) = state.update_files();
+        let (resources, updated_files) = state.update_files(compile_settings(*mode));
 
 		// SAFETY: single threaded test harness
 		unsafe { LAST_UPDATED_RESOURCES = Some(resources) };
@@ -186,7 +211,7 @@ mod test_bindings {
 
     #[allow(unused_variables)]
     pub extern "C" fn call_export_fn<'a>(
-        (state, _): &CState,
+        (state, ..): &CState,
         entity: GrugEntityHandle<'a>,
         fn_name: NTStrPtr<'a>,
         args: *const Value,
@@ -269,7 +294,7 @@ mod test_bindings {
         }
     }
 
-    pub extern "C" fn game_fn_error((state, _): &CState, msg: NTStrPtr<'static>) {
+    pub extern "C" fn game_fn_error((state, ..): &CState, msg: NTStrPtr<'static>) {
         state.set_host_fn_error(msg.to_str());
     }
 

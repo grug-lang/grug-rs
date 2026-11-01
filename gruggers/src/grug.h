@@ -350,16 +350,76 @@ grug_export_fn_id grug_get_export_fn_id(struct grug_state* gst, const char* enti
 // Returns a list of all the fn ids for the mod_api.json
 struct grug_export_fns grug_get_fn_ids(struct grug_state* gst);
 
+// The mode a compiled file's code runs in. The mode is decided when the file
+// compiles and travels with the compiled file, so a host decides it per file and
+// never per state: two files of one state can run in different modes, and a file
+// that is recompiled in another mode runs in that one from then on. Switching a
+// whole mod's mode is therefore a recompile of its files, not a state-wide
+// switch.
+//
+// GRUG_MODE_SAFE is the sandbox and is what every file gets unless the host asks
+// for the other mode:
+//
+//	- an on function that runs longer than the time limit (100 ms) is stopped
+//	  with a time limit error,
+//	- grug code that recurses deeper than the recursion limit (100 call frames)
+//	  is stopped with a stack overflow error,
+//	- a host function error unwinds the grug code that called the host function.
+//
+// GRUG_MODE_UNSAFE skips exactly those three checks and nothing else, which is
+// what a host grants a mod for speed. Everything else a host observes is
+// unchanged: the same file compiles to the same program, a compile error is the
+// same error, values and the mod API behave the same way, and a host function
+// error is still reported to the runtime error handler. What unsafe mode drops
+// is the unwinding, so the calling script carries on with the value the host
+// function returned instead of being abandoned. A script that recursed too
+// deeply can therefore exhaust the process stack and one that never returns can
+// hang the process, which is why a host must only grant unsafe mode to code the
+// user trusts.
+enum grug_mode {
+	GRUG_MODE_SAFE = 0,
+	GRUG_MODE_UNSAFE = 1,
+};
+
+// Decides the mode of one mod's files, which is how a host tells grug which
+// files are unsafe. See struct grug_compile_settings.
+//
+// mod_name is mod_name_len bytes and need not be null terminated. It is the
+// first directory component of a file's path relative to the mods directory,
+// exactly as grug_file_info.mod_name reports it, or empty for a file directly
+// within the mods directory. Returning true compiles that mod's files in
+// GRUG_MODE_UNSAFE.
+typedef bool (*grug_is_unsafe_mod_fn)(void* user_data, char const* mod_name, size_t mod_name_len);
+
+// The mode every file one compile call compiles runs in.
+//
+// grug's mode is per file, so a call that compiles many files takes the whole
+// decision rather than one mode. The decision is by mod, so a file's mode stays
+// its mod's mode however the mod's files change: a file that is hot reloaded or
+// added later asks the same question and gets the same answer, without the host
+// naming that new file.
+//
+// is_unsafe_mod is called on the thread that made the compile call, once per
+// file that call installs, and must give the same answer for the same mod name
+// for the length of that call. It is called with the empty name for a file
+// directly within the mods directory, so a host can leave those safe by
+// answering false for it. A NULL is_unsafe_mod is safe for every file, which is
+// what a host that grants nothing passes.
+struct grug_compile_settings {
+	grug_is_unsafe_mod_fn is_unsafe_mod;
+	void* user_data;
+};
+
 // Compiles a single file from the mods directory
-grug_file_id grug_compile_file(struct grug_state* gst, const char* path);
+grug_file_id grug_compile_file(struct grug_state* gst, const char* path, struct grug_compile_settings settings);
 
 // compiles all files in the mods directory and returns the file info for them
 // the returned grug_files only exists until the next call to grug_update
-struct grug_files grug_compile_all_files(struct grug_state* gst, const char* path);
+struct grug_files grug_compile_all_files(struct grug_state* gst, struct grug_compile_settings settings);
 
 // recompiles all files that have been updated since the last call to grug_update
 // the returned grug_files only exists until the next call to grug_update
-struct grug_files grug_update(struct grug_state* gst);
+struct grug_files grug_update(struct grug_state* gst, struct grug_compile_settings settings);
 
 // Returns the paths (relative to the mods directory) of every non-.grug
 // file within the mods directory that changed since the last call to
@@ -388,9 +448,6 @@ bool grug_deinit_entity(struct grug_state* gst, grug_entity_handle entity);
 
 // Destroy a grug state and free all its resources
 void grug_deinit(struct grug_state* gst);
-
-// The game may call this at any point, even within an on_fn. However, a backend is entirely free to ignore this call if it happens within an on fn, so beware.
-void grug_set_unsafe_mode_TODO(struct grug_state* gst, bool unsafe);
 
 // returns false if on function could not be executed, if the id given isn't an entity, or if there was a runtime error
 // `args` can be NULL if there are no arguments

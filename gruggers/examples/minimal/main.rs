@@ -1,5 +1,6 @@
 #![deny(warnings)]
 use gruggers::nt;
+use gruggers::CompileSettings;
 use gruggers::state::{GrugInitSettings, GrugState};
 use gruggers::types::Value;
 
@@ -35,13 +36,13 @@ fn main() {
     };
     state.all_host_fns_registered().unwrap();
 
-    let files = state.compile_all_files();
+    let files = state.compile_all_files(CompileSettings::safe());
     let id = *files.files()[0].result().as_ref().unwrap();
     let dog = state.create_entity(id).unwrap();
     let on_bark_id = state.get_export_fn_id("Dog", "bark").unwrap();
 
     loop {
-        _ = state.update_files();
+        _ = state.update_files(CompileSettings::safe());
         if !state.call_export_fn(
             &dog,
             on_bark_id,

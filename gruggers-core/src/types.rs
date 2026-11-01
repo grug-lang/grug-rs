@@ -95,6 +95,72 @@ impl Id {
     }
 }
 
+/// The mode a compiled file's code runs in.
+///
+/// The mode is decided when the file compiles and travels with the compiled
+/// file, so a host decides it per file and never per state: two files of the
+/// same state can run in different modes, and a file that is recompiled with
+/// another mode runs in that one from then on. Switching a whole mod's mode is
+/// therefore a recompile of its files, not a state-wide switch.
+///
+/// Safe mode is the sandbox, and it is what every caller gets unless it asks
+/// for [`Mode::Unsafe`]:
+///
+/// - an on function that runs longer than [`ON_FN_TIME_LIMIT`]
+///   (100 ms) is stopped with a time limit error,
+/// - grug code that recurses deeper than [`MAX_RECURSION_LIMIT`] (100
+///   call frames) is stopped with a stack overflow error,
+/// - a host function error unwinds the grug code that called the host
+///   function.
+///
+/// Unsafe mode skips exactly those three checks and nothing else, which is what
+/// a host grants a mod for speed: the checks cost a compare and a masked
+/// counter per instruction, and a file that is correct without them needs them
+/// neither. Everything a caller observes is otherwise unchanged:
+///
+/// - the same file compiles to the same program, and a compile error is the
+///   same error in both modes,
+/// - grug's values, arithmetic, entity and resource semantics and the mod API
+///   are the same in both modes,
+/// - the file's member variables and its export functions behave the same way
+///   while the file stays within the limits, so a correct program produces
+///   exactly the same values in both modes,
+/// - a host function error is still reported to the host's runtime error
+///   handler in unsafe mode; what unsafe mode drops is the unwinding, so the
+///   calling script carries on with the value the host function returned
+///   instead of being abandoned. The host can therefore still tell that the
+///   error happened, and a script that ignores what its host function returned
+///   after an error goes on with a value it was never meant to receive.
+///
+/// What unsafe mode drops is bounded: a script that recursed too deeply can
+/// exhaust the process stack and one that never returns can hang the process,
+/// which is the point of unsafe mode and why a host must only grant it to code
+/// the user trusts.
+///
+/// [`ON_FN_TIME_LIMIT`]: crate::runtime_error::ON_FN_TIME_LIMIT
+/// [`MAX_RECURSION_LIMIT`]: crate::runtime_error::MAX_RECURSION_LIMIT
+/// [`ON_FN_TIME_LIMIT`]: crate::runtime_error::ON_FN_TIME_LIMIT
+/// [`MAX_RECURSION_LIMIT`]: crate::runtime_error::MAX_RECURSION_LIMIT
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Mode {
+    /// The sandbox: the time limit, the recursion limit and host function
+    /// errors are enforced.
+    #[default]
+    Safe = 0,
+    /// The time limit, the recursion limit and host function errors do not stop
+    /// the script. See the type's documentation for what else does not change.
+    Unsafe = 1,
+}
+
+impl Mode {
+    /// Whether this is [`Mode::Safe`], where every check a host relies on is
+    /// enforced.
+    pub const fn is_safe(self) -> bool {
+        matches!(self, Mode::Safe)
+    }
+}
+
 /// Uniquely refers to a particular on function from a particular entity from
 /// the mod_api.
 /// Two different entities will have unique ExportFnIds for all their on functions

@@ -29,6 +29,8 @@ static VARIABLE_INFERENCE: bool = false;
 pub use gruggers_core::ast;
 pub use gruggers_core::types;
 
+pub use frontend::{CompileSettings, get_mod_name};
+
 pub use gruggers_core::nt;
 pub use gruggers_core::ntstring;
 
