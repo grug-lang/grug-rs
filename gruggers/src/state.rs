@@ -445,15 +445,23 @@ impl GrugState {
         })
     }
 
-    pub(crate) fn get_or_insert_script_id(&self, path: &Path) -> FileId {
+    /// The id of the script at `path`, relative to the mods directory, inserting a new one if the
+    /// state has not seen the file before.
+    ///
+    /// The path is canonicalized so that a path through a symlink, or one that spells the same file
+    /// differently, belongs to the same script. A file that is gone is an IO error rather than a
+    /// panic: a hot reload can delete it after the compiler thread read it and before the state
+    /// installs the compile, which is a deletion, and the caller decides whether to skip it (#908).
+    pub(crate) fn get_or_insert_script_id(
+        &self,
+        path: &Path,
+    ) -> std::result::Result<FileId, std::io::Error> {
         let mut canonicalized = PathBuf::from(self.mods_dir_path.clone());
         canonicalized.push(path);
-        let canonicalized = canonicalized
-            .canonicalize()
-            .expect("error while canonicalizing");
+        let canonicalized = canonicalized.canonicalize()?;
 
         let mut path_to_script_ids = self.path_to_script_ids.borrow_mut();
-        match path_to_script_ids.get(canonicalized.as_os_str()) {
+        Ok(match path_to_script_ids.get(canonicalized.as_os_str()) {
             Some((_, id)) => *id,
             None => {
                 let id = self.get_next_script_id();
@@ -464,7 +472,7 @@ impl GrugState {
                 );
                 id
             }
-        }
+        })
     }
 
     pub fn mods_dir_path(&self) -> &OsStr {

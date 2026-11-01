@@ -65,6 +65,20 @@ fn new_state(mods_dir: &Path) -> GrugState {
     state
 }
 
+/// A state that rescans the mods directory often enough that a test can wait for one scan
+fn new_state_with_poll_interval(mods_dir: &Path, interval: std::time::Duration) -> GrugState {
+    let mut state = GrugInitSettings::new()
+        .set_mod_api_path(MOD_API_PATH)
+        .set_mods_dir(mods_dir.as_os_str())
+        .set_poll_interval(interval)
+        .set_backend(BytecodeBackend::new())
+        .build_state()
+        .unwrap();
+    // SAFETY: None of the scripts in these tests call a host function
+    unsafe { state.register_dummies() };
+    state
+}
+
 fn compile_error(state: &GrugState, path: impl AsRef<OsStr>, text: &str) -> Error {
     state
         .compile_grug_file_from_str(path, text)
@@ -255,4 +269,167 @@ fn called_host_fn_must_be_registered() {
         err.inner().error_string.to_str(),
         "  in a (m/x-D.grug:2:5)\nError: The host function 'say' was not registered\n2 $ say(\"hi\")"
     );
+}
+
+/// A file that is gone when its compile is installed is an IO error, not a panic.
+///
+/// Installing a successful compile canonicalizes the file's path, so a `.grug` file deleted after
+/// its text was read panicked out of `get_or_insert_script_id`, and a panic that crosses
+/// `grug_update`'s `extern "C"` frame aborts the host process (#908). Deleting the file here is
+/// the same deletion a hot reload races with, without the race.
+#[test]
+fn compiling_a_deleted_file_from_a_string_is_an_io_error() {
+    let mods_dir = ModsDir::new("deleted-from-string");
+    mods_dir.write("m/x-A.grug", "x: number = 1\n");
+    let state = new_state(&mods_dir.0);
+    state.compile_grug_file("m/x-A.grug").unwrap();
+    std::fs::remove_file(mods_dir.0.join("m/x-A.grug")).unwrap();
+
+    let err = state
+        .compile_grug_file_from_str("m/x-A.grug", "x: number = 2\n")
+        .expect_err("expected an IO error for a file that is gone");
+    // The OS error in between differs per platform
+    let error_string = err.inner().error_string.to_str();
+    assert!(
+        error_string.starts_with("Error: IO error: "),
+        "{}",
+        error_string
+    );
+    assert!(
+        error_string.ends_with("\n$ m/x-A.grug"),
+        "{}",
+        error_string
+    );
+}
+
+/// Creates a FIFO, which a reader blocks on until a writer opens it or writes to it.
+///
+/// `std` cannot create one, and the only tests that need it are on Linux, where the poller is
+/// tested too.
+#[cfg(target_os = "linux")]
+fn create_fifo(path: &Path) {
+    let status = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .expect("mkfifo should be installed");
+    assert!(status.success(), "mkfifo failed");
+}
+
+/// The result of a compile, without the file id, so a test can carry it out of a thread.
+#[cfg(target_os = "linux")]
+fn compile_result_without_id(
+    file: &gruggers::state::FileInfo<'_>,
+) -> Result<(), String> {
+    file.result()
+        .map(|_| ())
+        .map_err(|err| err.error_message.to_str().to_owned())
+}
+
+/// A `.grug` file deleted after the compiler thread read it and before the state installed it is a
+/// deletion, not a panic.
+///
+/// The FIFO beside the victim is in the same chunk of compile requests as it, and the compiler
+/// opens every file of a chunk before it reads any of them, so the victim is open once the FIFO's
+/// read is what blocks. Deleting the victim then is the race a hot reload lost, arranged so that
+/// it happens every time instead of one run in many.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_deleted_before_its_compile_is_installed_is_not_an_error() {
+    let mods_dir = ModsDir::new("deleted-before-install");
+    let state = new_state_with_poll_interval(&mods_dir.0, std::time::Duration::from_millis(5));
+    // Both files appear after the watcher's baseline, so its next walk reports them as new
+    mods_dir.write("m/x-A.grug", "x: number = 1\n");
+    let fifo = mods_dir.0.join("m/z-Block.grug");
+    create_fifo(&fifo);
+    // Reading and writing keeps the compiler's open from blocking on a writer, so what the test
+    // controls is the FIFO's read, which happens after every file of the chunk is open.
+    let writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .unwrap();
+    // Nothing else wakes the test before the poller does, and the assertion below is what catches
+    // a wait that was too short.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    let update = std::thread::spawn(move || {
+        let (_, files) = state.update_files();
+        files
+            .files()
+            .iter()
+            .map(compile_result_without_id)
+            .collect::<Vec<_>>()
+    });
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::fs::remove_file(mods_dir.0.join("m/x-A.grug")).unwrap();
+    // Ends the block, so the compiler compiles both files and the state installs them
+    drop(writer);
+
+    let reported = update
+        .join()
+        .expect("update_files panicked on a file that was gone when its compile was installed");
+    // The victim was read before it was deleted, so its compile succeeded and it is the install
+    // that has to drop it. Reporting it as an error would mean it was never read.
+    assert_eq!(
+        reported.len(),
+        1,
+        "expected only the FIFO to be reported, got {:?}",
+        reported
+    );
+    assert!(reported[0].is_err());
+}
+
+/// The same deletion during the walk `compile_all_files` does at startup is not a panic either.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_deleted_during_the_startup_walk_is_not_an_error() {
+    let mods_dir = ModsDir::new("deleted-during-startup-walk");
+    mods_dir.write("m/x-A.grug", "x: number = 1\n");
+    let fifo = mods_dir.0.join("m/z-Block.grug");
+    create_fifo(&fifo);
+    let writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .unwrap();
+
+    let state = new_state(&mods_dir.0);
+    let compile = std::thread::spawn(move || {
+        let files = state.compile_all_files();
+        files
+            .files()
+            .iter()
+            .map(compile_result_without_id)
+            .collect::<Vec<_>>()
+    });
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::fs::remove_file(mods_dir.0.join("m/x-A.grug")).unwrap();
+    drop(writer);
+
+    let reported = compile
+        .join()
+        .expect("compile_all_files panicked on a file that was gone when its compile was installed");
+    assert_eq!(
+        reported.len(),
+        1,
+        "expected only the FIFO to be reported, got {:?}",
+        reported
+    );
+    assert!(reported[0].is_err());
+}
+
+/// A `.grug` symlink whose target is gone is reported as an IO error, not as a deletion.
+///
+/// The startup walk stats an entry without following it, so a symlink is not a path that vanished
+/// while the walk listed it: opening it is what fails, and that is a real error the host has to see.
+#[cfg(unix)]
+#[test]
+fn a_grug_symlink_to_a_gone_file_is_an_io_error_at_startup() {
+    let mods_dir = ModsDir::new("dangling-symlink");
+    std::os::unix::fs::symlink("nowhere.grug", mods_dir.0.join("m/gone-A.grug")).unwrap();
+    let state = new_state(&mods_dir.0);
+    let (ok_count, errors) = compile_all_errors(&state);
+    assert_eq!(ok_count, 0);
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].starts_with("IO error: "), "{}", errors[0]);
 }

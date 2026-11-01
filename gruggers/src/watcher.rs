@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 /// Whether an IO error says the path is gone, which a walk racing with a deletion sees and has to
 /// treat as the deletion rather than as a failure of the walk.
 #[allow(unused)]
-fn vanished_while_listing(err: &std::io::Error) -> bool {
+pub(crate) fn vanished_while_listing(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::NotFound
 }
 
@@ -31,10 +31,24 @@ pub fn poll_watch_changes(
     let mut dirs_to_check = vec![mods_dir.clone()];
 
     while let Some(dir) = dirs_to_check.pop() {
-        for entry in std::fs::read_dir(dir)? {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            // A subdirectory deleted after its parent listed it is a deletion, which the parent's
+            // mtime reports. The watched directory itself was listed by nobody, so failing to read
+            // it is an error.
+            Err(err) if dir != mods_dir && vanished_while_listing(&err) => continue,
+            Err(err) => return Err(err),
+        };
+        for entry in entries {
             let entry = entry?;
             let path = entry.path();
-            let metadata = entry.metadata()?;
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                // The entry was deleted after this walk listed it, which is a deletion like any
+                // other and not a reason to fail to start (#908).
+                Err(err) if vanished_while_listing(&err) => continue,
+                Err(err) => return Err(err),
+            };
             if metadata.file_type().is_dir() {
                 dirs_to_check.push(path.clone().into_os_string());
             }

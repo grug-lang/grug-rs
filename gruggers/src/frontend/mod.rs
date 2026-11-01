@@ -7,6 +7,7 @@ use crate::own_ptr::OwnPtr;
 use crate::state::{FileInfo, Files, GrugState, ResourcePaths};
 use crate::type_storage::TypeStorage;
 use crate::types::FileId;
+use crate::watcher::vanished_while_listing;
 
 use allocator_api2::vec::Vec;
 
@@ -180,7 +181,9 @@ impl GrugState {
                 &arena,
                 &mut self.type_storage.borrow_mut(),
             )?;
-            let id = self.get_or_insert_script_id(path.as_ref());
+            let id = self
+                .get_or_insert_script_id(path.as_ref())
+                .map_err(|err| Error::from_io_error(err, path))?;
             self.backend.insert_file(id, &file);
 
             self.track_file_entities(id);
@@ -239,15 +242,37 @@ impl GrugState {
             let mut entries_to_check = std::vec::Vec::from([mod_dir]);
 
             while let Some(next_entry) = entries_to_check.pop() {
-                if next_entry
-                    .metadata()
-                    .expect("could not read metadata")
-                    .is_dir()
-                {
+                let metadata = match next_entry.metadata() {
+                    Ok(metadata) => metadata,
+                    // The entry was deleted after its directory was listed, which is a deletion
+                    // rather than a failure to start (#908). Nothing in a test can delete it
+                    // between the listing and this stat, so the rule is unproven here and is the
+                    // one the poller's walk tests already force.
+                    Err(err) if vanished_while_listing(&err) => continue, // grcov-excl-line
+                    // grcov-excl-start: a stat that fails for any other reason is a real error
+                    Err(err) => panic!(
+                        "could not read metadata of '{}': {}",
+                        next_entry.path().to_string_lossy(),
+                        err
+                    ),
+                    // grcov-excl-stop
+                };
+                if metadata.is_dir() {
                     let next_entry_path = next_entry.path();
-                    for entry in
-                        std::fs::read_dir(&next_entry_path).expect("Could not read mods directory")
-                    {
+                    let entries = match std::fs::read_dir(&next_entry_path) {
+                        Ok(entries) => entries,
+                        // A subdirectory deleted after its parent listed it is a deletion too, and
+                        // is unproven for the same reason.
+                        Err(err) if vanished_while_listing(&err) => continue, // grcov-excl-line
+                        // grcov-excl-start: an unreadable directory is a real error
+                        Err(err) => panic!(
+                            "could not read '{}': {}",
+                            next_entry_path.to_string_lossy(),
+                            err
+                        ),
+                        // grcov-excl-stop
+                    };
+                    for entry in entries {
                         let Ok(entry) = entry else {
                             panic!("unable to read entry: {:?}", entry); // grcov-excl-line
                         };
@@ -310,7 +335,22 @@ impl GrugState {
                 // turn ok result into id, allocate error into outer arena
                 let result = match result {
                     Ok(ast) => {
-                        let id = self.get_or_insert_script_id(path.as_ref());
+                        let id = match self.get_or_insert_script_id(path.as_ref()) {
+                            Ok(id) => id,
+                            // The compiler thread read the file and the file system no longer has
+                            // it, which is a deletion like any other: the walk reports it as the
+                            // change to the file's parent directory, and installing it would abort
+                            // the host (#908).
+                            Err(err) if vanished_while_listing(&err) => continue,
+                            // grcov-excl-start: a canonicalize that fails for another reason is a
+                            // real error
+                            Err(err) => panic!(
+                                "error while canonicalizing '{}': {}",
+                                path.to_string_lossy(),
+                                err
+                            ),
+                            // grcov-excl-stop
+                        };
                         // Send to backend
                         self.backend.insert_file(id, &ast);
 
@@ -436,7 +476,22 @@ impl GrugState {
                 // turn ok result into id, copy err into current arena
                 let result = match result {
                     Ok(ast) => {
-                        let id = self.get_or_insert_script_id(path.as_ref());
+                        let id = match self.get_or_insert_script_id(path.as_ref()) {
+                            Ok(id) => id,
+                            // The compiler thread read the file and the file system no longer has
+                            // it, which is a deletion like any other: the walk reports it as the
+                            // change to the file's parent directory, and installing it would abort
+                            // the host (#908).
+                            Err(err) if vanished_while_listing(&err) => continue,
+                            // grcov-excl-start: a canonicalize that fails for another reason is a
+                            // real error
+                            Err(err) => panic!(
+                                "error while canonicalizing '{}': {}",
+                                path.to_string_lossy(),
+                                err
+                            ),
+                            // grcov-excl-stop
+                        };
                         // Send to backend
                         self.backend.insert_file(id, &ast);
 
