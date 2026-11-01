@@ -1,6 +1,13 @@
 pub use inner::*;
 use std::ffi::{OsStr, OsString};
 
+/// Whether an IO error says the path is gone, which a walk racing with a deletion sees and has to
+/// treat as the deletion rather than as a failure of the walk.
+#[allow(unused)]
+fn vanished_while_listing(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::NotFound
+}
+
 #[allow(unused)]
 pub fn poll_watch_changes(
     mods_dir: impl AsRef<OsStr>,
@@ -43,10 +50,25 @@ pub fn poll_watch_changes(
             match (|| -> Result<(), std::io::Error> {
                 let mut dirs_to_check = vec![mods_dir.clone()];
                 while let Some(dir) = dirs_to_check.pop() {
-                    for entry in std::fs::read_dir(dir)? {
+                    let entries = match std::fs::read_dir(&dir) {
+                        Ok(entries) => entries,
+                        // A subdirectory its owner deleted after this walk listed it is a deletion,
+                        // which this walk reports as the change to the parent's mtime. The watched
+                        // directory itself was listed by nobody, so failing to read it is an error.
+                        Err(err) if dir != mods_dir && vanished_while_listing(&err) => continue,
+                        Err(err) => return Err(err),
+                    };
+                    for entry in entries {
                         let entry = entry?;
                         let entry_path = entry.path();
-                        let metadata = entry.metadata()?;
+                        let metadata = match entry.metadata() {
+                            Ok(metadata) => metadata,
+                            // The entry was deleted after this directory was listed. It is a
+                            // deletion like any other, and reporting it as an error made the host
+                            // abort the whole process (#675).
+                            Err(err) if vanished_while_listing(&err) => continue,
+                            Err(err) => return Err(err),
+                        };
                         let m_time = metadata.modified()?;
                         let is_dir = metadata.file_type().is_dir();
                         if is_dir {
@@ -353,5 +375,273 @@ mod inner {
         f: impl FnMut(Result<OsString, std::io::Error>) -> bool + Send + 'static,
     ) -> Result<(), std::io::Error> {
         super::poll_watch_changes(mods_dir, poll_interval, f)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    /// How long a test waits for the poller before deciding the change it needs never happened.
+    const TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// How many files a round holds besides the victims. The whole round has to fit in one read of
+    /// the directory, so that the walk lists the victims before it can be told to delete them.
+    const ROUND_FILES: usize = 60;
+
+    /// How many files the callback deletes while the walk inspects the round. A single victim is
+    /// enough on a filesystem that lists a directory in the order its entries were created, like
+    /// tmpfs, where the victim created first is listed last, but another order is free to list every
+    /// victim before the walk reports a file, and four of the round's sixty-four entries makes that
+    /// practically certain not to happen.
+    const VICTIMS: usize = 4;
+
+    /// A watched directory, and an unwatched one beside it where a test builds a subtree before
+    /// moving it in with one rename, so a walk sees the subtree either not at all or all at once.
+    struct Scratch {
+        watched: PathBuf,
+        staging: PathBuf,
+    }
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "grug-watcher-{}-{name}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            let watched = root.join("watched");
+            let staging = root.join("staging");
+            std::fs::create_dir_all(&watched).unwrap();
+            std::fs::create_dir_all(&staging).unwrap();
+            Self { watched, staging }
+        }
+
+        /// Builds a round of [`ROUND_FILES`] files and [`VICTIMS`] victims, outside the watched
+        /// directory.
+        ///
+        /// A filesystem that lists a directory in the order its entries were created, like tmpfs,
+        /// lists the victims first and so last, which leaves the walk the whole round to report
+        /// before it inspects one of them.
+        fn build_round(&self, round: &str) {
+            let built = self.staging.join(round);
+            std::fs::create_dir(&built).unwrap();
+            for victim in 0..VICTIMS {
+                std::fs::write(built.join(victim_name(victim)), "").unwrap();
+            }
+            for file in 0..ROUND_FILES {
+                std::fs::write(built.join(format!("file{file:03}")), "").unwrap();
+            }
+        }
+
+        /// Moves the round built by [`Self::build_round`] into the watched directory.
+        fn move_in(&self, round: &str) {
+            std::fs::rename(self.staging.join(round), self.watched.join(round)).unwrap();
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(self.watched.parent().unwrap());
+        }
+    }
+
+    /// The name of the `index`th file of a round that its test deletes during the walk.
+    fn victim_name(index: usize) -> String {
+        format!("victim{index}")
+    }
+
+    /// Whether `name` is one of a round's victims.
+    fn is_victim(name: &OsStr) -> bool {
+        (0..VICTIMS).any(|index| name == OsStr::new(&victim_name(index)))
+    }
+
+    /// What a walk reported to a test.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Event {
+        /// The walk listed and inspected every file of the round, so none of them was an error.
+        RoundWalked,
+        /// The walk stopped on an IO error.
+        Errored(std::io::ErrorKind),
+    }
+
+    /// Starts a poller on the scratch directory, reporting each change to `on_change` and the
+    /// round's completion to `events`.
+    ///
+    /// The callback answers a change with true, which keeps the poller walking: answering false only
+    /// ends one walk, and only an error answered with false ends its thread. `stop` uses that.
+    fn start(
+        scratch: &Scratch,
+        round: &'static str,
+        events: &Sender<Event>,
+        mut on_change: impl FnMut(&Path) + Send + 'static,
+    ) -> (Arc<Mutex<Vec<std::io::ErrorKind>>>, Receiver<()>) {
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let (stopped, thread_stopped) = channel();
+        let errors_for_poller = Arc::clone(&errors);
+        let events = events.clone();
+        let mut walked = 0;
+        poll_watch_changes(
+            scratch.watched.as_os_str(),
+            Duration::from_millis(5),
+            move |change| {
+                match change {
+                    Ok(path) => {
+                        let path = PathBuf::from(path);
+                        if path.parent() == Some(Path::new(round))
+                            && path.file_name().is_some_and(|name| !is_victim(name))
+                        {
+                            walked += 1;
+                            if walked == ROUND_FILES {
+                                let _ = events.send(Event::RoundWalked);
+                            }
+                        }
+                        on_change(&path);
+                    }
+                    Err(err) => {
+                        errors_for_poller.lock().unwrap().push(err.kind());
+                        let _ = events.send(Event::Errored(err.kind()));
+                        let _ = stopped.send(());
+                        return false;
+                    }
+                }
+                true
+            },
+        )
+        .unwrap();
+        (errors, thread_stopped)
+    }
+
+    /// Makes the poller report an error it has to keep reporting, and waits for its thread to end.
+    ///
+    /// A directory the poller cannot read is an IO error like any other, so it tells a test that the
+    /// walk still reports what it cannot read, and it is the one error that ends the thread.
+    fn stop(
+        scratch: &Scratch,
+        errors: &Arc<Mutex<Vec<std::io::ErrorKind>>>,
+        stopped: &Receiver<()>,
+    ) -> Vec<std::io::ErrorKind> {
+        let locked = scratch.watched.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        stopped
+            .recv_timeout(TIMEOUT)
+            .expect("the poller never reported the unreadable directory");
+        // Put the mode back, so the scratch directory can be removed.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        errors.lock().unwrap().clone()
+    }
+
+    /// A file deleted between being listed and being inspected is a deletion, not an IO error.
+    ///
+    /// A walk reads a directory's entries in one go and inspects them one by one, so the file's owner
+    /// can delete it before its turn comes. Reporting that race as an error is what aborted the JVM
+    /// during coverage/tests/hot_reload_recipe_removed-Test.grug (#675); the deletion itself reaches
+    /// the host as the change to the file's parent directory.
+    #[test]
+    fn a_file_deleted_during_a_walk_is_not_an_io_error() {
+        let scratch = Scratch::new("deleted-file");
+        scratch.build_round("round");
+        let removed = Arc::new(AtomicBool::new(false));
+        let removed_in_poller = Arc::clone(&removed);
+        let round_in_poller = scratch.watched.join("round");
+        let (events, event) = channel();
+        let (errors, stopped) = start(&scratch, "round", &events, move |path| {
+            // The first file the walk reports leaves the victims' inspection still to come, since
+            // the walk listed the whole round before it inspected any of it.
+            let Some(directory) = path.parent() else {
+                return;
+            };
+            if directory != Path::new("round")
+                || path.file_name().is_some_and(is_victim)
+                || removed_in_poller.load(Ordering::Relaxed)
+            {
+                return;
+            }
+            for victim in 0..VICTIMS {
+                if std::fs::remove_file(round_in_poller.join(victim_name(victim))).is_ok() {
+                    removed_in_poller.store(true, Ordering::Relaxed);
+                }
+            }
+        });
+        scratch.move_in("round");
+
+        match event.recv_timeout(TIMEOUT) {
+            Ok(Event::RoundWalked) => {}
+            Ok(Event::Errored(kind)) => panic!(
+                "the walk reported {kind:?} for a file deleted while it was being listed"
+            ),
+            Err(_) => panic!("the walk never listed the round"),
+        }
+        assert!(
+            removed.load(Ordering::Relaxed),
+            "the walk never reported the round's first file, so nothing raced"
+        );
+        let reported = stop(&scratch, &errors, &stopped);
+        assert_eq!(
+            reported,
+            vec![std::io::ErrorKind::PermissionDenied],
+            "the walk reported an error other than the unreadable directory"
+        );
+    }
+
+    /// A directory deleted between being listed and being walked is a deletion too, not an IO error.
+    ///
+    /// A walk lists a directory's subdirectories and walks each of them only once it has the whole
+    /// listing, so the owner of a subtree can delete a directory that the walk has already seen.
+    #[test]
+    fn a_directory_deleted_during_a_walk_is_not_an_io_error() {
+        let scratch = Scratch::new("deleted-directory");
+        let built = scratch.staging.join("round");
+        // Two directories hold a file, which the walk reports while it walks the first of them, and
+        // the third stays empty. However the walk orders the three, the report comes from one of the
+        // first two, so at least one of the directories the callback deletes is still unvisited.
+        for name in ["alpha", "beta"] {
+            std::fs::create_dir_all(built.join(name)).unwrap();
+            std::fs::write(built.join(name).join("file"), "").unwrap();
+        }
+        std::fs::create_dir(built.join("gamma")).unwrap();
+
+        let removed = Arc::new(AtomicBool::new(false));
+        let removed_in_poller = Arc::clone(&removed);
+        let round_in_poller = scratch.watched.join("round");
+        let (deleted, deletion) = channel();
+        let (events, _event) = channel();
+        let (errors, stopped) = start(&scratch, "round", &events, move |path| {
+            let Some(directory) = path.parent() else {
+                return;
+            };
+            if directory.parent() != Some(Path::new("round"))
+                || removed_in_poller.load(Ordering::Relaxed)
+            {
+                return;
+            }
+            for name in ["alpha", "beta", "gamma"] {
+                if directory.file_name() == Some(OsStr::new(name)) {
+                    continue;
+                }
+                if std::fs::remove_dir_all(round_in_poller.join(name)).is_ok() {
+                    removed_in_poller.store(true, Ordering::Relaxed);
+                    let _ = deleted.send(());
+                }
+            }
+        });
+        scratch.move_in("round");
+
+        deletion
+            .recv_timeout(TIMEOUT)
+            .expect("the walk never reported a file in the round, so nothing was deleted");
+        let reported = stop(&scratch, &errors, &stopped);
+        assert_eq!(
+            reported,
+            vec![std::io::ErrorKind::PermissionDenied],
+            "a walk reported an error for a directory deleted while it was being listed"
+        );
     }
 }
