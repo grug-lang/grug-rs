@@ -24,7 +24,7 @@ pub(super) struct TypePropagator<'mod_api, 'arena: 'temp, 'temp> {
     mod_api: &'mod_api ModApi,
     current_mod_name: &'arena OsStr,
     mods_dir_path: &'mod_api OsStr,
-	spans: &'arena [SourceSpan],
+    spans: &'arena [SourceSpan],
     local_fns: &'arena [(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>]))],
     export_fns: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
     global_variables: HashMap<&'arena str, Type<'arena>>,
@@ -36,35 +36,35 @@ pub(super) struct TypePropagator<'mod_api, 'arena: 'temp, 'temp> {
 }
 
 struct LocalVariables<'a, 'this> {
-	current: HashMap<&'a str, Type<'a>>,
-	parent: Option<&'this Self>,
+    current: HashMap<&'a str, Type<'a>>,
+    parent: Option<&'this Self>,
 }
 
 impl<'a, 'this> LocalVariables<'a, 'this> {
-	fn new(parent: Option<&'this Self>) -> Self {
-		Self{
-			current: HashMap::new(),
-			parent
-		}
-	}
+    fn new(parent: Option<&'this Self>) -> Self {
+        Self {
+            current: HashMap::new(),
+            parent,
+        }
+    }
 
-	fn get_local_variable_type(&self, var_name: &str) -> Option<Type<'a>> {
-		let mut current = self;
-		loop {
-			if let Some(var_ty) = current.current.get(var_name) {
-				return Some(*var_ty)
-			} else if let Some(parent) = &current.parent {
-				current = parent
-			} else {
-				return None
-			}
-		}
-	}
+    fn get_local_variable_type(&self, var_name: &str) -> Option<Type<'a>> {
+        let mut current = self;
+        loop {
+            if let Some(var_ty) = current.current.get(var_name) {
+                return Some(*var_ty);
+            } else if let Some(parent) = &current.parent {
+                current = parent
+            } else {
+                return None;
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
 struct TypeMismatch<'a> {
-    span: SourceSpan,
+    span: u32,
     diff: TypeDiff<'a>,
 }
 
@@ -87,7 +87,7 @@ impl<'a> From<Error> for TypeInferenceError<'a> {
 
 impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 'temp> {
     // TODO: This should only be called within fill_result_types
-	#[expect(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         file_text: &'arena str,
         file_path: &'arena OsStr,
@@ -95,7 +95,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         mod_api: &'mod_api ModApi,
         mod_name: &'arena OsStr,
         mods_dir_path: &'mod_api OsStr,
-		spans: &'arena [SourceSpan],
+        spans: &'arena [SourceSpan],
         local_fns: &'arena [(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>]))],
         export_fns: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
         arena: &'arena Arena,
@@ -109,7 +109,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             mod_api,
             current_mod_name: mod_name,
             mods_dir_path,
-			spans,
+            spans,
             local_fns,
             export_fns,
             global_variables: HashMap::new(),
@@ -122,18 +122,18 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     }
 
     #[track_caller]
-    fn new_error(&self, span: SourceSpan, args: std::fmt::Arguments) -> Error {
+    fn new_error(&self, span: u32, args: std::fmt::Arguments) -> Error {
         Error::new(
             ErrorKind::TYPE_CHECKER_ERROR,
             self.current_fn_name.unwrap_or("member scope"),
             self.file_path,
             self.file_text,
-            span,
+            self.spans[span as usize],
             args,
         )
     }
 
-	#[expect(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn fill_result_types(
         entity_export_fns: &'mod_api [(&'mod_api NTStr, ModApiExportFn<'mod_api>)],
         mod_api: &'mod_api ModApi,
@@ -162,7 +162,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             mod_api,
             mod_name,
             mods_dir_path,
-			ast.spans,
+            ast.spans,
             ast.local_fn_signatures,
             ast.export_fn_signatures,
             arena,
@@ -176,8 +176,9 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 name: type_propagator
                     .arena
                     .copy_str_into_nt(entity_type)
-					.as_ntstrptr(),
+                    .as_ntstrptr(),
                 generics: &[],
+                num_spans: 1,
             },
         );
 
@@ -204,14 +205,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     ),
                 })?;
 
-			// TODO: check back up on this
-			//
-			// https://github.com/grug-lang/grug-tests/issues/180
+            // TODO: check back up on this
+            //
+            // https://github.com/grug-lang/grug-tests/issues/180
             if let ExprData::Identifier(name) = &variable.assignment_expr.data
                 && name.to_str() == "me"
             {
                 return Err(type_propagator.new_error(
-					type_propagator.spans[variable.assignment_expr.spans as usize],
+                    variable.assignment_expr.spans,
                     format_args!("Global variables can't be assigned 'me'"),
                 ));
             }
@@ -248,7 +249,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             if previous_on_fn_index > current_index {
                 type_propagator.current_fn_name = Some(on_fn_name);
                 return Err(type_propagator.new_error(
-					type_propagator.spans[current_on_fn.sig_span_start],
+					current_on_fn.sig_spans_start,
 					format_args!("The function '{}' needs to be moved before or after a different export function, according to the entity '{}' in mod_api.json", current_on_fn.name, entity_type)
 				));
             }
@@ -259,23 +260,19 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             if mod_api_on_fn.parameters.len() > current_on_fn.parameters.len() {
                 let param = &mod_api_on_fn.parameters[current_on_fn.parameters.len()];
                 return Err(type_propagator.new_error(
-					type_propagator.spans[current_on_fn.sig_span_start],
+                    current_on_fn.sig_spans_start,
                     format_args!(
                         "Function '{}' expected the parameter '{}' with type {}",
-                        current_on_fn.name,
-                        param.name,
-                        param.ty
+                        current_on_fn.name, param.name, param.ty
                     ),
                 ));
             } else if mod_api_on_fn.parameters.len() < current_on_fn.parameters.len() {
                 let param = &current_on_fn.parameters[mod_api_on_fn.parameters.len()];
                 return Err(type_propagator.new_error(
-					type_propagator.spans[param.spans],
+                    param.spans,
                     format_args!(
                         "Function '{}' got an unexpected extra parameter '{}' with type {}",
-                        current_on_fn.name,
-                        param.name,
-                        param.ty
+                        current_on_fn.name, param.name, param.ty
                     ),
                 ));
             }
@@ -287,32 +284,34 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 type_propagator.verify_generics::<false>(arg.ty, arg.spans + 3)?;
                 if param.name != arg.name {
                     return Err(type_propagator.new_error(
-						type_propagator.spans[arg.spans],
+                        arg.spans,
                         format_args!(
                             "Function '{}' its '{}' parameter was supposed to be named '{}'",
-                            current_on_fn.name,
-                            arg.name,
-                            param.name
+                            current_on_fn.name, arg.name, param.name
                         ),
                     ));
                 }
                 if param.ty != arg.ty {
                     return Err(type_propagator.new_error(
-						type_propagator.spans[arg.spans + 3],
+						arg.spans + 3,
 						format_args!("Function '{}' its '{}' parameter was supposed to have the type {}, but got {}", current_on_fn.name, param.name, param.ty, arg.ty)
 					));
                 }
             }
-			let mut local_variables = LocalVariables::new(None);
+            let mut local_variables = LocalVariables::new(None);
             for param in current_on_fn.parameters {
                 type_propagator.add_local_variable(
-					&mut local_variables,
+                    &mut local_variables,
                     param.name.to_str(),
                     param.ty,
                     param.spans,
                 )?;
             }
-            type_propagator.fill_complete_function(&local_variables, current_on_fn.body_statements, Type::Void)?;
+            type_propagator.fill_complete_function(
+                &local_variables,
+                current_on_fn.body_statements,
+                Type::Void,
+            )?;
 
             debug_assert!(type_propagator.current_fn_name == Some(current_on_fn.name.to_str()));
             type_propagator.current_fn_name = None;
@@ -326,7 +325,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             {
                 type_propagator.current_fn_name = Some(on_fn_name.to_str());
                 return Err(type_propagator.new_error(
-                    on_fn.span,
+                    on_fn.sig_spans_start,
                     format_args!(
                         "The function '{}' was not declared by entity '{}' in mod_api.json",
                         on_fn_name, entity_type
@@ -347,31 +346,36 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     return_type,
                     return_type_start,
                     return_type_len: _,
-                    span,
+                    sig_spans_start,
+                    sig_spans_len: _,
                 }) => {
                     debug_assert!(type_propagator.num_while_loops_deep == 0);
                     debug_assert!(type_propagator.current_fn_name.is_none());
 
                     let name = name;
                     type_propagator.current_fn_name = Some(name.to_str());
-					let mut local_variables = LocalVariables::new(None);
+                    let mut local_variables = LocalVariables::new(None);
                     for param in *parameters {
                         type_propagator.verify_generics::<false>(param.ty, param.spans + 3)?;
                         type_propagator.add_local_variable(
-							&mut local_variables,
+                            &mut local_variables,
                             param.name.to_str(),
                             param.ty,
                             param.spans,
                         )?;
                     }
-					type_propagator.verify_generics::<false>(*return_type, *return_type_start)?;
-                    type_propagator.fill_complete_function(&local_variables, body_statements, *return_type)?;
+                    type_propagator.verify_generics::<false>(*return_type, *return_type_start)?;
+                    type_propagator.fill_complete_function(
+                        &local_variables,
+                        body_statements,
+                        *return_type,
+                    )?;
 
                     if *return_type != Type::Void
                         && !matches!(body_statements.last(), Some(Statement::Return { .. }))
                     {
                         return Err(type_propagator.new_error(
-                            *span,
+                            *sig_spans_start,
                             format_args!(
                                 "Function '{}' is supposed to return {} as its last line",
                                 name, return_type
@@ -388,45 +392,53 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         Ok(ast)
     }
 
-    fn verify_generics<const ALLOW_EXISTENTIALS: bool>(&self, ty: Type, err_span: u32) -> Result<u32, Error> {
+    fn verify_generics<const ALLOW_EXISTENTIALS: bool>(
+        &self,
+        ty: Type,
+        err_span: u32,
+    ) -> Result<(), Error> {
         // Check the number of generic parameters
-        if let Type::Id { name, generics } = ty {
-			let class_generics = self
-				.mod_api
-				.classes()
-				.get(name.to_str()).map(|class| class.generics)
-				.unwrap_or(&[]);
+        if let Type::Id {
+            name,
+            generics,
+            num_spans: _,
+        } = ty
+        {
+            let class_generics = self
+                .mod_api
+                .classes()
+                .get(name.to_str())
+                .map(|class| class.generics)
+                .unwrap_or(&[]);
 
-			if generics.len() != class_generics.len() {
-				return Err(self.new_error(
-					self.spans[err_span as usize],
-					format_args!(
-						"type {} has {} generics, but was given {}",
-						name,
-						class_generics.len(),
-						generics.len()
-					),
-				));
-			}
-			let mut num_tokens = 2;
-			for generic in generics {
-				num_tokens += self.verify_generics::<ALLOW_EXISTENTIALS>(*generic, err_span + num_tokens)? + 2;
-			}
-			num_tokens -= 1;
-			Ok(num_tokens)
+            if generics.len() != class_generics.len() {
+                return Err(self.new_error(
+                    err_span,
+                    format_args!(
+                        "type {} has {} generics, but was given {}",
+                        name,
+                        class_generics.len(),
+                        generics.len()
+                    ),
+                ));
+            }
+            let mut num_tokens = 2;
+            for generic in generics {
+                self.verify_generics::<ALLOW_EXISTENTIALS>(*generic, err_span + num_tokens)?;
+                num_tokens += generic.num_spans() + 2;
+            }
+            Ok(())
         } else if !ALLOW_EXISTENTIALS && let Type::Existential { .. } = ty {
-			// grcov-excl-start: the parser only creates existentials with VARIABLE_INFERENCE on
-			Err(self.new_error(
-				self.spans[err_span as usize],
-				// TODO: Improve this error message to provide context 
-				// e.g. 'Global variables cannot use type inference'
-				format_args!(
-					"Type inference is not allowed in this position",
-				),
-			))
-			// grcov-excl-stop
-		} else {
-            Ok(1)
+            // grcov-excl-start: the parser only creates existentials with VARIABLE_INFERENCE on
+            Err(self.new_error(
+                err_span,
+                // TODO: Improve this error message to provide context
+                // e.g. 'Global variables cannot use type inference'
+                format_args!("Type inference is not allowed in this position",),
+            ))
+            // grcov-excl-stop
+        } else {
+            Ok(())
         }
     }
 
@@ -440,17 +452,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             | ExprData::String(_)
             | ExprData::Identifier(_)
             | ExprData::Number(_, _) => (),
-            ExprData::Unary {
-                op: _,
-                expr,
-                op_span: _,
-            } => self.check_global_expr(expr, name)?,
-            ExprData::Binary {
-                left,
-                right,
-                op: _,
-                op_span: _,
-            } => {
+            ExprData::Unary { op: _, expr } => self.check_global_expr(expr, name)?,
+            ExprData::Binary { left, right, op: _ } => {
                 self.check_global_expr(left, name)?;
                 self.check_global_expr(right, name)?;
             }
@@ -459,13 +462,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 name: fn_name,
                 args,
                 ptr: _,
-                name_span: _,
                 generics: _,
             } => {
                 let fn_name = fn_name;
                 if fn_name.to_str().starts_with("_") {
                     return Err(self.new_error(
-                        assignment_expr.span,
+                        assignment_expr.spans,
                         format_args!(
                             "The global variable '{}' isn't allowed to call local functions",
                             name
@@ -481,7 +483,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 name: _,
                 args,
                 ptr: _,
-                name_span: _,
                 generics: _,
             } => {
                 // This is fine even if it is a static method
@@ -504,13 +505,18 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         'mod_api: 'a,
     {
         match mod_api_type {
-            Type::Id { name, generics } => Type::Id {
+            Type::Id {
+                name,
+                generics,
+                num_spans,
+            } => Type::Id {
                 name,
                 generics: arena.slice_from_iter(
                     generics
                         .iter()
                         .map(|generic| Self::convert_mod_api_type(*generic, replacements, arena)),
                 ),
+                num_spans,
             },
             // This refers to the index within the generics array of the current host function, not the index within the typing context
             Type::Existential { idx } => replacements[idx],
@@ -519,9 +525,9 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     }
 
     /// Type inference in grug is limited to variables and expressions within
-	/// a single function
+    /// a single function
     /// Function Parameters, return types, and global variables do not allow
-	/// type inference
+    /// type inference
     ///
     /// This means that each complete function can be type checked
     /// independently (but in order).
@@ -534,11 +540,11 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     /// 2. Walk the statement tree once
     ///     - For each call to a generic host function, create new existential
     ///       types for the generics used by that host function.
-	///     - For each local variable declaration, create new existentials for
-	///       inferred types within it
+    ///     - For each local variable declaration, create new existentials for
+    ///       inferred types within it
     ///     - Emit constraints for the expressions.
-	///         - For local variables, add a constraint between the type of
-	///           the expression and the type of the variable
+    ///         - For local variables, add a constraint between the type of
+    ///           the expression and the type of the variable
     ///         - For function calls, add a constraint between the expected
     ///           type of the parameter (which may or may not be generic) and the
     ///           actual type of the expression (which may or may not be generic).
@@ -553,14 +559,15 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     /// see
     /// (this)[https://smallcultfollowing.com/babysteps/blog/2017/03/25/unification-in-chalk-part-1/]
     /// blog post for an explanation of how constraints work
-	fn fill_complete_function(
+    fn fill_complete_function(
         &mut self,
-		local_variables: &LocalVariables<'arena, '_>,
+        local_variables: &LocalVariables<'arena, '_>,
         statements: &mut [Statement<'arena>],
         expected_return_type: Type<'arena>,
-	) -> Result<(), Error> {
+    ) -> Result<(), Error> {
         let mut ty_ctx = TyCtx::new(
             self.current_fn_name.unwrap(),
+            self.spans,
             self.file_path,
             self.file_text,
             self.temp_arena,
@@ -591,10 +598,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         //    `fill_result_types`
         self.fill_statements(
             &mut ty_ctx,
-			local_variables,
+            local_variables,
             None,
-            unsafe { std::mem::transmute::<&mut [Statement<'arena>], &mut [Statement<'temp>]>(statements) },
-			expected_return_type,
+            unsafe {
+                std::mem::transmute::<&mut [Statement<'arena>], &mut [Statement<'temp>]>(statements)
+            },
+            expected_return_type,
             self.temp_arena,
         )?;
         let substitutions = ty_ctx.substitute(self.type_storage, self.arena)?;
@@ -605,21 +614,22 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         self.fill_statements(
             &mut TyCtx::new(
                 self.current_fn_name.unwrap(),
+                self.spans,
                 self.file_path,
                 self.file_text,
                 self.arena,
             ),
-			local_variables,
+            local_variables,
             Some(substitutions),
             statements,
-			expected_return_type,
+            expected_return_type,
             self.arena,
         )
-	}
+    }
 
-	/// Global variables do not have type inference, and they cannot be folded
-	/// into the `fill_complete_function`, function above, so we use the old
-	/// `fill_complete_expr` function instead
+    /// Global variables do not have type inference, and they cannot be folded
+    /// into the `fill_complete_function`, function above, so we use the old
+    /// `fill_complete_expr` function instead
     fn fill_global_variable(
         &mut self,
         expr: &mut Expr<'arena>,
@@ -627,6 +637,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     ) -> Result<(), TypeInferenceError<'temp>> {
         let mut ty_ctx = TyCtx::new(
             "member scope",
+            self.spans,
             self.file_path,
             self.file_text,
             self.temp_arena,
@@ -657,12 +668,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         //    `fill_result_types`
         let expr_type = self.fill_expr(
             &mut ty_ctx,
-			&LocalVariables::new(None),
+            &LocalVariables::new(None),
             None,
             unsafe { std::mem::transmute::<&mut Expr<'arena>, &mut Expr<'temp>>(expr) },
             self.temp_arena,
         )?;
-		ty_ctx.add_constraint(expr.span, expected_type, expr_type)?;
+        ty_ctx.add_constraint(expr.spans, expected_type, expr_type)?;
         let substitutions = ty_ctx.substitute(self.type_storage, self.arena)?;
         // Clear the typing context for the second pass.
         // This time, the type context is only used to keep track of the number
@@ -670,29 +681,33 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
         self.fill_expr(
             &mut TyCtx::new(
-				"member scope",
+                "member scope",
+                self.spans,
                 self.file_path,
                 self.file_text,
                 self.arena,
             ),
-			&LocalVariables::new(None),
+            &LocalVariables::new(None),
             Some(substitutions),
             expr,
             self.arena,
         )?;
-		Ok(())
+        Ok(())
     }
 
     fn fill_statements<'a>(
         &mut self,
         ty_ctx: &mut TyCtx<'a, 'arena>,
-		local_variables: &LocalVariables<'a, '_>,
+        local_variables: &LocalVariables<'a, '_>,
         substitutions: Option<&[Type<'static>]>,
         statements: &mut [Statement<'a>],
         expected_return_type: Type<'arena>,
         arena: &'a Arena,
-    ) -> Result<(), Error> where 'arena: 'a {
-		let mut local_variables = LocalVariables::new(Some(local_variables));
+    ) -> Result<(), Error>
+    where
+        'arena: 'a,
+    {
+        let mut local_variables = LocalVariables::new(Some(local_variables));
         for statement in statements {
             match statement {
                 Statement::Variable {
@@ -700,28 +715,37 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     ty,
                     assignment_expr,
                     spans,
-					spans_len
+                    spans_len: _,
                 } => {
-					let name = name;
+                    let name = name;
                     if let Some(ty) = ty {
-                        self.verify_generics::<true>(**ty, *type_span)?;
-						*ty = arena.alloc_into(
-							ty_ctx.instantiate_variable_existentials(name.to_str(), spans, **ty, substitutions)
-						);
-						let result_ty = self.fill_expr(ty_ctx, &local_variables, substitutions, assignment_expr, arena)?;
-						ty_ctx
-							.add_constraint(assignment_expr.span, **ty, result_ty)
-							.map_err(|err| {
-								self.new_error(
-									err.span,
-									format_args!(
+                        self.verify_generics::<true>(**ty, *spans + 3)?;
+                        *ty = arena.alloc_into(ty_ctx.instantiate_variable_existentials(
+                            name.to_str(),
+                            *spans,
+                            **ty,
+                            substitutions,
+                        ));
+                        let result_ty = self.fill_expr(
+                            ty_ctx,
+                            &local_variables,
+                            substitutions,
+                            assignment_expr,
+                            arena,
+                        )?;
+                        ty_ctx
+                            .add_constraint(assignment_expr.spans, **ty, result_ty)
+                            .map_err(|err| {
+                                self.new_error(
+                                    err.span,
+                                    format_args!(
                                         "Can't assign {} to '{}', which has type {}",
-										err.diff.swapped(),
-										name,
-										err.diff
-									),
-								)
-							})?;
+                                        err.diff.swapped(),
+                                        name,
+                                        err.diff
+                                    ),
+                                )
+                            })?;
 
                         self.add_local_variable(&mut local_variables, name.to_str(), **ty, *spans)?;
                     } else {
@@ -729,38 +753,46 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             if let Some(ty) = self.get_global_variable_type(name.to_str()) {
                                 if matches!(ty, Type::Id { .. }) {
                                     return Err(self.new_error(
-                                        assignment_expr.span,
+                                        assignment_expr.spans,
                                         format_args!("Global id variables can't be reassigned"),
                                     ));
                                 }
                                 ty
-                            } else if let Some(ty) = local_variables.get_local_variable_type(name.to_str()) {
+                            } else if let Some(ty) =
+                                local_variables.get_local_variable_type(name.to_str())
+                            {
                                 ty
                             } else {
                                 return Err(self.new_error(
-									*name_span,
+									*spans,
 									format_args!("Can't assign to the variable '{}', since it does not exist", name)
 								));
                             };
 
-						let result_ty = self.fill_expr(ty_ctx, &local_variables, substitutions, assignment_expr, arena)?;
-						ty_ctx
-							.add_constraint(assignment_expr.span, ty, result_ty)
-							.map_err(|err| {
-								self.new_error(
-									err.span,
-									format_args!(
+                        let result_ty = self.fill_expr(
+                            ty_ctx,
+                            &local_variables,
+                            substitutions,
+                            assignment_expr,
+                            arena,
+                        )?;
+                        ty_ctx
+                            .add_constraint(assignment_expr.spans, ty, result_ty)
+                            .map_err(|err| {
+                                self.new_error(
+                                    err.span,
+                                    format_args!(
                                         "Can't assign {} to '{}', which has type {}",
-										err.diff.swapped(),
-										name,
-										err.diff
-									),
-								)
-							})?;
+                                        err.diff.swapped(),
+                                        name,
+                                        err.diff
+                                    ),
+                                )
+                            })?;
                     }
                 }
                 Statement::Call(expr) => {
-					self.fill_expr(ty_ctx, &local_variables, substitutions, expr, arena)?;
+                    self.fill_expr(ty_ctx, &local_variables, substitutions, expr, arena)?;
                 }
                 Statement::If {
                     condition,
@@ -773,20 +805,33 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     let mut if_block = if_block;
                     let mut else_block = else_block;
                     loop {
-						let ty = self.fill_expr(ty_ctx, &local_variables, substitutions, condition, arena)?;
-						ty_ctx
-							.add_constraint(condition.span, ty, Type::Bool)
-							.map_err(|err| {
-								self.new_error(
-									err.span,
-									format_args!(
+                        let ty = self.fill_expr(
+                            ty_ctx,
+                            &local_variables,
+                            substitutions,
+                            condition,
+                            arena,
+                        )?;
+                        ty_ctx
+                            .add_constraint(condition.spans, ty, Type::Bool)
+                            .map_err(|err| {
+                                self.new_error(
+                                    err.span,
+                                    format_args!(
                                         "If condition must be bool but got '{}'",
-										err.diff,
-									),
-								)
-							})?;
-						
-                        self.fill_statements(ty_ctx, &local_variables, substitutions, if_block, expected_return_type, arena)?;
+                                        err.diff,
+                                    ),
+                                )
+                            })?;
+
+                        self.fill_statements(
+                            ty_ctx,
+                            &local_variables,
+                            substitutions,
+                            if_block,
+                            expected_return_type,
+                            arena,
+                        )?;
                         if !else_block.is_empty() {
                             if *is_chained {
                                 debug_assert!(else_block.len() == 1);
@@ -805,7 +850,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                                 };
                                 continue;
                             } else {
-								self.fill_statements(ty_ctx, &local_variables, substitutions, else_block, expected_return_type, arena)?;
+                                self.fill_statements(
+                                    ty_ctx,
+                                    &local_variables,
+                                    substitutions,
+                                    else_block,
+                                    expected_return_type,
+                                    arena,
+                                )?;
                             }
                         }
                         break;
@@ -814,29 +866,38 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     // [https://github.com/grug-lang/grug/issues/116]
                 }
                 Statement::While { condition, block } => {
-					let ty = self.fill_expr(ty_ctx, &local_variables, substitutions, condition, arena)?;
-					ty_ctx
-						.add_constraint(condition.span, ty, Type::Bool)
-						.map_err(|err| {
-							self.new_error(
+                    let ty =
+                        self.fill_expr(ty_ctx, &local_variables, substitutions, condition, arena)?;
+                    ty_ctx
+                        .add_constraint(condition.spans, ty, Type::Bool)
+                        .map_err(|err| {
+                            self.new_error(
 								err.span,
 								format_args!(
 									"While condition must be bool but got '{}'",
 									err.diff,
 								),
 							)
-						})?;
+                        })?;
                     self.num_while_loops_deep += 1;
-					self.fill_statements(ty_ctx, &local_variables, substitutions, block, expected_return_type, arena)?;
+                    self.fill_statements(
+                        ty_ctx,
+                        &local_variables,
+                        substitutions,
+                        block,
+                        expected_return_type,
+                        arena,
+                    )?;
                     self.num_while_loops_deep -= 1;
                 }
                 Statement::Return { return_span, expr } => {
                     if let Some(expr) = expr {
-						let ty = self.fill_expr(ty_ctx, &local_variables, substitutions, expr, arena)?;
-						ty_ctx
-							.add_constraint(expr.span, ty, expected_return_type)
-							.map_err(|err| {
-								match expected_return_type {
+                        let ty =
+                            self.fill_expr(ty_ctx, &local_variables, substitutions, expr, arena)?;
+                        ty_ctx
+                            .add_constraint(expr.spans, ty, expected_return_type)
+                            .map_err(|err| {
+                                match expected_return_type {
 									Type::Void => self.new_error(
 										err.span,
 										format_args!(
@@ -855,17 +916,17 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 										),
 									),
 								}
-							})?;
+                            })?;
                     } else if expected_return_type != Type::Void {
-						return Err(self.new_error(
-							*return_span,
-							format_args!(
-								"Function '{}' is supposed to return a value of type {}",
-								self.current_fn_name.unwrap(),
-								expected_return_type
-							),
-						));
-					}
+                        return Err(self.new_error(
+                            *return_span,
+                            format_args!(
+                                "Function '{}' is supposed to return a value of type {}",
+                                self.current_fn_name.unwrap(),
+                                expected_return_type
+                            ),
+                        ));
+                    }
                 }
                 Statement::Break(span) => {
                     if self.num_while_loops_deep == 0 {
@@ -894,7 +955,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     fn fill_expr<'a>(
         &mut self,
         ty_ctx: &mut TyCtx<'a, 'arena>,
-		local_variables: &LocalVariables<'a, '_>, 
+        local_variables: &LocalVariables<'a, '_>,
         substitutions: Option<&[Type<'static>]>,
         expr: &mut Expr<'a>,
         arena: &'a Arena,
@@ -914,33 +975,34 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             ExprData::Identifier(name) => {
                 let Some(ty) = self.get_variable_type(local_variables, name.to_str()) else {
                     return Err(self.new_error(
-                        expr.span,
+                        expr.spans,
                         format_args!("The variable '{}' does not exist", name),
                     ));
                 };
                 ty
             }
             ExprData::Number { .. } => Type::Number,
-            ExprData::Unary { op, expr, op_span } => {
-                if let Expr {
-                    data: ExprData::Unary { op: next_op, .. },
-                    ..
-                } = expr
-                    && next_op == op
+            ExprData::Unary {
+                op,
+                expr: inner_expr,
+            } => {
+                if let ExprData::Unary { op: next_op, .. } = inner_expr.data
+                    && next_op == *op
                 {
                     return Err(self.new_error(
-						*op_span,
+						expr.spans,
 						format_args!("Found '{0}' directly next to another '{0}', which can be simplified by just removing both of them", op)
 					));
                 }
-                let result_ty = self.fill_expr(ty_ctx, local_variables, substitutions, expr, arena)?;
-                self.reject_resource_or_entity_operand(result_ty, expr.span)?;
+                let result_ty =
+                    self.fill_expr(ty_ctx, local_variables, substitutions, inner_expr, arena)?;
+                self.reject_resource_or_entity_operand(result_ty, inner_expr.spans)?;
                 let expected = match op {
                     UnaryOperator::Not => Type::Bool,
                     UnaryOperator::Minus => Type::Number,
                 };
                 ty_ctx
-                    .add_constraint(*op_span, expected, result_ty)
+                    .add_constraint(expr.spans, expected, result_ty)
                     .map_err(|err| {
                         self.new_error(
                             err.span,
@@ -954,17 +1016,15 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     })?;
                 result_ty
             }
-            ExprData::Binary {
-                left,
-                right,
-                op,
-                op_span,
-            } => {
-                let result_0 = self.fill_expr(ty_ctx, local_variables, substitutions, left, arena)?;
-                let result_1 = self.fill_expr(ty_ctx, local_variables, substitutions, right, arena)?;
-                self.reject_resource_or_entity_operand(result_0, left.span)?;
-                self.reject_resource_or_entity_operand(result_1, right.span)?;
-                ty_ctx.add_constraint(*op_span, result_0, result_1).map_err(|err| self.new_error(
+            ExprData::Binary { left, right, op } => {
+                let result_0 =
+                    self.fill_expr(ty_ctx, local_variables, substitutions, left, arena)?;
+                let result_1 =
+                    self.fill_expr(ty_ctx, local_variables, substitutions, right, arena)?;
+                let op_span = left.spans + left.spans_len + 1;
+                self.reject_resource_or_entity_operand(result_0, left.spans)?;
+                self.reject_resource_or_entity_operand(result_1, right.spans)?;
+                ty_ctx.add_constraint(left.spans + left.spans_len + 1, result_0, result_1).map_err(|err| self.new_error(
 					err.span,
 					format_args!("The left and right operand of a binary expression ('{}') must have the same type, but got {} and {}", op, err.diff, err.diff.swapped())
 				))?;
@@ -985,12 +1045,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     | (Type::String, Type::String, BinaryOperator::NotEquals) => (),
                     (Type::String, Type::String, BinaryOperator::Plus) => {
                         return Err(
-                            self.new_error(*op_span, format_args!("cannot add strings with '+'"))
+                            self.new_error(op_span, format_args!("cannot add strings with '+'"))
                         );
                     }
                     (Type::String, Type::String, _) => {
                         return Err(self.new_error(
-                            *op_span,
+                            op_span,
                             format_args!("You can't use the '{}' operator on strings", op),
                         ));
                     }
@@ -1012,12 +1072,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     | BinaryOperator::Division => (Type::Number, Type::Number),
                 };
                 // Make sure both the left and right expressions have the expected type
-                for (expr_result, expr_span) in [(result_0, left.span), (result_1, right.span)] {
+                for (expr_result, expr_span) in [(result_0, op_span), (result_1, op_span)] {
                     ty_ctx
                         .add_constraint(expr_span, expected_type, expr_result)
                         .map_err(|err| {
                             self.new_error(
-                                *op_span,
+                                expr_span,
                                 format_args!(
                                     "'{}' operator expects {} but got {}",
                                     op,
@@ -1034,7 +1094,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 name,
                 args,
                 ptr,
-                name_span,
                 generics: final_generics,
             } => {
                 'outer: {
@@ -1055,19 +1114,13 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             && let None = self.get_variable_type(local_variables, recv_name)
                             && let Some(class) = self.mod_api.classes().get(recv_name)
                         {
-                            // Only remove the reciever on the second time through
-                            // so the same codepaths are excercised both times
-                            if substitutions.is_some() {
-                                *receiver_slot = None;
-                            }
-
                             let Some((_, host_fn)) = class
                                 .assoc_fns
                                 .iter()
                                 .find(|(fn_name, _)| fn_name.as_str() == name)
                             else {
                                 return Err(self.new_error(
-                                    *name_span,
+                                    receiver.spans + receiver.spans_len + 1,
                                     format_args!(
                                         "Cannot find static method '{}' on '{}'",
                                         name, recv_name
@@ -1076,21 +1129,32 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             };
                             if !host_fn.is_static {
                                 return Err(self.new_error(
-									*name_span,
+                                    receiver.spans + receiver.spans_len + 1,
 									format_args!("'{}' is a method on '{}', so it must be called on a value of that type, like 'x.{}()'", name, recv_name, name)
 								));
                             }
+
+                            // Only remove the reciever on the second time through
+                            // so the same codepaths are excercised both times
+                            if substitutions.is_some() {
+                                *receiver_slot = None;
+                            }
                             host_fn
                         } else {
-                            let receiver_type =
-                                self.fill_expr(ty_ctx, local_variables, substitutions, receiver, arena)?;
+                            let receiver_type = self.fill_expr(
+                                ty_ctx,
+                                local_variables,
+                                substitutions,
+                                receiver,
+                                arena,
+                            )?;
                             // We want to at least know the first level of the type is known
                             let actual_receiver_ty =
                                 if let Some(ty) = ty_ctx.get_current_type(receiver_type) {
                                     ty
                                 } else {
                                     return Err(self.new_error(
-                                        receiver.span,
+                                        receiver.spans,
                                         format_args!("Unable to infer type of method receiver"),
                                     ));
                                 };
@@ -1099,7 +1163,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                                 Type::Id { name, .. } => name.to_str(),
                                 ty => {
                                     return Err(self.new_error(
-                                        receiver.span,
+                                        receiver.spans,
                                         format_args!("Cannot call method on '{}' type", ty),
                                     ));
                                 }
@@ -1107,7 +1171,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
                             let Some(class) = self.mod_api.classes().get(receiver_name) else {
                                 return Err(self.new_error(
-                                    receiver.span,
+                                    receiver.spans,
                                     format_args!(
                                         "Type '{}' does not have any methods",
                                         receiver_name
@@ -1120,7 +1184,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                                 .find(|(fn_name, _)| fn_name.as_str() == name)
                             else {
                                 return Err(self.new_error(
-                                    receiver.span,
+                                    receiver.spans,
                                     format_args!(
                                         "Cannot find method '{}' on type '{}'",
                                         name, receiver_name
@@ -1130,7 +1194,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
                             if host_fn.is_static {
                                 return Err(self.new_error(
-									*name_span,
+									receiver.spans + receiver.spans_len + 1,
 									format_args!("'{}' is a static method on '{}', so it must be called as '{}.{}()'", name, receiver_name, receiver_name, name)
 								));
                             }
@@ -1138,61 +1202,72 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             host_fn
                         }
                     } else if let Some((_, (return_ty, sig_arguments))) =
-						self.local_fns.iter().find(|(fn_name, _)| *fn_name == name)
-					{
-						self.fill_arguments(
-							name,
-							ty_ctx,
-							local_variables,
-							substitutions,
-							*name_span,
-							sig_arguments,
-							args,
-							arena,
-						)?;
-						break 'outer *return_ty;
-					} else if let Some(host_fn) = self.mod_api.host_fns().get(name) {
-						host_fn
-					} else if name.starts_with("_") {
-						return Err(self.new_error(
-							*name_span,
-							format_args!(
-								"The local function '{}' was not defined by this grug file",
-								name
-							),
-						));
-					} else if self.export_fns.iter().any(|(fn_name, _)| *fn_name == name) {
-						return Err(self.new_error(
-							*name_span,
-							format_args!(
-								"Mods aren't allowed to call their own export functions"
-							),
-						));
-					} else {
-						return Err(self.new_error(
-							*name_span,
-							format_args!(
-								"The game function '{}' was not declared by mod_api.json",
-								name
-							),
-						));
-					};
+                        self.local_fns.iter().find(|(fn_name, _)| *fn_name == name)
+                    {
+                        self.fill_arguments(
+                            name,
+                            ty_ctx,
+                            local_variables,
+                            substitutions,
+                            expr.spans,
+                            sig_arguments,
+                            args,
+                            arena,
+                        )?;
+                        break 'outer *return_ty;
+                    } else if let Some(host_fn) = self.mod_api.host_fns().get(name) {
+                        host_fn
+                    } else if name.starts_with("_") {
+                        return Err(self.new_error(
+                            expr.spans,
+                            format_args!(
+                                "The local function '{}' was not defined by this grug file",
+                                name
+                            ),
+                        ));
+                    } else if self.export_fns.iter().any(|(fn_name, _)| *fn_name == name) {
+                        return Err(self.new_error(
+                            expr.spans,
+                            format_args!("Mods aren't allowed to call their own export functions"),
+                        ));
+                    } else {
+                        return Err(self.new_error(
+                            expr.spans,
+                            format_args!(
+                                "The game function '{}' was not declared by mod_api.json",
+                                name
+                            ),
+                        ));
+                    };
 
                     // Create the actual types to represent generics
                     let generics = if let Some(substitutions) = substitutions {
                         // for the second time through, replace the existentials as they are created, and also verify traits
                         let mut generics = Vec::with_capacity_in(host_fn.generics.len(), arena);
                         for generic in host_fn.generics {
-                            let idx = ty_ctx.create_existential(name, *name_span, ExistentialKind::Function);
+                            let idx = ty_ctx.create_existential(
+                                name,
+                                expr.spans,
+                                ExistentialKind::Function,
+                            );
                             let actual_ty = substitutions[idx];
-                            ty_ctx.verify_traits(actual_ty, generic.traits(), *name_span, name)?;
+                            ty_ctx.verify_traits(
+                                actual_ty,
+                                generic.traits(),
+                                self.spans[expr.spans as usize],
+                                name,
+                            )?;
                             generics.push(actual_ty)
                         }
                         generics.leak()
                     } else {
                         // The first time through, just create the existentials
                         arena.slice_from_iter(host_fn.generics.iter().map(|_| Type::Existential {
-                            idx: ty_ctx.create_existential(name, *name_span, ExistentialKind::Function),
+                            idx: ty_ctx.create_existential(
+                                name,
+                                expr.spans,
+                                ExistentialKind::Function,
+                            ),
                         }))
                     };
                     // substitute generic arguments in host fn parameters with actual types (existentials the first time through)
@@ -1208,18 +1283,25 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         let mod_api_receiver_ty =
                             Self::convert_mod_api_type(mod_api_receiver_ty, generics, arena);
                         ty_ctx
-                            .add_constraint(*name_span, mod_api_receiver_ty, actual_receiver_ty) .map_err(|err| self.new_error(
-								err.span, // grcov-excl-line
-								format_args!("An error cannot be triggered here, Type mismatch {} vs {}", err.diff, err.diff.swapped()), // grcov-excl-line
-							))?; // grcov-excl-line
+                            .add_constraint(expr.spans, mod_api_receiver_ty, actual_receiver_ty)
+                            .map_err(|err| {
+                                self.new_error(
+                                    err.span, // grcov-excl-line
+                                    format_args!(
+                                        "An error cannot be triggered here, Type mismatch {} vs {}",
+                                        err.diff,
+                                        err.diff.swapped()
+                                    ), // grcov-excl-line
+                                )
+                            })?; // grcov-excl-line
                     }
 
                     self.fill_arguments(
                         name,
                         ty_ctx,
-						local_variables,
+                        local_variables,
                         substitutions,
-                        *name_span,
+                        expr.spans,
                         parameters,
                         args,
                         arena,
@@ -1263,7 +1345,9 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
                 }
             }
-            ExprData::Parenthesized(expr) => self.fill_expr(ty_ctx, local_variables, substitutions, expr, arena)?,
+            ExprData::Parenthesized(expr) => {
+                self.fill_expr(ty_ctx, local_variables, substitutions, expr, arena)?
+            }
         };
 
         expr.result_type = Some(arena.alloc_into(result_ty));
@@ -1272,7 +1356,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
     // Resource and entity strings can only be passed directly to host
     // functions, so they can't be the operand of an operator
-    fn reject_resource_or_entity_operand(&self, ty: Type, span: SourceSpan) -> Result<(), Error> {
+    fn reject_resource_or_entity_operand(&self, ty: Type, span: u32) -> Result<(), Error> {
         let kind = match ty {
             Type::Resource { .. } => "A resource",
             Type::Entity { .. } => "An entity",
@@ -1280,18 +1364,21 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         };
         Err(self.new_error(
             span,
-            format_args!("{} string can only be passed directly to a host function", kind),
+            format_args!(
+                "{} string can only be passed directly to a host function",
+                kind
+            ),
         ))
     }
 
-	#[expect(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn fill_arguments<'a>(
         &mut self,
         function_name: &str,
         ty_ctx: &mut TyCtx<'a, 'arena>,
-		local_variables: &LocalVariables<'a, '_>,
+        local_variables: &LocalVariables<'a, '_>,
         substitutions: Option<&[Type<'static>]>,
-        name_span: SourceSpan,
+        name_span: u32,
         signature: &[Parameter<'a>],
         arguments: &mut [Expr<'a>],
         arena: &'a Arena,
@@ -1305,16 +1392,14 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 name_span,
                 format_args!(
                     "Function call '{}' expected the argument '{}' with type {}",
-                    function_name,
-                    param.name,
-                    param.ty
+                    function_name, param.name, param.ty
                 ),
             ));
         } else if signature.len() < arguments.len() {
             let arg = &mut arguments[signature.len()];
             let got_type = self.fill_expr(ty_ctx, local_variables, substitutions, arg, arena)?;
             return Err(self.new_error(
-                arg.span,
+                arg.spans,
                 format_args!(
                     "Function call '{}' got an unexpected extra argument with type {}",
                     function_name, got_type
@@ -1322,7 +1407,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             ));
         }
         for (param, arg) in signature.iter().zip(arguments) {
-            let arg_result_ty = self.fill_expr(ty_ctx, local_variables, substitutions, arg, arena)?;
+            let arg_result_ty =
+                self.fill_expr(ty_ctx, local_variables, substitutions, arg, arena)?;
             // If argument is resource
             if let Type::Resource {
                 extension,
@@ -1331,28 +1417,27 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 && let ExprData::Resource(ref mut value) = arg.data
             {
                 if substitutions.is_some() {
-                    *value = self
-                        .validate_and_fix_resource_string(
-                            value.to_str(),
-                            extension.to_str(),
-                            optional,
-                            arg.span,
-                            arena,
-                        )?;
+                    *value = self.validate_and_fix_resource_string(
+                        value.to_str(),
+                        extension.to_str(),
+                        optional,
+                        arg.spans,
+                        arena,
+                    )?;
                 }
             // If argument is entity
             } else if let Type::Entity { entity_type: _ } = param.ty
                 && let ExprData::Entity(ref mut value) = arg.data
             {
                 if substitutions.is_some() {
-                    self.validate_and_fix_entity_string(value, arg.span, arena)?;
+                    self.validate_and_fix_entity_string(value, arg.spans, arena)?;
                 }
             // argument is a literal string but resource is expected
             } else if let Type::Resource { .. } = param.ty
                 && let ExprData::String(string) = arg.data
             {
                 return Err(self.new_error(
-					arg.span,
+					arg.spans,
 					format_args!("The host function '{}' expects a resource string, so put an 'r' in front of string \"{}\"", function_name, string)
 				));
             // argument is a literal string but entity is expected
@@ -1360,7 +1445,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 && let ExprData::String(string) = arg.data
             {
                 return Err(self.new_error(
-					arg.span,
+					arg.spans,
 					format_args!("The host function '{}' expects an entity string, so put an 'e' in front of string \"{}\"", function_name, string)
 				));
             // anything else is passed where a resource or entity string is expected
@@ -1371,9 +1456,12 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     "an entity"
                 };
                 return Err(self.new_error(
-					arg.span,
-					format_args!("The host function '{}' expects {} string for argument '{}'", function_name, kind, param.name)
-				));
+                    arg.spans,
+                    format_args!(
+                        "The host function '{}' expects {} string for argument '{}'",
+                        function_name, kind, param.name
+                    ),
+                ));
             // argument is a resource or entity string but a generic is expected
             } else if let Type::Existential { .. } = param.ty
                 && let Type::Resource { .. } | Type::Entity { .. } = arg_result_ty
@@ -1384,18 +1472,21 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     "an entity"
                 };
                 return Err(self.new_error(
-					arg.span,
-					format_args!("Function call '{}' can't take {} string for its generic argument '{}'", function_name, kind, param.name)
-				));
+                    arg.spans,
+                    format_args!(
+                        "Function call '{}' can't take {} string for its generic argument '{}'",
+                        function_name, kind, param.name
+                    ),
+                ));
             // if argument is void
             } else if arg_result_ty == Type::Void {
                 return Err(self.new_error(
-					arg.span,
+					arg.spans,
 					format_args!("Function call '{}' expected the type {} for argument '{}', but got a function call that doesn't return anything", function_name, param.ty, param.name)
 				));
             // If the shape of the argument type matches the shape of the expected parameter including generics
             } else if arg_result_ty.matches(&param.ty) {
-                ty_ctx.add_constraint(arg.span, param.ty, arg_result_ty).map_err(|err| self.new_error(
+                ty_ctx.add_constraint(arg.spans, param.ty, arg_result_ty).map_err(|err| self.new_error(
 					err.span,
 					format_args!("Function call '{}' expected the type {} for argument '{}', but got {}", function_name, err.diff, param.name, err.diff.swapped())
 				))?;
@@ -1403,7 +1494,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
             } else {
                 let type_diff = TypeDiff::new(param.ty, arg_result_ty);
                 return Err(self.new_error(
-                    arg.span,
+                    arg.spans,
                     format_args!(
                         "Function call '{}' expected the type {} for argument '{}', but got {}",
                         function_name,
@@ -1422,7 +1513,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         value: &str,
         extension: &str,
         optional: bool,
-        span: SourceSpan,
+        span: u32,
         arena: &'a Arena,
     ) -> Result<NTStrPtr<'a>, Error> {
         if value.is_empty() {
@@ -1483,16 +1574,16 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         // fix string
         let mut string = PathBuf::from(self.current_mod_name);
         string.push(value);
-        let resource_str = unsafe{NTStr::from_str_unchecked(arena.fmt_into(
-			format_args!("{}\0", string.display()))
-		)};
+        let resource_str = unsafe {
+            NTStr::from_str_unchecked(arena.fmt_into(format_args!("{}\0", string.display())))
+        };
 
         // check if resource exists
         let mut full_path = PathBuf::from(self.mods_dir_path);
         full_path.push(resource_str.as_str());
         // An optional resource is allowed to not exist yet: the host function accepts a path it will
         // create later, like a screenshot reference on its first run.
-		//
+        //
         // we can't do `Ok(true) == std::fs::exists(&full_path)` because std::io::Error is not PartialEq
         if !optional && !std::fs::exists(&full_path).is_ok_and(std::convert::identity) {
             Err(self.new_error(span, format_args!("resource '{}' does not exist", value)))
@@ -1504,7 +1595,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
     fn validate_and_fix_entity_string<'a>(
         &mut self,
         entity_string: &mut NTStrPtr<'a>,
-        span: SourceSpan,
+        span: u32,
         arena: &'a Arena,
     ) -> Result<(), Error> {
         // Validate string
@@ -1567,14 +1658,26 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         // TODO: If the mod name is non utf8, this may cause problems
         // Cross mod entities are supported, so we actually need to handle this properly
         if mod_name.is_empty() {
-			*entity_string = unsafe{NTStr::from_str_unchecked(arena.fmt_into(
-				format_args!("{}:{}\0", self.current_mod_name.display(), entity_name))
-			)}.as_ntstrptr();
+            *entity_string = unsafe {
+                NTStr::from_str_unchecked(arena.fmt_into(format_args!(
+                    "{}:{}\0",
+                    self.current_mod_name.display(),
+                    entity_name
+                )))
+            }
+            .as_ntstrptr();
         }
         Ok(())
     }
 
-    fn get_variable_type<'a>(&self, local_variables: &LocalVariables<'a, '_>, var_name: &str) -> Option<Type<'a>> where 'arena: 'a{
+    fn get_variable_type<'a>(
+        &self,
+        local_variables: &LocalVariables<'a, '_>,
+        var_name: &str,
+    ) -> Option<Type<'a>>
+    where
+        'arena: 'a,
+    {
         if let var @ Some(_) = local_variables.get_local_variable_type(var_name) {
             var
         } else {
@@ -1586,7 +1689,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         self.global_variables.get(var_name).cloned()
     }
 
-    fn validate_variable_name(&self, name: &str, span: SourceSpan) -> Result<(), Error> {
+    fn validate_variable_name(&self, name: &str, span: u32) -> Result<(), Error> {
         if let Some(c) = name
             .chars()
             .find(|c| !c.is_ascii_lowercase() && !c.is_ascii_digit() && *c != '_')
@@ -1601,15 +1704,18 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 
     fn add_local_variable<'a>(
         &self,
-		local_variables: &mut LocalVariables<'a, '_>,
+        local_variables: &mut LocalVariables<'a, '_>,
         name: &'arena str,
         ty: Type<'arena>,
         name_span: u32,
-    ) -> Result<(), Error> where 'arena: 'a {
+    ) -> Result<(), Error>
+    where
+        'arena: 'a,
+    {
         self.validate_variable_name(name, name_span)?;
         if self.get_global_variable_type(name).is_some() {
             return Err(self.new_error(
-				self.spans[name_span as usize],
+                name_span,
                 format_args!(
                     "The local variable '{}' shadows an earlier global variable",
                     name
@@ -1618,15 +1724,15 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         }
         if local_variables.get_local_variable_type(name).is_some() {
             return Err(self.new_error(
-				self.spans[name_span as usize],
+                name_span,
                 format_args!(
                     "The local variable '{}' shadows an earlier local variable",
                     name
                 ),
             ));
         }
-		local_variables.current.insert(name, ty);
-		Ok(())
+        local_variables.current.insert(name, ty);
+        Ok(())
     }
 
     fn add_global_variable(
@@ -1639,7 +1745,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         match self.global_variables.entry(name) {
             Entry::Occupied(_) => {
                 return Err(self.new_error(
-                    self.spans[name_span as usize],
+                    name_span,
                     format_args!(
                         "The global variable '{}' shadows an earlier global variable",
                         name
@@ -1657,34 +1763,34 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 // Indicates if an existential was created from a variable from function
 #[derive(Debug, Clone, Copy)]
 enum ExistentialKind {
-	Function,
-	Variable
+    Function,
+    Variable,
 }
 
 impl ExistentialKind {
-	fn as_str(self) -> &'static str {
-		match self {
-			Self::Function => "function",
-			// Cov: only meaningful with variable inference
-			Self::Variable => "variable", // grcov-excl-line
-		}
-	}
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            // Cov: only meaningful with variable inference
+            Self::Variable => "variable", // grcov-excl-line
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 struct ExistentialData<'a> {
-	// indicates if this existential was created for a variable or for a
-	// host function
-	kind: ExistentialKind,
-    // span of the name of the function or variable that declared the existential
-    name_span: SourceSpan,
+    // indicates if this existential was created for a variable or for a
+    // host function
+    kind: ExistentialKind,
+    // index of the span of the name of the function or variable that declared the existential
+    name_span: u32,
     // name of the function or variable that declared the existential
     name: &'a str,
 }
 
 struct TyCtx<'a, 'err> {
     function_name: &'err str,
-	spans: &'err [SourceSpan],
+    spans: &'err [SourceSpan],
     file_path: &'err OsStr,
     file_text: &'err str,
     /// The names of each existential that has been created in this context so
@@ -1703,14 +1809,14 @@ struct TyCtx<'a, 'err> {
 impl<'a, 'err> TyCtx<'a, 'err> {
     fn new(
         function_name: &'err str,
-		spans: &'err [SourceSpan],
+        spans: &'err [SourceSpan],
         file_path: &'err OsStr,
         file_text: &'err str,
         temp_arena: &'a Arena,
     ) -> Self {
         Self {
             function_name,
-			spans,
+            spans,
             file_path,
             file_text,
             existentials: Vec::new_in(temp_arena),
@@ -1741,7 +1847,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
             match substitutions[stack.current] {
                 Type::Existential { idx } => {
                     let mut current = Some(&stack);
-					// Cov: I don't think this can be tested without variable type inference
+                    // Cov: I don't think this can be tested without variable type inference
                     while let Some(cur) = current {
                         if **cur == idx {
                             return None;
@@ -1774,12 +1880,12 @@ impl<'a, 'err> TyCtx<'a, 'err> {
     fn create_existential(
         &mut self,
         name: &'a str,
-        name_span: SourceSpan,
-		kind: ExistentialKind,
+        name_span: u32,
+        kind: ExistentialKind,
     ) -> usize {
         let new_existential = self.existentials.len();
         self.existentials.push(ExistentialData {
-			kind,
+            kind,
             name_span,
             name,
         });
@@ -1789,40 +1895,58 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         new_existential
     }
 
-	fn instantiate_variable_existentials(
-		&mut self, 
-		var_name: &'a str, 
-		type_span: u32, 
-		var_ty: Type<'a>, 
-		substitutions: Option<&[Type<'a>]>
-	) -> Type<'a> {
-		match var_ty {
-			Type::Id { name, generics } => {
-				let generics = self.temp_arena.slice_from_iter(generics.iter().map(|generic| {
-					self.instantiate_variable_existentials(var_name, name_span, *generic, substitutions)
-				}));
-				Type::Id { name, generics }
-			},
-			// the index in here is not real, it's just a placeholder from the
-			// parser
-			// Cov: Cannot be covered without variable type inference
-			// grcov-excl-start
-			Type::Existential { .. } => {
-				let idx = self.create_existential(var_name, self.spans[name_span as usize], ExistentialKind::Variable);
-				if let Some(substitutions) = substitutions {
-					substitutions[idx]
-				} else {
-					Type::Existential { idx }
-				}
-			}
-			// grcov-excl-stop
-			x => x
-		}
-	}
+    fn instantiate_variable_existentials(
+        &mut self,
+        var_name: &'a str,
+        type_span: u32,
+        var_ty: Type<'a>,
+        substitutions: Option<&[Type<'a>]>,
+    ) -> Type<'a> {
+        match var_ty {
+            Type::Id {
+                name,
+                generics,
+                num_spans,
+            } => {
+                let mut total_spans = 0;
+                let generics = self
+                    .temp_arena
+                    .slice_from_iter(generics.iter().map(|generic| {
+                        total_spans += generic.num_spans() + 2;
+                        self.instantiate_variable_existentials(
+                            var_name,
+                            type_span + total_spans,
+                            *generic,
+                            substitutions,
+                        )
+                    }));
+                Type::Id {
+                    name,
+                    generics,
+                    num_spans,
+                }
+            }
+            // the index in here is not real, it's just a placeholder from the
+            // parser
+            // Cov: Cannot be covered without variable type inference
+            // grcov-excl-start
+            Type::Existential { .. } => {
+                let idx = self.create_existential(var_name, type_span, ExistentialKind::Variable);
+                if let Some(substitutions) = substitutions {
+                    substitutions[idx]
+                } else {
+                    Type::Existential { idx }
+                }
+            }
+            // grcov-excl-stop
+            x => x,
+        }
+    }
 
     fn add_constraint(
         &mut self,
-        err_span: SourceSpan,
+        // TODO: Figure out if you can point to the exact type which is missing
+        err_span: u32,
         left: Type<'a>,
         right: Type<'a>,
     ) -> Result<(), TypeMismatch<'a>> {
@@ -1908,9 +2032,13 @@ impl<'a, 'err> TyCtx<'a, 'err> {
     //
     // # Note:
     // If there are any non-trivial loops, this will result in a stack overflow
-    unsafe fn copy_type_into<'arena, const RECURSE_EXISTENTIALS: bool>(&self, ty: Type<'a>, arena: &'arena Arena) -> Type<'arena> {
+    unsafe fn copy_type_into<'arena, const RECURSE_EXISTENTIALS: bool>(
+        &self,
+        ty: Type<'a>,
+        arena: &'arena Arena,
+    ) -> Type<'arena> {
         match ty {
-			// Cov: Resources and entities cannot occur with generic types
+            // Cov: Resources and entities cannot occur with generic types
             Type::Resource {
                 extension,
                 optional,
@@ -1921,24 +2049,35 @@ impl<'a, 'err> TyCtx<'a, 'err> {
             // grcov-excl-start
             Type::Entity {
                 entity_type: Some(_),
-            } => unreachable!("only a parameter can have an entity type, and fill_arguments never passes a parameter's entity type on to add_constraint"),
+            } => unreachable!(
+                "only a parameter can have an entity type, and fill_arguments never passes a parameter's entity type on to add_constraint"
+            ),
             // grcov-excl-stop
             Type::Entity { entity_type: None } => Type::Entity { entity_type: None },
             Type::Existential { idx } => {
-                if let Type::Existential { idx } = self.substitutions[idx] && !RECURSE_EXISTENTIALS {
+                if let Type::Existential { idx } = self.substitutions[idx]
+                    && !RECURSE_EXISTENTIALS
+                {
                     return Type::Existential { idx };
                 }
 
-                unsafe { self.copy_type_into::<RECURSE_EXISTENTIALS>(self.substitutions[idx], arena) }
+                unsafe {
+                    self.copy_type_into::<RECURSE_EXISTENTIALS>(self.substitutions[idx], arena)
+                }
             }
-            Type::Id { name, generics } => Type::Id {
-                name: arena.copy_str_into_nt(name.to_str()).as_ntstrptr(),
-                generics: arena.slice_from_iter(
-                    generics
-                        .iter()
-                        .map(|ty| unsafe { self.copy_type_into::<RECURSE_EXISTENTIALS>(*ty, arena) }),
-                ),
-            },
+            Type::Id {
+                name,
+                generics,
+                num_spans,
+            } => {
+                Type::Id {
+                    name: arena.copy_str_into_nt(name.to_str()).as_ntstrptr(),
+                    num_spans,
+                    generics: arena.slice_from_iter(generics.iter().map(|ty| unsafe {
+                        self.copy_type_into::<RECURSE_EXISTENTIALS>(*ty, arena)
+                    })),
+                }
+            }
             Type::Void => Type::Void,
             Type::Bool => Type::Bool,
             Type::Number => Type::Number,
@@ -1946,12 +2085,12 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         }
     }
 
-	// Ensure there are no types that cannot be fully determined
+    // Ensure there are no types that cannot be fully determined
     fn check_consistency(
         &self,
         ty: Type,
-		direct: bool,
-		error_idx: usize,
+        direct: bool,
+        error_idx: usize,
         parent_existentials: StackLL<usize>,
     ) -> Result<(), Error> {
         match ty {
@@ -1962,35 +2101,51 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                         // An uninferred generic names the last generic in its
                         // chain before the chain loops back, which is the one
                         // that nothing tells the type of
-                        let data = self.existentials[if direct { parent_existentials.current } else { error_idx }];
-						if direct {
-							return Err(self.new_error(
-								data.name_span,
-								format_args!("unable to infer generics in {} '{}'", data.kind.as_str(), data.name)
-							));
-						} else {
-							// Cov: Cannot occur without variable type inference
-							// grcov-excl-start
-							return Err(self.new_error(
-								data.name_span,
-								format_args!("infinite recursive type found in {} '{}'", data.kind.as_str(), data.name)
-							));
-							// grcov-excl-stop
-						}
+                        let data = self.existentials[if direct {
+                            parent_existentials.current
+                        } else {
+                            error_idx
+                        }];
+                        if direct {
+                            return Err(self.new_error(
+                                self.spans[data.name_span as usize],
+                                format_args!(
+                                    "unable to infer generics in {} '{}'",
+                                    data.kind.as_str(),
+                                    data.name
+                                ),
+                            ));
+                        } else {
+                            // Cov: Cannot occur without variable type inference
+                            // grcov-excl-start
+                            return Err(self.new_error(
+                                self.spans[data.name_span as usize],
+                                format_args!(
+                                    "infinite recursive type found in {} '{}'",
+                                    data.kind.as_str(),
+                                    data.name
+                                ),
+                            ));
+                            // grcov-excl-stop
+                        }
                     }
                     current = cur.parent;
                 }
                 self.check_consistency(
                     self.substitutions[idx],
-					true,
-					error_idx,
+                    true,
+                    error_idx,
                     StackLL {
                         current: idx,
                         parent: Some(&parent_existentials),
                     },
                 )?;
             }
-            Type::Id { name: _, generics } => {
+            Type::Id {
+                name: _,
+                generics,
+                num_spans: _,
+            } => {
                 for generic in generics {
                     self.check_consistency(*generic, false, error_idx, parent_existentials)?
                 }
@@ -2009,8 +2164,8 @@ impl<'a, 'err> TyCtx<'a, 'err> {
         for i in 0..self.substitutions.len() {
             self.check_consistency(
                 self.substitutions[i],
-				true,
-				i, 
+                true,
+                i,
                 StackLL {
                     current: i,
                     parent: None,
@@ -2064,10 +2219,12 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                     Type::Id {
                         name: ty_name,
                         generics: ty_generics,
+                        num_spans: _,
                     },
                     Type::Id {
                         name: imp_name,
                         generics: imp_generics,
+                        num_spans: _,
                     },
                 ) if ty_name == imp_name => {
                     debug_assert_eq!(ty_generics.len(), imp_generics.len());
@@ -2162,7 +2319,11 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
                 Type::Bool => "bool",
                 Type::Number => "number",
                 Type::String => "string",
-                Type::Id { name, generics: _ } => name.to_str(),
+                Type::Id {
+                    name,
+                    generics: _,
+                    num_spans: _,
+                } => name.to_str(),
                 Type::Resource { .. } => "resource",
                 Type::Entity { .. } => "entity",
                 Type::Existential { .. } => unreachable!(), // grcov-excl-line
@@ -2178,10 +2339,12 @@ impl<'a> std::fmt::Display for TypeDiff<'a> {
                 Type::Id {
                     name: name_left,
                     generics: generics_left,
+                    num_spans: _,
                 },
                 Type::Id {
                     name: name_right,
                     generics: generics_right,
+                    num_spans: _,
                 },
             ) if name_left == name_right => {
                 f.write_str("[")?;

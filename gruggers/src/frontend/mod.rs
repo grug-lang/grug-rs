@@ -27,16 +27,16 @@ use type_propagation::TypePropagator;
 
 pub type CompileRequest = (Arena, &'static [&'static OsStr]);
 pub type CompileResponse = (
-	Arena,
-	OwnPtr<
-		'static,
-		[(
-			Result<GrugAst<'static>, Error>,
-			// derived from input paths
-			// These paths are relative
-			&'static OsStr,
-		)],
-	>,
+    Arena,
+    OwnPtr<
+        'static,
+        [(
+            Result<GrugAst<'static>, Error>,
+            // derived from input paths
+            // These paths are relative
+            &'static OsStr,
+        )],
+    >,
 );
 
 // Compilation functions
@@ -602,7 +602,7 @@ impl GrugState {
         // at the end of the string
         let file_path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
         let file = GrugAst {
-			spans: tokens.spans(),
+            spans: tokens.spans(),
             members: member_variables.leak(),
             on_functions: on_functions.leak(),
             helper_functions: helper_functions.leak(),

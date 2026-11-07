@@ -1,12 +1,12 @@
 use super::GlobalStatement;
-use super::tokenizer::{Token, TokenType, TokensSlice, TokensArray};
-use crate::arena::Arena;
+use super::tokenizer::{Token, TokenType, TokensArray, TokensSlice};
 use crate::VARIABLE_INFERENCE;
-use crate::nt;
+use crate::arena::Arena;
 use crate::ast::{
-    BinaryOperator, Expr, ExprData, HelperFunction, MemberVariable, ExportFunction, Parameter,
+    BinaryOperator, ExportFunction, Expr, ExprData, HelperFunction, MemberVariable, Parameter,
     Statement, Type, UnaryOperator,
 };
+use crate::nt;
 
 use crate::error::{Error, ErrorKind, SourceSpan};
 
@@ -139,7 +139,7 @@ impl<'a> ParserError<'a> {
 const MAX_PARSING_DEPTH: usize = 100;
 
 pub(crate) struct Ast<'arena> {
-	pub spans: &'arena [SourceSpan],
+    pub spans: &'arena [SourceSpan],
     pub global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
     pub local_fn_signatures: &'arena [(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>]))],
     pub export_fn_signatures: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
@@ -167,7 +167,8 @@ pub(crate) fn parse<'a>(
     file_text: &'a str,
     file_path: &'a OsStr,
 ) -> Result<Ast<'a>, Error> {
-    let final_token_span = *tokens.spans()
+    let final_token_span = *tokens
+        .spans()
         .last()
         .unwrap_or(&SourceSpan { offset: 0, line: 1 });
     let mut parser = Parser::new_in(final_token_span, file_text, file_path, arena);
@@ -180,20 +181,18 @@ pub(crate) fn parse<'a>(
     let mut last_newline_token_span = SourceSpan { offset: 0, line: 0 };
 
     let result = (|parser: &mut Parser<'a>| -> Result<(), ParserError<'a>> {
-		while let Ok(token) = peek_tokens(&mut tokens) {
-            if let Ok(name_token) =
-                consume_tokens(&mut tokens, &[TokenType::Word])
-            {
-				// TODO(nikhil): I think there's a way to make sure we don't need the actual
-				// spans ever, but i don't wanna think about that yet
-				let ([_], [global_name], &[name_token_span], span_offset) = name_token.as_arrays();
+        while let Ok(token) = peek_tokens(&mut tokens) {
+            if let Ok(name_token) = consume_tokens(&mut tokens, &[TokenType::Word]) {
+                // TODO(nikhil): I think there's a way to make sure we don't need the actual
+                // spans ever, but i don't wanna think about that yet
+                let ([_], [global_name], &[name_token_span], spans_offset) = name_token.as_arrays();
                 if seen_on_fn {
                     return parser.new_error(
                         name_token_span,
                         format_args!("Cannot declare member variables after on_ functions"),
                     );
                 }
-				consume_tokens(&mut tokens, &[TokenType::Colon])?;
+                consume_tokens(&mut tokens, &[TokenType::Colon])?;
 
                 if *global_name == "me" {
                     return parser.new_error(
@@ -203,24 +202,26 @@ pub(crate) fn parse<'a>(
                 }
                 consume_space(&mut tokens)?;
 
-				let global_type_span_start = tokens.offset();
+                let global_type_span_start = tokens.offset();
                 let global_type = parser.parse_type(&mut tokens, arena)?;
-				parser.ensure_type_has_no_resource_or_entity(
-					global_type, 
-					"global variable", 
-					global_name,
-					tokens.spans(),
-					global_type_span_start as u32
-				)?;
-				let spans_len = (tokens.offset() - span_offset) as u32;
+                // TODO: This should point at the type, not the name
+                parser.ensure_type_has_no_resource_or_entity(
+                    global_type,
+                    "global variable",
+                    "type",
+                    global_name,
+                    tokens.spans(),
+                    global_type_span_start as u32,
+                )?;
+                let spans_len = (tokens.offset() - spans_offset) as u32;
 
                 // TODO: I think this will error on this line
                 // `x: number =25`
                 //
                 // The error message is not going to be helpful in that case
                 match consume_tokens(&mut tokens, &[TokenType::Space]) {
-					Ok(_) => (),
-					Err(ParserError::GotWrongToken { got, .. }) => {
+                    Ok(_) => (),
+                    Err(ParserError::GotWrongToken { got, .. }) => {
                         return parser.new_error(
                             got.span,
                             format_args!(
@@ -228,8 +229,8 @@ pub(crate) fn parse<'a>(
                                 global_name
                             ),
                         );
-					}
-					Err(err) => return Err(err)
+                    }
+                    Err(err) => return Err(err),
                 };
 
                 consume_tokens(&mut tokens, &[TokenType::Equal])?;
@@ -241,11 +242,11 @@ pub(crate) fn parse<'a>(
                 parser
                     .global_statements
                     .push(GlobalStatement::Variable(MemberVariable {
-						name: arena.copy_str_into_nt(global_name).as_ntstrptr(),
+                        name: arena.copy_str_into_nt(global_name).as_ntstrptr(),
                         ty: global_type,
                         assignment_expr,
-                        spans: span_offset as u32,
-						spans_len: spans_len as u32,
+                        spans: spans_offset as u32,
+                        spans_len: spans_len as u32,
                     }));
 
                 consume_tokens(&mut tokens, &[TokenType::NewLine])?;
@@ -256,7 +257,8 @@ pub(crate) fn parse<'a>(
             } else if let Ok(_) =
                 consume_tokens(&mut tokens, &[TokenType::Export, TokenType::Space])
             {
-                let ([_], [fn_name], &[name_token_span], span_offset) = consume_tokens(&mut tokens, &[TokenType::Word])?.as_arrays();
+                let ([_], [fn_name], &[name_token_span], span_offset) =
+                    consume_tokens(&mut tokens, &[TokenType::Word])?.as_arrays();
 
                 // expect newline after each item
                 if newline_required {
@@ -280,7 +282,7 @@ pub(crate) fn parse<'a>(
                 } else {
                     &[]
                 };
-				let spans_len = tokens.offset() - span_offset;
+                let spans_len = tokens.offset() - span_offset;
                 consume_tokens(&mut tokens, &[TokenType::CloseParenthesis])?;
 
                 let body_statements = parser.parse_statements(&mut tokens, 0, 1, arena)?;
@@ -296,11 +298,11 @@ pub(crate) fn parse<'a>(
                 }
 
                 let on_fn = ExportFunction {
-					name: arena.copy_str_into_nt(fn_name).as_ntstrptr(),
+                    name: arena.copy_str_into_nt(fn_name).as_ntstrptr(),
                     parameters,
                     body_statements,
-                    sig_span_start: span_offset as u32,
-					sig_span_len: spans_len as u32,
+                    sig_spans_start: span_offset as u32,
+                    sig_spans_len: spans_len as u32,
                 };
 
                 if parser
@@ -333,12 +335,12 @@ pub(crate) fn parse<'a>(
 
                 consume_tokens(&mut tokens, &[TokenType::NewLine])?;
             // local fn -> "local" + " " + name + "(" + arguments? + ")" + type + statements
-            } else if let Ok(_) =
-                consume_tokens(&mut tokens, &[TokenType::Local, TokenType::Space])
+            } else if let Ok(_) = consume_tokens(&mut tokens, &[TokenType::Local, TokenType::Space])
             {
-                let ([_], [fn_name], &[name_token_span], spans_offset) = consume_tokens(&mut tokens, &[TokenType::Word])?.as_arrays();
+                let ([_], [fn_name], &[name_token_span], spans_offset) =
+                    consume_tokens(&mut tokens, &[TokenType::Word])?.as_arrays();
 
-				if !fn_name.starts_with("_") {
+                if !fn_name.starts_with("_") {
                     parser.current_function = fn_name;
                     return parser.new_error(
                         name_token_span,
@@ -373,24 +375,24 @@ pub(crate) fn parse<'a>(
                 consume_tokens(&mut tokens, &[TokenType::CloseParenthesis])?;
 
                 // return type
-                let (return_type, return_type_span) = if let Ok(_) =
-                    assert_tokens(&tokens, &[TokenType::Space, TokenType::Word])
-                {
-                    consume_space(&mut tokens).unwrap();
-					let return_type_span = tokens.offset();
-                    let return_type = parser.parse_type(&mut tokens, arena)?;
-					parser.ensure_type_has_no_resource_or_entity(
-						return_type, 
-						"return type of function", 
-						fn_name,
-						tokens.spans(),
-						return_type_span as u32
-					)?;
-                    (return_type, return_type_span)
-                } else {
-                    (Type::Void, (spans_offset as u32, 1))
-                };
-				let sig_spans_len = tokens.offset() - spans_offset;
+                let (return_type, return_type_span) =
+                    if let Ok(_) = assert_tokens(&tokens, &[TokenType::Space, TokenType::Word]) {
+                        consume_space(&mut tokens).unwrap();
+                        let return_type_span = tokens.offset() as u32;
+                        let return_type = parser.parse_type(&mut tokens, arena)?;
+                        parser.ensure_type_has_no_resource_or_entity(
+                            return_type,
+                            "function",
+                            "return type",
+                            fn_name,
+                            tokens.spans(),
+                            return_type_span,
+                        )?;
+                        (return_type, (return_type_span, return_type.num_spans()))
+                    } else {
+                        (Type::Void, (spans_offset as u32, 1))
+                    };
+                let sig_spans_len = tokens.offset() - spans_offset;
 
                 let body_statements = parser.parse_statements(&mut tokens, 0, 1, arena)?;
 
@@ -405,14 +407,14 @@ pub(crate) fn parse<'a>(
                 }
 
                 let helper_fn = HelperFunction {
-					name: arena.copy_str_into_nt(fn_name).as_ntstrptr(),
+                    name: arena.copy_str_into_nt(fn_name).as_ntstrptr(),
                     parameters,
                     body_statements,
                     return_type,
                     return_type_start: return_type_span.0,
                     return_type_len: return_type_span.1,
-					sig_spans_start: spans_offset as u32,
-					sig_spans_len: sig_spans_len as u32,
+                    sig_spans_start: spans_offset as u32,
+                    sig_spans_len: sig_spans_len as u32,
                 };
 
                 seen_helper_fn = true;
@@ -444,8 +446,7 @@ pub(crate) fn parse<'a>(
                 newline_required = true;
 
                 consume_tokens(&mut tokens, &[TokenType::NewLine])?;
-            } else if let Ok(token) = consume_tokens(&mut tokens, &[TokenType::NewLine])
-            {
+            } else if let Ok(token) = consume_tokens(&mut tokens, &[TokenType::NewLine]) {
                 if !newline_allowed {
                     return parser.new_error(token.spans[0], format_args!("Unexpected empty line"));
                 }
@@ -457,19 +458,19 @@ pub(crate) fn parse<'a>(
                 last_newline_token_span = token.spans[0];
 
                 parser.global_statements.push(GlobalStatement::EmptyLine);
-            } else if let Ok(token) =
-                consume_tokens(&mut tokens, &[TokenType::Comment])
-            {
-				let (_, [value], _, _) = token.as_arrays();
+            } else if let Ok(token) = consume_tokens(&mut tokens, &[TokenType::Comment]) {
+                let (_, [value], _, _) = token.as_arrays();
                 newline_allowed = true;
 
-                parser.global_statements.push(GlobalStatement::Comment {
-					value,
-                });
+                parser
+                    .global_statements
+                    .push(GlobalStatement::Comment { value });
                 consume_tokens(&mut tokens, &[TokenType::NewLine])?;
             } else {
-				let (&[ty], &[value], &[span], _) = token.as_arrays();
-                Err(ParserError::UnexpectedToken { token: Token{ty, value, span } })?
+                let (&[ty], &[value], &[span], _) = token.as_arrays();
+                Err(ParserError::UnexpectedToken {
+                    token: Token { ty, value, span },
+                })?
             }
         }
 
@@ -486,7 +487,7 @@ pub(crate) fn parse<'a>(
 
     match result {
         Ok(()) => Ok(Ast {
-			spans: tokens.spans(),
+            spans: tokens.spans(),
             global_statements: parser.global_statements,
             local_fn_signatures: parser.local_fn_signatures.leak(),
             export_fn_signatures: parser.export_fn_signatures.leak(),
@@ -540,26 +541,28 @@ impl<'a> Parser<'a> {
         let mut arguments = Vec::new_in(arena);
         loop {
             // parse_arg
-            let ([_], &[arg_name], &[name_token_span], spans_offset) = consume_tokens(tokens, &[TokenType::Word])?.as_arrays();
+            let ([_], &[arg_name], _, spans_offset) =
+                consume_tokens(tokens, &[TokenType::Word])?.as_arrays();
             consume_tokens(tokens, &[TokenType::Colon, TokenType::Space])?;
 
-			let type_span_offset = tokens.offset();
+            let type_span_offset = tokens.offset();
             let param_type = self.parse_type(tokens, arena)?;
 
-			self.ensure_type_has_no_resource_or_entity(
-				param_type, 
-				"function parameter", 
-				arg_name,
-				tokens.spans(),
-				type_span_offset as u32
-			)?;
-			let spans_len = tokens.offset() - spans_offset;
+            self.ensure_type_has_no_resource_or_entity(
+                param_type,
+                "argument",
+                "type",
+                arg_name,
+                tokens.spans(),
+                type_span_offset as u32,
+            )?;
+            let spans_len = tokens.offset() - spans_offset;
 
             arguments.push(Parameter {
-				name: arena.copy_str_into_nt(arg_name).as_ntstrptr(),
+                name: arena.copy_str_into_nt(arg_name).as_ntstrptr(),
                 ty: param_type,
-				spans: spans_offset as u32,
-				spans_len: spans_len as u32,
+                spans: spans_offset as u32,
+                spans_len: spans_len as u32,
             });
 
             if consume_tokens(tokens, &[TokenType::Comma]).is_err() {
@@ -579,10 +582,11 @@ impl<'a> Parser<'a> {
         arena: &'a Arena,
     ) -> Result<&'a mut [Statement<'a>], ParserError<'a>> {
         assert_parsing_depth(parsing_depth)?;
-        let (_, _, &[_, _, last_new_line_span], spans_offset) = consume_tokens(
+        let (_, _, &[_, _, mut last_new_line_span], _) = consume_tokens(
             tokens,
             &[TokenType::Space, TokenType::OpenBrace, TokenType::NewLine],
-        )?.as_arrays();
+        )?
+        .as_arrays();
 
         let mut newline_allowed = false;
         let mut newline_seen = false;
@@ -594,15 +598,16 @@ impl<'a> Parser<'a> {
             if let Ok(tokens) =
                 consume_tokens(tokens, &[TokenType::Indentation, TokenType::NewLine])
             {
-				let [indentation_token_span, _] = tokens.spans;
+                let [indentation_token_span, _] = tokens.spans;
                 return self.new_error(
                     *indentation_token_span,
                     format_args!("Empty line cannot have indentation"),
                 );
             } else if let Ok(token) = consume_tokens(tokens, &[TokenType::NewLine]) {
-				[last_new_line_span] = *token.spans;
+                [last_new_line_span] = *token.spans;
                 if !newline_allowed {
-                    return self.new_error(last_new_line_span, format_args!("Unexpected empty line"));
+                    return self
+                        .new_error(last_new_line_span, format_args!("Unexpected empty line"));
                 }
                 // cannot have consecutive newlines
                 newline_allowed = false;
@@ -656,7 +661,7 @@ impl<'a> Parser<'a> {
                     self.parse_local_variable(tokens, parsing_depth + 1, arena)
                 }
                 _ => self.new_error(
-					spans[1],
+                    spans[1],
                     format_args!(
                         "Expected '(', or ':', or ' =' after the word '{}' on line {}",
                         values[0], spans[0].line,
@@ -666,9 +671,8 @@ impl<'a> Parser<'a> {
             TokenType::If => {
                 // if condition and block
                 let mut ifs = Vec::new();
-				consume_tokens(tokens, &[TokenType::If, TokenType::Space])?;
+                consume_tokens(tokens, &[TokenType::If, TokenType::Space])?;
                 loop {
-
                     let condition = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
                     let if_block =
                         self.parse_statements(tokens, parsing_depth + 1, indentation + 1, arena)?;
@@ -678,11 +682,9 @@ impl<'a> Parser<'a> {
                     let is_chained;
                     let else_block;
 
-                    if consume_tokens(tokens, &[TokenType::Space, TokenType::Else])
-                        .is_ok()
-                    {
-						if let Ok(_) = consume_tokens(tokens, &[TokenType::Space, TokenType::If]) {
-							consume_space(tokens)?;
+                    if consume_tokens(tokens, &[TokenType::Space, TokenType::Else]).is_ok() {
+                        if let Ok(_) = consume_tokens(tokens, &[TokenType::Space, TokenType::If]) {
+                            consume_space(tokens)?;
                             is_chained = true;
                             ifs.push((
                                 condition,
@@ -711,14 +713,12 @@ impl<'a> Parser<'a> {
                     .pop()
                     .expect("We have parsed at least a single if statement");
                 for statement in ifs.into_iter().rev() {
-                    let else_block = std::slice::from_mut(arena.alloc_into(
-                        Statement::If {
-                            condition: current.0,
-                            is_chained: current.1,
-                            if_block: current.2,
-                            else_block: current.3,
-                        },
-                    ));
+                    let else_block = std::slice::from_mut(arena.alloc_into(Statement::If {
+                        condition: current.0,
+                        is_chained: current.1,
+                        if_block: current.2,
+                        else_block: current.3,
+                    }));
                     current = statement;
                     current.3 = else_block;
                 }
@@ -730,16 +730,21 @@ impl<'a> Parser<'a> {
                 })
             }
             TokenType::Return => {
-				get_tokens::<1>(tokens)?;
+                get_tokens::<1>(tokens)?;
                 let expr = if let TokenType::NewLine = tys[1] {
                     None
                 } else {
                     consume_space(tokens)?;
-                    Some(arena.alloc_into(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?))
+                    Some(arena.alloc_into(self.parse_expression(
+                        tokens,
+                        parsing_depth + 1,
+                        0.,
+                        arena,
+                    )?))
                 };
                 Ok(Statement::Return {
                     return_span: spans_offset as u32,
-                    expr
+                    expr,
                 })
             }
             TokenType::While => {
@@ -753,22 +758,22 @@ impl<'a> Parser<'a> {
                 Ok(Statement::While { condition, block })
             }
             TokenType::Break => {
-				get_tokens::<1>(tokens)?;
+                get_tokens::<1>(tokens)?;
                 Ok(Statement::Break(spans_offset as u32))
             }
             TokenType::Continue => {
-				get_tokens::<1>(tokens)?;
+                get_tokens::<1>(tokens)?;
                 Ok(Statement::Continue(spans_offset as u32))
             }
             TokenType::Comment => {
-				get_tokens::<1>(tokens)?;
+                get_tokens::<1>(tokens)?;
                 Ok(Statement::Comment {
                     comment_span: spans_offset as u32,
-					value: arena.copy_str_into_nt(values[0]).as_ntstrptr(),
+                    value: arena.copy_str_into_nt(values[0]).as_ntstrptr(),
                 })
             }
             got_token => self.new_error(
-				spans[0],
+                spans[0],
                 format_args!(
                     "Expected a statement token, but got {} on line {}",
                     got_token, spans[1].line
@@ -785,7 +790,8 @@ impl<'a> Parser<'a> {
         arena: &'a Arena,
     ) -> Result<Statement<'a>, ParserError<'a>> {
         assert_parsing_depth(parsing_depth)?;
-		let ([_], &[local_name], &[name_token_span], spans_offset) = consume_tokens(tokens, &[TokenType::Word])?.as_arrays();
+        let ([_], &[local_name], &[name_token_span], spans_offset) =
+            consume_tokens(tokens, &[TokenType::Word])?.as_arrays();
 
         let (ty, type_span) = if consume_tokens(tokens, &[TokenType::Colon]).is_ok() {
             if local_name == "me" {
@@ -795,37 +801,38 @@ impl<'a> Parser<'a> {
                 );
             }
             consume_space(tokens)?;
-			let type_span_offset = tokens.offset();
+            let type_span_offset = tokens.offset() as u32;
             let ty = self.parse_type(tokens, arena)?;
 
-			// TODO: this should error at the location of the error.
-			// The Id variant of type should contain the spans of the inner types 
-			self.ensure_type_has_no_resource_or_entity(
-				ty, 
-				"variable", 
-				local_name,
-				tokens.spans(),
-				type_span_offset as u32
-			)?;
-            (Some(&*arena.alloc_into(ty)), type_span_offset)
+            // TODO: this should error at the location of the error.
+            // The Id variant of type should contain the spans of the inner types
+            self.ensure_type_has_no_resource_or_entity(
+                ty,
+                "variable",
+                "type",
+                local_name,
+                tokens.spans(),
+                type_span_offset,
+            )?;
+            (
+                Some(&*arena.alloc_into(ty)),
+                (type_span_offset, ty.num_spans() + 2),
+            )
         } else {
-            (None, (spans_offset as u32, 1))
+            (None, (spans_offset as u32, 0))
         };
         // TODO: This error should just be folded into ExpectedSpace but it has
         // to be different to match the required error message
-		match consume_tokens(tokens, &[TokenType::Space]) {
-			Ok(_) => (),
-			Err(ParserError::GotWrongToken { got, .. }) => {
-				return self.new_error(
-					got.span,
-					format_args!(
-						"Variable '{}' was not assigned a value",
-						local_name
-					),
-				);
-			}
-			Err(err) => return Err(err)
-		};
+        match consume_tokens(tokens, &[TokenType::Space]) {
+            Ok(_) => (),
+            Err(ParserError::GotWrongToken { got, .. }) => {
+                return self.new_error(
+                    got.span,
+                    format_args!("Variable '{}' was not assigned a value", local_name),
+                );
+            }
+            Err(err) => return Err(err),
+        };
 
         if local_name == "me" {
             return self.new_error(
@@ -840,11 +847,11 @@ impl<'a> Parser<'a> {
         consume_space(tokens)?;
         let assignment_expr = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
         Ok(Statement::Variable {
-			name: arena.copy_str_into_nt(local_name).as_ntstrptr(),
+            name: arena.copy_str_into_nt(local_name).as_ntstrptr(),
             ty,
             assignment_expr,
-			spans: type_span.0,
-			spans_len: type_span.1,
+            spans: spans_offset as u32,
+            spans_len: 1 + type_span.1 + 2,
         })
     }
 
@@ -858,14 +865,14 @@ impl<'a> Parser<'a> {
         assert_parsing_depth(parsing_depth)?;
         let mut current: Expr = {
             let ([ty], [value], &[span], spans_offset) = get_tokens(tokens)?.as_arrays();
-			let spans_offset = spans_offset as u32;
+            let spans_offset = spans_offset as u32;
 
             match ty {
                 TokenType::OpenParenthesis => {
                     let expr = self.parse_expression(tokens, parsing_depth + 1, 0., arena)?;
                     let _ = &consume_tokens(tokens, &[TokenType::CloseParenthesis])?;
 
-					let spans_len = expr.spans_len + 2;
+                    let spans_len = expr.spans_len + 2;
                     Expr {
                         data: ExprData::Parenthesized(arena.alloc_into(expr)),
                         result_type: None,
@@ -876,59 +883,54 @@ impl<'a> Parser<'a> {
                 TokenType::True => Expr {
                     data: ExprData::True,
                     result_type: None,
-					spans: spans_offset,
-					spans_len: 1,
+                    spans: spans_offset,
+                    spans_len: 1,
                 },
                 TokenType::False => Expr {
                     data: ExprData::False,
                     result_type: None,
-					spans: spans_offset,
-					spans_len: 1,
+                    spans: spans_offset,
+                    spans_len: 1,
                 },
                 TokenType::String => Expr {
                     data: ExprData::String(arena.copy_str_into_nt(value).as_ntstrptr()),
                     result_type: None,
-					spans: spans_offset,
-					spans_len: 1,
+                    spans: spans_offset,
+                    spans_len: 1,
                 },
                 TokenType::Resource => Expr {
                     data: ExprData::Resource(arena.copy_str_into_nt(value).as_ntstrptr()),
                     result_type: None,
-					spans: spans_offset,
-					spans_len: 1,
+                    spans: spans_offset,
+                    spans_len: 1,
                 },
                 TokenType::Entity => Expr {
                     data: ExprData::Entity(arena.copy_str_into_nt(value).as_ntstrptr()),
                     result_type: None,
-					spans: spans_offset,
-					spans_len: 1,
+                    spans: spans_offset,
+                    spans_len: 1,
                 },
                 TokenType::Word => {
                     // a word token can actually be a function call
-                    if let Ok(_) = consume_tokens(tokens, &[TokenType::OpenParenthesis])
-                    {
-                        if value.starts_with("_")
-                            && !self.called_local_functions.contains(value)
-                        {
+                    if let Ok(_) = consume_tokens(tokens, &[TokenType::OpenParenthesis]) {
+                        if value.starts_with("_") && !self.called_local_functions.contains(value) {
                             self.called_local_functions.push(value);
                         }
 
                         // immediate ")" | (expr + ("," + " " + expr)*) + ")"
 
-                        if let Ok(_) =
-                            consume_tokens(tokens, &[TokenType::CloseParenthesis])
-                        {
+                        if let Ok(_) = consume_tokens(tokens, &[TokenType::CloseParenthesis]) {
                             Expr {
                                 data: ExprData::Call {
                                     receiver: None,
-									name: arena.copy_str_into_nt(value).as_ntstrptr(),
+                                    name: arena.copy_str_into_nt(value).as_ntstrptr(),
                                     args: Vec::new().leak(),
                                     ptr: None,
                                     generics: &[],
                                 },
                                 result_type: None,
-								spans: spans_offset,
-								spans_len: 3,
+                                spans: spans_offset,
+                                spans_len: 3,
                             }
                         } else {
                             let mut arguments = Vec::new_in(arena);
@@ -939,26 +941,22 @@ impl<'a> Parser<'a> {
                                     0.,
                                     arena,
                                 )?);
-                                if let Ok(_) = consume_tokens(
-                                    tokens,
-                                    &[TokenType::Comma, TokenType::Space],
-                                ) {
+                                if let Ok(_) =
+                                    consume_tokens(tokens, &[TokenType::Comma, TokenType::Space])
+                                {
                                 } else {
-                                    let _ = consume_tokens(
-                                        tokens,
-                                        &[TokenType::CloseParenthesis],
-                                    )?;
+                                    let _ = consume_tokens(tokens, &[TokenType::CloseParenthesis])?;
                                     break Expr {
                                         data: ExprData::Call {
                                             receiver: None,
-											name: arena.copy_str_into_nt(value).as_ntstrptr(),
+                                            name: arena.copy_str_into_nt(value).as_ntstrptr(),
                                             args: arguments.leak(),
                                             ptr: None,
                                             generics: &[],
                                         },
                                         result_type: None,
-										spans: spans_offset,
-										spans_len: tokens.offset() as u32 - spans_offset,
+                                        spans: spans_offset,
+                                        spans_len: tokens.offset() as u32 - spans_offset,
                                     };
                                 }
                             }
@@ -967,19 +965,19 @@ impl<'a> Parser<'a> {
                         Expr {
                             data: ExprData::Identifier(arena.copy_str_into_nt(value).as_ntstrptr()),
                             result_type: None,
-							spans: spans_offset,
-							spans_len: 1,
+                            spans: spans_offset,
+                            spans_len: 1,
                         }
                     }
                 }
                 TokenType::Int32 => Expr {
                     data: ExprData::Number(
                         value.parse::<i64>().unwrap_or(f64::MAX as i64) as f64,
-						arena.copy_str_into_nt(value).as_ntstrptr(),
+                        arena.copy_str_into_nt(value).as_ntstrptr(),
                     ),
                     result_type: None,
-					spans: spans_offset,
-					spans_len: 1,
+                    spans: spans_offset,
+                    spans_len: 1,
                 },
                 TokenType::Float32 => {
                     let number = value.parse::<f64>().unwrap();
@@ -997,13 +995,10 @@ impl<'a> Parser<'a> {
                     }
 
                     Expr {
-                        data: ExprData::Number(
-                            number,
-							arena.copy_str_into_nt(value).as_ntstrptr(),
-                        ),
+                        data: ExprData::Number(number, arena.copy_str_into_nt(value).as_ntstrptr()),
                         result_type: None,
-						spans: spans_offset,
-						spans_len: 1,
+                        spans: spans_offset,
+                        spans_len: 1,
                     }
                 }
                 TokenType::Minus | TokenType::Not => {
@@ -1018,13 +1013,13 @@ impl<'a> Parser<'a> {
                     let ((), r_bp) = Self::get_prefix_precedence(unary_op);
                     let expr = self.parse_expression(tokens, parsing_depth + 1, r_bp, arena)?;
                     Expr {
+                        spans: spans_offset,
+                        spans_len: 1 + expr.spans_len,
                         result_type: None,
                         data: ExprData::Unary {
                             op: unary_op,
                             expr: arena.alloc_into(expr),
                         },
-						spans: spans_offset,
-						spans_len: 1 + expr.spans_len,
                     }
                 }
                 _ => {
@@ -1040,97 +1035,106 @@ impl<'a> Parser<'a> {
             // TODO: Consume the dot and word token separately
             // TODO: add a test to verify that a call can be a receiver
             // `_return_vec().push(25)`
-			if let [TokenType::Dot, TokenType::Word] = toks.tys {
-				let (_, [_, name], _, spans_offset) = toks.as_arrays();
-				get_tokens::<2>(tokens).unwrap();
+            if let [TokenType::Dot, TokenType::Word] = toks.tys {
+                let (_, [_, name], _, _) = toks.as_arrays();
+                get_tokens::<2>(tokens).unwrap();
 
                 let receiver = current;
                 // a word token can actually be a function call
-				match consume_tokens(tokens, &[TokenType::OpenParenthesis]) {
-					Ok(_) => {
-						// immediate ")" | (expr + ("," + " " + expr)*) + ")"
-						current = if let Ok(_) = consume_tokens(tokens, &[TokenType::CloseParenthesis]) {
-							Expr {
-								data: ExprData::Call {
-									receiver: Some(arena.alloc_into(receiver)),
-									name: arena.copy_str_into_nt(name).as_ntstrptr(), 
-									args: Vec::new().leak(),
-									ptr: None,
-									generics: &[],
-								},
-								result_type: None,
-								spans: receiver.spans,
-								spans_len: receiver.spans_len + 4 // '.' <name> '(' ')'
-							}
-						} else {
-							let mut arguments = Vec::new_in(arena);
-							loop {
-								arguments.push(self.parse_expression(tokens, parsing_depth + 1, 0., arena)?);
-								if let Ok(_) = consume_tokens(tokens, &[TokenType::Comma, TokenType::Space]) {
-									// empty 
-								} else {
-									consume_tokens(tokens, &[TokenType::CloseParenthesis])?;
-									break;
-								}
-							}
-							Expr {
-								data: ExprData::Call {
-									receiver: Some(arena.alloc_into(receiver)),
-									name: arena.copy_str_into_nt(name).as_ntstrptr(), 
-									args: arguments.leak(),
-									ptr: None,
-									generics: &[],
-								},
-								result_type: None,
-								spans: receiver.spans,
-								spans_len: tokens.offset() as u32 - receiver.spans,
-							}
-						};
-					} 
-					Err(ParserError::GotWrongToken { got, .. }) => {
-						// Reserved for struct field accesses
-						return self.new_error(got.span, format_args!("Method call expected '('"));
-					}
-					Err(err) => return Err(err),
+                match consume_tokens(tokens, &[TokenType::OpenParenthesis]) {
+                    Ok(_) => {
+                        // immediate ")" | (expr + ("," + " " + expr)*) + ")"
+                        current = if let Ok(_) =
+                            consume_tokens(tokens, &[TokenType::CloseParenthesis])
+                        {
+                            Expr {
+                                spans: receiver.spans,
+                                spans_len: receiver.spans_len + 4, // '.' <name> '(' ')'
+                                data: ExprData::Call {
+                                    receiver: Some(arena.alloc_into(receiver)),
+                                    name: arena.copy_str_into_nt(name).as_ntstrptr(),
+                                    args: Vec::new().leak(),
+                                    ptr: None,
+                                    generics: &[],
+                                },
+                                result_type: None,
+                            }
+                        } else {
+                            let mut arguments = Vec::new_in(arena);
+                            loop {
+                                arguments.push(self.parse_expression(
+                                    tokens,
+                                    parsing_depth + 1,
+                                    0.,
+                                    arena,
+                                )?);
+                                if let Ok(_) =
+                                    consume_tokens(tokens, &[TokenType::Comma, TokenType::Space])
+                                {
+                                    // empty
+                                } else {
+                                    consume_tokens(tokens, &[TokenType::CloseParenthesis])?;
+                                    break;
+                                }
+                            }
+                            Expr {
+                                spans: receiver.spans,
+                                spans_len: tokens.offset() as u32 - receiver.spans,
+                                data: ExprData::Call {
+                                    receiver: Some(arena.alloc_into(receiver)),
+                                    name: arena.copy_str_into_nt(name).as_ntstrptr(),
+                                    args: arguments.leak(),
+                                    ptr: None,
+                                    generics: &[],
+                                },
+                                result_type: None,
+                            }
+                        };
+                    }
+                    Err(ParserError::GotWrongToken { got, .. }) => {
+                        // Reserved for struct field accesses
+                        return self.new_error(got.span, format_args!("Method call expected '('"));
+                    }
+                    Err(err) => return Err(err),
                 }
             } else if let [TokenType::Space, _] = toks.tys {
-				let bin_op = match toks.tys[1] {
-					TokenType::Or => BinaryOperator::Or,
-					TokenType::And => BinaryOperator::And,
-					TokenType::DoubleEquals => BinaryOperator::DoubleEquals,
-					TokenType::NotEquals => BinaryOperator::NotEquals,
-					TokenType::Greater => BinaryOperator::Greater,
-					TokenType::GreaterEquals => BinaryOperator::GreaterEquals,
-					TokenType::Less => BinaryOperator::Less,
-					TokenType::LessEquals => BinaryOperator::LessEquals,
-					TokenType::Plus => BinaryOperator::Plus,
-					TokenType::Minus => BinaryOperator::Minus,
-					TokenType::Star => BinaryOperator::Multiply,
-					TokenType::ForwardSlash => BinaryOperator::Division,
-					_ => break,
-				};
-				let (l_bp, r_bp) = Self::get_infix_precedence(bin_op);
-				if l_bp < min_precedence {
-					break;
-				}
-				// consume space and op
-				_ = get_tokens::<2>(tokens)?;
-				consume_space(tokens)?;
-				let next = self.parse_expression(tokens, parsing_depth + 1, r_bp, arena)?;
+                let bin_op = match toks.tys[1] {
+                    TokenType::Or => BinaryOperator::Or,
+                    TokenType::And => BinaryOperator::And,
+                    TokenType::DoubleEquals => BinaryOperator::DoubleEquals,
+                    TokenType::NotEquals => BinaryOperator::NotEquals,
+                    TokenType::Greater => BinaryOperator::Greater,
+                    TokenType::GreaterEquals => BinaryOperator::GreaterEquals,
+                    TokenType::Less => BinaryOperator::Less,
+                    TokenType::LessEquals => BinaryOperator::LessEquals,
+                    TokenType::Plus => BinaryOperator::Plus,
+                    TokenType::Minus => BinaryOperator::Minus,
+                    TokenType::Star => BinaryOperator::Multiply,
+                    TokenType::ForwardSlash => BinaryOperator::Division,
+                    _ => break,
+                };
+                let (l_bp, r_bp) = Self::get_infix_precedence(bin_op);
+                if l_bp < min_precedence {
+                    break;
+                }
+                // consume space and op
+                _ = get_tokens::<2>(tokens)?;
+                consume_space(tokens)?;
+                let next = self.parse_expression(tokens, parsing_depth + 1, r_bp, arena)?;
 
-				current = Expr {
-					result_type: None,
-					data: ExprData::Binary {
-						op: bin_op,
-						left: arena.alloc_into(current),
-						right: arena.alloc_into(next),
-					},
-					spans: current.spans,
-					spans_len: tokens.offset() as u32 - current.spans,
-				};
-			} else {
-				break;
-			}
+                current = Expr {
+                    spans: current.spans,
+                    spans_len: tokens.offset() as u32 - current.spans,
+                    result_type: None,
+                    data: ExprData::Binary {
+                        op: bin_op,
+                        left: arena.alloc_into(current),
+                        right: arena.alloc_into(next),
+                    },
+                };
+            } else {
+                break;
+            }
         }
         Ok(current)
     }
@@ -1164,101 +1168,102 @@ impl<'a> Parser<'a> {
         tokens: &mut TokensSlice<'a>,
         arena: &'a Arena,
     ) -> Result<Type<'a>, ParserError<'a>> {
-        let (_, [value], &[name_span], start_offset) = consume_tokens(tokens, &[TokenType::Word])?.as_arrays();
-        Ok((
-            match *value {
-				// grcov-excl-start: VARIABLE_INFERENCE is off
-				"_" if VARIABLE_INFERENCE => Type::Existential {
-					// TODO: Is this okay, should we create a unique idx for
-					// each inferred variable in a function?
-					idx: 0,
-				},
-				// grcov-excl-stop
-				"_" => {
-					return self.new_error(
-						name_span,
-						format_args!("`_` is not a valid type name"),
-					);
-				}
-                "bool" => Type::Bool,
-                "number" => Type::Number,
-                "string" => Type::String,
-                "resource" => Type::Resource {
-                    extension: nt!("").as_ntstrptr(),
-                    optional: false,
-                },
-                "entity" => Type::Entity { entity_type: None },
-                type_name => {
-                    let generics = if let Ok(_) =
-                        consume_tokens(tokens, &[TokenType::OpenBracket])
-                    {
-                        let mut generics = Vec::new_in(arena);
-                        generics.push(self.parse_type(tokens, arena)?);
-
-                        while let Ok(_) = consume_tokens(tokens, &[TokenType::Comma]) {
-                            consume_space(tokens)?;
-                            generics.push(self.parse_type(tokens, arena)?);
-                        }
-                        consume_tokens(tokens, &[TokenType::CloseBracket])?;
-                        &*generics.leak()
-                    } else {
-                        &[]
-                    };
-                    Type::Id {
-                        name: arena.copy_str_into_nt(type_name).as_ntstrptr(),
-                        generics,
-						num_spans: (tokens.offset() - start_offset) as u32,
-                    }
-                }
+        let (_, [value], &[name_span], start_offset) =
+            consume_tokens(tokens, &[TokenType::Word])?.as_arrays();
+        let val = match *value {
+            // grcov-excl-start: VARIABLE_INFERENCE is off
+            "_" if VARIABLE_INFERENCE => Type::Existential {
+                // TODO: Is this okay, should we create a unique idx for
+                // each inferred variable in a function?
+                idx: 0,
             },
-        ))
+            // grcov-excl-stop
+            "_" => {
+                return self.new_error(name_span, format_args!("`_` is not a valid type name"));
+            }
+            "bool" => Type::Bool,
+            "number" => Type::Number,
+            "string" => Type::String,
+            "resource" => Type::Resource {
+                extension: nt!("").as_ntstrptr(),
+                optional: false,
+            },
+            "entity" => Type::Entity { entity_type: None },
+            type_name => {
+                let generics = if let Ok(_) = consume_tokens(tokens, &[TokenType::OpenBracket]) {
+                    let mut generics = Vec::new_in(arena);
+                    generics.push(self.parse_type(tokens, arena)?);
+
+                    while let Ok(_) = consume_tokens(tokens, &[TokenType::Comma]) {
+                        consume_space(tokens)?;
+                        generics.push(self.parse_type(tokens, arena)?);
+                    }
+                    consume_tokens(tokens, &[TokenType::CloseBracket])?;
+                    &*generics.leak()
+                } else {
+                    &[]
+                };
+                Type::Id {
+                    name: arena.copy_str_into_nt(type_name).as_ntstrptr(),
+                    generics,
+                    num_spans: (tokens.offset() - start_offset) as u32,
+                }
+            }
+        };
+        Ok(val)
     }
 
-	fn ensure_type_has_no_resource_or_entity(
-		&self, 
-		ty: Type, 
-		item_type: &str, 
-		name: &str, 
-		spans: &[SourceSpan], 
-		first_span: u32
-	) -> Result<usize, ParserError<'a>> {
-		match ty {
-			Type::Entity { .. } => {
+    fn ensure_type_has_no_resource_or_entity(
+        &self,
+        ty: Type,
+        item_type: &str,
+        type_type: &str,
+        name: &str,
+        spans: &[SourceSpan],
+        first_span: u32,
+    ) -> Result<(), ParserError<'a>> {
+        match ty {
+            Type::Entity { .. } => {
                 return self.new_error(
-                    spans[first_span],
+                    spans[first_span as usize],
                     format_args!(
-                        "The {} '{}' can't contain 'entity' in its type",
-						item_type, 
-                        name
+                        "The {} '{}' can't contain 'entity' in its {}",
+                        item_type, name, type_type,
                     ),
                 );
-			}
-			Type::Resource { .. } => {
+            }
+            Type::Resource { .. } => {
                 return self.new_error(
-                    spans[first_span],
+                    spans[first_span as usize],
                     format_args!(
-                        "The {} '{}' can't contain 'resource' in its type",
-						item_type, 
-                        name
+                        "The {} '{}' can't contain 'resource' in its {}",
+                        item_type, name, type_type,
                     ),
                 );
-			}
-			Type::Id { generics, name: _ } => {
-				// for the name and the '['
-				let num_spans = 2;
-				for generic in generics {
-					// +2 for the ',' and space
-					num_spans += generics.num_spans() + 2;
-					self.ensure_type_has_no_resource_or_entity(*generic, item_type, name, spans, first_span + num_spans)?;
-				}
-				// if there are no generics, then we have to remove the ']' 
-				//
-				// and if there are generics, then there's only one token after the
-				// last type (the ']') instead of 2
-			}
-			_ => (),
-		}
-	}
+            }
+            Type::Id {
+                generics,
+                name: _,
+                num_spans: _,
+            } => {
+                // for the name and the '['
+                // let mut num_spans = 2;
+                for generic in generics {
+                    // +2 for the ',' and space
+                    // num_spans += generic.num_spans() + 2;
+                    self.ensure_type_has_no_resource_or_entity(
+                        *generic, item_type, type_type, name, spans, first_span,
+                    )?;
+                }
+                // if there are no generics, then we have to remove the ']'
+                //
+                // and if there are generics, then there's only one token after the
+                // last type (the ']') instead of 2
+            }
+            _ => (),
+        }
+        Ok(())
+    }
 }
 
 fn is_end_of_block<'a>(
@@ -1268,14 +1273,14 @@ fn is_end_of_block<'a>(
     use super::SPACES_PER_INDENT;
 
     assert!(indentation != 0);
-    let (&[ty], &[value], &[span], spans_offset) = peek_tokens(tokens)?.as_arrays();
+    let (&[ty], &[value], &[span], _) = peek_tokens(tokens)?.as_arrays();
     match ty {
         TokenType::CloseBrace => Ok(true),
         TokenType::NewLine => Ok(false),
-        TokenType::Indentation => {
-            Ok(value.len() == (indentation - 1) * SPACES_PER_INDENT)
-        }
-        _ => Err(ParserError::ExpectedIndentation { got: Token{ty, value, span }}),
+        TokenType::Indentation => Ok(value.len() == (indentation - 1) * SPACES_PER_INDENT),
+        _ => Err(ParserError::ExpectedIndentation {
+            got: Token { ty, value, span },
+        }),
     }
 }
 
@@ -1296,24 +1301,24 @@ fn assert_tokens<'a, const N: usize>(
     tokens: &TokensSlice<'a>,
     expected: &[TokenType; N],
 ) -> Result<TokensArray<'a, N>, ParserError<'a>> {
-	let Some(tokens) = tokens.as_array() else {
+    let Some(tokens) = tokens.as_array() else {
         return Err(ParserError::UnexpectedEof {
             expected: expected[tokens.len()],
         });
-	};
+    };
     for (i, (got, expected)) in tokens.tys.iter().zip(expected).enumerate() {
         if got != expected {
             return Err(ParserError::GotWrongToken {
                 expected: *expected,
                 got: Token {
-					ty: *got,
-					value: tokens.values[i],
-					span: tokens.spans[i],
-				},
+                    ty: *got,
+                    value: tokens.values[i],
+                    span: tokens.spans[i],
+                },
             });
         }
     }
-	Ok(tokens)
+    Ok(tokens)
 }
 
 // consumes the next few tokens if they match the given types, otherwise leaves the input unchanged
@@ -1324,33 +1329,31 @@ fn consume_tokens<'a, const N: usize>(
     expected: &'_ [TokenType; N],
 ) -> Result<TokensArray<'a, N>, ParserError<'a>> {
     _ = assert_tokens::<N>(tokens, expected)?;
-	Ok(tokens.take_array().unwrap())
+    Ok(tokens.take_array().unwrap())
 }
 
 #[track_caller]
 fn get_tokens<'a, const N: usize>(
-    tokens: &mut TokensSlice<'a>
+    tokens: &mut TokensSlice<'a>,
 ) -> Result<TokensArray<'a, N>, ParserError<'static>> {
-	tokens.take_array().ok_or(ParserError::OutOfTokensError)
+    tokens.take_array().ok_or(ParserError::OutOfTokensError)
 }
 
 #[track_caller]
 fn peek_tokens<'a, const N: usize>(
-    tokens: &TokensSlice<'a>
+    tokens: &TokensSlice<'a>,
 ) -> Result<TokensArray<'a, N>, ParserError<'static>> {
-	tokens.as_array().ok_or(ParserError::OutOfTokensError)
+    tokens.as_array().ok_or(ParserError::OutOfTokensError)
 }
 
 #[track_caller]
 #[inline]
-fn consume_space<'a>(
-    tokens: &mut TokensSlice<'a>
-) -> Result<TokensArray<'a, 1>, ParserError<'a>> {
+fn consume_space<'a>(tokens: &mut TokensSlice<'a>) -> Result<TokensArray<'a, 1>, ParserError<'a>> {
     match consume_tokens(tokens, &[TokenType::Space]) {
-		Err(ParserError::GotWrongToken { got, .. }) => Err(ParserError::ExpectedSpace { got }),
-		Err(err) => Err(err),
-		Ok(tok) => Ok(tok)
-	}
+        Err(ParserError::GotWrongToken { got, .. }) => Err(ParserError::ExpectedSpace { got }),
+        Err(err) => Err(err),
+        Ok(tok) => Ok(tok),
+    }
 }
 
 #[track_caller]
@@ -1361,13 +1364,22 @@ fn consume_indentation<'a>(
     use super::SPACES_PER_INDENT;
 
     match consume_tokens(tokens, &[TokenType::Indentation]) {
-		Err(err) => Err(err),
-		Ok(TokensArray {tys: [ty], values: [value], spans: [span], offset: _}) if value.len() != indentation * SPACES_PER_INDENT => {
-			return Err(ParserError::IndentationMismatch {
-				expected_spaces: indentation * SPACES_PER_INDENT,
-				token: Token { ty: *ty, value: *value, span: *span },
-			});
-		}
-		Ok(tok) => Ok(tok)
-	}
+        Err(err) => Err(err),
+        Ok(TokensArray {
+            tys: [ty],
+            values: [value],
+            spans: [span],
+            offset: _,
+        }) if value.len() != indentation * SPACES_PER_INDENT => {
+            return Err(ParserError::IndentationMismatch {
+                expected_spaces: indentation * SPACES_PER_INDENT,
+                token: Token {
+                    ty: *ty,
+                    value: *value,
+                    span: *span,
+                },
+            });
+        }
+        Ok(tok) => Ok(tok),
+    }
 }

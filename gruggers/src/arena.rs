@@ -4,7 +4,7 @@ mod page_alloc {
     // directly use VirtualAlloc and VirtualFree on windows
     #[cfg(all(not(miri), windows))]
     pub mod windows {
-		#![allow(clippy::upper_case_acronyms)]
+        #![allow(clippy::upper_case_acronyms)]
         use crate::pal::windows::*;
         use allocator_api2::alloc::AllocError;
         use std::ptr::NonNull;
@@ -425,8 +425,8 @@ mod arena_impl {
             Ok(ptr)
         }
 
-		/// # Safety
-		/// `old_ptr` must be safe to memcpy for min(old_layout.size(), new_layout.size())
+        /// # Safety
+        /// `old_ptr` must be safe to memcpy for min(old_layout.size(), new_layout.size())
         pub unsafe fn realloc_zeroed(
             &self,
             old_ptr: *mut u8,
@@ -573,7 +573,7 @@ mod arena_impl {
         }
 
         /// Allocates space for and moves a value into the arena
-		#[expect(clippy::mut_from_ref)] 
+        #[expect(clippy::mut_from_ref)]
         pub fn alloc_into<T>(&self, value: T) -> &mut T {
             let ptr = self.allocate(Layout::new::<T>()).unwrap().cast::<T>();
             unsafe {
@@ -802,46 +802,46 @@ mod mt_arena {
                 .map(|x| x as *const _ as _)
                 .unwrap_or_else(std::ptr::null_mut);
 
-			// First block is 1 page, then double the sizes
-			let mut num_pages = if current.is_null() {
-				1
-			} else {
-				unsafe { (&*current).cur_block_size() * 2 }
-			};
-			while num_pages * page_size < min_size_bytes {
-				num_pages *= 2;
-			}
-			let new_block = PageAllocator::alloc_pages(num_pages)
-				.expect("Could not allocate pages")
-				.as_ptr()
-				.cast::<ArenaHeader>();
-			let new_block_len = num_pages * page_size;
-			debug_assert!(new_block.addr().is_multiple_of(4096));
+            // First block is 1 page, then double the sizes
+            let mut num_pages = if current.is_null() {
+                1
+            } else {
+                unsafe { (&*current).cur_block_size() * 2 }
+            };
+            while num_pages * page_size < min_size_bytes {
+                num_pages *= 2;
+            }
+            let new_block = PageAllocator::alloc_pages(num_pages)
+                .expect("Could not allocate pages")
+                .as_ptr()
+                .cast::<ArenaHeader>();
+            let new_block_len = num_pages * page_size;
+            debug_assert!(new_block.addr().is_multiple_of(4096));
 
-			// SAFETY: Block was just successfully allocated and the start of a
-			// block is where an ArenaHeader should be written to. And since
-			// it was just allocated, no other thread can see this yet
-			unsafe {
-				ArenaHeader::write_into(new_block, current, new_block_len);
-			}
+            // SAFETY: Block was just successfully allocated and the start of a
+            // block is where an ArenaHeader should be written to. And since
+            // it was just allocated, no other thread can see this yet
+            unsafe {
+                ArenaHeader::write_into(new_block, current, new_block_len);
+            }
 
-			if let Err(next) = self.current.compare_exchange(
-				current,
-				new_block,
-				Ordering::AcqRel,
-				Ordering::Relaxed,
-			) {
-				// No other thread has access to this block because it was
-				// just allocated
-				unsafe { ArenaHeader::free(new_block) };
-				// SAFETY: next can never be NULL because we never reset
-				// it to null, and if this is the first allocation, then
-				// current is already NULL, so next cannot be NULL
-				unsafe { &*next }
-			} else {
-				// SAFETY: we just allocated an initialized this block
-				unsafe { &*new_block }
-			}
+            if let Err(next) = self.current.compare_exchange(
+                current,
+                new_block,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                // No other thread has access to this block because it was
+                // just allocated
+                unsafe { ArenaHeader::free(new_block) };
+                // SAFETY: next can never be NULL because we never reset
+                // it to null, and if this is the first allocation, then
+                // current is already NULL, so next cannot be NULL
+                unsafe { &*next }
+            } else {
+                // SAFETY: we just allocated an initialized this block
+                unsafe { &*new_block }
+            }
         }
 
         pub fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
@@ -899,8 +899,8 @@ mod mt_arena {
             Ok(ptr)
         }
 
-		/// # Safety
-		/// `old_ptr` must be safe to memcpy for min(old_layout.size(), new_layout.size())
+        /// # Safety
+        /// `old_ptr` must be safe to memcpy for min(old_layout.size(), new_layout.size())
         pub unsafe fn realloc_zeroed(
             &self,
             old_ptr: *mut u8,
@@ -1046,7 +1046,7 @@ mod mt_arena {
         }
 
         /// Allocates space for and moves a value into the arena
-		#[expect(clippy::mut_from_ref)] 
+        #[expect(clippy::mut_from_ref)]
         pub fn alloc_into<T>(&self, value: T) -> &mut T {
             let ptr = self.allocate(Layout::new::<T>()).unwrap().cast::<T>();
             unsafe {

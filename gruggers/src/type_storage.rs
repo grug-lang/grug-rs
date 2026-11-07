@@ -22,12 +22,12 @@ impl<'a> PartialEq for TypeWrapper<'a> {
                 Id {
                     name: name_1,
                     generics: generics_1,
-                    ..
+                    num_spans: _,
                 },
                 Id {
                     name: name_2,
                     generics: generics_2,
-                    ..
+                    num_spans: _,
                 },
             ) => name_1.ptr_eq(name_2) && std::ptr::eq(generics_1, generics_2),
             (
@@ -55,7 +55,11 @@ impl<'a> std::hash::Hash for TypeWrapper<'a> {
     fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
         use Type::*;
         match self.0 {
-            Id { name, generics, .. } => {
+            Id {
+                name,
+                generics,
+                num_spans: _,
+            } => {
                 "Type".hash(hasher);
                 hasher.write_usize(name.as_ptr() as usize);
                 hasher.write_usize(generics as *const _ as *const Type as usize);
@@ -137,7 +141,11 @@ impl TypeStorage {
     pub fn insert_type(&mut self, ty: Type) -> Type<'static> {
         use Type::*;
         match ty {
-            Id { name, generics } => {
+            Id {
+                name,
+                generics,
+                num_spans,
+            } => {
                 let name = self.insert_string(name.to_str());
                 let generics = self.insert_type_list(generics);
                 self.type_lists
@@ -146,6 +154,7 @@ impl TypeStorage {
                 Id {
                     name: name.as_ntstrptr(),
                     generics,
+                    num_spans,
                 }
             }
             Resource {

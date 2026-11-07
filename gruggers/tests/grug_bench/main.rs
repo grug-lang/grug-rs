@@ -1,5 +1,6 @@
 #![deny(warnings)]
 #![allow(improper_ctypes)]
+#[rustfmt::skip]
 mod test_bindings {
     use gruggers::backend::BytecodeBackend as Backend;
     use gruggers::ntstring::{NTOsStrPtr, NTStrPtr};
@@ -120,7 +121,7 @@ mod test_bindings {
 }
 use test_bindings::*;
 
-mod game_functions {
+#[rustfmt::skip] mod game_functions {
     use gruggers::ast::Type;
     use gruggers::state::GrugState;
     use gruggers::types::Value;
