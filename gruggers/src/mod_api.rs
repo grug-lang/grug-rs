@@ -374,7 +374,7 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                 };
 
                 Type::Resource {
-					extension: arena.copy_str_into_nt(extension).as_ntstrptr(),
+                    extension: arena.copy_str_into_nt(extension).as_ntstrptr(),
                     optional,
                 }
             }
@@ -408,7 +408,11 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                 } else {
                     &[]
                 };
-                Type::Id { name, generics }
+                Type::Id {
+                    name,
+                    generics,
+                    num_spans: 0,
+                }
             }
         };
         Ok(ty)
@@ -451,8 +455,8 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
             temp.push(Parameter {
                 name: param_name,
                 ty,
-                name_span: SourceSpan { offset: 0, line: 0 },
-                type_span: SourceSpan { offset: 0, line: 0 },
+                spans: 0,
+                spans_len: 0,
             });
         }
         Ok(temp.leak())
@@ -637,10 +641,12 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                     Type::Id {
                         name: ty_name,
                         generics: act_generic_types,
+                        num_spans: _,
                     },
                     Type::Id {
                         name: imp_name,
                         generics: imp_generic_types,
+                        num_spans: _,
                     },
                 ) if ty_name == imp_name => {
                     act_generic_types
@@ -681,14 +687,17 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
                 _ => false,
             }
         }
-        if let Type::Id { name, generics } = ty {
+        if let Type::Id {
+            name,
+            generics,
+            num_spans: _,
+        } = ty
+        {
             // If the type is found, then check if the number of generics
             // match and also recursively check types
             self.push_path(JsonPathComponent::ObjectKey("generics"));
-			let name = name.to_str();
-            if let Some((_, constraints)) = known_types
-                .iter()
-                .find(|(ty_name, _)| *ty_name == name)
+            let name = name.to_str();
+            if let Some((_, constraints)) = known_types.iter().find(|(ty_name, _)| *ty_name == name)
             {
                 if constraints.len() != generics.len() {
                     return Err(self.new_error(self.arena.fmt_into(format_args!(
@@ -755,12 +764,12 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
             // error
             // if not found, number of generics MUST be 0
             } else if !generics.is_empty() {
-				return Err(self.new_error(self.arena.fmt_into(format_args!(
-					": {} was not declared in \"classes\", so it cannot have generics",
-					name
-				))));
-			}
-            
+                return Err(self.new_error(self.arena.fmt_into(format_args!(
+                    ": {} was not declared in \"classes\", so it cannot have generics",
+                    name
+                ))));
+            }
+
             self.pop_path();
         }
         Ok(())
@@ -1018,6 +1027,7 @@ pub(crate) fn get_mod_api_from_text(
                 let ty = Type::Id {
                     name: entity_name.as_ntstrptr(),
                     generics: &[],
+                    num_spans: 0,
                 };
 
                 let export_fns = if let Some(export_fns) = entity_values.get("export_functions") {
@@ -1183,6 +1193,7 @@ pub(crate) fn get_mod_api_from_text(
                     generics: arena.slice_from_iter(
                         (0..(generics.len())).map(|i| Type::Existential { idx: i }),
                     ),
+                    num_spans: 0,
                 };
 
                 // optional "methods" object
@@ -1469,7 +1480,9 @@ mod tests {
 
     fn register_twice(class_name: Option<&str>, fn_name: &str) -> String {
         let mut mod_api = registration_mod_api();
-        mod_api.register_host_fn(class_name, fn_name, dummy_host_fn, None).unwrap();
+        mod_api
+            .register_host_fn(class_name, fn_name, dummy_host_fn, None)
+            .unwrap();
         let err = mod_api
             .register_host_fn(class_name, fn_name, dummy_host_fn, None)
             .expect_err("expected the second registration to fail");
@@ -1485,12 +1498,18 @@ mod tests {
 
     #[test]
     fn host_fn_can_only_be_registered_once() {
-        assert_eq!(register_twice(None, "f"), "host function f has already been registered");
+        assert_eq!(
+            register_twice(None, "f"),
+            "host function f has already been registered"
+        );
     }
 
     #[test]
     fn method_can_only_be_registered_once() {
-        assert_eq!(register_twice(Some("Box"), "get"), "method Box.get has already been registered");
+        assert_eq!(
+            register_twice(Some("Box"), "get"),
+            "method Box.get has already been registered"
+        );
     }
 
     #[test]
@@ -1503,7 +1522,10 @@ mod tests {
 
     #[test]
     fn entity_method_can_only_be_registered_once() {
-        assert_eq!(register_twice(Some("E"), "m"), "entity method E.m has already been registered");
+        assert_eq!(
+            register_twice(Some("E"), "m"),
+            "entity method E.m has already been registered"
+        );
     }
 
     #[test]
@@ -1541,7 +1563,9 @@ mod tests {
     #[test]
     fn reg_fn_can_only_be_registered_once() {
         let mut mod_api = registration_mod_api();
-        mod_api.register_reg_fn(None, "f", dummy_reg_fn, None).unwrap();
+        mod_api
+            .register_reg_fn(None, "f", dummy_reg_fn, None)
+            .unwrap();
         let err = mod_api
             .register_reg_fn(None, "f", dummy_reg_fn, None)
             .expect_err("expected the second registration to fail");
@@ -1558,10 +1582,12 @@ mod tests {
     fn register_dummies_registers_every_host_fn_and_method() {
         let mut mod_api = registration_mod_api();
         unsafe { mod_api.register_dummies() };
-        let host_fns = mod_api
-            .host_fns
-            .values()
-            .chain(mod_api.classes.values().flat_map(|class| class.assoc_fns.iter().map(|(_, host_fn)| host_fn)));
+        let host_fns = mod_api.host_fns.values().chain(
+            mod_api
+                .classes
+                .values()
+                .flat_map(|class| class.assoc_fns.iter().map(|(_, host_fn)| host_fn)),
+        );
         for host_fn in host_fns {
             let fn_ptr = host_fn.fn_ptr.expect("every host fn should have a dummy");
             unsafe { fn_ptr(std::ptr::null(), std::ptr::null(), std::ptr::null()) };

@@ -45,9 +45,9 @@
 //! some JSON data, etc) is left up to the host.
 
 use crate::arena::Arena;
-use crate::frontend::{CompileRequest, CompileResponse};
 use crate::backend::{Backend, BytecodeBackend, ErasedBackend};
 use crate::error::{Error, ErrorKind, SourceSpan};
+use crate::frontend::{CompileRequest, CompileResponse};
 use crate::mod_api::{ModApi, get_mod_api, get_mod_api_from_text};
 use crate::nt;
 use crate::ntstring::NTStrPtr;
@@ -618,7 +618,8 @@ impl GrugState {
 
     /// Create a new entity from the input file id
     pub fn create_entity(&self, file_id: FileId) -> Option<GrugEntityHandle<'_>> {
-        let entity = self.entities
+        let entity = self
+            .entities
             .insert(unsafe { GrugEntity::new_uninit(self.get_next_entity_id(), file_id) });
         let entity = unsafe { GrugEntityHandle::new(entity) };
         let success = self.backend.init_entity(self, &entity);
@@ -631,7 +632,9 @@ impl GrugState {
                 .push(NonNull::from_ref(&*entity));
             Some(entity)
         } else {
-            unsafe { self.entities.delete(entity.into_inner()); }
+            unsafe {
+                self.entities.delete(entity.into_inner());
+            }
             None
         }
     }
@@ -645,7 +648,9 @@ impl GrugState {
         if self.entities.contains(entity.0) {
             // SAFETY: We take ownership of the entity so we cannot call this function on the same entity twice.
             // Also we make sure new entities and reloaded entities are always initialized
-            unsafe { self.backend.destroy_entity_data(&entity); }
+            unsafe {
+                self.backend.destroy_entity_data(&entity);
+            }
 
             self.script_entities
                 .borrow_mut()
@@ -687,10 +692,10 @@ impl GrugState {
 // Registration functions
 impl GrugState {
     /// Register a generic host function
-	///
-	/// # Safety
-	/// 
-	/// The grug arguments this function expects must match the mod_api
+    ///
+    /// # Safety
+    ///
+    /// The grug arguments this function expects must match the mod_api
     pub unsafe fn register_reg_fn<const N: usize>(
         &mut self,
         fn_name: &str,
@@ -700,17 +705,19 @@ impl GrugState {
     }
 
     /// Register a non generic host method
-	///
-	/// # Safety
-	/// 
-	/// The grug arguments this function expects must match the mod_api
+    ///
+    /// # Safety
+    ///
+    /// The grug arguments this function expects must match the mod_api
     pub unsafe fn register_reg_method<const N: usize>(
         &mut self,
         class_name: &str,
         fn_name: &str,
         func: RegFn<N, GrugState>,
     ) -> Result<(), Error> {
-        unsafe { self.register_reg_fn_internal(Some(class_name), fn_name, erase_reg_fn(func), Some(N)) }
+        unsafe {
+            self.register_reg_fn_internal(Some(class_name), fn_name, erase_reg_fn(func), Some(N))
+        }
     }
 
     pub(crate) unsafe fn register_reg_fn_internal(
@@ -734,16 +741,17 @@ impl GrugState {
 
         // Note: This is the same as the unstable get_mut_unchecked on Arc;
         // Once that is stabilized, this can be replaced
-        let mod_api = *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
+        let mod_api =
+            *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
         let mod_api = unsafe { mod_api.byte_add(16).cast::<ModApi>() };
         unsafe { (&mut *mod_api).register_reg_fn(class_name, fn_name, func, count) }
     }
 
     /// Register a non generic host function
-	///
-	/// # Safety
-	/// 
-	/// The grug arguments this function expects must match the mod_api
+    ///
+    /// # Safety
+    ///
+    /// The grug arguments this function expects must match the mod_api
     pub unsafe fn register_host_fn<const N: usize>(
         &mut self,
         fn_name: &str,
@@ -753,17 +761,19 @@ impl GrugState {
     }
 
     /// Register a non generic host method
-	///
-	/// # Safety
-	/// 
-	/// The grug arguments this function expects must match the mod_api
+    ///
+    /// # Safety
+    ///
+    /// The grug arguments this function expects must match the mod_api
     pub unsafe fn register_method<const N: usize>(
         &mut self,
         class_name: &str,
         fn_name: &str,
         func: HostFn<N, Self>,
     ) -> Result<(), Error> {
-        unsafe { self.register_host_fn_internal(Some(class_name), fn_name, erase_host_fn(func), Some(N)) }
+        unsafe {
+            self.register_host_fn_internal(Some(class_name), fn_name, erase_host_fn(func), Some(N))
+        }
     }
 
     pub(crate) unsafe fn register_host_fn_internal(
@@ -787,7 +797,8 @@ impl GrugState {
 
         // Note: This is the same as the unstable get_mut_unchecked on Arc;
         // Once that is stabilized, this can be replaced
-        let mod_api = *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
+        let mod_api =
+            *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
         let mod_api = unsafe { mod_api.byte_add(16).cast::<ModApi>() };
         unsafe { (&mut *mod_api).register_host_fn(class_name, fn_name, func, count) }
     }
@@ -809,7 +820,8 @@ impl GrugState {
 
         // Note: This is the same as the unstable get_mut_unchecked on Arc;
         // Once that is stabilized, this can be replaced
-        let mod_api = *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
+        let mod_api =
+            *unsafe { std::mem::transmute::<&mut Arc<ModApi>, &mut *mut u8>(&mut self.mod_api) };
         let mod_api = unsafe { mod_api.byte_add(16).cast::<ModApi>() };
         unsafe { (&mut *mod_api).register_dummies() }
     }

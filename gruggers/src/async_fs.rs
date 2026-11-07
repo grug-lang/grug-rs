@@ -178,8 +178,8 @@ mod windows {
             }
         }
 
-		// clippy doesn't know the values are being mutated
-		#[expect(clippy::while_immutable_condition)]
+        // clippy doesn't know the values are being mutated
+        #[expect(clippy::while_immutable_condition)]
         // wait for all apcs to complete
         while num_apcs_queued != num_apcs_finished {
             // sleep for a maximum of 500ms to read files
@@ -216,12 +216,7 @@ mod windows {
                 continue;
             }
             // Add a null byte to the end of the file;
-            unsafe {
-                *file_text
-                    .cast::<u8>()
-                    .add(iosb.information)
-                    .as_ptr() = b'\0'
-            };
+            unsafe { *file_text.cast::<u8>().add(iosb.information).as_ptr() = b'\0' };
             let new_ptr = unsafe {
                 NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(
                     file_text.cast::<u8>().as_ptr(),

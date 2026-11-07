@@ -3,6 +3,7 @@
 use gruggers::nt;
 use gruggers::ntstring::NTStr;
 
+#[rustfmt::skip]
 mod test_bindings {
     use gruggers::arena::Arena;
     use gruggers::backend::{BytecodeBackend, StubBackend};
@@ -368,6 +369,7 @@ mod test_bindings {
 }
 use test_bindings::*;
 
+#[rustfmt::skip]
 mod game_fn_bindings {
     use gruggers::ast::Type;
     use gruggers::error::Error;

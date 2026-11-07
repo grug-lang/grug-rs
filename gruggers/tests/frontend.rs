@@ -136,7 +136,9 @@ fn strings_can_contain_escape_sequences() {
     let text = "x: string = \"a\\tb\\nc\\rd\\\\e\\\"f\"\n";
     mods_dir.write("m/x-A.grug", text);
     let state = new_state(&mods_dir.0);
-    state.compile_grug_file_from_str("m/x-A.grug", text).unwrap();
+    state
+        .compile_grug_file_from_str("m/x-A.grug", text)
+        .unwrap();
 }
 
 // grug-tests covers "\n", but can't cover "\r\n", since grug-for-python reads
@@ -182,8 +184,16 @@ fn compiling_a_missing_file_is_an_io_error() {
         .expect_err("expected an IO error");
     // The OS error in between differs per platform
     let error_string = err.inner().error_string.to_str();
-    assert!(error_string.starts_with("Error: IO error: "), "{}", error_string);
-    assert!(error_string.ends_with("\n$ m/missing-A.grug"), "{}", error_string);
+    assert!(
+        error_string.starts_with("Error: IO error: "),
+        "{}",
+        error_string
+    );
+    assert!(
+        error_string.ends_with("\n$ m/missing-A.grug"),
+        "{}",
+        error_string
+    );
 }
 
 #[test]
