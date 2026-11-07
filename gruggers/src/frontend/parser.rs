@@ -167,10 +167,12 @@ pub(crate) fn parse<'a>(
     file_text: &'a str,
     file_path: &'a OsStr,
 ) -> Result<Ast<'a>, Error> {
-    let final_token_span = *tokens
-        .spans()
-        .last()
-        .unwrap_or(&SourceSpan { offset: 0, line: 1 });
+    let final_token_span = *tokens.spans().last().unwrap_or(&SourceSpan {
+        offset: 0,
+        line: 1,
+        col: 1,
+        len: 1,
+    });
     let mut parser = Parser::new_in(final_token_span, file_text, file_path, arena);
     let mut seen_helper_fn = false;
 
@@ -178,7 +180,12 @@ pub(crate) fn parse<'a>(
     let mut newline_allowed = false;
     let mut newline_seen = false;
     let mut newline_required = false;
-    let mut last_newline_token_span = SourceSpan { offset: 0, line: 0 };
+    let mut last_newline_token_span = SourceSpan {
+        offset: 0,
+        line: 0,
+        col: 1,
+        len: 1,
+    };
 
     let result = (|parser: &mut Parser<'a>| -> Result<(), ParserError<'a>> {
         while let Ok(token) = peek_tokens(&mut tokens) {

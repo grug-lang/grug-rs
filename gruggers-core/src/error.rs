@@ -7,33 +7,35 @@ use allocator_api2::vec::Vec;
 use std::ffi::OsStr;
 use std::io::Write;
 
-/// Points at a particual location within a file. Only contains the byte offset
-/// from the start of the file and the line number. The column number must be
-/// determined by scanning the file backwards from the offset. The offset is
-/// guaranteed to be at a utf-8 codepoint boundary.
+/// Points at a particual location within a file.
+///
+/// Most Ast node contain an index within an implicit SourceSpan array instead of storing the spans inline.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct SourceSpan {
     /// The byte offset within the file where the span begins
     pub offset: usize,
-    /// The line number of the span
+    /// The line number of the start of the span
     pub line: usize,
+    /// The column number of the start of the span
+    pub col: usize,
+    /// The length of the span,
+    pub len: usize,
 }
 
 impl SourceSpan {
-    /// Get the line and column number of the start of a source span in the
-    /// source code if it is within bounds
+    /// Get the column number of the given offset in the source code if it is
+    /// within bounds
     ///
     /// # Panics
     /// if the source offset is out of bounds of the text
-    // TODO: Make this SIMD Optimized
-    pub fn get_col(self, text: &str) -> usize {
+    pub fn get_col_from_offset(offset: usize, text: &str) -> usize {
         // This is for if the error is in the first line. The loop wont find a
         // '\n' so `column` will not get reinitialized
-        let mut column = self.offset + 1;
+        let mut column = offset + 1;
         let text = text.as_bytes();
         for (i, ch) in text
-            .get(..self.offset)
+            .get(..offset)
             .expect("span within source code bounds")
             .iter()
             .rev()
@@ -67,6 +69,7 @@ impl SourceSpan {
     ///
     /// # Panics
     /// if the source offset is out of bounds of the text
+	// TODO: Maybe see if you can use self.col to skip finding the start of the line.
     pub fn get_source_line(self, text: &str) -> &str {
         let text = text.as_bytes();
 
@@ -243,7 +246,7 @@ impl<'a> GrugError<'a> {
     ) -> Self {
         // println!("{:?}", std::panic::Location::caller());
         let line = err_span.line;
-        let column = err_span.get_col(source_text);
+        let column = err_span.col;
         let source_line = err_span.get_source_line(source_text).trim_start();
 
         let mut err_string = Vec::new_in(&alloc);

@@ -56,7 +56,12 @@ impl ModApi {
             "",
             "".as_ref(),
             "",
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             args,
         )
     }
@@ -289,7 +294,12 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
             location,
             self.path.as_ref(),
             self.text,
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!("{} {}", location, message),
         )
     }
@@ -304,7 +314,12 @@ impl<'a, 'error> ModApiContext<'a, 'error> {
             location,
             self.path.as_ref(),
             self.text,
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!("{} {}", location, message),
         )
     }
@@ -806,7 +821,12 @@ pub(crate) fn get_mod_api(mod_api_path: impl AsRef<Path>) -> Result<ModApi> {
             "",
             mod_api_path.as_ref(),
             "",
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!("IO Error: {}", err),
         )
     })?;
@@ -826,7 +846,12 @@ pub(crate) fn get_mod_api_from_text(
             "",
             mod_api_path.as_ref(),
             mod_api_text,
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!("{err}"),
         )
     })?;

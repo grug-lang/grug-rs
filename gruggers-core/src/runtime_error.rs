@@ -107,7 +107,7 @@ impl<'a> RuntimeError<'a> {
                             stack_frame.fn_name.to_str(),
                             file_path.display(),
                             stack_frame.span.line,
-                            stack_frame.span.get_col(stack_frame.file_text.to_str()),
+                            stack_frame.span.col,
                         )
                         .expect("Writing into a Vec can never fail");
                     }

@@ -529,7 +529,12 @@ impl GrugState {
                 "",
                 path,
                 "",
-                SourceSpan { offset: 0, line: 1 },
+                SourceSpan {
+                    offset: 0,
+                    line: 1,
+                    col: 0,
+                    len: 1,
+                },
                 format_args!("File is empty"),
             ));
         }
@@ -547,7 +552,7 @@ impl GrugState {
 				"",
 				path,
 				"",
-				SourceSpan{offset: 0, line: 0},
+				SourceSpan{offset: 0, line: 0, col: 0, len: 0},
 				format_args!("Entity '{}' is not registered in the mod_api.json", entity_type),
 			))?;
         let Some(export_fns) = &entity.export_fns else {
@@ -556,7 +561,12 @@ impl GrugState {
                 "",
                 path,
                 "",
-                SourceSpan { offset: 0, line: 0 },
+                SourceSpan {
+                    offset: 0,
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                },
                 format_args!("'{}' is a class, not an entity", entity_type),
             ));
         };
@@ -701,7 +711,12 @@ fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
                     "",
                     path,
                     "",
-                    SourceSpan { offset: 0, line: 0 },
+                    SourceSpan {
+                        offset: 0,
+                        line: 0,
+                        col: 0,
+                        len: 0,
+                    },
                     format_args!("'{}' is missing a period in its name", file_name.display()),
                 ));
             }
@@ -719,7 +734,12 @@ fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
                 "",
                 path,
                 "",
-                SourceSpan { offset: 0, line: 0 },
+                SourceSpan {
+                    offset: 0,
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                },
                 format_args!(
                     "'{}' is missing an entity type in its name",
                     file_name.display()
@@ -733,7 +753,12 @@ fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
                 "",
                 path,
                 "",
-                SourceSpan { offset: 0, line: 0 },
+                SourceSpan {
+                    offset: 0,
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                },
                 format_args!(
                     "'{}' is missing an entity type in its name",
                     file_name.display()
@@ -751,7 +776,12 @@ fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
             "",
             path,
             "",
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!(
                 "There are more than {} characters \n\
 				in the entity type of '{}', exceeding MAX_FILE_ENTITY_TYPE_LENGTH",
@@ -774,7 +804,12 @@ fn check_custom_id_is_pascal<'a>(
             "",
             entity_type,
             "",
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!("'{}' is not valid utf8", entity_type.display()),
         )
     })?;
@@ -787,7 +822,12 @@ fn check_custom_id_is_pascal<'a>(
             "",
             path,
             "",
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!(
                 "'{entity_type}' seems like a custom ID type, but it doesn't start in Uppercase"
             ),
@@ -800,7 +840,12 @@ fn check_custom_id_is_pascal<'a>(
                 "",
                 path,
                 "",
-                SourceSpan { offset: 0, line: 0 },
+                SourceSpan {
+                    offset: 0,
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                },
                 format_args!(
                     "'{entity_type}' seems like a custom ID type, but it contains '{ch}', which isn't uppercase, lowercase, or a digit",
                 ),

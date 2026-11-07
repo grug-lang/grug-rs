@@ -480,7 +480,12 @@ impl GrugState {
                 "",
                 "".as_ref(),
                 "",
-                SourceSpan { offset: 0, line: 0 },
+                SourceSpan {
+                    offset: 0,
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                },
                 format_args!("mod api does not define an entity named {}", entity_type),
             ));
         }
@@ -494,7 +499,12 @@ impl GrugState {
             "",
             "".as_ref(),
             "",
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!(
                 "'{}' does not export a function named '{}'",
                 entity_type, fn_name
@@ -524,7 +534,12 @@ impl GrugState {
                 "",
                 "".as_ref(),
                 "",
-                SourceSpan { offset: 0, line: 0 },
+                SourceSpan {
+                    offset: 0,
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                },
                 format_args!("mod api does not define an entity named {}", entity_type),
             ));
         }
@@ -562,7 +577,12 @@ impl GrugState {
                 "",
                 "".as_ref(),
                 "",
-                SourceSpan { offset: 0, line: 0 },
+                SourceSpan {
+                    offset: 0,
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                },
                 args,
             )
         }

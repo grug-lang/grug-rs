@@ -894,7 +894,12 @@ impl BytecodeBackend {
                     });
                     // push the next stack frame
                     self.call_stack.push(StackFrame {
-                        span: SourceSpan { line: 0, offset: 0 },
+                        span: SourceSpan {
+                            line: 0,
+                            offset: 0,
+                            col: 0,
+                            len: 0,
+                        },
                         fn_name: name.as_ntstrptr(),
                         file_path: Some(instructions.path),
                         file_text: instructions.file_text.as_ntstrptr(),
@@ -1074,7 +1079,12 @@ impl Backend for BytecodeBackend {
         self.call_stack.push(StackFrame {
             fn_name: nt!("init_globals").as_ntstrptr(),
             file_path: Some(file.instructions.path),
-            span: SourceSpan { line: 0, offset: 0 },
+            span: SourceSpan {
+                line: 0,
+                offset: 0,
+                col: 0,
+                len: 0,
+            },
             file_text: file.instructions.file_text.as_ntstrptr(),
         });
 
@@ -1157,7 +1167,12 @@ impl Backend for BytecodeBackend {
                 )
             },
             file_path: Some(file.instructions.path),
-            span: SourceSpan { line: 0, offset: 0 },
+            span: SourceSpan {
+                line: 0,
+                offset: 0,
+                col: 0,
+                len: 0,
+            },
             file_text: file.instructions.file_text.as_ntstrptr(),
         });
         let ret_val = unsafe {
@@ -1224,7 +1239,12 @@ impl Backend for BytecodeBackend {
                 )
             },
             file_path: Some(file.instructions.path),
-            span: SourceSpan { line: 0, offset: 0 },
+            span: SourceSpan {
+                line: 0,
+                offset: 0,
+                col: 0,
+                len: 0,
+            },
             file_text: file.instructions.file_text.as_ntstrptr(),
         });
 
@@ -1383,8 +1403,12 @@ impl Instructions {
 
     fn push_ins(&mut self, ins: Op, source_location: Option<SourceSpan>) {
         self.stream.push(ins);
-        self.debug_info
-            .push(source_location.unwrap_or(SourceSpan { offset: 0, line: 0 }));
+        self.debug_info.push(source_location.unwrap_or(SourceSpan {
+            offset: 0,
+            line: 0,
+            col: 0,
+            len: 0,
+        }));
         debug_assert_eq!(self.stream.len(), self.debug_info.len());
     }
 
@@ -1552,7 +1576,15 @@ impl std::fmt::Display for Instructions {
         for (addr, (ins, location)) in self.stream.iter().zip(&self.debug_info).enumerate() {
             match (&mut last_line, location) {
                 // offset 0, line 0 can only happen if there is no debug info
-                (_, SourceSpan { offset: 0, line: 0 }) => (),
+                (
+                    _,
+                    SourceSpan {
+                        offset: 0,
+                        line: 0,
+                        col: 0,
+                        len: 0,
+                    },
+                ) => (),
                 (None, location) => {
                     writeln!(f, "// {}", location.get_source_line(self.file_text).trim())?;
                     last_line = Some(location.line);

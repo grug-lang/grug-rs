@@ -122,15 +122,13 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
 ) -> Result<Tokens<'a>, Error> {
     let file_path = file_path.as_ref();
     let mut tokens = Tokens::new_in(arena);
+    let mut last_new_line_offset = 0;
     let mut cur_line = 1;
 
     macro_rules! new_tokenizer_error{
-		(($offset: expr, $line: expr) => $format_str: literal $(, $args: expr)*) => {
-			Error::new(ErrorKind::TOKENIZER_ERROR, "", file_path, file_text, SourceSpan{offset: $offset, line: $line}, format_args!($format_str $(,$args)*))
+		(($offset: expr, $line: expr, $col: expr, $len: expr) => $format_str: literal $(, $args: expr)*) => {
+			Error::new(ErrorKind::TOKENIZER_ERROR, "", file_path, file_text, SourceSpan{ offset: $offset, line: $line, col: $col, len: $len }, format_args!($format_str $(,$args)*))
 		};
-		($span: expr => $format_str: literal $(, $args: expr)*) => {
-			Error::new(ErrorKind::TOKENIZER_ERROR, "", file_path, file_text, $span, format_args!($format_str $(,$args)*))
-		}
 	}
 
     let file_text_str = file_text;
@@ -139,14 +137,14 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
 
     'outer: while i < file_text.len() {
         macro_rules! token_match {
-			($tag: literal => $expr: expr$(, $extra_expr: expr)?) => {
+			($tag: literal => $expr: expr $(, $extra_expr: expr)?) => {
 				let lit_len = $tag.len();
-				if i + lit_len <= file_text.len() && &file_text[i..(i+lit_len)] == &*$tag {
+				if let Some(text) = file_text.get(i..(i+lit_len)) && text == &*$tag {
 					// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
 					tokens.push(
 						$expr,
 						unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])},
-						SourceSpan{offset: i, line: cur_line}
+						SourceSpan{offset: i, line: cur_line, col: i - last_new_line_offset + 1, len: lit_len }
 					);
 					i += lit_len;
 					$($extra_expr;)?
@@ -155,14 +153,14 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
 			}
 		}
         macro_rules! token_match_word {
-			($tag: literal => $expr: expr$(, $extra_expr: expr)?) => {
+			($tag: literal => $expr: expr $(, $extra_expr: expr)?) => {
 				let lit_len = $tag.len();
-				if i + lit_len <= file_text.len() && &file_text[i..(i+lit_len)] == &*$tag && (i + lit_len == file_text.len() || !is_word_char(file_text[i+lit_len] as char)) {
+				if let Some(text) = file_text.get(i..(i+lit_len)) && text == &*$tag && file_text.get(i + lit_len).is_none_or(|&x| !is_word_char(x as char)) {
 					// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
 					tokens.push(
 						$expr,
 						unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])},
-						SourceSpan{offset: i, line: cur_line}
+						SourceSpan{offset: i, line: cur_line, col: i - last_new_line_offset + 1, len: lit_len }
 					);
 					i += lit_len;
 					$($extra_expr;)?
@@ -183,8 +181,8 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
         token_match!(b"," => TokenType::Comma);
         token_match!(b":" => TokenType::Colon);
         token_match!(b"." => TokenType::Dot);
-        token_match!(b"\n" => TokenType::NewLine, {cur_line += 1;});
-        token_match!(b"\r\n" => TokenType::NewLine, {cur_line += 1;});
+        token_match!(b"\n" => TokenType::NewLine,   {cur_line += 1; last_new_line_offset = i});
+        token_match!(b"\r\n" => TokenType::NewLine, {cur_line += 1; last_new_line_offset = i});
         token_match!(b"==" => TokenType::DoubleEquals);
         token_match!(b"!=" => TokenType::NotEquals);
         token_match!(b"=" => TokenType::Equal);
@@ -209,26 +207,28 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
         // Spaces
         let lit_len = b" ".len();
         if file_text[i..(i + lit_len)] == *b" " {
-            let old_i = i;
+            let start = i;
             while i < file_text.len() && file_text[i] == b' ' {
                 i += 1;
             }
-            let num_spaces = i - old_i;
+            let num_spaces = i - start;
             if num_spaces == 1 {
                 // SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
                 tokens.push(
                     TokenType::Space,
-                    unsafe { str::from_utf8_unchecked(&file_text[old_i..i]) },
+                    unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
                     SourceSpan {
-                        offset: old_i,
+                        offset: start,
                         line: cur_line,
+                        col: start - last_new_line_offset + 1,
+                        len: i - start,
                     },
                 );
                 continue;
             }
             if num_spaces % SPACES_PER_INDENT != 0 {
                 return Err(new_tokenizer_error!(
-                    (i - num_spaces, cur_line) =>
+                    (i - num_spaces, cur_line, i - last_new_line_offset - num_spaces + 1, 1) =>
                     "Expected multiple of {} spaces but found {} spaces", SPACES_PER_INDENT, num_spaces
                 ));
             }
@@ -236,10 +236,12 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
             // SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
             tokens.push(
                 TokenType::Indentation,
-                unsafe { str::from_utf8_unchecked(&file_text[old_i..i]) },
+                unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
                 SourceSpan {
-                    offset: old_i,
+                    offset: start,
                     line: cur_line,
+                    col: start - last_new_line_offset + 1,
+                    len: i - start,
                 },
             );
             continue;
@@ -254,6 +256,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
         ] {
             if file_text[i..].starts_with(start) {
                 let quote_start_index = i;
+                let start_column = i - last_new_line_offset + 1;
                 i += start.len();
                 let start_index = i;
                 let start_line = cur_line;
@@ -265,6 +268,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
 
                 let mut chars = file_text_str[i..].chars();
                 while let Some(char) = chars.next() {
+                    let cur_offset = file_text_str.len() - chars.as_str().len() - char.len_utf8();
                     match char {
                         '"' if !is_escaped => {
                             finished = true;
@@ -278,18 +282,13 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                         }
                         '\r' | '\n' if is_escaped => {
                             return Err(new_tokenizer_error!(
-                                (file_text_str.len() - chars.as_str().len() - 2, cur_line) =>
+                                (cur_offset, cur_line, cur_offset - last_new_line_offset, 1) =>
                                 "Unexpected line break in string on line {}", cur_line
-                            ));
-                        }
-                        '\0' => {
-                            return Err(new_tokenizer_error!(
-                                (file_text_str.len() - chars.as_str().len(), cur_line) =>
-                                "Unexpected null byte on line {}", cur_line
                             ));
                         }
                         '\n' => {
                             cur_line += 1;
+                            last_new_line_offset = i + 1;
                             allocated.push(b'\n');
                         }
                         x => {
@@ -302,7 +301,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                 }
                 if !finished {
                     return Err(new_tokenizer_error!(
-                        (quote_start_index, start_line) =>
+                        (quote_start_index, start_line, start_column, i - start_index) =>
                         "Unclosed \" on line {}", start_line
                     ));
                 }
@@ -318,6 +317,8 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                     SourceSpan {
                         offset: quote_start_index,
                         line: start_line,
+                        col: start_column,
+                        len: i - quote_start_index,
                     },
                 );
                 i = file_text.len() - chars.as_str().len();
@@ -340,6 +341,8 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                 SourceSpan {
                     offset: start,
                     line: cur_line,
+                    col: start - last_new_line_offset + 1,
+                    len: i - start,
                 },
             );
             continue;
@@ -356,7 +359,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                 if file_text[i] == b'.' {
                     if seen_period {
                         return Err(new_tokenizer_error!(
-                            (i, cur_line) =>
+                            (i, cur_line, i - last_new_line_offset + 1, 1) =>
                             "Encountered two '.' periods in a number on line {}", cur_line
                         ));
                     }
@@ -371,7 +374,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                     // should be allowed but i can understand why
                     // they're not
                     return Err(new_tokenizer_error!(
-                        (i, cur_line) =>
+                        (i, cur_line, i - last_new_line_offset + 1, 1) =>
                         "Missing digit after decimal point in '{}'", &file_text_str[start..i]
                     ));
                 }
@@ -382,6 +385,8 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                     SourceSpan {
                         offset: start,
                         line: cur_line,
+                        col: start - last_new_line_offset + 1,
+                        len: i - start,
                     },
                 );
             } else {
@@ -392,6 +397,8 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                     SourceSpan {
                         offset: start,
                         line: cur_line,
+                        col: start - last_new_line_offset + 1,
+                        len: i - start,
                     },
                 );
             }
@@ -404,7 +411,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
             i += 1;
             if i >= file_text.len() || file_text[i] != b' ' {
                 return Err(new_tokenizer_error!(
-                    (i, cur_line) =>
+                    (i, cur_line, i - last_new_line_offset + 1, 1) =>
                     "Expected space (' ') after '#'"
                 ));
             }
@@ -413,7 +420,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
             while i < file_text.len() && file_text[i] != b'\r' && file_text[i] != b'\n' {
                 if file_text[i] == b'\0' {
                     return Err(new_tokenizer_error!(
-                        (i, cur_line) =>
+                    (i, cur_line, i - last_new_line_offset + 1, 1) =>
                         "Unexpected null byte on line {}", cur_line
                     ));
                 }
@@ -422,12 +429,12 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
 
             if (i - start) == 0 {
                 return Err(new_tokenizer_error!(
-                    (i - 1, cur_line) =>
+                    (i, cur_line, i - last_new_line_offset, 1) =>
                     "Expected comment to contain some text"
                 ));
             } else if (file_text[i - 1] as char).is_ascii_whitespace() {
                 return Err(new_tokenizer_error!(
-                    (i, cur_line) =>
+                    (i, cur_line, i - last_new_line_offset + 1, 1) =>
                     "A comment has trailing whitespace on line {}", cur_line
                 ));
             }
@@ -439,13 +446,15 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                 SourceSpan {
                     offset: old_i,
                     line: cur_line,
+                    col: old_i - last_new_line_offset + 1,
+                    len: i - old_i,
                 },
             );
             continue;
         }
 
         return Err(new_tokenizer_error!(
-            (i, cur_line) =>
+            (i, cur_line, i - last_new_line_offset + 1, 1) =>
             "Unrecognized character '{}'", file_text_str[i..].chars().next().expect("There is atleast one more character")
         ));
     }
