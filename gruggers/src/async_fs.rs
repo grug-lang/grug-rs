@@ -39,7 +39,9 @@ pub fn verify_file_data<'a>(data: &'a [u8], file_path: &OsStr) -> Result<&'a NTS
             // Find the actual line number
             SourceSpan {
                 offset: err.valid_up_to(),
-                line: SourceSpan::get_line_from_offset(err.valid_up_to(), str),
+                line: str.lines().count(),
+                col: SourceSpan::get_col_from_offset(err.valid_up_to(), str),
+                len: err.error_len().unwrap_or(0),
             },
             format_args!("File is not valid utf8: {}", err),
         )
@@ -47,7 +49,7 @@ pub fn verify_file_data<'a>(data: &'a [u8], file_path: &OsStr) -> Result<&'a NTS
     let nt_str = NTStr::try_from_str(str).map_err(|err| {
         match err {
             NTStrError::UnexpectedNullByte { location } => {
-                let line = SourceSpan::get_line_from_offset(location, str);
+                let line = str[..location].lines().count();
                 Error::new(
                     ErrorKind::UNEXPECTED_NULL_BYTE,
                     "",
@@ -57,6 +59,8 @@ pub fn verify_file_data<'a>(data: &'a [u8], file_path: &OsStr) -> Result<&'a NTS
                     SourceSpan {
                         offset: location,
                         line,
+                        col: SourceSpan::get_col_from_offset(location, str),
+                        len: 0,
                     },
                     format_args!("Unexpected null byte on line {}", line),
                 )
@@ -169,7 +173,12 @@ mod windows {
                     "",
                     file_path,
                     "",
-                    SourceSpan { offset: 0, line: 0 },
+                    SourceSpan {
+                        offset: 0,
+                        line: 0,
+                        col: 0,
+                        len: 0,
+                    },
                     format_args!("IO Error (status is not STATUS_PENDING): {:?}", nt_status),
                 )));
             } else {
@@ -208,7 +217,12 @@ mod windows {
                     // We don't know which file this error is for
                     file_path,
                     "",
-                    SourceSpan { offset: 0, line: 0 },
+                    SourceSpan {
+                        offset: 0,
+                        line: 0,
+                        col: 0,
+                        len: 0,
+                    },
                     format_args!("IO Error (status is not Success): {:x?}", unsafe {
                         iosb.status.status
                     }),
