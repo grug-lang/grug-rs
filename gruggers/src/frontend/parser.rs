@@ -186,7 +186,7 @@ pub(crate) fn parse<'a>(
     };
 
     let result = (|parser: &mut Parser<'a>| -> Result<(), ParserError<'a>> {
-        while let Ok(token) = peek_tokens(&mut tokens) {
+        while let Ok(token) = peek_tokens(&tokens) {
             if let Ok(name_token) = consume_tokens(&mut tokens, &[TokenType::Word]) {
                 // TODO(nikhil): I think there's a way to make sure we don't need the actual
                 // spans ever, but i don't wanna think about that yet
@@ -251,7 +251,7 @@ pub(crate) fn parse<'a>(
                         ty: global_type,
                         assignment_expr,
                         spans: spans_offset as u32,
-                        spans_len: spans_len as u32,
+                        spans_len,
                     }));
 
                 consume_tokens(&mut tokens, &[TokenType::NewLine])?;
@@ -360,7 +360,7 @@ pub(crate) fn parse<'a>(
 
                 parser.current_function = fn_name;
 
-                if !parser.called_local_functions.contains(&fn_name) {
+                if !parser.called_local_functions.contains(fn_name) {
                     return parser.new_error(
                         name_token_span,
                         format_args!(
@@ -882,7 +882,7 @@ impl<'a> Parser<'a> {
                         data: ExprData::Parenthesized(arena.alloc_into(expr)),
                         result_type: None,
                         spans: spans_offset,
-                        spans_len: spans_len,
+                        spans_len,
                     }
                 }
                 TokenType::True => Expr {
@@ -1371,19 +1371,19 @@ fn consume_indentation<'a>(
     match consume_tokens(tokens, &[TokenType::Indentation]) {
         Err(err) => Err(err),
         Ok(TokensArray {
-            tys: [ty],
-            values: [value],
-            spans: [span],
+            tys: &[ty],
+            values: &[value],
+            spans: &[span],
             offset: _,
         }) if value.len() != indentation * SPACES_PER_INDENT => {
-            return Err(ParserError::IndentationMismatch {
+            Err(ParserError::IndentationMismatch {
                 expected_spaces: indentation * SPACES_PER_INDENT,
                 token: Token {
-                    ty: *ty,
-                    value: *value,
-                    span: *span,
+                    ty,
+                    value,
+                    span,
                 },
-            });
+            })
         }
         Ok(tok) => Ok(tok),
     }

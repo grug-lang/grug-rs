@@ -112,11 +112,9 @@ impl Default for RuntimeErrorHandler {
     }
 }
 
-// F must be Send because GrugState is Send, and 'static because the handler is
-// erased to a pointer that can outlive any borrow F holds
 impl<F: Fn(&RuntimeError) + Send + 'static> From<F> for RuntimeErrorHandler {
     fn from(f: F) -> Self {
-        let f = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(f))) }.cast::<()>();
+		let f = Box::into_non_null(Box::new(f)).cast::<()>();
         extern "C" fn handler<F: Fn(&RuntimeError)>(data: NonNull<()>, error: &RuntimeError) {
             unsafe { (data.cast::<F>().as_ref())(error) };
         }

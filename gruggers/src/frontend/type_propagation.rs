@@ -350,7 +350,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     debug_assert!(type_propagator.num_while_loops_deep == 0);
                     debug_assert!(type_propagator.current_fn_name.is_none());
 
-                    let name = name;
                     type_propagator.current_fn_name = Some(name.to_str());
                     let mut local_variables = LocalVariables::new(None);
                     for param in *parameters {
@@ -462,7 +461,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                 ptr: _,
                 generics: _,
             } => {
-                let fn_name = fn_name;
                 if fn_name.to_str().starts_with("_") {
                     return Err(self.new_error(
                         assignment_expr.spans,
@@ -715,7 +713,6 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                     spans,
                     spans_len: _,
                 } => {
-                    let name = name;
                     if let Some(ty) = ty {
                         self.verify_generics::<true>(**ty, *spans + 3)?;
                         *ty = arena.alloc_into(ty_ctx.instantiate_variable_existentials(

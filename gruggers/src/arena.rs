@@ -411,10 +411,7 @@ mod arena_impl {
 					// then available space is upto the end of the current
 					// block, and current needs to be set
 
-					// Note: We have to use `as usize` here because old_ptr may
-					// not be allocation in cur_block and comparing pointers
-					// from different allocations is UB.
-					if cur_block.current.get() as usize == unsafe {old_ptr.add(old_layout.size())} as usize {
+					if std::ptr::eq(cur_block.current.get(), old_ptr.wrapping_add(old_layout.size())) {
 						let alloc_start = old_ptr.wrapping_add(old_ptr.align_offset(new_layout.align()));
 						let alloc_end = alloc_start.wrapping_add(new_layout.size());
 						(alloc_start, alloc_end, cur_block.end, true)
