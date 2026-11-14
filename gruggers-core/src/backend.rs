@@ -159,9 +159,9 @@ impl<GrugState: State> ErasedBackend<GrugState> {
         (self.vtable.clear_entities)(self.data)
     }
     /// See [`Backend::destroy_entity_data`]
-	/// # Safety
-	///
-	/// same as [`Backend::destroy_entity_data`]
+    /// # Safety
+    ///
+    /// same as [`Backend::destroy_entity_data`]
     #[inline]
     pub unsafe fn destroy_entity_data(&self, entity: &GrugEntity) {
         unsafe { (self.vtable.destroy_entity_data)(self.data, entity) }
@@ -295,7 +295,7 @@ impl<T: Backend, GrugState: State> From<T> for ErasedBackend<GrugState> {
         }
 
         Self {
-            data: unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(other))).cast::<()>() },
+            data: Box::into_non_null(Box::new(other)).cast::<()>(),
             vtable: &BackendVTable {
                 insert_file: insert_file::<T>,
                 init_entity: init_entity::<T, GrugState>,
@@ -455,7 +455,7 @@ impl<B: Backend> From<CBackend<B>> for ErasedBackend<CState> {
         }
 
         Self {
-            data: unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(other))).cast::<()>() },
+            data: Box::into_non_null(Box::new(other)).cast::<()>(),
             vtable: &BackendVTable {
                 insert_file: insert_file::<B>,
                 init_entity: init_entity::<B>,

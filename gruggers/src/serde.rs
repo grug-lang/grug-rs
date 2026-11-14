@@ -17,7 +17,7 @@ pub fn dump_file_to_json(grug_text: &str, file_path: impl AsRef<OsStr>) -> Resul
 
     let tokens = tokenizer::tokenize(grug_text, &arena, "")?;
 
-    let ast = parser::parse(&tokens, &arena, grug_text, file_path.as_ref())?;
+    let ast = parser::parse(tokens.leak(), &arena, grug_text, file_path.as_ref())?;
 
     let json = json::stringify_pretty(ast_to_json(&ast.global_statements), 4);
     Ok(json)
@@ -38,7 +38,12 @@ fn invalid_json(input_json: &str, message: std::fmt::Arguments) -> Error {
         "",
         "".as_ref(),
         input_json,
-        SourceSpan { offset: 0, line: 0 },
+        SourceSpan {
+            offset: 0,
+            line: 0,
+            len: 0,
+            col: 0,
+        },
         message,
     )
 }
@@ -52,9 +57,9 @@ mod ser {
 			GlobalStatement::Variable(MemberVariable{
 				name,
 				ty,
-				type_span: _,
 				assignment_expr,
-				span: _
+				spans: _,
+				spans_len: _,
 			}) => {
 				object! {
 					"type": "VARIABLE_STATEMENT",
@@ -63,11 +68,12 @@ mod ser {
 					"assignment": serialize_expr(assignment_expr),
 				}
 			},
-			GlobalStatement::OnFunction(OnFunction{
+			GlobalStatement::ExportFunction(ExportFunction{
 				name,
 				parameters,
 				body_statements,
-				span: _
+				sig_spans_start: _,
+				sig_spans_len: _,
 			}) => {
 				let mut object = object! {
 					"type": "EXPORT_FN",
@@ -84,8 +90,10 @@ mod ser {
 				parameters,
 				body_statements,
 				return_type,
-				return_type_span: _,
-				span: _
+				return_type_start: _,
+				return_type_len: _,
+				sig_spans_start: _,
+				sig_spans_len: _,
 			}) => {
 				let mut object = object! {
 					"type": "LOCAL_FN",
@@ -106,7 +114,7 @@ mod ser {
 			} => {
 				object! {
 					"type": "COMMENT_STATEMENT",
-					"comment": value.to_str(),
+					"comment": *value,
 				}
 			},
 			GlobalStatement::EmptyLine => {
@@ -131,7 +139,11 @@ mod ser {
             Type::String => object! {
                 "name": "string",
             },
-            Type::Id { name, generics } => {
+            Type::Id {
+                name,
+                generics,
+                num_spans: _,
+            } => {
                 let mut object = object! {
                     "name": name.to_str(),
                 };
@@ -145,8 +157,8 @@ mod ser {
                 object
             }
             Type::Existential { .. } => object! {
-				"name": "_"
-			},
+                "name": "_"
+            },
             Type::Resource { .. } => unreachable!(),
             Type::Entity { .. } => unreachable!(),
         }
@@ -180,21 +192,12 @@ mod ser {
                 "type": "NUMBER_EXPR",
                 "value": string.to_str(),
             },
-            ExprData::Unary {
-                op,
-                expr,
-                op_span: _,
-            } => object! {
+            ExprData::Unary { op, expr } => object! {
                 "type": "UNARY_EXPR",
                 "operator": serialize_unary_operator(op),
                 "expr": serialize_expr(expr),
             },
-            ExprData::Binary {
-                left,
-                right,
-                op,
-                op_span: _,
-            } => {
+            ExprData::Binary { left, right, op } => {
                 let ty = if matches!(op, BinaryOperator::Or | BinaryOperator::And) {
                     "LOGICAL_EXPR"
                 } else {
@@ -212,7 +215,6 @@ mod ser {
                 name,
                 args,
                 ptr: _,
-                name_span: _,
                 generics: _,
             } => {
                 let mut object = object! {
@@ -271,9 +273,9 @@ mod ser {
             Statement::Variable {
                 name,
                 ty,
-                type_span: _,
                 assignment_expr,
-                name_span: _,
+                spans: _,
+                spans_len: _,
             } => {
                 let mut object = object! {
                     "type": "VARIABLE_STATEMENT",
@@ -909,3 +911,26 @@ mod de {
     }
 }
 use de::*;
+
+// mod json2 {
+// 	use crate::arena::Arena;
+// 	pub enum Json<'a> {
+// 		Null,
+// 		Bool(bool),
+// 		Int(i64),
+// 		Float(f64),
+// 		Str(&'a str),
+// 		Array(&'a [Json<'a>]),
+// 		Obj(&'a [(&'a str, Json<'a>)]),
+// 	}
+
+// 	impl<'a> Json<'a> {
+// 		pub fn parse_json(arena: &'a Arena) -> Json<'a> {
+// 			todo!();
+// 		}
+// 		pub fn pretty_print(&self, arena: &'a Arena, spaces_per_indent: usize) -> &'a str {
+// 			fn pretty_print_inner<'a>(value: &Json<'a>,
+// 			todo!();
+// 		}
+// 	}
+// }

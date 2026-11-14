@@ -3,8 +3,7 @@
 use crate::error::SourceSpan;
 use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
 use crate::utils::{copy_osstr_as_ntosstr, copy_str, copy_str_as_ntstr};
-use allocator_api2::alloc::Allocator;
-use allocator_api2::vec::Vec;
+use std::alloc::Allocator;
 use std::ffi::OsStr;
 use std::io::Write;
 
@@ -72,7 +71,7 @@ pub struct RuntimeError<'a> {
 impl<'a> RuntimeError<'a> {
     /// The call_stack must have already been allocated within `a`
     #[track_caller]
-	#[expect(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new_error_in<A: Allocator>(
         kind: RuntimeErrorKind,
         call_stack: &'a [StackFrame<'a>],
@@ -107,7 +106,7 @@ impl<'a> RuntimeError<'a> {
                             stack_frame.fn_name.to_str(),
                             file_path.display(),
                             stack_frame.span.line,
-                            stack_frame.span.get_col(stack_frame.file_text.to_str()),
+                            stack_frame.span.col,
                         )
                         .expect("Writing into a Vec can never fail");
                     }

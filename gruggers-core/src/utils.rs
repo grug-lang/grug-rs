@@ -1,7 +1,8 @@
 use crate::ntstring::{NTOsStr, NTStr};
-use allocator_api2::alloc::Allocator;
-use allocator_api2::boxed::Box;
+use std::alloc::Allocator;
+use std::alloc::Layout;
 use std::ffi::OsStr;
+use std::mem::MaybeUninit;
 
 pub fn copy_str_as_ntstr<'a>(str: &'_ str, a: &'a impl Allocator) -> &'a NTStr {
     let slice = copy_bytes_as_nt(str.as_bytes(), a);
@@ -30,7 +31,7 @@ pub fn copy_str<'a>(str: &'_ str, a: &'a impl Allocator) -> &'a str {
 }
 
 pub fn copy_bytes<'a>(str: &'_ [u8], a: &'a impl Allocator) -> &'a [u8] {
-    let mut slice = Box::<[u8], _>::new_uninit_slice_in(str.len(), a);
+    let mut slice = box_new_uninit_slice(str.len(), a);
     // SAFETY: `slice` was just allocated within `a` with length `str.len`
     unsafe {
         slice
@@ -44,7 +45,7 @@ pub fn copy_bytes<'a>(str: &'_ [u8], a: &'a impl Allocator) -> &'a [u8] {
 
 pub fn copy_bytes_as_nt<'a>(str: &'_ [u8], a: &'a impl Allocator) -> &'a [u8] {
     assert!(!str.contains(&b'\0'));
-    let mut slice = Box::<[u8], _>::new_uninit_slice_in(str.len() + 1, a);
+    let mut slice = box_new_uninit_slice(str.len() + 1, a);
     // SAFETY: `slice` was just allocated within `a` with length `str.len + 1`
     unsafe {
         slice
@@ -57,4 +58,14 @@ pub fn copy_bytes_as_nt<'a>(str: &'_ [u8], a: &'a impl Allocator) -> &'a [u8] {
     // SAFETY:
     // 	- Slice is fully initialized in the above line
     unsafe { Box::leak(slice.assume_init()) }
+}
+
+pub fn box_new_uninit_slice<T, A: Allocator>(len: usize, a: A) -> Box<[MaybeUninit<T>], A> {
+    let ptr = a
+        .allocate(Layout::array::<T>(len).unwrap())
+        .unwrap()
+        .cast::<MaybeUninit<T>>();
+    // allocate may return extra capacity, but we want a box with the exact requested length
+    let ptr = std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), len);
+    unsafe { Box::from_raw_in(ptr, a) }
 }

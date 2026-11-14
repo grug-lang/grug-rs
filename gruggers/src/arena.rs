@@ -4,9 +4,9 @@ mod page_alloc {
     // directly use VirtualAlloc and VirtualFree on windows
     #[cfg(all(not(miri), windows))]
     pub mod windows {
-		#![allow(clippy::upper_case_acronyms)]
+        #![allow(clippy::upper_case_acronyms)]
         use crate::pal::windows::*;
-        use allocator_api2::alloc::AllocError;
+        use std::alloc::AllocError;
         use std::ptr::NonNull;
         pub static PAGE_SIZE: std::sync::LazyLock<u32> =
             std::sync::LazyLock::new(PageAllocator::page_size);
@@ -164,7 +164,7 @@ mod page_alloc {
         use std::alloc::Layout;
         use std::ptr::NonNull;
 
-        use allocator_api2::alloc::AllocError;
+        use std::alloc::AllocError;
 
         pub struct PageAllocator;
 
@@ -231,8 +231,7 @@ mod arena_impl {
     use std::ffi::OsStr;
     use std::ptr::NonNull;
 
-    use allocator_api2::alloc::{AllocError, Allocator};
-    use allocator_api2::vec::Vec;
+    use std::alloc::{AllocError, Allocator};
 
     use std::io::Write;
 
@@ -388,12 +387,8 @@ mod arena_impl {
         }
 
         /// Copies the memory pointed to by `old_ptr` with layout `old_layout`,
-        /// and copies it to a new allocation with layout `new_layout`.
-        ///
-        /// Unlike a more general realloc function, it is valid to pass an
-        /// old_ptr and old_layout that were not allocated by this arena.
-        ///
-        /// The pointer should still point to memory that is valid to read however
+        /// and copies it to a new allocation with layout `new_layout`. This
+        /// function will reuse the existing allocation if possible
         ///
         /// # SAFETY
         ///
@@ -405,12 +400,58 @@ mod arena_impl {
             old_layout: Layout,
             new_layout: Layout,
         ) -> Result<NonNull<[u8]>, AllocError> {
+            // reuse allocation if
+            // 	- old_ptr is last allocation and accounting for alignment, remaining space can fit new layout
+            // 		- cur_block.current is set to end of this allocation
+            // 	- accounting for alignment, old_layout.size() can fit new layout.
+            // 		- cur_block.current is unchanged
+            if let Some(cur_block) = self.current_block() {
+                let (alloc_start, alloc_end, available_end, set_current) =
+					// if old_ptr is the last allocation from this arena,
+					// then available space is upto the end of the current
+					// block, and current needs to be set
+
+					if std::ptr::eq(cur_block.current.get(), old_ptr.wrapping_add(old_layout.size())) {
+						let alloc_start = old_ptr.wrapping_add(old_ptr.align_offset(new_layout.align()));
+						let alloc_end = alloc_start.wrapping_add(new_layout.size());
+						(alloc_start, alloc_end, cur_block.end, true)
+					// otherwise, available space is the exisiting allocation and current should not be set
+					} else {
+						let alloc_start = old_ptr.wrapping_add(old_ptr.align_offset(new_layout.align()));
+						let alloc_end = alloc_start.wrapping_add(new_layout.size());
+						let available_end = old_ptr.wrapping_add(old_layout.size());
+						(alloc_start, alloc_end, available_end, false)
+					};
+
+                // Enough space
+                if alloc_end.addr() < available_end.addr() {
+                    if set_current {
+                        cur_block.current.set(alloc_end)
+                    }
+
+                    if alloc_start != old_ptr {
+                        unsafe {
+                            old_ptr.copy_to(
+                                alloc_start.cast(),
+                                std::cmp::min(old_layout.size(), new_layout.size()),
+                            );
+                        }
+                    }
+                    return Ok(unsafe {
+                        NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(
+                            alloc_start,
+                            new_layout.size(),
+                        ))
+                    });
+                }
+            }
+            // Fall through to creating a new allocation
             let ptr = self.alloc(new_layout)?;
             // ptr from self.alloc is valid to write to for length new_layout.size()
             // old_ptr is valid to read from for length old_layout.size()
             if !old_ptr.is_null() {
                 unsafe {
-                    old_ptr.copy_from_nonoverlapping(
+                    old_ptr.copy_to_nonoverlapping(
                         ptr.as_ptr().cast(),
                         std::cmp::min(old_layout.size(), new_layout.size()),
                     );
@@ -425,21 +466,22 @@ mod arena_impl {
             Ok(ptr)
         }
 
-		/// # Safety
-		/// `old_ptr` must be safe to memcpy for min(old_layout.size(), new_layout.size())
+        /// # Safety
+        /// `old_ptr` must be safe to memcpy for min(old_layout.size(), new_layout.size())
         pub unsafe fn realloc_zeroed(
             &self,
             old_ptr: *mut u8,
             old_layout: Layout,
             new_layout: Layout,
         ) -> Result<NonNull<[u8]>, AllocError> {
-            let ptr = self.alloc_zeroed(new_layout)?;
-            unsafe { (ptr.as_ptr() as *mut u8).write_bytes(0, new_layout.size()) };
-            unsafe {
-                old_ptr.copy_from_nonoverlapping(
-                    ptr.as_ptr().cast(),
-                    std::cmp::min(old_layout.size(), new_layout.size()),
-                );
+            let ptr = unsafe { self.realloc(old_ptr, old_layout, new_layout)? };
+            if new_layout.size() > old_layout.size() {
+                unsafe {
+                    ptr.as_ptr()
+                        .cast::<u8>()
+                        .add(old_layout.size())
+                        .write_bytes(0, new_layout.size() - old_layout.size())
+                };
             }
             Ok(ptr)
         }
@@ -573,7 +615,7 @@ mod arena_impl {
         }
 
         /// Allocates space for and moves a value into the arena
-		#[expect(clippy::mut_from_ref)] 
+        #[expect(clippy::mut_from_ref)]
         pub fn alloc_into<T>(&self, value: T) -> &mut T {
             let ptr = self.allocate(Layout::new::<T>()).unwrap().cast::<T>();
             unsafe {
@@ -617,6 +659,30 @@ mod arena_impl {
             self.alloc(layout)
         }
         unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
+        unsafe fn grow(
+            &self,
+            ptr: NonNull<u8>,
+            old_layout: Layout,
+            new_layout: Layout,
+        ) -> Result<NonNull<[u8]>, AllocError> {
+            unsafe { self.realloc(ptr.as_ptr(), old_layout, new_layout) }
+        }
+        unsafe fn grow_zeroed(
+            &self,
+            ptr: NonNull<u8>,
+            old_layout: Layout,
+            new_layout: Layout,
+        ) -> Result<NonNull<[u8]>, AllocError> {
+            unsafe { self.realloc_zeroed(ptr.as_ptr(), old_layout, new_layout) }
+        }
+        unsafe fn shrink(
+            &self,
+            ptr: NonNull<u8>,
+            old_layout: Layout,
+            new_layout: Layout,
+        ) -> Result<NonNull<[u8]>, AllocError> {
+            unsafe { self.realloc(ptr.as_ptr(), old_layout, new_layout) }
+        }
         // unsafe fn realloc (&mut self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         // 	self.realloc(old_ptr, old_layout, new_layout)
         // }
@@ -664,8 +730,7 @@ mod mt_arena {
     use std::ptr::NonNull;
     use std::sync::atomic::{AtomicPtr, Ordering};
 
-    use allocator_api2::alloc::{AllocError, Allocator};
-    use allocator_api2::vec::Vec;
+    use std::alloc::{AllocError, Allocator};
 
     use std::io::Write;
 
@@ -802,46 +867,46 @@ mod mt_arena {
                 .map(|x| x as *const _ as _)
                 .unwrap_or_else(std::ptr::null_mut);
 
-			// First block is 1 page, then double the sizes
-			let mut num_pages = if current.is_null() {
-				1
-			} else {
-				unsafe { (&*current).cur_block_size() * 2 }
-			};
-			while num_pages * page_size < min_size_bytes {
-				num_pages *= 2;
-			}
-			let new_block = PageAllocator::alloc_pages(num_pages)
-				.expect("Could not allocate pages")
-				.as_ptr()
-				.cast::<ArenaHeader>();
-			let new_block_len = num_pages * page_size;
-			debug_assert!(new_block.addr().is_multiple_of(4096));
+            // First block is 1 page, then double the sizes
+            let mut num_pages = if current.is_null() {
+                1
+            } else {
+                unsafe { (&*current).cur_block_size() * 2 }
+            };
+            while num_pages * page_size < min_size_bytes {
+                num_pages *= 2;
+            }
+            let new_block = PageAllocator::alloc_pages(num_pages)
+                .expect("Could not allocate pages")
+                .as_ptr()
+                .cast::<ArenaHeader>();
+            let new_block_len = num_pages * page_size;
+            debug_assert!(new_block.addr().is_multiple_of(4096));
 
-			// SAFETY: Block was just successfully allocated and the start of a
-			// block is where an ArenaHeader should be written to. And since
-			// it was just allocated, no other thread can see this yet
-			unsafe {
-				ArenaHeader::write_into(new_block, current, new_block_len);
-			}
+            // SAFETY: Block was just successfully allocated and the start of a
+            // block is where an ArenaHeader should be written to. And since
+            // it was just allocated, no other thread can see this yet
+            unsafe {
+                ArenaHeader::write_into(new_block, current, new_block_len);
+            }
 
-			if let Err(next) = self.current.compare_exchange(
-				current,
-				new_block,
-				Ordering::AcqRel,
-				Ordering::Relaxed,
-			) {
-				// No other thread has access to this block because it was
-				// just allocated
-				unsafe { ArenaHeader::free(new_block) };
-				// SAFETY: next can never be NULL because we never reset
-				// it to null, and if this is the first allocation, then
-				// current is already NULL, so next cannot be NULL
-				unsafe { &*next }
-			} else {
-				// SAFETY: we just allocated an initialized this block
-				unsafe { &*new_block }
-			}
+            if let Err(next) = self.current.compare_exchange(
+                current,
+                new_block,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                // No other thread has access to this block because it was
+                // just allocated
+                unsafe { ArenaHeader::free(new_block) };
+                // SAFETY: next can never be NULL because we never reset
+                // it to null, and if this is the first allocation, then
+                // current is already NULL, so next cannot be NULL
+                unsafe { &*next }
+            } else {
+                // SAFETY: we just allocated an initialized this block
+                unsafe { &*new_block }
+            }
         }
 
         pub fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
@@ -899,8 +964,8 @@ mod mt_arena {
             Ok(ptr)
         }
 
-		/// # Safety
-		/// `old_ptr` must be safe to memcpy for min(old_layout.size(), new_layout.size())
+        /// # Safety
+        /// `old_ptr` must be safe to memcpy for min(old_layout.size(), new_layout.size())
         pub unsafe fn realloc_zeroed(
             &self,
             old_ptr: *mut u8,
@@ -1046,7 +1111,7 @@ mod mt_arena {
         }
 
         /// Allocates space for and moves a value into the arena
-		#[expect(clippy::mut_from_ref)] 
+        #[expect(clippy::mut_from_ref)]
         pub fn alloc_into<T>(&self, value: T) -> &mut T {
             let ptr = self.allocate(Layout::new::<T>()).unwrap().cast::<T>();
             unsafe {

@@ -1,8 +1,6 @@
-use allocator_api2::vec::Vec as ArenaVec;
-
 use crate::arena::Arena;
 use crate::ast::{
-    BinaryOperator, Expr, ExprData, GrugAst, HelperFunction, OnFunction, Statement, Type,
+    BinaryOperator, ExportFunction, Expr, ExprData, GrugAst, HelperFunction, Statement, Type,
     UnaryOperator,
 };
 use crate::backend::Backend;
@@ -74,9 +72,12 @@ impl<'a> Compiler<'a> {
         let me_location = compiler.insert_global_variable("me");
         instructions.push_ins(Op::StoreGlobal { index: me_location }, None);
         for global in ast.members.iter() {
-            compiler.compile_expr(&mut instructions, &global.assignment_expr);
+            compiler.compile_expr(&mut instructions, &global.assignment_expr, ast.spans);
             let i = compiler.insert_global_variable(global.name.to_str());
-            instructions.push_ins(Op::StoreGlobal { index: i }, Some(global.span));
+            instructions.push_ins(
+                Op::StoreGlobal { index: i },
+                Some(ast.spans[global.spans as usize]),
+            );
         }
         // Note(nikhil): Maybe this should point to the location of the last member variable
         instructions.push_ins(Op::ReturnVoid, None);
@@ -85,11 +86,11 @@ impl<'a> Compiler<'a> {
             let Some(on_function) = on_function else {
                 continue;
             };
-            compiler.compile_on_fn(&mut instructions, on_function, i + 1);
+            compiler.compile_on_fn(&mut instructions, on_function, ast.spans, i + 1);
         }
 
         for helper_function in ast.helper_functions.iter() {
-            compiler.compile_helper_fn(&mut instructions, helper_function);
+            compiler.compile_helper_fn(&mut instructions, helper_function, ast.spans);
         }
         for (patch_loc, name) in compiler.helper_fn_patches {
             let data_loc = instructions
@@ -111,6 +112,7 @@ impl<'a> Compiler<'a> {
         &mut self,
         instructions: &mut Instructions,
         helper_function: &'a HelperFunction,
+        source_spans: &'a [SourceSpan],
     ) {
         debug_assert_eq!(self.locals.len(), 0);
         debug_assert_eq!(self.current_scope_size, 0);
@@ -122,11 +124,11 @@ impl<'a> Compiler<'a> {
             self.insert_local_variable(param.name.to_str());
         }
         for statement in &*helper_function.body_statements {
-            self.compile_statement(instructions, statement);
+            self.compile_statement(instructions, statement, source_spans);
         }
         instructions.push_ins(Op::ReturnVoid, None);
         instructions.insert_helper_fn(
-            helper_function.name.to_ntstr(),
+            helper_function.name.to_str(),
             helper_function.parameters.len() as u32,
             self.locals_size_max,
             begin_location,
@@ -138,7 +140,8 @@ impl<'a> Compiler<'a> {
     fn compile_on_fn(
         &mut self,
         instructions: &mut Instructions,
-        on_function: &'a OnFunction,
+        on_function: &'a ExportFunction,
+        source_spans: &'a [SourceSpan],
         index: usize,
     ) {
         debug_assert_eq!(self.locals.len(), 0);
@@ -152,14 +155,22 @@ impl<'a> Compiler<'a> {
             self.insert_local_variable(param.name.to_str());
         }
         for statement in &*on_function.body_statements {
-            self.compile_statement(instructions, statement);
+            self.compile_statement(instructions, statement, source_spans);
         }
         // TODO: Maybe we need to store the end span of the function
         instructions.push_ins(Op::ReturnVoid, None);
         instructions.insert_on_fn(
             index,
             GrugFnData {
-                name: on_function.name.to_ntstr(),
+                // SAFETY: this string is allocated in instructions._arena,
+                // which is not cleared as long as the instructions exists.
+                name: unsafe {
+                    std::mem::transmute::<&NTStr, &'static NTStr>(
+                        instructions
+                            ._arena
+                            .copy_str_into_nt(on_function.name.to_str()),
+                    )
+                },
                 location: begin_location,
                 args_count: param_count as u32,
                 locals_size: self.locals_size_max,
@@ -169,24 +180,38 @@ impl<'a> Compiler<'a> {
         self.pop_scope();
     }
 
-    fn compile_statement(&mut self, instructions: &mut Instructions, statement: &'a Statement) {
+    fn compile_statement(
+        &mut self,
+        instructions: &mut Instructions,
+        statement: &'a Statement,
+        source_spans: &'a [SourceSpan],
+    ) {
         match statement {
             Statement::Variable {
                 name,
                 ty,
-                type_span: _,
                 assignment_expr,
-                name_span,
+                spans,
+                spans_len: _,
             } => {
                 let name = name.to_str();
-                self.compile_expr(instructions, assignment_expr);
+                self.compile_expr(instructions, assignment_expr, source_spans);
                 if ty.is_some() {
                     let loc = self.insert_local_variable(name);
-                    instructions.push_ins(Op::StoreLocal { index: loc }, Some(*name_span));
+                    instructions.push_ins(
+                        Op::StoreLocal { index: loc },
+                        Some(source_spans[*spans as usize]),
+                    );
                 } else if let Some(loc) = self.get_local_location(name) {
-                    instructions.push_ins(Op::StoreLocal { index: loc }, Some(*name_span));
+                    instructions.push_ins(
+                        Op::StoreLocal { index: loc },
+                        Some(source_spans[*spans as usize]),
+                    );
                 } else if let Some(loc) = self.get_global_location(name) {
-                    instructions.push_ins(Op::StoreGlobal { index: loc }, Some(*name_span));
+                    instructions.push_ins(
+                        Op::StoreGlobal { index: loc },
+                        Some(source_spans[*spans as usize]),
+                    );
                 } else {
                     unreachable!();
                 }
@@ -204,14 +229,14 @@ impl<'a> Compiler<'a> {
                 let mut end_patches = Vec::new();
 
                 loop {
-                    self.compile_expr(instructions, condition);
+                    self.compile_expr(instructions, condition, source_spans);
 
                     let condition_patch_loc = instructions.get_loc();
                     instructions.push_ins(Op::JmpIfNot { offset: 0 }, None);
 
                     self.push_scope();
                     for statement in &**if_block {
-                        self.compile_statement(instructions, statement);
+                        self.compile_statement(instructions, statement, source_spans);
                     }
                     self.pop_scope();
 
@@ -250,7 +275,7 @@ impl<'a> Compiler<'a> {
                         } else {
                             self.push_scope();
                             for statement in &**else_block {
-                                self.compile_statement(instructions, statement);
+                                self.compile_statement(instructions, statement, source_spans);
                             }
                             self.pop_scope();
                         }
@@ -283,14 +308,14 @@ impl<'a> Compiler<'a> {
             }
             Statement::While { condition, block } => {
                 let continue_loc = instructions.get_loc();
-                self.compile_expr(instructions, condition);
+                self.compile_expr(instructions, condition, source_spans);
                 let break_patch_loc = instructions.get_loc();
                 instructions.push_ins(Op::JmpIfNot { offset: 0 }, None);
 
                 self.while_loop_patches.push((continue_loc, Vec::new()));
 
                 for statement in &**block {
-                    self.compile_statement(instructions, statement);
+                    self.compile_statement(instructions, statement, source_spans);
                 }
                 let end_loc = instructions.get_loc();
                 instructions.push_ins(
@@ -324,16 +349,17 @@ impl<'a> Compiler<'a> {
             // There's no correctness issues here, but it will cause the stack
             // frame to grow if theres a lot of functions with return types as
             // statements in a functions
-            Statement::Call(expr) => self.compile_expr(instructions, expr),
+            Statement::Call(expr) => self.compile_expr(instructions, expr, source_spans),
             Statement::Return {
                 return_span: span,
                 expr,
             } => {
+                let span = source_spans[*span as usize];
                 if let Some(expr) = expr {
-                    self.compile_expr(instructions, expr);
-                    instructions.push_ins(Op::ReturnValue, Some(*span));
+                    self.compile_expr(instructions, expr, source_spans);
+                    instructions.push_ins(Op::ReturnValue, Some(span));
                 } else {
-                    instructions.push_ins(Op::ReturnVoid, Some(*span));
+                    instructions.push_ins(Op::ReturnVoid, Some(span));
                 }
             }
             Statement::Break(span) => {
@@ -342,7 +368,7 @@ impl<'a> Compiler<'a> {
                     .unwrap()
                     .1
                     .push(instructions.get_loc());
-                instructions.push_ins(Op::Jmp { offset: 0 }, Some(*span));
+                instructions.push_ins(Op::Jmp { offset: 0 }, Some(source_spans[*span as usize]));
             }
             Statement::Continue(span) => {
                 let continue_loc = self.while_loop_patches.last().unwrap().0;
@@ -350,7 +376,7 @@ impl<'a> Compiler<'a> {
                     Op::Jmp {
                         offset: Op::calc_offset(instructions.get_loc(), continue_loc),
                     },
-                    Some(*span),
+                    Some(source_spans[*span as usize]),
                 );
             }
             Statement::EmptyLine => {}
@@ -358,89 +384,91 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn compile_expr(&mut self, instructions: &mut Instructions, expr: &'a Expr) {
+    fn compile_expr(
+        &mut self,
+        instructions: &mut Instructions,
+        expr: &'a Expr,
+        source_spans: &[SourceSpan],
+    ) {
+        let expr_span = source_spans[expr.spans as usize];
         match &expr.data {
-            ExprData::True => instructions.push_ins(Op::LoadTrue, Some(expr.span)),
-            ExprData::False => instructions.push_ins(Op::LoadFalse, Some(expr.span)),
+            ExprData::True => instructions.push_ins(Op::LoadTrue, Some(expr_span)),
+            ExprData::False => instructions.push_ins(Op::LoadFalse, Some(expr_span)),
             ExprData::String(value) | ExprData::Resource(value) | ExprData::Entity(value) => {
                 let data_loc = instructions.insert_string(value.to_str());
-                instructions.push_ins(Op::LoadStr { data_loc }, Some(expr.span));
+                instructions.push_ins(Op::LoadStr { data_loc }, Some(expr_span));
             }
             ExprData::Number(value, _) => {
                 let data_loc = instructions.insert_number(*value);
-                instructions.push_ins(Op::LoadNumber { data_loc }, Some(expr.span));
+                instructions.push_ins(Op::LoadNumber { data_loc }, Some(expr_span));
             }
             ExprData::Identifier(name) => {
                 let name = name.to_str();
                 if let Some(loc) = self.get_local_location(name) {
-                    instructions.push_ins(Op::LoadLocal { index: loc }, Some(expr.span));
+                    instructions.push_ins(Op::LoadLocal { index: loc }, Some(expr_span));
                 } else if let Some(loc) = self.get_global_location(name) {
-                    instructions.push_ins(Op::LoadGlobal { index: loc }, Some(expr.span));
+                    instructions.push_ins(Op::LoadGlobal { index: loc }, Some(expr_span));
                 } else {
                     unreachable!();
                 }
             }
-            ExprData::Binary {
-                left,
-                right,
-                op,
-                op_span,
-            } => {
-                self.compile_expr(instructions, left);
+            ExprData::Binary { left, right, op } => {
+                self.compile_expr(instructions, left, source_spans);
+                let op_span = source_spans[(expr.spans + expr.spans_len + 2) as usize];
                 match op {
                     BinaryOperator::Greater => {
-                        self.compile_expr(instructions, right);
-                        instructions.push_ins(Op::CmpG, Some(*op_span));
+                        self.compile_expr(instructions, right, source_spans);
+                        instructions.push_ins(Op::CmpG, Some(op_span));
                     }
                     BinaryOperator::GreaterEquals => {
-                        self.compile_expr(instructions, right);
-                        instructions.push_ins(Op::CmpGe, Some(*op_span));
+                        self.compile_expr(instructions, right, source_spans);
+                        instructions.push_ins(Op::CmpGe, Some(op_span));
                     }
                     BinaryOperator::Less => {
-                        self.compile_expr(instructions, right);
-                        instructions.push_ins(Op::CmpL, Some(*op_span));
+                        self.compile_expr(instructions, right, source_spans);
+                        instructions.push_ins(Op::CmpL, Some(op_span));
                     }
                     BinaryOperator::LessEquals => {
-                        self.compile_expr(instructions, right);
-                        instructions.push_ins(Op::CmpLe, Some(*op_span));
+                        self.compile_expr(instructions, right, source_spans);
+                        instructions.push_ins(Op::CmpLe, Some(op_span));
                     }
                     BinaryOperator::Plus => {
-                        self.compile_expr(instructions, right);
-                        instructions.push_ins(Op::Add, Some(*op_span));
+                        self.compile_expr(instructions, right, source_spans);
+                        instructions.push_ins(Op::Add, Some(op_span));
                     }
                     BinaryOperator::Minus => {
-                        self.compile_expr(instructions, right);
-                        instructions.push_ins(Op::Sub, Some(*op_span));
+                        self.compile_expr(instructions, right, source_spans);
+                        instructions.push_ins(Op::Sub, Some(op_span));
                     }
                     BinaryOperator::Multiply => {
-                        self.compile_expr(instructions, right);
-                        instructions.push_ins(Op::Mul, Some(*op_span));
+                        self.compile_expr(instructions, right, source_spans);
+                        instructions.push_ins(Op::Mul, Some(op_span));
                     }
                     BinaryOperator::Division => {
-                        self.compile_expr(instructions, right);
-                        instructions.push_ins(Op::Div, Some(*op_span));
+                        self.compile_expr(instructions, right, source_spans);
+                        instructions.push_ins(Op::Div, Some(op_span));
                     }
                     BinaryOperator::DoubleEquals => match right.result_type.unwrap() {
                         Type::String => {
-                            self.compile_expr(instructions, right);
-                            instructions.push_ins(Op::StrEq, Some(*op_span));
+                            self.compile_expr(instructions, right, source_spans);
+                            instructions.push_ins(Op::StrEq, Some(op_span));
                         }
                         Type::Void => unreachable!(),
                         _ => {
-                            self.compile_expr(instructions, right);
-                            instructions.push_ins(Op::CmpEq, Some(*op_span));
+                            self.compile_expr(instructions, right, source_spans);
+                            instructions.push_ins(Op::CmpEq, Some(op_span));
                         }
                     },
                     BinaryOperator::NotEquals => match right.result_type.unwrap() {
                         Type::String => {
-                            self.compile_expr(instructions, right);
-                            instructions.push_ins(Op::StrEq, Some(*op_span));
-                            instructions.push_ins(Op::Not, Some(*op_span));
+                            self.compile_expr(instructions, right, source_spans);
+                            instructions.push_ins(Op::StrEq, Some(op_span));
+                            instructions.push_ins(Op::Not, Some(op_span));
                         }
                         Type::Void => unreachable!(),
                         _ => {
-                            self.compile_expr(instructions, right);
-                            instructions.push_ins(Op::CmpNeq, Some(*op_span));
+                            self.compile_expr(instructions, right, source_spans);
+                            instructions.push_ins(Op::CmpNeq, Some(op_span));
                         }
                     },
                     // JmpIf and JmpIfNot pop the left operand, so each arm leaves exactly one
@@ -450,10 +478,10 @@ impl<'a> Compiler<'a> {
                     // arguments and shift them.
                     BinaryOperator::Or => {
                         let skip_loc = instructions.get_loc();
-                        instructions.push_ins(Op::JmpIf { offset: 0 }, Some(*op_span));
-                        self.compile_expr(instructions, right);
+                        instructions.push_ins(Op::JmpIf { offset: 0 }, Some(op_span));
+                        self.compile_expr(instructions, right, source_spans);
                         let end_loc = instructions.get_loc();
-                        instructions.push_ins(Op::Jmp { offset: 0 }, Some(*op_span));
+                        instructions.push_ins(Op::Jmp { offset: 0 }, Some(op_span));
                         instructions
                             .try_patch(
                                 Op::JmpIf {
@@ -462,7 +490,7 @@ impl<'a> Compiler<'a> {
                                 skip_loc,
                             )
                             .unwrap();
-                        instructions.push_ins(Op::LoadTrue, Some(*op_span));
+                        instructions.push_ins(Op::LoadTrue, Some(op_span));
                         instructions
                             .try_patch(
                                 Op::Jmp {
@@ -474,10 +502,10 @@ impl<'a> Compiler<'a> {
                     }
                     BinaryOperator::And => {
                         let skip_loc = instructions.get_loc();
-                        instructions.push_ins(Op::JmpIfNot { offset: 0 }, Some(*op_span));
-                        self.compile_expr(instructions, right);
+                        instructions.push_ins(Op::JmpIfNot { offset: 0 }, Some(op_span));
+                        self.compile_expr(instructions, right, source_spans);
                         let end_loc = instructions.get_loc();
-                        instructions.push_ins(Op::Jmp { offset: 0 }, Some(*op_span));
+                        instructions.push_ins(Op::Jmp { offset: 0 }, Some(op_span));
                         instructions
                             .try_patch(
                                 Op::JmpIfNot {
@@ -486,7 +514,7 @@ impl<'a> Compiler<'a> {
                                 skip_loc,
                             )
                             .unwrap();
-                        instructions.push_ins(Op::LoadFalse, Some(*op_span));
+                        instructions.push_ins(Op::LoadFalse, Some(op_span));
                         instructions
                             .try_patch(
                                 Op::Jmp {
@@ -498,15 +526,16 @@ impl<'a> Compiler<'a> {
                     }
                 }
             }
-            ExprData::Unary { op, expr, op_span } => {
-                self.compile_expr(instructions, expr);
+            ExprData::Unary { op, expr } => {
+                let op_span = source_spans[expr.spans as usize];
+                self.compile_expr(instructions, expr, source_spans);
                 match op {
-                    UnaryOperator::Not => instructions.push_ins(Op::Not, Some(*op_span)),
+                    UnaryOperator::Not => instructions.push_ins(Op::Not, Some(op_span)),
                     // TODO: Add Negate instruction to do this in a single instruction
                     UnaryOperator::Minus => {
                         let data_loc = instructions.insert_number(-1.);
-                        instructions.push_ins(Op::LoadNumber { data_loc }, Some(*op_span));
-                        instructions.push_ins(Op::Mul, Some(*op_span));
+                        instructions.push_ins(Op::LoadNumber { data_loc }, Some(op_span));
+                        instructions.push_ins(Op::Mul, Some(op_span));
                     }
                 }
             }
@@ -515,9 +544,9 @@ impl<'a> Compiler<'a> {
                 name,
                 args,
                 ptr: None,
-                name_span,
                 generics: _,
             } => {
+                let name_span = source_spans[expr.spans as usize];
                 let args_count = args.len();
                 if args_count > u16::MAX as usize {
                     panic!(
@@ -526,24 +555,21 @@ impl<'a> Compiler<'a> {
                     );
                 }
                 for argument in &**args {
-                    self.compile_expr(instructions, argument);
+                    self.compile_expr(instructions, argument, source_spans);
                 }
 
-                let data_loc = instructions
-                    .get_helper_fn_info(name.to_str())
-                    .unwrap_or_else(|| {
-                        self.helper_fn_patches
-                            .push((instructions.get_loc(), name.to_str()));
-                        0
-                    });
-                instructions.push_ins(Op::CallHelperFunction { data_loc }, Some(*name_span));
+                let name = name.to_str();
+                let data_loc = instructions.get_helper_fn_info(name).unwrap_or_else(|| {
+                    self.helper_fn_patches.push((instructions.get_loc(), name));
+                    0
+                });
+                instructions.push_ins(Op::CallHelperFunction { data_loc }, Some(name_span));
             }
             ExprData::Call {
                 receiver: Some(_),
                 name: _,
                 args: _,
                 ptr: None,
-                name_span: _,
                 generics: _,
             } => {
                 unreachable!();
@@ -553,23 +579,29 @@ impl<'a> Compiler<'a> {
                 name,
                 args,
                 ptr: Some(ptr),
-                name_span,
                 generics,
             } => {
+                let name_span = source_spans[expr.spans as usize];
                 let args_count;
                 if let Some(receiver) = receiver {
                     args_count = args.len() + 1;
-                    self.compile_expr(instructions, receiver);
+                    self.compile_expr(instructions, receiver, source_spans);
                 } else {
                     args_count = args.len();
                 }
                 for argument in &**args {
-                    self.compile_expr(instructions, argument);
+                    self.compile_expr(instructions, argument, source_spans);
                 }
 
                 let has_return = *expr.result_type.unwrap() != Type::Void;
                 let data_loc = instructions.insert_game_fn_data(HostFnData {
-                    name: name.to_ntstr(),
+                    // SAFETY: this string is allocated in instructions._arena,
+                    // which is not cleared as long as the instructions exists.
+                    name: unsafe {
+                        std::mem::transmute::<&NTStr, &'static NTStr>(
+                            instructions._arena.copy_str_into_nt(name.to_str()),
+                        )
+                    },
                     args_count: args_count as u32,
                     generics,
                     ptr: *ptr,
@@ -580,10 +612,10 @@ impl<'a> Compiler<'a> {
                         has_return,
                         data_loc,
                     },
-                    Some(*name_span),
+                    Some(name_span),
                 );
             }
-            ExprData::Parenthesized(expr) => self.compile_expr(instructions, expr),
+            ExprData::Parenthesized(expr) => self.compile_expr(instructions, expr, source_spans),
         }
     }
 
@@ -681,9 +713,8 @@ impl BytecodeBackend {
         let outer_errorring = self.is_errorring.get();
         self.invocation_depth.set(self.invocation_depth.get() + 1);
         self.is_errorring.set(false);
-        let ret_val = unsafe {
-            self.run_inner(stack, state, globals, instructions, locals_size, start_loc)
-        };
+        let ret_val =
+            unsafe { self.run_inner(stack, state, globals, instructions, locals_size, start_loc) };
         self.invocation_depth.set(self.invocation_depth.get() - 1);
         self.is_errorring.set(if nested {
             outer_errorring || self.is_errorring.get()
@@ -861,7 +892,12 @@ impl BytecodeBackend {
                     });
                     // push the next stack frame
                     self.call_stack.push(StackFrame {
-                        span: SourceSpan { line: 0, offset: 0 },
+                        span: SourceSpan {
+                            line: 0,
+                            offset: 0,
+                            col: 0,
+                            len: 0,
+                        },
                         fn_name: name.as_ntstrptr(),
                         file_path: Some(instructions.path),
                         file_text: instructions.file_text.as_ntstrptr(),
@@ -971,7 +1007,7 @@ impl BytecodeBackend {
             .next()
             .expect("must have at least one grug stack frame");
 
-        let mut frames = ArenaVec::with_capacity_in(call_stack.len() - 1, &arena);
+        let mut frames = Vec::with_capacity_in(call_stack.len() - 1, &arena);
         frames.extend_from_slice(&call_stack[..call_stack.len() - 1]);
         let frames = frames.leak();
 
@@ -1041,7 +1077,12 @@ impl Backend for BytecodeBackend {
         self.call_stack.push(StackFrame {
             fn_name: nt!("init_globals").as_ntstrptr(),
             file_path: Some(file.instructions.path),
-            span: SourceSpan { line: 0, offset: 0 },
+            span: SourceSpan {
+                line: 0,
+                offset: 0,
+                col: 0,
+                len: 0,
+            },
             file_text: file.instructions.file_text.as_ntstrptr(),
         });
 
@@ -1124,7 +1165,12 @@ impl Backend for BytecodeBackend {
                 )
             },
             file_path: Some(file.instructions.path),
-            span: SourceSpan { line: 0, offset: 0 },
+            span: SourceSpan {
+                line: 0,
+                offset: 0,
+                col: 0,
+                len: 0,
+            },
             file_text: file.instructions.file_text.as_ntstrptr(),
         });
         let ret_val = unsafe {
@@ -1191,7 +1237,12 @@ impl Backend for BytecodeBackend {
                 )
             },
             file_path: Some(file.instructions.path),
-            span: SourceSpan { line: 0, offset: 0 },
+            span: SourceSpan {
+                line: 0,
+                offset: 0,
+                col: 0,
+                len: 0,
+            },
             file_text: file.instructions.file_text.as_ntstrptr(),
         });
 
@@ -1312,7 +1363,10 @@ struct Instructions {
     constants: Vec<ConstantData<'static>>,
     helper_fn_locations: HashMap<&'static str, /* constant location */ u32>,
     game_fn_locations: HashMap<
-        (/* HostFn as usize */ ErasedHostFn, &'static [Type<'static>]),
+        (
+            /* HostFn as usize */ ErasedHostFn,
+            &'static [Type<'static>],
+        ),
         /* constant location */ u32,
     >,
     // SAFETY: Strings are not 'static allocated within self._arena
@@ -1347,8 +1401,12 @@ impl Instructions {
 
     fn push_ins(&mut self, ins: Op, source_location: Option<SourceSpan>) {
         self.stream.push(ins);
-        self.debug_info
-            .push(source_location.unwrap_or(SourceSpan { offset: 0, line: 0 }));
+        self.debug_info.push(source_location.unwrap_or(SourceSpan {
+            offset: 0,
+            line: 0,
+            col: 0,
+            len: 0,
+        }));
         debug_assert_eq!(self.stream.len(), self.debug_info.len());
     }
 
@@ -1516,7 +1574,15 @@ impl std::fmt::Display for Instructions {
         for (addr, (ins, location)) in self.stream.iter().zip(&self.debug_info).enumerate() {
             match (&mut last_line, location) {
                 // offset 0, line 0 can only happen if there is no debug info
-                (_, SourceSpan { offset: 0, line: 0 }) => (),
+                (
+                    _,
+                    SourceSpan {
+                        offset: 0,
+                        line: 0,
+                        col: 0,
+                        len: 0,
+                    },
+                ) => (),
                 (None, location) => {
                     writeln!(f, "// {}", location.get_source_line(self.file_text).trim())?;
                     last_line = Some(location.line);
@@ -1607,14 +1673,15 @@ impl std::fmt::Display for Instructions {
                     let HostFnData {
                         args_count: _,
                         generics,
-                        ptr: _,
+                        ptr,
                         name,
                     } = unsafe { self.constants[*data_loc as usize].host_fn_data };
                     write!(
                         f,
-                        "CallGameFunction {} generics: {}",
+                        "CallGameFunction {} generics: {} addr: 0x{:x}",
                         name,
-                        TypeListDisplay(generics)
+                        TypeListDisplay(generics),
+                        ptr as usize
                     )
                 }
             }?;

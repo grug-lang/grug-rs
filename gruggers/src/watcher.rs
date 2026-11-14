@@ -230,10 +230,7 @@ mod inner {
             // 	to 4 bytes
             // 	len: len of 0 is always valid for slices
             let current = unsafe {
-                &*(ptr::slice_from_raw_parts(
-                    self.current,
-                    0,
-                ) as *const FileNotifyInformation)
+                &*(ptr::slice_from_raw_parts(self.current, 0) as *const FileNotifyInformation)
             };
             let next_offset = current.next_entry_offset as usize;
             // SAFETY:
@@ -242,10 +239,8 @@ mod inner {
             // 	to 4 bytes
             // 	len: len is guaranteed by ReadDirectoryChangesW
             let current = unsafe {
-                &*(ptr::slice_from_raw_parts(
-                    self.current,
-                    current.file_name_len as usize / 2,
-                ) as *const FileNotifyInformation)
+                &*(ptr::slice_from_raw_parts(self.current, current.file_name_len as usize / 2)
+                    as *const FileNotifyInformation)
             };
 
             self.current = if next_offset == 0 {
