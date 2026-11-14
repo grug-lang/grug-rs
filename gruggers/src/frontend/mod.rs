@@ -8,8 +8,6 @@ use crate::state::{FileInfo, Files, GrugState, ResourcePaths};
 use crate::type_storage::TypeStorage;
 use crate::types::FileId;
 
-use allocator_api2::vec::Vec;
-
 use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
@@ -201,7 +199,7 @@ impl GrugState {
                 self.backend.init_entity(self, unsafe { &*entity.as_ptr() });
             }
         } else if id.to_inner() as usize == script_entities.len() {
-            script_entities.push(std::vec::Vec::new());
+            script_entities.push(Vec::new());
         } else {
             // File ids are handed out in order, so a new id is always the next one
             unreachable!(); // grcov-excl-line
@@ -215,7 +213,7 @@ impl GrugState {
         let arena = self.arenas.borrow_mut().pop().unwrap_or_default();
 
         let mut file_paths = Vec::new_in(&arena);
-        let mut files = std::vec::Vec::new();
+        let mut files = Vec::new();
 
         let mods_dir_len = if self
             .mods_dir_path
@@ -235,7 +233,7 @@ impl GrugState {
             let Ok(mod_dir) = mod_dir else {
                 panic!("unable to read directory: {:?}", mod_dir); // grcov-excl-line
             };
-            let mut entries_to_check = std::vec::Vec::from([mod_dir]);
+            let mut entries_to_check = Vec::from([mod_dir]);
 
             while let Some(next_entry) = entries_to_check.pop() {
                 if next_entry
@@ -380,9 +378,9 @@ impl GrugState {
     pub fn update_files(&self) -> (ResourcePaths, Files) {
         let arena = self.arenas.borrow_mut().pop().unwrap_or_default();
         let mut file_paths = Vec::new_in(&arena);
-        let mut updated_resources = std::vec::Vec::new();
+        let mut updated_resources = Vec::new();
 
-        let mut grug_files = std::vec::Vec::new();
+        let mut grug_files = Vec::new();
         for change in self.changes.try_iter() {
             let file_name = change.expect("File IO error");
             if let Some(extension) = <OsStr as AsRef<Path>>::as_ref(&file_name).extension()
@@ -494,7 +492,7 @@ impl GrugState {
         // don't need to live as long as (and aren't related to) the
         // arena backing `grug_files` above.
         let resource_arena = Arena::new();
-        let resource_paths: std::vec::Vec<NTOsStrPtr<'_>> = updated_resources
+        let resource_paths: Vec<NTOsStrPtr<'_>> = updated_resources
             .iter()
             .map(|path| resource_arena.copy_osstr_into_nt(path).as_ntosstrptr())
             .collect();

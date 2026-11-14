@@ -6,7 +6,7 @@ mod page_alloc {
     pub mod windows {
         #![allow(clippy::upper_case_acronyms)]
         use crate::pal::windows::*;
-        use allocator_api2::alloc::AllocError;
+		use std::alloc::AllocError;
         use std::ptr::NonNull;
         pub static PAGE_SIZE: std::sync::LazyLock<u32> =
             std::sync::LazyLock::new(PageAllocator::page_size);
@@ -164,7 +164,7 @@ mod page_alloc {
         use std::alloc::Layout;
         use std::ptr::NonNull;
 
-        use allocator_api2::alloc::AllocError;
+		use std::alloc::AllocError;
 
         pub struct PageAllocator;
 
@@ -231,8 +231,7 @@ mod arena_impl {
     use std::ffi::OsStr;
     use std::ptr::NonNull;
 
-    use allocator_api2::alloc::{AllocError, Allocator};
-    use allocator_api2::vec::Vec;
+	use std::alloc::{ AllocError, Allocator };
 
     use std::io::Write;
 
@@ -664,8 +663,7 @@ mod mt_arena {
     use std::ptr::NonNull;
     use std::sync::atomic::{AtomicPtr, Ordering};
 
-    use allocator_api2::alloc::{AllocError, Allocator};
-    use allocator_api2::vec::Vec;
+	use std::alloc::{ AllocError, Allocator };
 
     use std::io::Write;
 

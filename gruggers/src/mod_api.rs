@@ -12,8 +12,6 @@ use crate::frontend::type_propagation::StackLL;
 use crate::ntstring::NTStr;
 use crate::types::{ErasedHostFn, ErasedRegFn};
 
-use allocator_api2::vec::Vec;
-
 use json::JsonValue;
 use json::object::Object;
 

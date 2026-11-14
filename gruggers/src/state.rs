@@ -966,7 +966,7 @@ mod files {
     impl Files {
         pub fn empty() -> Self {
             Self {
-                inner: (Box::new([]) as Box<[_]>).into(),
+                inner: OwnPtr::empty(),
                 _arena: Arena::new(),
             }
         }

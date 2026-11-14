@@ -12,8 +12,6 @@ use crate::error::{Error, ErrorKind, SourceSpan};
 
 use std::ffi::OsStr;
 
-use allocator_api2::vec::Vec;
-
 #[allow(unused)]
 #[derive(Debug)]
 /// Lightweight error for structural parsing error
@@ -141,7 +139,7 @@ const MAX_PARSING_DEPTH: usize = 100;
 pub(crate) struct Ast<'arena> {
     pub spans: &'arena [SourceSpan],
     pub global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
-    pub local_fn_signatures: &'arena [(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>]))],
+    pub local_fn_signatures: &'arena [(&'arena str, Type<'arena>, &'arena [Parameter<'arena>])],
     pub export_fn_signatures: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
 }
 
@@ -157,7 +155,7 @@ struct Parser<'arena> {
     pub(crate) global_statements: Vec<GlobalStatement<'arena>, &'arena Arena>,
     pub(crate) called_local_functions: Vec<&'arena str, &'arena Arena>,
     pub(crate) local_fn_signatures:
-        Vec<(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>])), &'arena Arena>,
+        Vec<(&'arena str, Type<'arena>, &'arena [Parameter<'arena>]), &'arena Arena>,
     pub(crate) export_fn_signatures: Vec<(&'arena str, &'arena [Parameter<'arena>]), &'arena Arena>,
 }
 
@@ -429,7 +427,7 @@ pub(crate) fn parse<'a>(
                 if parser
                     .local_fn_signatures
                     .iter()
-                    .any(|(name, _)| name == fn_name)
+                    .any(|(name, _, _)| name == fn_name)
                 {
                     return parser.new_error(
                         name_token_span,
@@ -443,7 +441,7 @@ pub(crate) fn parse<'a>(
 
                 parser
                     .local_fn_signatures
-                    .push((fn_name, (helper_fn.return_type, helper_fn.parameters)));
+                    .push((fn_name, helper_fn.return_type, helper_fn.parameters));
                 parser
                     .global_statements
                     .push(GlobalStatement::HelperFunction(helper_fn));

@@ -3,8 +3,7 @@
 use crate::error::SourceSpan;
 use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
 use crate::utils::{copy_osstr_as_ntosstr, copy_str, copy_str_as_ntstr};
-use allocator_api2::alloc::Allocator;
-use allocator_api2::vec::Vec;
+use std::alloc::Allocator;
 use std::ffi::OsStr;
 use std::io::Write;
 

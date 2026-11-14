@@ -15,8 +15,6 @@ use crate::nt;
 use crate::ntstring::{NTStr, NTStrPtr};
 use crate::type_storage::TypeStorage;
 
-use allocator_api2::vec::Vec;
-
 pub(super) struct TypePropagator<'mod_api, 'arena: 'temp, 'temp> {
     file_text: &'arena str,
     file_path: &'arena OsStr,
@@ -25,7 +23,7 @@ pub(super) struct TypePropagator<'mod_api, 'arena: 'temp, 'temp> {
     current_mod_name: &'arena OsStr,
     mods_dir_path: &'mod_api OsStr,
     spans: &'arena [SourceSpan],
-    local_fns: &'arena [(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>]))],
+    local_fns: &'arena [(&'arena str, Type<'arena>, &'arena [Parameter<'arena>])],
     export_fns: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
     global_variables: HashMap<&'arena str, Type<'arena>>,
     num_while_loops_deep: usize,
@@ -96,7 +94,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
         mod_name: &'arena OsStr,
         mods_dir_path: &'mod_api OsStr,
         spans: &'arena [SourceSpan],
-        local_fns: &'arena [(&'arena str, (Type<'arena>, &'arena [Parameter<'arena>]))],
+        local_fns: &'arena [(&'arena str, Type<'arena>, &'arena [Parameter<'arena>])],
         export_fns: &'arena [(&'arena str, &'arena [Parameter<'arena>])],
         arena: &'arena Arena,
         temp_arena: &'temp Arena,
@@ -1201,8 +1199,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             receiver_info = Some((actual_receiver_ty, class.ty));
                             host_fn
                         }
-                    } else if let Some((_, (return_ty, sig_arguments))) =
-                        self.local_fns.iter().find(|(fn_name, _)| *fn_name == name)
+                    } else if let Some((_, return_ty, sig_arguments)) =
+                        self.local_fns.iter().find(|(fn_name, _, _)| *fn_name == name)
                     {
                         self.fill_arguments(
                             name,
