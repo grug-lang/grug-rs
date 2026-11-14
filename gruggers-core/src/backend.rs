@@ -159,9 +159,9 @@ impl<GrugState: State> ErasedBackend<GrugState> {
         (self.vtable.clear_entities)(self.data)
     }
     /// See [`Backend::destroy_entity_data`]
-	/// # Safety
-	///
-	/// same as [`Backend::destroy_entity_data`]
+    /// # Safety
+    ///
+    /// same as [`Backend::destroy_entity_data`]
     #[inline]
     pub unsafe fn destroy_entity_data(&self, entity: &GrugEntity) {
         unsafe { (self.vtable.destroy_entity_data)(self.data, entity) }

@@ -2,13 +2,11 @@ use crate::arena::Arena;
 use crate::ast::*;
 use crate::error::{Error, ErrorKind, SourceSpan};
 use crate::mod_api::ModApi;
-use crate::ntstring::{NTOsStrPtr, NTStr, NTStrPtr};
+use crate::ntstring::{NTOsStrPtr, NTStr};
 use crate::own_ptr::OwnPtr;
 use crate::state::{FileInfo, Files, GrugState, ResourcePaths};
 use crate::type_storage::TypeStorage;
 use crate::types::FileId;
-
-use allocator_api2::vec::Vec;
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -27,21 +25,20 @@ use type_propagation::TypePropagator;
 
 pub type CompileRequest = (Arena, &'static [&'static OsStr]);
 pub type CompileResponse = (
-	Arena,
-	OwnPtr<
-		'static,
-		[(
-			Result<GrugAst<'static>, Error>,
-			// derived from input paths
-			// These paths are relative
-			&'static OsStr,
-		)],
-	>,
+    Arena,
+    OwnPtr<
+        'static,
+        [(
+            Result<GrugAst<'static>, Error>,
+            // derived from input paths
+            // These paths are relative
+            &'static OsStr,
+        )],
+    >,
 );
 
 // Compilation functions
 impl GrugState {
-	
     /// Send at most this many files to a thread for compilation
     const FILES_PER_THREAD: usize = 8;
     // All 'static fields are actually allocated within the arena
@@ -202,7 +199,7 @@ impl GrugState {
                 self.backend.init_entity(self, unsafe { &*entity.as_ptr() });
             }
         } else if id.to_inner() as usize == script_entities.len() {
-            script_entities.push(std::vec::Vec::new());
+            script_entities.push(Vec::new());
         } else {
             // File ids are handed out in order, so a new id is always the next one
             unreachable!(); // grcov-excl-line
@@ -216,7 +213,7 @@ impl GrugState {
         let arena = self.arenas.borrow_mut().pop().unwrap_or_default();
 
         let mut file_paths = Vec::new_in(&arena);
-        let mut files = std::vec::Vec::new();
+        let mut files = Vec::new();
 
         let mods_dir_len = if self
             .mods_dir_path
@@ -236,7 +233,7 @@ impl GrugState {
             let Ok(mod_dir) = mod_dir else {
                 panic!("unable to read directory: {:?}", mod_dir); // grcov-excl-line
             };
-            let mut entries_to_check = std::vec::Vec::from([mod_dir]);
+            let mut entries_to_check = Vec::from([mod_dir]);
 
             while let Some(next_entry) = entries_to_check.pop() {
                 if next_entry
@@ -381,9 +378,9 @@ impl GrugState {
     pub fn update_files(&self) -> (ResourcePaths, Files) {
         let arena = self.arenas.borrow_mut().pop().unwrap_or_default();
         let mut file_paths = Vec::new_in(&arena);
-        let mut updated_resources = std::vec::Vec::new();
+        let mut updated_resources = Vec::new();
 
-        let mut grug_files = std::vec::Vec::new();
+        let mut grug_files = Vec::new();
         for change in self.changes.try_iter() {
             let file_name = change.expect("File IO error");
             if let Some(extension) = <OsStr as AsRef<Path>>::as_ref(&file_name).extension()
@@ -495,7 +492,7 @@ impl GrugState {
         // don't need to live as long as (and aren't related to) the
         // arena backing `grug_files` above.
         let resource_arena = Arena::new();
-        let resource_paths: std::vec::Vec<NTOsStrPtr<'_>> = updated_resources
+        let resource_paths: Vec<NTOsStrPtr<'_>> = updated_resources
             .iter()
             .map(|path| resource_arena.copy_osstr_into_nt(path).as_ntosstrptr())
             .collect();
@@ -530,15 +527,20 @@ impl GrugState {
                 "",
                 path,
                 "",
-                SourceSpan { offset: 0, line: 1 },
+                SourceSpan {
+                    offset: 0,
+                    line: 1,
+                    col: 0,
+                    len: 1,
+                },
                 format_args!("File is empty"),
             ));
         }
 
         // tokenize
-        let tokens = tokenizer::tokenize(file_text, arena, path)?;
+        let tokens = tokenizer::tokenize(file_text, arena, path)?.leak();
         // parse
-        let ast = parser::parse(tokens.leak(), arena, file_text, path)?;
+        let ast = parser::parse(tokens, arena, file_text, path)?;
 
         // get mod api entity declaration
         let entity = mod_api.classes().get(entity_type).ok_or_else(||
@@ -548,7 +550,7 @@ impl GrugState {
 				"",
 				path,
 				"",
-				SourceSpan{offset: 0, line: 0},
+				SourceSpan{offset: 0, line: 0, col: 0, len: 0},
 				format_args!("Entity '{}' is not registered in the mod_api.json", entity_type),
 			))?;
         let Some(export_fns) = &entity.export_fns else {
@@ -557,7 +559,12 @@ impl GrugState {
                 "",
                 path,
                 "",
-                SourceSpan { offset: 0, line: 0 },
+                SourceSpan {
+                    offset: 0,
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                },
                 format_args!("'{}' is a class, not an entity", entity_type),
             ));
         };
@@ -587,11 +594,11 @@ impl GrugState {
             .into_iter()
             .for_each(|statement| match statement {
                 GlobalStatement::Variable(st) => member_variables.push(st),
-                GlobalStatement::OnFunction(st) => {
+                GlobalStatement::ExportFunction(st) => {
                     let (i, _) = export_fns
                         .iter()
                         .enumerate()
-                        .find(|(_, (name, _))| name.as_str() == st.name.to_str())
+                        .find(|(_, (name, _))| *name == st.name.to_ntstr())
                         .expect("export function has already been verified to exist");
                     on_functions[i] = Some(&*arena.alloc_into(st));
                 }
@@ -603,6 +610,7 @@ impl GrugState {
         // at the end of the string
         let file_path = arena.copy_osstr_into_nt(path).as_ntosstrptr();
         let file = GrugAst {
+            spans: tokens.spans(),
             members: member_variables.leak(),
             on_functions: on_functions.leak(),
             helper_functions: helper_functions.leak(),
@@ -630,7 +638,7 @@ pub(crate) enum GlobalStatement<'a> {
     ///     set_weapon("sword.json")
     /// }
     /// ```
-    OnFunction(OnFunction<'a>),
+    ExportFunction(ExportFunction<'a>),
     /// A helper function declaration
     /// ```text
     /// helper_color(n: number) Color {
@@ -654,7 +662,7 @@ pub(crate) enum GlobalStatement<'a> {
     /// ## This is a global comment
     /// shared_number: number = 0
     /// ```
-    Comment { value: NTStrPtr<'a> },
+    Comment { value: &'a str },
     /// An Empty line at the top level of a script
     EmptyLine,
 }
@@ -701,7 +709,12 @@ fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
                     "",
                     path,
                     "",
-                    SourceSpan { offset: 0, line: 0 },
+                    SourceSpan {
+                        offset: 0,
+                        line: 0,
+                        col: 0,
+                        len: 0,
+                    },
                     format_args!("'{}' is missing a period in its name", file_name.display()),
                 ));
             }
@@ -719,7 +732,12 @@ fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
                 "",
                 path,
                 "",
-                SourceSpan { offset: 0, line: 0 },
+                SourceSpan {
+                    offset: 0,
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                },
                 format_args!(
                     "'{}' is missing an entity type in its name",
                     file_name.display()
@@ -733,7 +751,12 @@ fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
                 "",
                 path,
                 "",
-                SourceSpan { offset: 0, line: 0 },
+                SourceSpan {
+                    offset: 0,
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                },
                 format_args!(
                     "'{}' is missing an entity type in its name",
                     file_name.display()
@@ -751,7 +774,12 @@ fn get_entity_type(path: &OsStr) -> Result<&str, Error> {
             "",
             path,
             "",
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!(
                 "There are more than {} characters \n\
 				in the entity type of '{}', exceeding MAX_FILE_ENTITY_TYPE_LENGTH",
@@ -774,7 +802,12 @@ fn check_custom_id_is_pascal<'a>(
             "",
             entity_type,
             "",
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!("'{}' is not valid utf8", entity_type.display()),
         )
     })?;
@@ -787,7 +820,12 @@ fn check_custom_id_is_pascal<'a>(
             "",
             path,
             "",
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!(
                 "'{entity_type}' seems like a custom ID type, but it doesn't start in Uppercase"
             ),
@@ -800,7 +838,12 @@ fn check_custom_id_is_pascal<'a>(
                 "",
                 path,
                 "",
-                SourceSpan { offset: 0, line: 0 },
+                SourceSpan {
+                    offset: 0,
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                },
                 format_args!(
                     "'{entity_type}' seems like a custom ID type, but it contains '{ch}', which isn't uppercase, lowercase, or a digit",
                 ),

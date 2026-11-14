@@ -83,7 +83,12 @@ impl Error {
             "",
             file_path,
             "",
-            SourceSpan { offset: 0, line: 0 },
+            SourceSpan {
+                offset: 0,
+                line: 0,
+                col: 0,
+                len: 0,
+            },
             format_args!("IO error: {}", err),
         )
     }

@@ -23,13 +23,9 @@
 use std::borrow::Borrow;
 use std::ffi::{CStr, c_char};
 use std::marker::PhantomData;
-use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::ptr::NonNull;
 use std::sync::Arc;
-
-use allocator_api2::alloc::Allocator;
-use allocator_api2::boxed::Box;
 
 pub use str::*;
 mod str {
@@ -73,27 +69,6 @@ mod str {
                 std::ptr::copy(value.as_ptr(), arc.cast_mut().cast(), value.len());
                 arc.cast_mut().cast::<u8>().add(value.len()).write(b'\0');
                 std::mem::transmute(Arc::from_raw(arc).assume_init())
-            }
-        }
-
-        /// Copy `value` into a `Box<NTStr>` in allocator `a`.
-        ///
-        /// # Panics
-        ///
-        /// if `value` contains a null byte
-        // TODO: remove this
-        pub fn box_from_str_in<A: Allocator>(value: &str, a: A) -> Box<Self, A> {
-            assert!(!value.contains('\0'));
-            let (ptr, a) = Box::into_raw_with_allocator(Box::<[u8], _>::new_uninit_slice_in(
-                value.len() + 1,
-                a,
-            ));
-
-            unsafe {
-                std::ptr::copy(value.as_ptr(), ptr.cast(), value.len());
-                ptr.cast::<u8>().add(value.len()).write(b'\0');
-                let ptr = std::mem::transmute::<*mut [MaybeUninit<u8>], *mut NTStr>(ptr);
-                Box::from_raw_in(ptr, a)
             }
         }
 

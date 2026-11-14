@@ -39,7 +39,9 @@ pub fn verify_file_data<'a>(data: &'a [u8], file_path: &OsStr) -> Result<&'a NTS
             // Find the actual line number
             SourceSpan {
                 offset: err.valid_up_to(),
-                line: SourceSpan::get_line_from_offset(err.valid_up_to(), str),
+                line: str.lines().count(),
+                col: SourceSpan::get_col_from_offset(err.valid_up_to(), str),
+                len: err.error_len().unwrap_or(0),
             },
             format_args!("File is not valid utf8: {}", err),
         )
@@ -47,7 +49,7 @@ pub fn verify_file_data<'a>(data: &'a [u8], file_path: &OsStr) -> Result<&'a NTS
     let nt_str = NTStr::try_from_str(str).map_err(|err| {
         match err {
             NTStrError::UnexpectedNullByte { location } => {
-                let line = SourceSpan::get_line_from_offset(location, str);
+                let line = str[..location].lines().count();
                 Error::new(
                     ErrorKind::UNEXPECTED_NULL_BYTE,
                     "",
@@ -57,6 +59,8 @@ pub fn verify_file_data<'a>(data: &'a [u8], file_path: &OsStr) -> Result<&'a NTS
                     SourceSpan {
                         offset: location,
                         line,
+                        col: SourceSpan::get_col_from_offset(location, str),
+                        len: 0,
                     },
                     format_args!("Unexpected null byte on line {}", line),
                 )
@@ -77,8 +81,6 @@ mod windows {
     use std::fs::File;
     use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use std::ptr::NonNull;
-
-    use allocator_api2::vec::Vec;
 
     /// # SAFETY
     /// The returned file should only be used for async reads
@@ -169,7 +171,12 @@ mod windows {
                     "",
                     file_path,
                     "",
-                    SourceSpan { offset: 0, line: 0 },
+                    SourceSpan {
+                        offset: 0,
+                        line: 0,
+                        col: 0,
+                        len: 0,
+                    },
                     format_args!("IO Error (status is not STATUS_PENDING): {:?}", nt_status),
                 )));
             } else {
@@ -178,8 +185,8 @@ mod windows {
             }
         }
 
-		// clippy doesn't know the values are being mutated
-		#[expect(clippy::while_immutable_condition)]
+        // clippy doesn't know the values are being mutated
+        #[expect(clippy::while_immutable_condition)]
         // wait for all apcs to complete
         while num_apcs_queued != num_apcs_finished {
             // sleep for a maximum of 500ms to read files
@@ -208,7 +215,12 @@ mod windows {
                     // We don't know which file this error is for
                     file_path,
                     "",
-                    SourceSpan { offset: 0, line: 0 },
+                    SourceSpan {
+                        offset: 0,
+                        line: 0,
+                        col: 0,
+                        len: 0,
+                    },
                     format_args!("IO Error (status is not Success): {:x?}", unsafe {
                         iosb.status.status
                     }),
@@ -216,12 +228,7 @@ mod windows {
                 continue;
             }
             // Add a null byte to the end of the file;
-            unsafe {
-                *file_text
-                    .cast::<u8>()
-                    .add(iosb.information)
-                    .as_ptr() = b'\0'
-            };
+            unsafe { *file_text.cast::<u8>().add(iosb.information).as_ptr() = b'\0' };
             let new_ptr = unsafe {
                 NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(
                     file_text.cast::<u8>().as_ptr(),

@@ -1,11 +1,14 @@
 use super::SPACES_PER_INDENT;
 use crate::arena::Arena;
 use crate::error::{Error, ErrorKind, SourceSpan};
-use allocator_api2::vec::Vec;
 
+use std::alloc::Allocator;
+use std::alloc::Layout;
 use std::ffi::OsStr;
+use std::mem::{size_of, transmute};
+use std::ptr::NonNull;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Token<'a> {
     pub(super) ty: TokenType,
     pub(super) value: &'a str,
@@ -58,6 +61,8 @@ pub enum TokenType {
     Float32,
     Comment,
 }
+
+const _: () = const { assert!(size_of::<TokenType>() == size_of::<Option<TokenType>>()) };
 
 impl std::fmt::Display for TokenType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -113,18 +118,16 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
     file_text: &'a str,
     arena: &'a Arena,
     file_path: P,
-) -> Result<Vec<Token<'a>, &'a Arena>, Error> {
+) -> Result<Tokens<'a>, Error> {
     let file_path = file_path.as_ref();
-    let mut tokens = Vec::new_in(arena);
+    let mut tokens = Tokens::new_in(arena);
+    let mut last_new_line_offset = 0;
     let mut cur_line = 1;
 
     macro_rules! new_tokenizer_error{
-		(($offset: expr, $line: expr) => $format_str: literal $(, $args: expr)*) => {
-			Error::new(ErrorKind::TOKENIZER_ERROR, "", file_path, file_text, SourceSpan{offset: $offset, line: $line}, format_args!($format_str $(,$args)*))
+		(($offset: expr, $line: expr, $col: expr, $len: expr) => $format_str: literal $(, $args: expr)*) => {
+			Error::new(ErrorKind::TOKENIZER_ERROR, "", file_path, file_text, SourceSpan{ offset: $offset, line: $line, col: $col, len: $len }, format_args!($format_str $(,$args)*))
 		};
-		($span: expr => $format_str: literal $(, $args: expr)*) => {
-			Error::new(ErrorKind::TOKENIZER_ERROR, "", file_path, file_text, $span, format_args!($format_str $(,$args)*))
-		}
 	}
 
     let file_text_str = file_text;
@@ -133,15 +136,15 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
 
     'outer: while i < file_text.len() {
         macro_rules! token_match {
-			($tag: literal => $expr: expr$(, $extra_expr: expr)?) => {
+			($tag: literal => $expr: expr $(, $extra_expr: expr)?) => {
 				let lit_len = $tag.len();
-				if i + lit_len <= file_text.len() && &file_text[i..(i+lit_len)] == &*$tag {
+				if let Some(text) = file_text.get(i..(i+lit_len)) && text == &*$tag {
 					// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
-					tokens.push(Token{
-						ty: $expr,
-						value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])},
-						span: SourceSpan{offset: i, line: cur_line},
-					});
+					tokens.push(
+						$expr,
+						unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])},
+						SourceSpan{offset: i, line: cur_line, col: i - last_new_line_offset + 1, len: lit_len }
+					);
 					i += lit_len;
 					$($extra_expr;)?
 					continue;
@@ -149,15 +152,15 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
 			}
 		}
         macro_rules! token_match_word {
-			($tag: literal => $expr: expr$(, $extra_expr: expr)?) => {
+			($tag: literal => $expr: expr $(, $extra_expr: expr)?) => {
 				let lit_len = $tag.len();
-				if i + lit_len <= file_text.len() && &file_text[i..(i+lit_len)] == &*$tag && (i + lit_len == file_text.len() || !is_word_char(file_text[i+lit_len] as char)) {
+				if let Some(text) = file_text.get(i..(i+lit_len)) && text == &*$tag && file_text.get(i + lit_len).is_none_or(|&x| !is_word_char(x as char)) {
 					// SAFETY: string is guaranteed to be utf8 because it tests equal to tag which is utf8 despite being a byte array
-					tokens.push(Token{
-						ty: $expr,
-						value: unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])},
-						span: SourceSpan{offset: i, line: cur_line},
-					});
+					tokens.push(
+						$expr,
+						unsafe{str::from_utf8_unchecked(&file_text[i..(i+lit_len)])},
+						SourceSpan{offset: i, line: cur_line, col: i - last_new_line_offset + 1, len: lit_len }
+					);
 					i += lit_len;
 					$($extra_expr;)?
 					continue 'outer;
@@ -177,8 +180,8 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
         token_match!(b"," => TokenType::Comma);
         token_match!(b":" => TokenType::Colon);
         token_match!(b"." => TokenType::Dot);
-        token_match!(b"\n" => TokenType::NewLine, {cur_line += 1;});
-        token_match!(b"\r\n" => TokenType::NewLine, {cur_line += 1;});
+        token_match!(b"\n" => TokenType::NewLine,   {cur_line += 1; last_new_line_offset = i});
+        token_match!(b"\r\n" => TokenType::NewLine, {cur_line += 1; last_new_line_offset = i});
         token_match!(b"==" => TokenType::DoubleEquals);
         token_match!(b"!=" => TokenType::NotEquals);
         token_match!(b"=" => TokenType::Equal);
@@ -203,39 +206,43 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
         // Spaces
         let lit_len = b" ".len();
         if file_text[i..(i + lit_len)] == *b" " {
-            let old_i = i;
+            let start = i;
             while i < file_text.len() && file_text[i] == b' ' {
                 i += 1;
             }
-            let num_spaces = i - old_i;
+            let num_spaces = i - start;
             if num_spaces == 1 {
                 // SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-                tokens.push(Token {
-                    ty: TokenType::Space,
-                    value: unsafe { str::from_utf8_unchecked(&file_text[old_i..i]) },
-                    span: SourceSpan {
-                        offset: old_i,
+                tokens.push(
+                    TokenType::Space,
+                    unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
+                    SourceSpan {
+                        offset: start,
                         line: cur_line,
+                        col: start - last_new_line_offset + 1,
+                        len: i - start,
                     },
-                });
+                );
                 continue;
             }
             if num_spaces % SPACES_PER_INDENT != 0 {
                 return Err(new_tokenizer_error!(
-                    (i - num_spaces, cur_line) =>
+                    (i - num_spaces, cur_line, i - last_new_line_offset - num_spaces + 1, 1) =>
                     "Expected multiple of {} spaces but found {} spaces", SPACES_PER_INDENT, num_spaces
                 ));
             }
 
             // SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-            tokens.push(Token {
-                ty: TokenType::Indentation,
-                value: unsafe { str::from_utf8_unchecked(&file_text[old_i..i]) },
-                span: SourceSpan {
-                    offset: old_i,
+            tokens.push(
+                TokenType::Indentation,
+                unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
+                SourceSpan {
+                    offset: start,
                     line: cur_line,
+                    col: start - last_new_line_offset + 1,
+                    len: i - start,
                 },
-            });
+            );
             continue;
         }
 
@@ -248,6 +255,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
         ] {
             if file_text[i..].starts_with(start) {
                 let quote_start_index = i;
+                let start_column = i - last_new_line_offset + 1;
                 i += start.len();
                 let start_index = i;
                 let start_line = cur_line;
@@ -255,61 +263,64 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                 let mut is_escaped = false;
 
                 let mut allocated = Vec::new_in(arena);
-				let mut finished = false;
+                let mut finished = false;
 
-				let mut chars = file_text_str[i..].chars();
-				while let Some(char) = chars.next() {
-					match char {
-						'"' if !is_escaped => {
-							finished = true;
-							break;
-						},
-						't' if is_escaped => allocated.push(b'\t'),
-						'n' if is_escaped => allocated.push(b'\n'),
-						'r' if is_escaped => allocated.push(b'\r'),
-						'\\' if !is_escaped && ty == TokenType::String => {
-							is_escaped = true;
-						}
-						'\r' | '\n' if is_escaped => {
-							return Err(new_tokenizer_error!(
-								(file_text_str.len() - chars.as_str().len() - 2, cur_line) =>
-								"Unexpected line break in string on line {}", cur_line
-							));
-						}
-						'\n' => {
-							cur_line += 1;
-							allocated.push(b'\n');
-						}
-						x => {
-							is_escaped = false;
-							let mut bytes = [0;4];
-							let char_utf8 = x.encode_utf8(&mut bytes).as_bytes();
-							allocated.extend_from_slice(char_utf8);
-						}
-					}
-				}
-				if !finished {
+                let mut chars = file_text_str[i..].chars();
+                while let Some(char) = chars.next() {
+                    let cur_offset = file_text_str.len() - chars.as_str().len() - char.len_utf8();
+                    match char {
+                        '"' if !is_escaped => {
+                            finished = true;
+                            break;
+                        }
+                        't' if is_escaped => allocated.push(b'\t'),
+                        'n' if is_escaped => allocated.push(b'\n'),
+                        'r' if is_escaped => allocated.push(b'\r'),
+                        '\\' if !is_escaped && ty == TokenType::String => {
+                            is_escaped = true;
+                        }
+                        '\r' | '\n' if is_escaped => {
+                            return Err(new_tokenizer_error!(
+                                (cur_offset, cur_line, cur_offset - last_new_line_offset, 1) =>
+                                "Unexpected line break in string on line {}", cur_line
+                            ));
+                        }
+                        '\n' => {
+                            cur_line += 1;
+                            last_new_line_offset = i + 1;
+                            allocated.push(b'\n');
+                        }
+                        x => {
+                            is_escaped = false;
+                            let mut bytes = [0; 4];
+                            let char_utf8 = x.encode_utf8(&mut bytes).as_bytes();
+                            allocated.extend_from_slice(char_utf8);
+                        }
+                    }
+                }
+                if !finished {
                     return Err(new_tokenizer_error!(
-                        (quote_start_index, start_line) =>
+                        (quote_start_index, start_line, start_column, i - start_index) =>
                         "Unclosed \" on line {}", start_line
                     ));
-				}
+                }
 
                 let value = if !allocated.is_empty() {
                     unsafe { str::from_utf8_unchecked(allocated.leak()) }
                 } else {
                     unsafe { str::from_utf8_unchecked(&file_text[start_index..(i)]) }
                 };
-                tokens.push(Token {
+                tokens.push(
                     ty,
-                    // SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
                     value,
-                    span: SourceSpan {
+                    SourceSpan {
                         offset: quote_start_index,
                         line: start_line,
+                        col: start_column,
+                        len: i - quote_start_index,
                     },
-                });
-				i = file_text.len() - chars.as_str().len();
+                );
+                i = file_text.len() - chars.as_str().len();
                 continue 'outer;
             }
         }
@@ -323,15 +334,16 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
             {
                 i += 1
             }
-            // SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-            tokens.push(Token {
-                ty: TokenType::Word,
-                value: unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
-                span: SourceSpan {
+            tokens.push(
+                TokenType::Word,
+                unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
+                SourceSpan {
                     offset: start,
                     line: cur_line,
+                    col: start - last_new_line_offset + 1,
+                    len: i - start,
                 },
-            });
+            );
             continue;
         }
 
@@ -346,7 +358,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                 if file_text[i] == b'.' {
                     if seen_period {
                         return Err(new_tokenizer_error!(
-                            (i, cur_line) =>
+                            (i, cur_line, i - last_new_line_offset + 1, 1) =>
                             "Encountered two '.' periods in a number on line {}", cur_line
                         ));
                     }
@@ -361,29 +373,33 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                     // should be allowed but i can understand why
                     // they're not
                     return Err(new_tokenizer_error!(
-                        (i, cur_line) =>
+                        (i, cur_line, i - last_new_line_offset + 1, 1) =>
                         "Missing digit after decimal point in '{}'", &file_text_str[start..i]
                     ));
                 }
                 // SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-                tokens.push(Token {
-                    ty: TokenType::Float32,
-                    value: unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
-                    span: SourceSpan {
+                tokens.push(
+                    TokenType::Float32,
+                    unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
+                    SourceSpan {
                         offset: start,
                         line: cur_line,
+                        col: start - last_new_line_offset + 1,
+                        len: i - start,
                     },
-                });
+                );
             } else {
                 // SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-                tokens.push(Token {
-                    ty: TokenType::Int32,
-                    value: unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
-                    span: SourceSpan {
+                tokens.push(
+                    TokenType::Int32,
+                    unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
+                    SourceSpan {
                         offset: start,
                         line: cur_line,
+                        col: start - last_new_line_offset + 1,
+                        len: i - start,
                     },
-                });
+                );
             }
             continue;
         }
@@ -394,42 +410,50 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
             i += 1;
             if i >= file_text.len() || file_text[i] != b' ' {
                 return Err(new_tokenizer_error!(
-                    (i, cur_line) =>
+                    (i, cur_line, i - last_new_line_offset + 1, 1) =>
                     "Expected space (' ') after '#'"
                 ));
             }
             i += 1;
             let start = i;
             while i < file_text.len() && file_text[i] != b'\r' && file_text[i] != b'\n' {
+                if file_text[i] == b'\0' {
+                    return Err(new_tokenizer_error!(
+                    (i, cur_line, i - last_new_line_offset + 1, 1) =>
+                        "Unexpected null byte on line {}", cur_line
+                    ));
+                }
                 i += 1;
             }
 
             if (i - start) == 0 {
                 return Err(new_tokenizer_error!(
-                    (i - 1, cur_line) =>
+                    (i, cur_line, i - last_new_line_offset, 1) =>
                     "Expected comment to contain some text"
                 ));
             } else if (file_text[i - 1] as char).is_ascii_whitespace() {
                 return Err(new_tokenizer_error!(
-                    (i, cur_line) =>
+                    (i, cur_line, i - last_new_line_offset + 1, 1) =>
                     "A comment has trailing whitespace on line {}", cur_line
                 ));
             }
 
             // SAFETY: string starting at current index is guaranteed to be utf8 it matches a valid utf8 byte
-            tokens.push(Token {
-                ty: TokenType::Comment,
-                value: unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
-                span: SourceSpan {
+            tokens.push(
+                TokenType::Comment,
+                unsafe { str::from_utf8_unchecked(&file_text[start..i]) },
+                SourceSpan {
                     offset: old_i,
                     line: cur_line,
+                    col: old_i - last_new_line_offset + 1,
+                    len: i - old_i,
                 },
-            });
+            );
             continue;
         }
 
         return Err(new_tokenizer_error!(
-            (i, cur_line) =>
+            (i, cur_line, i - last_new_line_offset + 1, 1) =>
             "Unrecognized character '{}'", file_text_str[i..].chars().next().expect("There is atleast one more character")
         ));
     }
@@ -441,55 +465,242 @@ fn is_word_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
-// This only exists to add coverage to the fmt function above. I'd remove it if
-// i could use #[coverage(off)]
-#[cfg(test)]
-mod test {
-    use super::*;
-    #[test]
-    fn test() {
-        let x = &[
-            TokenType::OpenParenthesis,
-            TokenType::CloseParenthesis,
-            TokenType::OpenBrace,
-            TokenType::CloseBrace,
-            TokenType::Plus,
-            TokenType::Minus,
-            TokenType::Star,
-            TokenType::ForwardSlash,
-            TokenType::Comma,
-            TokenType::Colon,
-            TokenType::NewLine,
-            TokenType::DoubleEquals,
-            TokenType::NotEquals,
-            TokenType::Equal,
-            TokenType::GreaterEquals,
-            TokenType::Greater,
-            TokenType::LessEquals,
-            TokenType::Less,
-            TokenType::And,
-            TokenType::Or,
-            TokenType::Not,
-            TokenType::True,
-            TokenType::False,
-            TokenType::If,
-            TokenType::Else,
-            TokenType::While,
-            TokenType::Break,
-            TokenType::Return,
-            TokenType::Continue,
-            TokenType::Export,
-            TokenType::Local,
-            TokenType::Space,
-            TokenType::Indentation,
-            TokenType::String,
-            TokenType::Entity,
-            TokenType::Resource,
-            TokenType::Word,
-            TokenType::Int32,
-            TokenType::Float32,
-            TokenType::Comment,
-        ];
-        x.iter().for_each(|x| println!("{}", x));
+pub struct Tokens<'a> {
+    buf: NonNull<u8>,
+    len: usize,
+    cap: usize,
+    arena: &'a Arena,
+}
+
+impl<'a> Tokens<'a> {
+    pub const fn new_in(arena: &'a Arena) -> Self {
+        Self {
+            buf: NonNull::dangling(),
+            len: 0,
+            cap: 0,
+            arena,
+        }
+    }
+
+    pub fn leak(self) -> TokensSlice<'a> {
+        TokensSlice {
+            offset: 0,
+            len: self.len,
+            tys: self.tys_ptr(),
+            values: self.values_ptr(),
+            spans: self.spans_ptr(),
+        }
+    }
+
+    // 	pub fn as_slice(&self) -> TokensSlice {
+    // 		TokensSlice {
+    // 			len: self.len,
+    // 			tys: self.tys_ptr(),
+    // 			values: self.values_ptr(),
+    // 			spans: self.spans_ptr(),
+    // 		}
+    // 	}
+
+    fn grow(&mut self) {
+        let new_cap = if self.cap == 0 { 8 } else { self.cap * 2 };
+        let new_layout = Self::layout_for_cap(new_cap);
+        let old_layout = Self::layout_for_cap(self.cap);
+
+        let old_values_off = self.values_off();
+        let old_spans_off = self.spans_off();
+
+        let new_ptr = unsafe {
+            self.arena
+                .grow(self.buf, old_layout, new_layout)
+                .expect("could not reallocate buffer")
+                .cast()
+        };
+        self.buf = new_ptr;
+        self.cap = new_cap;
+
+        unsafe {
+            self.buf
+                .add(old_spans_off)
+                .cast()
+                .copy_to(self.spans_ptr(), self.len)
+        };
+        unsafe {
+            self.buf
+                .add(old_values_off)
+                .cast()
+                .copy_to(self.values_ptr(), self.len)
+        };
+        // Set rest of types array to None
+        unsafe {
+            self.buf.add(self.len).write_bytes(
+                transmute::<Option<TokenType>, u8>(None),
+                self.cap - self.len + 64,
+            )
+        };
+    }
+
+    const fn layout_for_cap(cap: usize) -> Layout {
+        if cap == 0 {
+            Layout::new::<()>()
+        } else {
+            match Layout::from_size_align(
+                (64 + cap) * size_of::<Option<TokenType>>()
+                    + cap * size_of::<&str>()
+                    + cap * size_of::<SourceSpan>(),
+                8,
+            ) {
+                Ok(layout) => layout,
+                Err(_) => panic!("invalid layout"),
+            }
+        }
+    }
+
+    const fn tys_ptr(&self) -> NonNull<Option<TokenType>> {
+        self.buf.cast()
+    }
+
+    const fn values_off(&self) -> usize {
+        if self.cap == 0 {
+            0
+        } else {
+            (64 + self.cap) * size_of::<Option<TokenType>>()
+        }
+    }
+
+    const fn spans_off(&self) -> usize {
+        self.values_off() + self.cap * size_of::<&str>()
+    }
+
+    const fn values_ptr(&self) -> NonNull<&'a str> {
+        unsafe { self.buf.add(self.values_off()).cast() }
+    }
+
+    const fn spans_ptr(&self) -> NonNull<SourceSpan> {
+        unsafe { self.buf.add(self.spans_off()).cast() }
+    }
+
+    pub fn push(&mut self, ty: TokenType, value: &'a str, span: SourceSpan) {
+        if self.len >= self.cap {
+            self.grow();
+        }
+        unsafe { self.tys_ptr().add(self.len).write(Some(ty)) }
+        unsafe { self.values_ptr().add(self.len).write(value) }
+        unsafe { self.spans_ptr().add(self.len).write(span) }
+        self.len += 1;
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct TokensSlice<'a> {
+    offset: usize,
+    len: usize,
+    // if len != 0, tys is guaranteed to contain 64 values past the end of slice that are `None`
+    // This is to allow SIMD optimizations for array comparisons
+    tys: NonNull<Option<TokenType>>,
+    values: NonNull<&'a str>,
+    spans: NonNull<SourceSpan>,
+}
+
+// impl<'a> Iterator for TokensSlice<'a> {
+// 	type Item = Token<'a>;
+// 	fn next(&mut self) -> Option<Self::Item> {
+// 		if self.len == 0 { None }
+// 		else {
+// 			let tok = Token {
+// 				ty   : unsafe{self.tys.cast().read()},
+// 				value: unsafe{self.values    .read()},
+// 				span : unsafe{self.spans     .read()},
+// 			};
+// 			self.len -= 1;
+// 			self.tys    = unsafe{self.tys.add(1)};
+// 			self.values = unsafe{self.values.add(1)};
+// 			self.spans  = unsafe{self.spans.add(1)};
+// 			Some(tok)
+// 		}
+// 	}
+// }
+
+impl<'a> TokensSlice<'a> {
+    // #[inline(always)]
+    #[track_caller]
+    #[inline(always)]
+    pub fn as_array<const N: usize>(&self) -> Option<TokensArray<'a, N>> {
+        if self.len >= N {
+            if N > 0 {
+                // This hopefully indicates that a SIMD overload is okay.
+                unsafe {
+                    std::hint::assert_unchecked(
+                        self.tys
+                            .add(self.len)
+                            .cast::<[Option<TokenType>; 64]>()
+                            .read()
+                            == [None; 64],
+                        // "{:?}",
+                        // std::slice::from_raw_parts(self.tys.as_ptr(), self.len + 64)
+                    );
+                }
+            }
+            Some(TokensArray {
+                offset: self.offset,
+                tys: unsafe { self.tys.cast().as_ref() },
+                values: unsafe { self.values.cast().as_ref() },
+                spans: unsafe { self.spans.cast().as_ref() },
+            })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn take_array<const N: usize>(&mut self) -> Option<TokensArray<'a, N>> {
+        let arr = self.as_array()?;
+        self.offset += N;
+        self.len -= N;
+        self.tys = unsafe { self.tys.add(N) };
+        self.values = unsafe { self.values.add(N) };
+        self.spans = unsafe { self.spans.add(N) };
+        Some(arr)
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    // pub fn types(&self) -> &[TokenType] {
+    // 	unsafe{std::slice::from_raw_parts(self.tys.cast().as_ptr(), self.len)}
+    // }
+    // pub fn values(&self) -> &[&str] {
+    // 	unsafe{std::slice::from_raw_parts(self.values.as_ptr(), self.len)}
+    // }
+    /// Returns a slice over the full spans of the file. This does not change as tokens are consumed.
+    pub fn spans(&self) -> &'a [SourceSpan] {
+        unsafe {
+            std::slice::from_raw_parts(self.spans.as_ptr().sub(self.offset), self.len + self.offset)
+        }
+    }
+
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct TokensArray<'a, const N: usize> {
+    pub offset: usize,
+    pub tys: &'a [TokenType; N],
+    pub values: &'a [&'a str; N],
+    pub spans: &'a [SourceSpan; N],
+}
+
+impl<'a, const N: usize> TokensArray<'a, N> {
+    pub fn as_arrays(
+        self,
+    ) -> (
+        &'a [TokenType; N],
+        &'a [&'a str; N],
+        &'a [SourceSpan; N],
+        usize,
+    ) {
+        (self.tys, self.values, self.spans, self.offset)
     }
 }
