@@ -67,7 +67,7 @@ impl SourceSpan {
     ///
     /// # Panics
     /// if the source offset is out of bounds of the text
-	// TODO: Maybe see if you can use self.col to skip finding the start of the line.
+    // TODO: Maybe see if you can use self.col to skip finding the start of the line.
     pub fn get_source_line(self, text: &str) -> &str {
         let text = text.as_bytes();
 
@@ -313,13 +313,13 @@ impl<'a> GrugError<'a> {
         }
 
         // SAFETY: We never give out a `'static` pointer to this string from safe code
-		let function_name = copy_str_as_ntstr(function_name, alloc).as_ntstrptr();
+        let function_name = copy_str_as_ntstr(function_name, alloc).as_ntstrptr();
 
         // Copy source_line into an allocator and return a reference to the new string
         // Equivalent to Box::leak(Box::from(str)) except the box is allocated in a custom allocator
         // cannot use box_from_str_in because that doesn't allow null bytes
         // within the string
-		let source_line = copy_str(source_line, alloc);
+        let source_line = copy_str(source_line, alloc);
         // SAFETY: We never give out a `'static` pointer to this string from safe code
         let file_path = copy_osstr_as_ntosstr(file_path, alloc).as_ntosstrptr();
 

@@ -1,4 +1,4 @@
-use std::alloc::{ Allocator, Global };
+use std::alloc::{Allocator, Global};
 use std::cell::UnsafeCell;
 /// A Vec where you can push and pop with a shared reference.
 ///

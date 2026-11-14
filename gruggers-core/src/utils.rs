@@ -1,8 +1,8 @@
-use std::alloc::Layout;
-use std::mem::MaybeUninit;
 use crate::ntstring::{NTOsStr, NTStr};
 use std::alloc::Allocator;
+use std::alloc::Layout;
 use std::ffi::OsStr;
+use std::mem::MaybeUninit;
 
 pub fn copy_str_as_ntstr<'a>(str: &'_ str, a: &'a impl Allocator) -> &'a NTStr {
     let slice = copy_bytes_as_nt(str.as_bytes(), a);
@@ -31,7 +31,7 @@ pub fn copy_str<'a>(str: &'_ str, a: &'a impl Allocator) -> &'a str {
 }
 
 pub fn copy_bytes<'a>(str: &'_ [u8], a: &'a impl Allocator) -> &'a [u8] {
-	let mut slice = box_new_uninit_slice(str.len(), a);
+    let mut slice = box_new_uninit_slice(str.len(), a);
     // SAFETY: `slice` was just allocated within `a` with length `str.len`
     unsafe {
         slice
@@ -45,12 +45,12 @@ pub fn copy_bytes<'a>(str: &'_ [u8], a: &'a impl Allocator) -> &'a [u8] {
 
 pub fn copy_bytes_as_nt<'a>(str: &'_ [u8], a: &'a impl Allocator) -> &'a [u8] {
     assert!(!str.contains(&b'\0'));
-	let mut slice = box_new_uninit_slice(str.len() + 1, a);
+    let mut slice = box_new_uninit_slice(str.len() + 1, a);
     // SAFETY: `slice` was just allocated within `a` with length `str.len + 1`
     unsafe {
         slice
             .as_mut_ptr()
-			.cast::<u8>()
+            .cast::<u8>()
             .copy_from(str.as_ptr(), str.len())
     };
     // SAFETY: `slice` was just allocated within `a` with length `str.len + 1`
@@ -61,8 +61,11 @@ pub fn copy_bytes_as_nt<'a>(str: &'_ [u8], a: &'a impl Allocator) -> &'a [u8] {
 }
 
 pub fn box_new_uninit_slice<T, A: Allocator>(len: usize, a: A) -> Box<[MaybeUninit<T>], A> {
-	let ptr = a.allocate(Layout::array::<T>(len).unwrap()).unwrap().cast::<MaybeUninit<T>>();
-	// allocate may return extra capacity, but we want a box with the exact requested length
-	let ptr = std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), len);
-	unsafe{Box::from_raw_in(ptr, a)}
+    let ptr = a
+        .allocate(Layout::array::<T>(len).unwrap())
+        .unwrap()
+        .cast::<MaybeUninit<T>>();
+    // allocate may return extra capacity, but we want a box with the exact requested length
+    let ptr = std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), len);
+    unsafe { Box::from_raw_in(ptr, a) }
 }

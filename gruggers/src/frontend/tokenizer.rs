@@ -260,56 +260,76 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                 let start_index = i;
                 let start_line = cur_line;
 
+                let mut has_escape = false;
                 let mut is_escaped = false;
 
-                let mut allocated = Vec::new_in(arena);
-                let mut finished = false;
-
                 let mut chars = file_text_str[i..].chars();
-                while let Some(char) = chars.next() {
-                    let cur_offset = file_text_str.len() - chars.as_str().len() - char.len_utf8();
+                // loop through string once to see if it needs escaping
+                loop {
+                    let Some(char) = chars.next() else {
+                        return Err(new_tokenizer_error!(
+                            (quote_start_index, start_line, start_column, i - start_index) =>
+                            "Unclosed \" on line {}", start_line
+                        ));
+                    };
                     match char {
                         '"' if !is_escaped => {
-                            finished = true;
                             break;
                         }
-                        't' if is_escaped => allocated.push(b'\t'),
-                        'n' if is_escaped => allocated.push(b'\n'),
-                        'r' if is_escaped => allocated.push(b'\r'),
                         '\\' if !is_escaped && ty == TokenType::String => {
                             is_escaped = true;
+                            has_escape = true;
                         }
-                        '\r' | '\n' if is_escaped => {
-                            return Err(new_tokenizer_error!(
-                                (cur_offset, cur_line, cur_offset - last_new_line_offset, 1) =>
-                                "Unexpected line break in string on line {}", cur_line
-                            ));
-                        }
-                        '\n' => {
-                            cur_line += 1;
-                            last_new_line_offset = i + 1;
-                            allocated.push(b'\n');
-                        }
-                        x => {
+                        _ => {
                             is_escaped = false;
-                            let mut bytes = [0; 4];
-                            let char_utf8 = x.encode_utf8(&mut bytes).as_bytes();
-                            allocated.extend_from_slice(char_utf8);
                         }
                     }
+                    i += char.len_utf8();
                 }
-                if !finished {
-                    return Err(new_tokenizer_error!(
-                        (quote_start_index, start_line, start_column, i - start_index) =>
-                        "Unclosed \" on line {}", start_line
-                    ));
-                }
+                // if escaping is needed, then loop through again and copy the escaped string out
+                let value = if has_escape {
+                    i = start_index;
+                    let mut allocated = Vec::new_in(arena);
 
-                let value = if !allocated.is_empty() {
+                    let mut chars = file_text_str[i..].chars();
+                    while let Some(char) = chars.next() {
+                        match char {
+                            '"' if !is_escaped => {
+                                break;
+                            }
+                            't' if is_escaped => allocated.push(b'\t'),
+                            'n' if is_escaped => allocated.push(b'\n'),
+                            'r' if is_escaped => allocated.push(b'\r'),
+                            '\\' if !is_escaped && ty == TokenType::String => {
+                                is_escaped = true;
+                            }
+                            '\r' | '\n' if is_escaped => {
+                                return Err(new_tokenizer_error!(
+                                    (i, cur_line, i - last_new_line_offset, 1) =>
+                                    "Unexpected line break in string on line {}", cur_line
+                                ));
+                            }
+                            '\n' => {
+                                cur_line += 1;
+                                last_new_line_offset = i + 1;
+                                allocated.push(b'\n');
+                            }
+                            x => {
+                                is_escaped = false;
+                                let mut bytes = [0; 4];
+                                let char_utf8 = x.encode_utf8(&mut bytes).as_bytes();
+                                allocated.extend_from_slice(char_utf8);
+                            }
+                        }
+                        i += char.len_utf8();
+                    }
                     unsafe { str::from_utf8_unchecked(allocated.leak()) }
                 } else {
                     unsafe { str::from_utf8_unchecked(&file_text[start_index..(i)]) }
                 };
+                // to skip the last '"' character
+                i += 1;
+
                 tokens.push(
                     ty,
                     value,

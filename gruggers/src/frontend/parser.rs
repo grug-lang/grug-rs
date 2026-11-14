@@ -439,9 +439,11 @@ pub(crate) fn parse<'a>(
                 }
                 parser.current_function = "member scope";
 
-                parser
-                    .local_fn_signatures
-                    .push((fn_name, helper_fn.return_type, helper_fn.parameters));
+                parser.local_fn_signatures.push((
+                    fn_name,
+                    helper_fn.return_type,
+                    helper_fn.parameters,
+                ));
                 parser
                     .global_statements
                     .push(GlobalStatement::HelperFunction(helper_fn));
@@ -1378,11 +1380,7 @@ fn consume_indentation<'a>(
         }) if value.len() != indentation * SPACES_PER_INDENT => {
             Err(ParserError::IndentationMismatch {
                 expected_spaces: indentation * SPACES_PER_INDENT,
-                token: Token {
-                    ty,
-                    value,
-                    span,
-                },
+                token: Token { ty, value, span },
             })
         }
         Ok(tok) => Ok(tok),

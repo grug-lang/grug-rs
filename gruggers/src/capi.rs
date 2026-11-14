@@ -235,7 +235,12 @@ pub extern "C" fn json_to_grug(
                     "",
                     "".as_ref(),
                     "",
-                    SourceSpan { offset: 0, line: 0 },
+                    SourceSpan {
+                        offset: 0,
+                        line: 0,
+                        len: 0,
+                        col: 0,
+                    },
                     format_args!("the generated grug source contains a null byte"),
                 ))
             };

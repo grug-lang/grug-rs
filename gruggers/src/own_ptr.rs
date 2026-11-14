@@ -57,9 +57,14 @@ impl<'a, T: ?Sized> OwnPtr<'a, T> {
 
 impl<'a, T> OwnPtr<'a, [T]> {
     /// Creates an empty OwnPtr slice
-	pub fn empty() -> Self {
-		unsafe{Self::from_ptr(std::ptr::slice_from_raw_parts_mut(NonNull::dangling().as_ptr(), 0))}
-	}
+    pub fn empty() -> Self {
+        unsafe {
+            Self::from_ptr(std::ptr::slice_from_raw_parts_mut(
+                NonNull::dangling().as_ptr(),
+                0,
+            ))
+        }
+    }
 }
 
 impl<'a, T: ?Sized> std::ops::Deref for OwnPtr<'a, T> {

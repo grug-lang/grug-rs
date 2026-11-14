@@ -1196,8 +1196,10 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             receiver_info = Some((actual_receiver_ty, class.ty));
                             host_fn
                         }
-                    } else if let Some((_, return_ty, sig_arguments)) =
-                        self.local_fns.iter().find(|(fn_name, _, _)| *fn_name == name)
+                    } else if let Some((_, return_ty, sig_arguments)) = self
+                        .local_fns
+                        .iter()
+                        .find(|(fn_name, _, _)| *fn_name == name)
                     {
                         self.fill_arguments(
                             name,
@@ -1308,18 +1310,18 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         *final_generics = self.type_storage.insert_type_list(generics);
                         // A reg fn can specialize the host function for these
                         // generics, and returns None to fall back to fn_ptr
-						*ptr = Some(match host_fn.fn_ptr {
-							// If normal fn ptr is available, then we try
-							// to get the reg_fn version first, but always
-							// fall back to the fn ptr version.
-							Some(fn_ptr) => {
-								host_fn.reg_fn.and_then(|reg_fn| unsafe{reg_fn(final_generics.as_ptr())})
-								   .unwrap_or(fn_ptr)
-							}
-							None => {
-								if let Some(reg_fn) = host_fn.reg_fn {
-									unsafe{reg_fn(final_generics.as_ptr())}.ok_or_else(|| {
-										self.new_error(
+                        *ptr = Some(match host_fn.fn_ptr {
+                            // If normal fn ptr is available, then we try
+                            // to get the reg_fn version first, but always
+                            // fall back to the fn ptr version.
+                            Some(fn_ptr) => host_fn
+                                .reg_fn
+                                .and_then(|reg_fn| unsafe { reg_fn(final_generics.as_ptr()) })
+                                .unwrap_or(fn_ptr),
+                            None => {
+                                if let Some(reg_fn) = host_fn.reg_fn {
+                                    unsafe { reg_fn(final_generics.as_ptr()) }.ok_or_else(|| {
+                                        self.new_error(
 											expr.spans,
 											format_args!(
 												"The host function '{}' has no version for the generics {}",
@@ -1327,15 +1329,18 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 												TypeListDisplay(final_generics),
 											),
 										)
-									})?
-								} else {
-									return Err(self.new_error(
-										expr.spans,
-										format_args!("The host function '{}' was not registered", name),
-									));
-								}
-							}
-						});
+                                    })?
+                                } else {
+                                    return Err(self.new_error(
+                                        expr.spans,
+                                        format_args!(
+                                            "The host function '{}' was not registered",
+                                            name
+                                        ),
+                                    ));
+                                }
+                            }
+                        });
                     }
                     Self::convert_mod_api_type(host_fn.return_ty, generics, arena)
                 }

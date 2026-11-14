@@ -38,7 +38,12 @@ fn invalid_json(input_json: &str, message: std::fmt::Arguments) -> Error {
         "",
         "".as_ref(),
         input_json,
-        SourceSpan { offset: 0, line: 0 },
+        SourceSpan {
+            offset: 0,
+            line: 0,
+            len: 0,
+            col: 0,
+        },
         message,
     )
 }
@@ -924,7 +929,7 @@ use de::*;
 // 			todo!();
 // 		}
 // 		pub fn pretty_print(&self, arena: &'a Arena, spaces_per_indent: usize) -> &'a str {
-// 			fn pretty_print_inner<'a>(value: &Json<'a>, 
+// 			fn pretty_print_inner<'a>(value: &Json<'a>,
 // 			todo!();
 // 		}
 // 	}
