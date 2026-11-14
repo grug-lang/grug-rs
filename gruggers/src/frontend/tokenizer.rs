@@ -296,9 +296,12 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                             '"' if !is_escaped => {
                                 break;
                             }
-                            't' if is_escaped => allocated.push(b'\t'),
-                            'n' if is_escaped => allocated.push(b'\n'),
-                            'r' if is_escaped => allocated.push(b'\r'),
+                            't' if is_escaped => { allocated.push(b'\t'); is_escaped = false },
+                            'n' if is_escaped => { allocated.push(b'\n'); is_escaped = false },
+                            'r' if is_escaped => { allocated.push(b'\r'); is_escaped = false },
+							x if is_escaped && x in ['\\', '"'] => {
+								allocated.push(x); is_escaped = false;
+							}
                             '\\' if !is_escaped && ty == TokenType::String => {
                                 is_escaped = true;
                             }
@@ -311,7 +314,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                             _ if is_escaped => {
                                 return Err(new_tokenizer_error!(
                                     (i, cur_line, i - last_new_line_offset, 1) =>
-                                    "Unrecognized escape character on line {}", cur_line
+                                    "Unrecognized escape character {} on line {}", char, cur_line
                                 ));
                             }
                             '\n' => {
