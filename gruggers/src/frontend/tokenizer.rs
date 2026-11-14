@@ -299,8 +299,11 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                             't' if is_escaped => { allocated.push(b'\t'); is_escaped = false },
                             'n' if is_escaped => { allocated.push(b'\n'); is_escaped = false },
                             'r' if is_escaped => { allocated.push(b'\r'); is_escaped = false },
-							x if is_escaped && x in ['\\', '"'] => {
-								allocated.push(x); is_escaped = false;
+							x if is_escaped && ['\\', '"'].contains(&x) => {
+								is_escaped = false;
+                                let mut bytes = [0; 4];
+                                let char_utf8 = x.encode_utf8(&mut bytes).as_bytes();
+								allocated.extend_from_slice(char_utf8); 
 							}
                             '\\' if !is_escaped && ty == TokenType::String => {
                                 is_escaped = true;
