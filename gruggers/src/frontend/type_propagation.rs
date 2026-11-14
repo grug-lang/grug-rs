@@ -470,6 +470,8 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                         ),
                     ));
                 }
+				// TODO: Cover this by adding a new test which calls a local
+				// function in a function argument
                 args.iter()
                     .map(|argument| self.check_global_expr(argument, name))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1281,16 +1283,19 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
                             Self::convert_mod_api_type(mod_api_receiver_ty, generics, arena);
                         ty_ctx
                             .add_constraint(expr.spans, mod_api_receiver_ty, actual_receiver_ty)
+							// grcov-excl-start: Errors can't happen here
+							// until we have specialized methods
                             .map_err(|err| {
                                 self.new_error(
-                                    err.span, // grcov-excl-line
+                                    err.span, 
                                     format_args!(
                                         "An error cannot be triggered here, Type mismatch {} vs {}",
                                         err.diff,
                                         err.diff.swapped()
-                                    ), // grcov-excl-line
+                                    ), 
                                 )
-                            })?; // grcov-excl-line
+                            })?; 
+							// grcov-excl-end
                     }
 
                     self.fill_arguments(
@@ -2101,12 +2106,9 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                         // An uninferred generic names the last generic in its
                         // chain before the chain loops back, which is the one
                         // that nothing tells the type of
-                        let data = self.existentials[if direct {
-                            parent_existentials.current
-                        } else {
-                            error_idx
-                        }];
+
                         if direct {
+							let data = self.existentials[parent_existentials.current];
                             return Err(self.new_error(
                                 self.spans[data.name_span as usize],
                                 format_args!(
@@ -2118,6 +2120,7 @@ impl<'a, 'err> TyCtx<'a, 'err> {
                         } else {
                             // Cov: Cannot occur without variable type inference
                             // grcov-excl-start
+							let data = self.existentials[error_idx];
                             return Err(self.new_error(
                                 self.spans[data.name_span as usize],
                                 format_args!(

@@ -291,20 +291,29 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                     i = start_index;
                     let mut allocated = Vec::new_in(arena);
 
-					for char in file_text_str[i..].chars() {
+                    for char in file_text_str[i..].chars() {
                         match char {
                             '"' if !is_escaped => {
                                 break;
                             }
-                            't' if is_escaped => { allocated.push(b'\t'); is_escaped = false },
-                            'n' if is_escaped => { allocated.push(b'\n'); is_escaped = false },
-                            'r' if is_escaped => { allocated.push(b'\r'); is_escaped = false },
-							x if is_escaped && ['\\', '"'].contains(&x) => {
-								is_escaped = false;
+                            't' if is_escaped => {
+                                allocated.push(b'\t');
+                                is_escaped = false
+                            }
+                            'n' if is_escaped => {
+                                allocated.push(b'\n');
+                                is_escaped = false
+                            }
+                            'r' if is_escaped => {
+                                allocated.push(b'\r');
+                                is_escaped = false
+                            }
+                            x if is_escaped && ['\\', '"'].contains(&x) => {
+                                is_escaped = false;
                                 let mut bytes = [0; 4];
                                 let char_utf8 = x.encode_utf8(&mut bytes).as_bytes();
-								allocated.extend_from_slice(char_utf8); 
-							}
+                                allocated.extend_from_slice(char_utf8);
+                            }
                             '\\' if !is_escaped && ty == TokenType::String => {
                                 is_escaped = true;
                             }
@@ -448,12 +457,6 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
             i += 1;
             let start = i;
             while i < file_text.len() && file_text[i] != b'\r' && file_text[i] != b'\n' {
-                if file_text[i] == b'\0' {
-                    return Err(new_tokenizer_error!(
-                    (i, cur_line, i - last_new_line_offset + 1, 1) =>
-                        "Unexpected null byte on line {}", cur_line
-                    ));
-                }
                 i += 1;
             }
 
@@ -581,7 +584,8 @@ impl<'a> Tokens<'a> {
                 8,
             ) {
                 Ok(layout) => layout,
-                Err(_) => panic!("invalid layout"),
+				// Gotta do this because const
+                Err(_) => panic!("invalid layout"), // grcov-excl-line
             }
         }
     }

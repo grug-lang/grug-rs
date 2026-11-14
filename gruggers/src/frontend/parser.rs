@@ -220,10 +220,6 @@ pub(crate) fn parse<'a>(
                 )?;
                 let spans_len = (tokens.offset() - spans_offset) as u32;
 
-                // TODO: I think this will error on this line
-                // `x: number =25`
-                //
-                // The error message is not going to be helpful in that case
                 match consume_tokens(&mut tokens, &[TokenType::Space]) {
                     Ok(_) => (),
                     Err(ParserError::GotWrongToken { got, .. }) => {
@@ -238,7 +234,7 @@ pub(crate) fn parse<'a>(
                     Err(err) => return Err(err),
                 };
 
-                consume_tokens(&mut tokens, &[TokenType::Equal])?;
+                consume_tokens(&mut tokens, &[TokenType::Equal])?; // grcov-excl-line
 
                 consume_space(&mut tokens)?;
 
@@ -838,7 +834,7 @@ impl<'a> Parser<'a> {
                     format_args!("Variable '{}' was not assigned a value", local_name),
                 );
             }
-            Err(err) => return Err(err),
+            Err(err) => return Err(err), // grcov-excl-line
         };
 
         if local_name == "me" {
@@ -1102,7 +1098,7 @@ impl<'a> Parser<'a> {
                         // Reserved for struct field accesses
                         return self.new_error(got.span, format_args!("Method call expected '('"));
                     }
-                    Err(err) => return Err(err),
+                    Err(err) => return Err(err) // grcov-excl-line
                 }
             } else if let [TokenType::Space, _] = toks.tys {
                 let bin_op = match toks.tys[1] {

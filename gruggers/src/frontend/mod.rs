@@ -79,7 +79,7 @@ impl GrugState {
                             ok_files.push((file, file_path));
                         }
                         Err(err) => {
-                            results.push((Err(err), file_path));
+                            results.push((Err(err), file_path)); // grcov-excl-line: because i'm not simulating file system errors
                         }
                     }
                 }
@@ -797,6 +797,7 @@ fn check_custom_id_is_pascal<'a>(
     path: &'_ OsStr,
 ) -> Result<&'a str, Error> {
     let entity_type = entity_type.to_str().ok_or_else(|| {
+		// TODO: Cover this
         Error::new(
             ErrorKind::FILE_NAME_ERROR,
             "",
