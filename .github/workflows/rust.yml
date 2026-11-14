@@ -24,8 +24,8 @@ jobs:
       # Bump this deliberately on MSRV bump.
       - name: Install the pinned toolchain
         run: |
-          rustup toolchain install 1.100.1 --profile minimal --component rustfmt --component clippy --no-self-update
-          rustup default 1.100.1
+          rustup toolchain install 1.100.0 --profile minimal --component rustfmt --component clippy --no-self-update
+          rustup default 1.100.0
           rustc --version
       - run: git submodule update --init --force
       - run: cmake -S gruggers/src/grug-tests/ -B ./gruggers/src/grug-tests/build/ -G Ninja -DCMAKE_BUILD_TYPE=Release

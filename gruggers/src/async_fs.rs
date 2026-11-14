@@ -262,8 +262,6 @@ mod fallback {
     use std::fs::File;
     use std::io::Read;
 
-    use allocator_api2::vec::Vec;
-
     pub fn open_file_async_for_read(path: &impl AsRef<OsStr>) -> Result<File, Error> {
         let path = path.as_ref();
         File::open(path).map_err(|err| Error::from_io_error(err, path))
