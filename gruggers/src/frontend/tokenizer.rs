@@ -291,8 +291,7 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                     i = start_index;
                     let mut allocated = Vec::new_in(arena);
 
-                    let mut chars = file_text_str[i..].chars();
-                    while let Some(char) = chars.next() {
+					for char in file_text_str[i..].chars() {
                         match char {
                             '"' if !is_escaped => {
                                 break;
