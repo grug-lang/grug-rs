@@ -3,16 +3,9 @@
 version = 4
 
 [[package]]
-name = "allocator-api2"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c880a97d28a3681c0267bd29cff89621202715b065127cd445fa0f0fe0aa2880"
-
-[[package]]
 name = "gruggers"
 version = "0.9.2"
 dependencies = [
- "allocator-api2",
  "gruggers-core",
  "json",
 ]
@@ -20,17 +13,10 @@ dependencies = [
 [[package]]
 name = "gruggers-core"
 version = "0.9.1"
-dependencies = [
- "allocator-api2",
-]
 
 [[package]]
 name = "gruggers-jit"
 version = "0.1.0"
-dependencies = [
- "allocator-api2",
- "gruggers-core",
-]
 
 [[package]]
 name = "json"

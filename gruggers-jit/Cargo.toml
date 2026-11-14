@@ -4,5 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-allocator-api2 = "0.4.0"
-gruggers-core = {version = "0.9.1", path = "../gruggers-core"}
+# gruggers-core = {version = "0.9.1", path = "../gruggers-core"}

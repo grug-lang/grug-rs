@@ -1,9 +1,8 @@
 use super::SPACES_PER_INDENT;
 use crate::arena::Arena;
 use crate::error::{Error, ErrorKind, SourceSpan};
-use allocator_api2::alloc::Allocator;
-use allocator_api2::vec::Vec;
 
+use std::alloc::Allocator;
 use std::alloc::Layout;
 use std::ffi::OsStr;
 use std::mem::{size_of, transmute};

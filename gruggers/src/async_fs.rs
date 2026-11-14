@@ -82,8 +82,6 @@ mod windows {
     use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use std::ptr::NonNull;
 
-    use allocator_api2::vec::Vec;
-
     /// # SAFETY
     /// The returned file should only be used for async reads
     ///

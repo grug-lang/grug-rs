@@ -1,5 +1,3 @@
-use allocator_api2::vec::Vec as ArenaVec;
-
 use crate::arena::Arena;
 use crate::ast::{
     BinaryOperator, ExportFunction, Expr, ExprData, GrugAst, HelperFunction, Statement, Type,
@@ -1009,7 +1007,7 @@ impl BytecodeBackend {
             .next()
             .expect("must have at least one grug stack frame");
 
-        let mut frames = ArenaVec::with_capacity_in(call_stack.len() - 1, &arena);
+        let mut frames = Vec::with_capacity_in(call_stack.len() - 1, &arena);
         frames.extend_from_slice(&call_stack[..call_stack.len() - 1]);
         let frames = frames.leak();
 

@@ -33,8 +33,7 @@
 //! }
 //! ```
 
-use allocator_api2::alloc::Allocator;
-use allocator_api2::boxed::Box as Box2;
+use std::alloc::Allocator;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
@@ -54,6 +53,13 @@ impl<'a, T: ?Sized> OwnPtr<'a, T> {
     pub unsafe fn from_ptr(ptr: *mut T) -> Self {
         Self(unsafe { NonNull::new_unchecked(ptr) }, PhantomData)
     }
+}
+
+impl<'a, T> OwnPtr<'a, [T]> {
+    /// Creates an empty OwnPtr slice
+	pub fn empty() -> Self {
+		unsafe{Self::from_ptr(std::ptr::slice_from_raw_parts_mut(NonNull::dangling().as_ptr(), 0))}
+	}
 }
 
 impl<'a, T: ?Sized> std::ops::Deref for OwnPtr<'a, T> {
@@ -93,17 +99,10 @@ impl<'a, T: ?Sized> Drop for OwnPtr<'a, T> {
     }
 }
 
-impl<'a, T: ?Sized, A: Allocator + 'a> From<Box2<T, A>> for OwnPtr<'a, T> {
-    fn from(other: Box2<T, A>) -> Self {
-        // SAFETY: Box2::into_raw points to a valid T
-        unsafe { Self::from_ptr(Box2::into_raw(other)) }
-    }
-}
-
-impl<'a, T: ?Sized> From<Box<T>> for OwnPtr<'a, T> {
-    fn from(other: Box<T>) -> Self {
+impl<'a, T: ?Sized, A: Allocator + 'a> From<Box<T, A>> for OwnPtr<'a, T> {
+    fn from(other: Box<T, A>) -> Self {
         // SAFETY: Box::into_raw points to a valid T
-        unsafe { Self::from_ptr(Box::into_raw(other)) }
+        unsafe { Self::from_ptr(Box::into_raw_with_allocator(other).0) }
     }
 }
 
