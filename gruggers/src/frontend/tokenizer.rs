@@ -309,12 +309,12 @@ pub fn tokenize<'a, P: AsRef<OsStr>>(
                                     "Unexpected line break in string on line {}", cur_line
                                 ));
                             }
-							_ if is_escaped => {
+                            _ if is_escaped => {
                                 return Err(new_tokenizer_error!(
                                     (i, cur_line, i - last_new_line_offset, 1) =>
-                                    "Unrecognized escape character", cur_line
+                                    "Unrecognized escape character on line {}", cur_line
                                 ));
-							}
+                            }
                             '\n' => {
                                 cur_line += 1;
                                 last_new_line_offset = i + 1;
