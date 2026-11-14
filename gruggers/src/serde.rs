@@ -906,3 +906,26 @@ mod de {
     }
 }
 use de::*;
+
+// mod json2 {
+// 	use crate::arena::Arena;
+// 	pub enum Json<'a> {
+// 		Null,
+// 		Bool(bool),
+// 		Int(i64),
+// 		Float(f64),
+// 		Str(&'a str),
+// 		Array(&'a [Json<'a>]),
+// 		Obj(&'a [(&'a str, Json<'a>)]),
+// 	}
+
+// 	impl<'a> Json<'a> {
+// 		pub fn parse_json(arena: &'a Arena) -> Json<'a> {
+// 			todo!();
+// 		}
+// 		pub fn pretty_print(&self, arena: &'a Arena, spaces_per_indent: usize) -> &'a str {
+// 			fn pretty_print_inner<'a>(value: &Json<'a>, 
+// 			todo!();
+// 		}
+// 	}
+// }

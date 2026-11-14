@@ -387,12 +387,8 @@ mod arena_impl {
         }
 
         /// Copies the memory pointed to by `old_ptr` with layout `old_layout`,
-        /// and copies it to a new allocation with layout `new_layout`.
-        ///
-        /// Unlike a more general realloc function, it is valid to pass an
-        /// old_ptr and old_layout that were not allocated by this arena.
-        ///
-        /// The pointer should still point to memory that is valid to read however
+		/// and copies it to a new allocation with layout `new_layout`. This
+		/// function will reuse the existing allocation if possible
         ///
         /// # SAFETY
         ///
@@ -404,18 +400,60 @@ mod arena_impl {
             old_layout: Layout,
             new_layout: Layout,
         ) -> Result<NonNull<[u8]>, AllocError> {
-            let ptr = self.alloc(new_layout)?;
-            // ptr from self.alloc is valid to write to for length new_layout.size()
-            // old_ptr is valid to read from for length old_layout.size()
-            if !old_ptr.is_null() {
-                unsafe {
-                    old_ptr.copy_from_nonoverlapping(
-                        ptr.as_ptr().cast(),
-                        std::cmp::min(old_layout.size(), new_layout.size()),
-                    );
-                }
-            }
-            Ok(ptr)
+			// reuse allocation if
+			// 	- old_ptr is last allocation and accounting for alignment, remaining space can fit new layout
+			// 		- cur_block.current is set to end of this allocation
+			// 	- accounting for alignment, old_layout.size() can fit new layout.
+			// 		- cur_block.current is unchanged
+			if let Some(cur_block) = self.current_block() {
+				let (alloc_start, alloc_end, available_end, set_current) = 
+					// if old_ptr is the last allocation from this arena,
+					// then available space is upto the end of the current
+					// block, and current needs to be set
+
+					// Note: We have to use `as usize` here because old_ptr may
+					// not be allocation in cur_block and comparing pointers
+					// from different allocations is UB.
+					if cur_block.current.get() as usize == unsafe {old_ptr.add(old_layout.size())} as usize {
+						let alloc_start = old_ptr.wrapping_add(old_ptr.align_offset(new_layout.align()));
+						let alloc_end = alloc_start.wrapping_add(new_layout.size());
+						(alloc_start, alloc_end, cur_block.end, true)
+					// otherwise, available space is the exisiting allocation and current should not be set
+					} else {
+						let alloc_start = old_ptr.wrapping_add(old_ptr.align_offset(new_layout.align()));
+						let alloc_end = alloc_start.wrapping_add(new_layout.size());
+						let available_end = old_ptr.wrapping_add(old_layout.size());
+						(alloc_start, alloc_end, available_end, false)
+					};
+
+				// Enough space
+				if alloc_end.addr() < available_end.addr() {
+					if set_current {cur_block.current.set(alloc_end)}
+
+					if alloc_start != old_ptr { unsafe {
+						old_ptr.copy_to(
+							alloc_start.cast(),
+							std::cmp::min(old_layout.size(), new_layout.size()),
+						);
+					} }
+					return Ok(unsafe{NonNull::new_unchecked(
+						std::ptr::slice_from_raw_parts_mut(alloc_start, new_layout.size())
+					)});
+				}
+			}
+			// Fall through to creating a new allocation
+			let ptr = self.alloc(new_layout)?;
+			// ptr from self.alloc is valid to write to for length new_layout.size()
+			// old_ptr is valid to read from for length old_layout.size()
+			if !old_ptr.is_null() {
+				unsafe {
+					old_ptr.copy_to_nonoverlapping(
+						ptr.as_ptr().cast(),
+						std::cmp::min(old_layout.size(), new_layout.size()),
+					);
+				}
+			}
+			Ok(ptr)
         }
 
         pub fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
@@ -432,14 +470,10 @@ mod arena_impl {
             old_layout: Layout,
             new_layout: Layout,
         ) -> Result<NonNull<[u8]>, AllocError> {
-            let ptr = self.alloc_zeroed(new_layout)?;
-            unsafe { (ptr.as_ptr() as *mut u8).write_bytes(0, new_layout.size()) };
-            unsafe {
-                old_ptr.copy_from_nonoverlapping(
-                    ptr.as_ptr().cast(),
-                    std::cmp::min(old_layout.size(), new_layout.size()),
-                );
-            }
+			let ptr = unsafe{self.realloc(old_ptr, old_layout, new_layout)?};
+			if new_layout.size() > old_layout.size() {
+				unsafe {ptr.as_ptr().cast::<u8>().add(old_layout.size()).write_bytes(0, new_layout.size() - old_layout.size())};
+			}
             Ok(ptr)
         }
 
@@ -616,6 +650,15 @@ mod arena_impl {
             self.alloc(layout)
         }
         unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
+		unsafe fn grow(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+			unsafe{self.realloc(ptr.as_ptr(), old_layout, new_layout)}
+		}
+		unsafe fn grow_zeroed(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+			unsafe{self.realloc_zeroed(ptr.as_ptr(), old_layout, new_layout)}
+		}
+		unsafe fn shrink(&self, ptr: NonNull<u8>, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+			unsafe{self.realloc(ptr.as_ptr(), old_layout, new_layout)}
+		}
         // unsafe fn realloc (&mut self, old_ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         // 	self.realloc(old_ptr, old_layout, new_layout)
         // }

@@ -219,7 +219,7 @@ fn compile_all_files_compiles_every_grug_file() {
 
     let (ok_count, errors) = compile_all_errors(&state);
     assert_eq!(ok_count, 2);
-    assert_eq!(errors, ["unexpected end of file"]);
+    assert_eq!(errors, ["Expected space (' ') but got end of file"]);
 
     // Compiling everything again reinitializes the entities of each file
     let file = state.compile_grug_file("m/ok-A.grug").unwrap();

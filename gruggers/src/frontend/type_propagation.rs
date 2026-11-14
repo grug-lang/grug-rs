@@ -1323,7 +1323,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 								if let Some(reg_fn) = host_fn.reg_fn {
 									unsafe{reg_fn(final_generics.as_ptr())}.ok_or_else(|| {
 										self.new_error(
-											*name_span,
+											expr.spans,
 											format_args!(
 												"The host function '{}' has no version for the generics {}",
 												name,
@@ -1333,7 +1333,7 @@ impl<'mod_api: 'arena, 'arena: 'temp, 'temp> TypePropagator<'mod_api, 'arena, 't
 									})?
 								} else {
 									return Err(self.new_error(
-										*name_span,
+										expr.spans,
 										format_args!("The host function '{}' was not registered", name),
 									));
 								}
