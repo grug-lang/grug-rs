@@ -64,8 +64,8 @@ jobs:
       # explained in the "Require 100% coverage" step below.
       - name: Install the pinned toolchain
         run: |
-          rustup toolchain install 1.98.1 --profile minimal --component llvm-tools --no-self-update
-          rustup default 1.98.1
+          rustup toolchain install 1.100.0 --profile minimal --component llvm-tools --no-self-update
+          rustup default 1.100.0
           rustc --version
       - name: Install cargo-llvm-cov and grcov
         uses: taiki-e/install-action@v2

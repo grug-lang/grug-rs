@@ -594,14 +594,14 @@ pub fn main() {
     let grug_tests_path = nt!("src/grug-tests/tests");
     let mod_api_path = nt!("src/grug-tests/mod_api.json");
 
-    // std::panic::set_hook(Box::new(|info| {
-    //     _ = std::io::stdout().write_fmt(format_args!(
-    //         "{}: {}\n",
-    //         info.location().unwrap(),
-    //         info.payload_as_str().unwrap_or("No info")
-    //     ));
-    //     std::process::exit(2);
-    // }));
+    std::panic::set_hook(Box::new(|info| {
+        _ = std::io::stdout().write_fmt(format_args!(
+            "{}: {}\n",
+            info.location().unwrap(),
+            info.payload_as_str().unwrap_or("No info")
+        ));
+        std::process::exit(2);
+    }));
     unsafe {
         grug_tests_run(
             grug_tests_path.as_ntstrptr(),
